@@ -858,7 +858,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if isinstance(state, bytes):
             with SessionStore(db_file=state) as store:
-                state = store.get_session_state()
+                state = store.export_session_state()
 
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.Tool | llm.Toolset] = []

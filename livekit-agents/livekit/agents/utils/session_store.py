@@ -5,7 +5,6 @@ import hashlib
 import json
 import pickle
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,40 +16,15 @@ from ..log import logger
 
 @dataclass
 class SessionSnapshot:
-    """
-    Full database snapshot for initial upload or full sync.
-
-    Used when:
-    - First time creating session in cloud
-    - Cloud requests full resync
-    - Worker needs to download entire state
-    """
-
-    version_hash: str  # Content hash of the database
+    version: str  # Content hash of the database
     db_data: bytes  # Complete database file content
-    timestamp: float  # When snapshot was created
-
-    def size(self) -> int:
-        """Size of the snapshot in bytes."""
-        return len(self.db_data)
 
 
 @dataclass
 class SessionDelta:
-    """
-    Incremental changeset for efficient sync (formerly ChangesetMetadata).
-
-    Used for normal operation after initial snapshot exists.
-    """
-
     base_version: str | None  # Hash of the base version (None for initial)
     new_version: str  # Hash of the new version (content-addressable)
     changeset: bytes  # SQLite changeset bytes (binary delta)
-    timestamp: float  # When this delta was created
-
-    def size(self) -> int:
-        """Size of the changeset in bytes."""
-        return len(self.changeset)
 
 
 SCHEMA_VERSION = 1
@@ -122,6 +96,24 @@ class SessionStore:
 
         self._create_schema()
 
+        # load version from database if it exists
+        cursor = self.conn.cursor()
+        result = cursor.execute("SELECT version FROM session").fetchone()
+        if result:
+            self._version = result[0]
+
+    def get_schema_version(self) -> int | None:
+        """Get the schema version from the database."""
+        cursor = self.conn.cursor()
+        result = cursor.execute(
+            "SELECT value FROM _schema_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        return int(result[0]) if result else None
+
+    @property
+    def version(self) -> str | None:
+        return self._version
+
     @classmethod
     def from_session_state(cls, state: dict[str, Any]) -> SessionStore:
         """
@@ -129,7 +121,7 @@ class SessionStore:
         Should be called only on a fresh SessionStore instance.
         """
         store = cls(db_file=None)
-        version = hashlib.sha256(pickle.dumps(state)).hexdigest()
+        version = hashlib.sha1(pickle.dumps(state)).hexdigest()
         cursor = store.conn.cursor()
 
         # write session metadata (version, current agent, tools)
@@ -161,19 +153,54 @@ class SessionStore:
                 (item["id"], item_text, False, item["created_at"]),
             )
 
-        # write agent state
+        # write agent state recursively
         store._write_agent_state(cursor, state.get("agent", {}))
 
+        # update version
         store._version = version
         return store
 
-    def get_schema_version(self) -> int | None:
-        """Get the schema version from the database."""
+    def export_session_state(self) -> dict[str, Any]:
+        """Get current session state from database in AgentSession.get_state() format."""
         cursor = self.conn.cursor()
-        result = cursor.execute(
-            "SELECT value FROM _schema_metadata WHERE key = 'schema_version'"
+
+        meta = cursor.execute(
+            "SELECT version, current_agent_id, tools_json FROM session"
         ).fetchone()
-        return int(result[0]) if result else None
+        if not meta:
+            return {}
+
+        _, current_agent_id, tools_json = meta
+
+        # load tools from session
+        tools = json.loads(tools_json) if tools_json else []
+
+        # load userdata
+        userdata = {}
+        for key, value_text, is_encrypted in cursor.execute(
+            "SELECT key, value, is_encrypted FROM userdata"
+        ):
+            userdata[key] = self._deserialize_data(value_text, bool(is_encrypted), None)
+
+        # load session history
+        history_items = []
+        for item_data, is_encrypted in cursor.execute(
+            "SELECT item_data, is_encrypted FROM session_history ORDER BY created_at"
+        ):
+            item_dict = self._deserialize_data(item_data, bool(is_encrypted), None)
+            history_items.append(item_dict)
+
+        history = {"items": history_items}
+
+        # load agent state (current agent)
+        agent = self._load_agent(cursor, current_agent_id) if current_agent_id else {}
+
+        return {
+            "userdata": userdata,
+            "tools": tools,
+            "history": history,
+            "agent": agent,
+        }
 
     def compute_changesets(self, target_store: SessionStore) -> SessionDelta:
         """
@@ -233,9 +260,8 @@ class SessionStore:
 
             return SessionDelta(
                 base_version=self._version,
-                new_version=target_store.get_version(),
+                new_version=target_store.version,
                 changeset=changeset,
-                timestamp=time.time(),
             )
 
         finally:
@@ -294,15 +320,6 @@ class SessionStore:
                 },
             )
 
-    def get_version(self) -> str | None:
-        """
-        Get current version hash.
-
-        Returns:
-            Current version hash (SHA256 hex string) or None if no versions yet
-        """
-        return self._version
-
     def export_snapshot(self) -> SessionSnapshot:
         """
         Export the entire database as a snapshot for cloud upload.
@@ -318,15 +335,11 @@ class SessionStore:
         with open(self._db_path, "rb") as f:
             db_data = f.read()
 
-        version = self.get_version()
+        version = self.version
         if not version:
             raise ValueError("Database has no version - cannot export snapshot")
 
-        return SessionSnapshot(
-            version_hash=version,
-            db_data=db_data,
-            timestamp=time.time(),
-        )
+        return SessionSnapshot(version=version, db_data=db_data)
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -395,48 +408,6 @@ class SessionStore:
                 "INSERT INTO agent_chat_ctx (agent_id, item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?, ?)",
                 (agent_id, item["id"], item_text, False, item["created_at"]),
             )
-
-    def get_session_state(self) -> dict[str, Any]:
-        """Get current session state from database in AgentSession.get_state() format."""
-        cursor = self.conn.cursor()
-
-        meta = cursor.execute(
-            "SELECT version, current_agent_id, tools_json FROM session"
-        ).fetchone()
-        if not meta:
-            return {}
-
-        _, current_agent_id, tools_json = meta
-
-        # load tools from session
-        tools = json.loads(tools_json) if tools_json else []
-
-        # load userdata
-        userdata = {}
-        for key, value_text, is_encrypted in cursor.execute(
-            "SELECT key, value, is_encrypted FROM userdata"
-        ):
-            userdata[key] = self._deserialize_data(value_text, bool(is_encrypted), None)
-
-        # load session history
-        history_items = []
-        for item_data, is_encrypted in cursor.execute(
-            "SELECT item_data, is_encrypted FROM session_history ORDER BY created_at"
-        ):
-            item_dict = self._deserialize_data(item_data, bool(is_encrypted), None)
-            history_items.append(item_dict)
-
-        history = {"items": history_items}
-
-        # load agent state (current agent)
-        agent = self._load_agent(cursor, current_agent_id) if current_agent_id else {}
-
-        return {
-            "userdata": userdata,
-            "tools": tools,
-            "history": history,
-            "agent": agent,
-        }
 
     def _load_agent(self, cursor: apsw.Cursor, agent_id: str) -> dict[str, Any] | None:
         """Load agent state recursively including parent agents."""

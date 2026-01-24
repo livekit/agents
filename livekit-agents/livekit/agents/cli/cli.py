@@ -1260,7 +1260,7 @@ def _sms_text_mode(
                         changeset = old_store.compute_changesets(store)
                     with open(
                         chnageset_dir
-                        / f"{changeset.base_version}-{changeset.new_version}.changeset",
+                        / f"{changeset.base_version[:8]}-{changeset.new_version[:8]}.changeset",
                         "wb",
                     ) as wf:
                         wf.write(changeset.changeset)
