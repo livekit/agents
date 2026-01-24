@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,10 +94,7 @@ TABLE_SCHEMAS = {
     "session_history": TableSchema(
         name="session_history",
         pk_columns=["item_id"],
-        compare_columns=[
-            "item_data",
-            "is_encrypted",
-        ],  # Compare data, ignore created_at (immutable)
+        compare_columns=["item_data", "is_encrypted", "created_at"],
     ),
     "agent_states": TableSchema(
         name="agent_states",
@@ -106,7 +104,7 @@ TABLE_SCHEMAS = {
     "agent_chat_items": TableSchema(
         name="agent_chat_items",
         pk_columns=["agent_id", "item_id"],
-        compare_columns=["item_data", "is_encrypted"],  # Compare data, ignore created_at
+        compare_columns=["item_data", "is_encrypted", "created_at"],
     ),
 }
 
@@ -119,16 +117,25 @@ class SessionStore:
     # Schema version for migrations
     SCHEMA_VERSION = 1
 
-    def __init__(self, db_path: str | Path, create_schema: bool = True):
+    def __init__(self, db_file: str | Path | bytes | None, *, create_schema: bool = True):
         """
         Initialize session store.
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file, if None, a temporary database will be created
             create_schema: If True, creates schema if it doesn't exist
         """
-        self.db_path = Path(db_path)
-        self.conn = apsw.Connection(str(self.db_path))
+        self._temp_file: Path | None = None
+        if db_file is None or isinstance(db_file, bytes):
+            self._temp_file = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+            if isinstance(db_file, bytes):
+                with open(self._temp_file, "wb") as f:
+                    f.write(db_file)
+            self._db_path = self._temp_file
+        else:
+            self._db_path = Path(db_file)
+
+        self.conn = apsw.Connection(str(self._db_path))
         self._session: apsw.Session | None = None
         self._current_version: str | None = None  # Hash of current version
 
@@ -145,18 +152,17 @@ class SessionStore:
             self._current_version = result[0]
 
     @classmethod
-    def from_state(cls, state: dict[str, Any], db_path: str | Path) -> SessionStore:
+    def from_state(cls, state: dict[str, Any]) -> SessionStore:
         """
         Create a SessionStore from a state dict.
 
         Args:
             state: State dict from AgentSession.get_state()
-            db_path: Where to create the database
 
         Returns:
             SessionStore with state written to DB
         """
-        store = cls(db_path=db_path, create_schema=True)
+        store = cls(db_file=None, create_schema=True)
 
         # Compute version hash from state
         version_hash = store._compute_version_hash_from_state(state)
@@ -166,19 +172,6 @@ class SessionStore:
         store._current_version = version_hash
 
         return store
-
-    @classmethod
-    def from_db(cls, db_path: str | Path) -> SessionStore:
-        """
-        Load existing SessionStore from database file.
-
-        Args:
-            db_path: Path to existing database
-
-        Returns:
-            SessionStore loaded from DB
-        """
-        return cls(db_path=db_path, create_schema=False)
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -347,7 +340,8 @@ class SessionStore:
             )
 
         # 2. Write userdata
-        for key, value in state.get("userdata", {}).items():
+        user_data = state.get("userdata") or {}
+        for key, value in user_data.items():
             value_text, is_encrypted = self._serialize_data(value, None)
             cursor.execute(
                 "INSERT INTO userdata (key, value, is_encrypted) VALUES (?, ?, ?)",
@@ -594,7 +588,9 @@ class SessionStore:
         cursor = self.conn.cursor()
 
         # Check if metadata exists
-        meta = cursor.execute("SELECT version, current_agent_id FROM session_metadata").fetchone()
+        meta = cursor.execute(
+            "SELECT version_hash, current_agent_id FROM session_metadata"
+        ).fetchone()
         if not meta:
             # No state exists yet
             return {"userdata": {}, "tools": [], "history": {"items": []}, "agent": {}}
@@ -719,11 +715,11 @@ class SessionStore:
                 backup.step()  # Copy entire database
             temp_conn.close()
 
-            work_store = SessionStore(db_path=tmp_db_path, create_schema=False)
+            work_store = SessionStore(db_file=tmp_db_path, create_schema=False)
 
         try:
             # Compute diff and generate changeset
-            operations = self._compute_db_diff(work_store.db_path, target_store.db_path)
+            operations = self._compute_db_diff(work_store._db_path, target_store._db_path)
 
             work_store.begin_tracking()
             cursor = work_store.conn.cursor()
@@ -813,7 +809,7 @@ class SessionStore:
             SessionSnapshot containing full database content
         """
         # Read entire database file
-        with open(self.db_path, "rb") as f:
+        with open(self._db_path, "rb") as f:
             db_data = f.read()
 
         version = self.get_version()
@@ -886,6 +882,9 @@ class SessionStore:
         if self._session is not None:
             self._session = None
         self.conn.close()
+        if self._temp_file and self._temp_file.exists():
+            self._temp_file.unlink()
+            self._temp_file = None
 
     def __enter__(self) -> SessionStore:
         return self

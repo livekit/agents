@@ -852,11 +852,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent": self._agent.get_state(),
         }
 
-    async def rehydrate(self, state_dict: dict[str, Any]) -> None:
+    async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
         """Restore session state from bytes."""
+        from ..utils.session_store import SessionStore
+
+        if isinstance(state, bytes):
+            with SessionStore(db_file=state) as store:
+                state = store.get_session_state()
+
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.Tool | llm.Toolset] = []
-        for name in state_dict["tools"]:
+        for name in state["tools"]:
             # TODO: support provider tools
             if name in tool_ctx.function_tools:
                 valid_tools.append(tool_ctx.function_tools[name])
@@ -864,10 +870,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.warning("tool not found when unpickling", extra={"missing_tool": name})
 
         self._tools = valid_tools
-        self._userdata = state_dict["userdata"]
+        self._userdata = state["userdata"]
 
         # decrypt and unpickle chat history
-        history = state_dict["history"]
+        history = state["history"]
         self._chat_ctx = llm.ChatContext.from_dict(history)
 
         # TODO: save to TextMessageContext?
@@ -877,7 +883,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         except RuntimeError:
             pass
 
-        agent = Agent.create_from_state(state_dict["agent"])
+        agent = Agent.create_from_state(state["agent"])
         if self._started:
             # only allow rehydrate session that not started yet?
             await self._update_activity(agent)
