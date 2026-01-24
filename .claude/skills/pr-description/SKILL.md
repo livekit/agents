@@ -34,7 +34,7 @@ Create a pull request description for this branch. If updating, preserve key inf
 - **Use bullet points** - Easier to scan
 - **Don't duplicate the diff** - Explain intent, not implementation
 - Follow [CONTRIBUTING.md](/CONTRIBUTING.md) guidelines
-- Run `ruff check --fix` and `ruff format` before finalizing
+- **For Python changes:** Run `ruff check --fix` and `ruff format` before finalizing
 
 ## Checklist
 

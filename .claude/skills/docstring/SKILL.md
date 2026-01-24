@@ -5,6 +5,8 @@ description: Generate Google-style docstrings for Python classes and functions
 
 Add or update docstrings for Python code. This skill follows Google-style docstrings compatible with pdoc3.
 
+**Note:** For pdoc3 to properly render Google-style docstrings, ensure the module includes `__docformat__ = "google"` at the top, or run pdoc with `--docformat google`.
+
 ## Usage
 
 ```
