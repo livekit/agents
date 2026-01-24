@@ -9,7 +9,7 @@ Add or update docstrings for Python code. This skill follows Google-style docstr
 
 ## Usage
 
-```
+```bash
 /docstring ClassName
 /docstring path/to/file.py
 ```
