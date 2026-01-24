@@ -1257,16 +1257,14 @@ def _sms_text_mode(
                 # compute the changeset
                 if os.path.exists(sess_data_file):
                     with SessionStore(db_file=sess_data_file) as old_store:
-                        changeset = old_store.compute_changesets(store)
-                    with open(
-                        chnageset_dir
-                        / f"{changeset.base_version[:8]}-{changeset.new_version[:8]}.changeset",
-                        "wb",
-                    ) as wf:
-                        wf.write(changeset.changeset)
+                        delta = old_store.compute_delta(store)
+
+                    name = f"{delta.base_version[:8]}-{delta.new_version[:8]}.changeset"
+                    with open(chnageset_dir / name, "wb") as wf:
+                        wf.write(delta.dumps())
 
                 with open(sess_data_file, "wb") as wf:
-                    wf.write(store.export_snapshot().db_data)
+                    wf.write(store.export_database())
 
             logger.debug("session data saved", extra={"session_data_file": sess_data_file})
 

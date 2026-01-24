@@ -15,16 +15,46 @@ from ..log import logger
 
 
 @dataclass
-class SessionSnapshot:
-    version: str  # Content hash of the database
-    db_data: bytes  # Complete database file content
-
-
-@dataclass
 class SessionDelta:
     base_version: str | None  # Hash of the base version (None for initial)
     new_version: str  # Hash of the new version (content-addressable)
     changeset: bytes  # SQLite changeset bytes (binary delta)
+
+    # Fixed size for SHA-1 hash (40 hex characters)
+    VERSION_SIZE = 40
+
+    def dumps(self) -> bytes:
+        base_ver_bytes = (self.base_version or ("0" * self.VERSION_SIZE)).encode("ascii")
+        new_ver_bytes = self.new_version.encode("ascii")
+
+        if len(base_ver_bytes) != self.VERSION_SIZE:
+            raise ValueError(f"base_version must be {self.VERSION_SIZE} characters")
+        if len(new_ver_bytes) != self.VERSION_SIZE:
+            raise ValueError(f"new_version must be {self.VERSION_SIZE} characters")
+
+        return base_ver_bytes + new_ver_bytes + self.changeset
+
+    @classmethod
+    def load(cls, data: bytes | str | Path) -> SessionDelta:
+        if isinstance(data, (str, Path)):
+            with open(data, "rb") as f:
+                data = f.read()
+
+        if len(data) < cls.VERSION_SIZE * 2:
+            raise ValueError(f"Data too short: expected at least {cls.VERSION_SIZE * 2} bytes")
+
+        base_ver_bytes = data[: cls.VERSION_SIZE]
+        new_ver_bytes = data[cls.VERSION_SIZE : cls.VERSION_SIZE * 2]
+        changeset_bytes = data[cls.VERSION_SIZE * 2 :]
+
+        base_version = base_ver_bytes.decode("ascii")
+        # convert "0"*40 back to None
+        if base_version == "0" * cls.VERSION_SIZE:
+            base_version = None
+
+        new_version = new_ver_bytes.decode("ascii")
+
+        return cls(base_version=base_version, new_version=new_version, changeset=changeset_bytes)
 
 
 SCHEMA_VERSION = 1
@@ -202,7 +232,7 @@ class SessionStore:
             "agent": agent,
         }
 
-    def compute_changesets(self, target_store: SessionStore) -> SessionDelta:
+    def compute_delta(self, target_store: SessionStore) -> SessionDelta:
         """
         Compute changeset from this store to target store using SQLite's session diff.
 
@@ -320,26 +350,67 @@ class SessionStore:
                 },
             )
 
-    def export_snapshot(self) -> SessionSnapshot:
+    def sync_snapshot(
+        self, changesets: list[SessionDelta], *, inplace: bool = True
+    ) -> SessionStore:
         """
-        Export the entire database as a snapshot for cloud upload.
+        Sync a session store with a list of changesets to the latest version.
 
-        Use this for:
-        - Initial upload to cloud
-        - Full resync when deltas are unavailable
+        Builds the correct changeset chain order, finds the starting point that matches
+        the store's current version, then applies all subsequent changesets in order.
+
+        Args:
+            store: Base SessionStore to sync from
+            changesets: List of SessionDelta (order not guaranteed)
+            inplace: If True, modify store in place; if False, create a new store
 
         Returns:
-            SessionSnapshot containing full database content
+            Updated SessionStore (same as input if inplace=True, new instance otherwise)
+
+        Raises:
+            ValueError: If no matching changeset found or chain is broken
         """
-        # Read entire database file
+        if not changesets:
+            return self
+
+        # build a map of base_version -> SessionDelta for quick lookup
+        version_map: dict[str | None, SessionDelta] = {}
+        for delta in changesets:
+            if delta.base_version in version_map:
+                raise ValueError(
+                    f"Multiple changesets found with same base_version={delta.base_version}"
+                )
+            version_map[delta.base_version] = delta
+
+        current_version = self.version
+        if current_version not in version_map:
+            raise ValueError(
+                f"No changeset found with base_version={current_version}. "
+                f"Cannot sync from current version."
+            )
+
+        ordered_changesets: list[SessionDelta] = []
+        next_version = current_version
+
+        while next_version in version_map:
+            delta = version_map[next_version]
+            ordered_changesets.append(delta)
+            next_version = delta.new_version
+
+        if not inplace:
+            db_data = self.export_database()
+            store = SessionStore(db_file=db_data)
+        else:
+            store = self
+
+        # apply the changesets in order
+        store.apply_changesets(ordered_changesets)
+
+        return store
+
+    def export_database(self) -> bytes:
         with open(self._db_path, "rb") as f:
-            db_data = f.read()
-
-        version = self.version
-        if not version:
-            raise ValueError("Database has no version - cannot export snapshot")
-
-        return SessionSnapshot(version=version, db_data=db_data)
+            return f.read()
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
