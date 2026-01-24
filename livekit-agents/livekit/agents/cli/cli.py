@@ -1253,12 +1253,16 @@ def _sms_text_mode(
         if new_state:
             chnageset_dir = pathlib.Path(sess_data_file).with_suffix(".changesets")
             chnageset_dir.mkdir(parents=True, exist_ok=True)
-            with SessionStore.from_state(new_state) as store:
+            with SessionStore.from_session_state(new_state) as store:
                 # compute the changeset
                 if os.path.exists(sess_data_file):
                     with SessionStore(db_file=sess_data_file) as old_store:
                         changeset = old_store.compute_changesets(store)
-                    with open(chnageset_dir / f"{changeset.base_version}-{changeset.new_version}.changeset", "wb") as wf:
+                    with open(
+                        chnageset_dir
+                        / f"{changeset.base_version}-{changeset.new_version}.changeset",
+                        "wb",
+                    ) as wf:
                         wf.write(changeset.changeset)
 
                 with open(sess_data_file, "wb") as wf:
