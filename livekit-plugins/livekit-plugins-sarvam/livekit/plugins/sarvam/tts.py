@@ -484,28 +484,27 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             """tokenize text from the input_ch to sentences"""
             word_stream = None
-            try:
-                async for input in self._input_ch:
-                    if isinstance(input, str):
-                        if word_stream is None:
-                            tokenizer_instance: tokenize.tokenizer.SentenceTokenizer
-                            if self._opts.word_tokenizer is None:
-                                # Fallback to basic tokenizer if none provided
-                                tokenizer_instance = tokenize.basic.SentenceTokenizer()
-                            else:
-                                tokenizer_instance = self._opts.word_tokenizer
-                            word_stream = tokenizer_instance.stream()
-                            segments_ch.send_nowait(word_stream)
-                        word_stream.push_text(input)
-                    elif isinstance(input, self._FlushSentinel):
-                        if word_stream and not word_stream.closed:
-                            word_stream.end_input()
-                        word_stream = None
-            finally:
-                if word_stream is not None and not word_stream.closed:
-                    word_stream.end_input()
-                if not segments_ch.closed:
-                    segments_ch.close()
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if word_stream is None:
+                        tokenizer_instance: tokenize.tokenizer.SentenceTokenizer
+                        if self._opts.word_tokenizer is None:
+                            # Fallback to basic tokenizer if none provided
+                            tokenizer_instance = tokenize.basic.SentenceTokenizer()
+                        else:
+                            tokenizer_instance = self._opts.word_tokenizer
+                        word_stream = tokenizer_instance.stream()
+                        segments_ch.send_nowait(word_stream)
+                    word_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if word_stream:
+                        word_stream.end_input()
+                    word_stream = None
+
+            if word_stream is not None:
+                word_stream.end_input()
+
+            segments_ch.close()
 
         async def _process_segments() -> None:
             async for word_stream in segments_ch:

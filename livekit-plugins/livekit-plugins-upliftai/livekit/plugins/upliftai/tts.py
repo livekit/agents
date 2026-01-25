@@ -481,6 +481,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_parts.append(data.token)
 
             if not text_parts:
+                output_emitter.end_segment()
                 return
 
             # Format text
@@ -508,7 +509,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except asyncio.TimeoutError:
                     break
 
-            output_emitter.end_input()
+            output_emitter.end_segment()
 
         except Exception as e:
             logger.error(f"Segment synthesis error: {e}")

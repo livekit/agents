@@ -358,6 +358,7 @@ class SynthesizeStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._input_lock = asyncio.Lock()
         self._replay_events: list[str | SynthesizeStream._FlushSentinel] = []
         self._input_ended = False
         self._event_ch = aio.Chan[SynthesizedAudio]()
@@ -525,33 +526,40 @@ class SynthesizeStream(ABC):
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token or self._input_ch.closed:
+        if not token:
             return
-
-        if not self._mtc_text:
-            if self._num_segments >= 1:
-                logger.warning(
-                    "SynthesizeStream: handling multiple segments in a single instance is "
-                    "deprecated. Please create a new SynthesizeStream instance for each segment. "
-                    "Most TTS plugins now use pooled WebSocket connections via ConnectionPool."
-                )
+        with self._input_lock:
+            if self._input_ch.closed:
                 return
 
-            self._num_segments += 1
+            if not self._mtc_text:
+                if self._num_segments >= 1:
+                    logger.warning(
+                        "SynthesizeStream: handling multiple segments in a single instance is "
+                        "deprecated. Please create a new SynthesizeStream instance for each segment. "
+                        "Most TTS plugins now use pooled WebSocket connections via ConnectionPool."
+                    )
+                    return
 
-        self._pushed_text += token
-        self._replay_events.append(token)
+                self._num_segments += 1
 
-        if self._metrics_task is None:
-            self._metrics_task = asyncio.create_task(
-                self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
-            )
+            self._pushed_text += token
+            self._replay_events.append(token)
 
-        self._mtc_text += token
-        self._input_ch.send_nowait(token)
+            if self._metrics_task is None:
+                self._metrics_task = asyncio.create_task(
+                    self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
+                )
+
+            self._mtc_text += token
+            self._input_ch.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        with self._input_lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
         if self._input_ch.closed:
             return
 
@@ -565,25 +573,27 @@ class SynthesizeStream(ABC):
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
-        self.flush()
-        self._input_ended = True
-        self._input_ch.close()
+        with self._input_lock:
+            self._flush_locked()
+            self._input_ended = True
+            self._input_ch.close()
 
     def _reset_for_retry(self) -> None:
         # Reset per-attempt timing used for metrics; without this, retries can produce incorrect
         # durations/TTFB because `_mark_started` only sets the first time.
         self._started_time = 0
-        if not self._input_ch.closed:
-            self._input_ch.close()
+        with self._input_lock:
+            old_ch = self._input_ch
+            ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+            for ev in self._replay_events:
+                ch.send_nowait(ev)
 
-        ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
-        for ev in self._replay_events:
-            ch.send_nowait(ev)
+            if self._input_ended:
+                ch.close()
 
-        if self._input_ended:
-            ch.close()
-
-        self._input_ch = ch
+            self._input_ch = ch
+            if not old_ch.closed:
+                old_ch.close()
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
