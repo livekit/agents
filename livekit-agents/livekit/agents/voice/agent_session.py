@@ -24,7 +24,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import RunEvent, cli, inference, llm, stt, tts, utils, vad
+from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
@@ -57,7 +57,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
-from .run_result import RunResult
+from .run_result import RunEvent, RunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:

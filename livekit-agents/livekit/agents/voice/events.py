@@ -4,7 +4,17 @@ import base64
 import time
 from dataclasses import asdict, is_dataclass
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeAlias, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    Union,
+    get_args,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PrivateAttr, model_validator
 from typing_extensions import Self
@@ -34,7 +44,7 @@ from ..types import FlushSentinel, TimedString
 from ..vad import VADEvent, VADEventType
 from .io import PlaybackFinishedEvent, PlaybackStartedEvent
 from .room_io.types import TextInputEvent
-from .run_result import AgentHandoffEvent
+from .run_result import AgentHandoffEvent, RunEvent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -292,7 +302,7 @@ def _serialize_audio_frame(frame: rtc.AudioFrame) -> dict:
     }
 
 
-def _internal_event_serializer(event: InternalEvent) -> dict | None:
+def _internal_event_serializer(event: InternalEvent | RunEvent) -> dict | None:
     """Serialize an internal event to a dictionary or None.
 
     Args:
@@ -304,9 +314,15 @@ def _internal_event_serializer(event: InternalEvent) -> dict | None:
 
     if isinstance(event, AgentHandoffEvent):
         data = asdict(event)
+        data["item"] = event.item.model_dump(mode="json")
         # replace agent objects with their ids
         data["old_agent"] = event.old_agent.id if event.old_agent else None
         data["new_agent"] = event.new_agent.id if event.new_agent else None
+        return data
+
+    if isinstance(event, get_args(RunEvent)):
+        data = asdict(event)
+        data["item"] = event.item.model_dump(mode="json")
         return data
 
     if isinstance(event, SynthesizedAudio):
@@ -337,10 +353,10 @@ def _internal_event_serializer(event: InternalEvent) -> dict | None:
         data = asdict(event)
         if isinstance(event.data, rtc.AudioFrame):
             data["data"] = _serialize_audio_frame(event.data)
-        elif isinstance(event.data, str):
-            data["data"] = event.data
         elif isinstance(event.data, TimedString):
             data["data"] = event.data.to_dict()
+        elif isinstance(event.data, str):
+            data["data"] = event.data
         elif isinstance(event.data, ChatChunk):
             data["data"] = event.data.model_dump(mode="json")
         return data
