@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-import base64
 import time
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel
-
-from livekit.rtc import AudioFrame
-
-from ..llm import ChatChunk, ChatContext, GenerationCreatedEvent, LLMOutputEvent
-from ..log import logger
-from ..tts import SynthesizedAudio
-from ..types import TimedString
-from ..vad import VADEvent, VADEventType
+from ..llm import ChatContext
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent, TimedInternalEvent
 
@@ -49,47 +40,11 @@ class SessionReport:
             events_dict.append(event.model_dump())
 
         if self.include_internal_events:
-            for created_at, e in self.internal_events:
-                if isinstance(e, BaseModel):
-                    internal_events_dict.append({**e.model_dump(), "__created_at": created_at})
-                elif isinstance(e, SynthesizedAudio):
-                    # coming from TTS
-                    data = asdict(e)
-                    data["frame"] = self._serialize_audio_frame(e.frame)
-                    internal_events_dict.append({**data, "__created_at": created_at})
-                elif isinstance(e, LLMOutputEvent):
-                    data = asdict(e)
-                    if isinstance(e.data, AudioFrame):
-                        data["data"] = self._serialize_audio_frame(e.data)
-                    elif isinstance(e.data, str):
-                        data["data"] = e.data
-                    elif isinstance(e.data, TimedString):
-                        data["data"] = e.data.to_dict()
-                    elif isinstance(e.data, ChatChunk):
-                        data["data"] = e.data.model_dump(mode="json")
-                    internal_events_dict.append({**data, "__created_at": created_at})
-                elif isinstance(e, VADEvent):
-                    # skip inference done events, they are too frequent and too noisy
-                    if e.type == VADEventType.INFERENCE_DONE:
-                        continue
-                    # remove audio frames from VAD event since we can reproduce them cheaply
-                    data = asdict(e)
-                    data["frames"] = []
-                    internal_events_dict.append({**data, "__created_at": created_at})
-                elif isinstance(e, GenerationCreatedEvent):
-                    # skip message_stream and function_stream as they are not serializable
-                    data = {
-                        "message_stream": None,
-                        "function_stream": None,
-                        "user_initiated": e.user_initiated,
-                        "response_id": e.response_id,
-                        "type": e.type,
-                    }
-                    internal_events_dict.append({**data, "__created_at": created_at})
-                elif is_dataclass(e):
-                    internal_events_dict.append({**asdict(e), "__created_at": created_at})
-                else:
-                    logger.warning(f"Unknown internal event type: {type(e)}")
+            for event in self.internal_events:
+                if (data := event.model_dump(mode="json", by_alias=True)) and data[
+                    "event"
+                ] is not None:
+                    internal_events_dict.append(data)
 
         return {
             "job_id": self.job_id,
@@ -115,13 +70,4 @@ class SessionReport:
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
-        }
-
-    @staticmethod
-    def _serialize_audio_frame(frame: AudioFrame) -> dict:
-        return {
-            "sample_rate": frame.sample_rate,
-            "num_channels": frame.num_channels,
-            "samples_per_channel": frame.samples_per_channel,
-            "data": base64.b64encode(frame.data).decode("utf-8"),
         }

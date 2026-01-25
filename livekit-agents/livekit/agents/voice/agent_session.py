@@ -370,14 +370,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
-        if self._include_internal_events:
-            self._recorded_internal_events.append((time.time(), arg))
         super().emit(event, arg)
+        self.maybe_collect(arg)
 
     def maybe_collect(self, event: InternalEvent) -> None:
         """Collect the event if internal events are enabled. AgentEvent should be collected already with `emit`."""
         if self._include_internal_events:
-            self._recorded_internal_events.append((time.time(), event))
+            self._recorded_internal_events.append(TimedInternalEvent(event=event))
 
     @property
     def userdata(self) -> Userdata_T:
