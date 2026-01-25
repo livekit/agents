@@ -600,7 +600,8 @@ class SynthesizeStream(ABC):
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
-        self._input_ch.close()
+        with self._input_lock:
+            self._input_ch.close()
 
         if self._metrics_task is not None:
             await self._metrics_task
