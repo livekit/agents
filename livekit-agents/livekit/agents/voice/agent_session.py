@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Generic,
     Literal,
     Optional,
@@ -25,7 +24,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import cli, inference, llm, stt, tts, utils, vad
+from .. import RunEvent, cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
@@ -374,7 +373,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().emit(event, arg)
         self.maybe_collect(arg)
 
-    def maybe_collect(self, event: InternalEvent | Any) -> None:
+    def maybe_collect(self, event: InternalEvent | RunEvent) -> None:
         """Collect the event if internal events are enabled."""
         if self._include_internal_events:
             self._recorded_internal_events.append(TimedInternalEvent(event=event))

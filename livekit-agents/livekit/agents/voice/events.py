@@ -283,6 +283,15 @@ InternalEvent: TypeAlias = Union[
 ]
 
 
+def _serialize_audio_frame(frame: rtc.AudioFrame) -> dict:
+    return {
+        "sample_rate": frame.sample_rate,
+        "num_channels": frame.num_channels,
+        "samples_per_channel": frame.samples_per_channel,
+        "data": base64.b64encode(frame.data).decode("utf-8"),
+    }
+
+
 def _internal_event_serializer(event: InternalEvent) -> dict | None:
     """Serialize an internal event to a dictionary or None.
 
@@ -292,14 +301,6 @@ def _internal_event_serializer(event: InternalEvent) -> dict | None:
     Returns:
         A dictionary representing the event or None if the event should be ignored.
     """
-
-    def _serialize_audio_frame(frame: rtc.AudioFrame) -> dict:
-        return {
-            "sample_rate": frame.sample_rate,
-            "num_channels": frame.num_channels,
-            "samples_per_channel": frame.samples_per_channel,
-            "data": base64.b64encode(frame.data).decode("utf-8"),
-        }
 
     if isinstance(event, AgentHandoffEvent):
         data = asdict(event)
