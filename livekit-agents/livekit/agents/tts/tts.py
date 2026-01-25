@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -358,7 +359,7 @@ class SynthesizeStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
-        self._input_lock = asyncio.Lock()
+        self._input_lock = threading.Lock()
         self._replay_events: list[str | SynthesizeStream._FlushSentinel] = []
         self._input_ended = False
         self._event_ch = aio.Chan[SynthesizedAudio]()

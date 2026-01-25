@@ -541,7 +541,7 @@ class _Connection:
 
     @property
     def is_open(self) -> bool:
-        return bool(self._ws) and not self._ws.closed and not self._closed
+        return self._ws is not None and not self._ws.closed and not self._closed
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
