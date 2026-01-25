@@ -732,7 +732,7 @@ class _Connection:
                 if data.get("isFinal"):
                     if not ctx.received_audio and ctx.sent_text and not ctx.waiter.done():
                         # ElevenLabs sometimes returns `isFinal` with an empty `audio` payload.
-                        # Empty input can legitimately return isFinal without audio, so only treat
+                        # Empty input can return isFinal without audio, so only treat
                         # it as a retryable failure when we actually sent text.
                         ctx.waiter.set_exception(
                             APIError("11labs stream ended without audio", retryable=True)

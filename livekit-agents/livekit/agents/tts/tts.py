@@ -573,6 +573,8 @@ class SynthesizeStream(ABC):
         # Reset per-attempt timing used for metrics; without this, retries can produce incorrect
         # durations/TTFB because `_mark_started` only sets the first time.
         self._started_time = 0
+        if not self._input_ch.closed:
+            self._input_ch.close()
 
         ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         for ev in self._replay_events:
