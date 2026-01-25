@@ -511,6 +511,7 @@ class _StreamData:
     waiter: asyncio.Future[None]
     timeout_timer: asyncio.TimerHandle | None = None
     received_audio: bool = False
+    sent_text: bool = False
 
 
 class _Connection:
@@ -571,6 +572,10 @@ class _Connection:
         """Send synthesis content to the connection"""
         if self._closed or not self._ws or self._ws.closed:
             raise APIConnectionError("WebSocket connection is closed")
+        if content.text.strip():
+            ctx = self._context_data.get(content.context_id)
+            if ctx:
+                ctx.sent_text = True
         self._input_queue.send_nowait(content)
 
     def close_context(self, context_id: str) -> None:
@@ -725,9 +730,10 @@ class _Connection:
                         ctx.timeout_timer.cancel()
 
                 if data.get("isFinal"):
-                    if not ctx.received_audio and not ctx.waiter.done():
+                    if not ctx.received_audio and ctx.sent_text and not ctx.waiter.done():
                         # ElevenLabs sometimes returns `isFinal` with an empty `audio` payload.
-                        # Treat that as a retryable failure and force a reconnect for the next attempt.
+                        # Empty input can legitimately return isFinal without audio, so only treat
+                        # it as a retryable failure when we actually sent text.
                         ctx.waiter.set_exception(
                             APIError("11labs stream ended without audio", retryable=True)
                         )
