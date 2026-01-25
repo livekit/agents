@@ -44,6 +44,58 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 
 
+def _get_model_mismatch_hint(model: str, use_vertexai: bool, error_message: str) -> str | None:
+    """
+    Generate a helpful hint when a WebSocket 1008 error suggests model/API mismatch.
+
+    Args:
+        model: The model name being used
+        use_vertexai: Whether VertexAI is enabled
+        error_message: The error message from the WebSocket exception
+
+    Returns:
+        A helpful hint string, or None if no mismatch detected
+    """
+    # Only provide hints for 1008 policy violations
+    if "1008" not in error_message and "policy violation" not in error_message.lower():
+        return None
+
+    is_vertexai_model = model.startswith("gemini-live-")
+    is_gemini_api_model = model.startswith(("gemini-2.", "gemini-1."))
+
+    if use_vertexai and is_gemini_api_model:
+        suggested_model = None
+        if "09-2025" in model:
+            suggested_model = "gemini-live-2.5-flash-preview-native-audio-09-2025"
+        elif "12-2025" in model or "2.5" in model:
+            suggested_model = "gemini-live-2.5-flash-native-audio"
+
+        hint = (
+            f"\n\nHint: Model '{model}' appears to be a Gemini API model, but VertexAI is enabled. "
+            f"VertexAI requires different model names (prefixed with 'gemini-live-')."
+        )
+        if suggested_model:
+            hint += f" Try using model='{suggested_model}' instead."
+        return hint
+
+    if not use_vertexai and is_vertexai_model:
+        suggested_model = None
+        if "09-2025" in model:
+            suggested_model = "gemini-2.5-flash-native-audio-preview-09-2025"
+        elif "preview" not in model:
+            suggested_model = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+        hint = (
+            f"\n\nHint: Model '{model}' appears to be a VertexAI model, but Gemini API is being used. "
+            f"Gemini API requires different model names."
+        )
+        if suggested_model:
+            hint += f" Try using model='{suggested_model}' instead, or enable vertexai=True."
+        return hint
+
+    return None
+
+
 @dataclass
 class InputTranscription:
     item_id: str
@@ -753,19 +805,29 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+                # Check if this might be a model/API mismatch and provide helpful hint
+                hint = _get_model_mismatch_hint(self._opts.model, self._opts.vertexai, str(e))
+                if hint:
+                    logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
+                else:
+                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+
                 if not self._msg_ch.closed:
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
                     if not session or max_retries == 0:
                         self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(message="Failed to connect to Gemini Live") from e
+                        error_msg = "Failed to connect to Gemini Live"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
 
                     if self._num_retries == max_retries:
                         self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(
-                            message=f"Failed to connect to Gemini Live after {max_retries} attempts"
-                        ) from e
+                        error_msg = f"Failed to connect to Gemini Live after {max_retries} attempts"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
 
                     retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
