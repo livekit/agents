@@ -413,7 +413,7 @@ class SpeechStream(stt.SpeechStream):
                     # Reset speaking state on reconnection
                     self._speaking = False
                     # Add exponential backoff
-                    await asyncio.sleep(min(2 ** reconnect_attempt, 10))
+                    await asyncio.sleep(min(2**reconnect_attempt, 10))
 
                 reconnect_attempt += 1
                 if reconnect_attempt > max_reconnect_attempts:
