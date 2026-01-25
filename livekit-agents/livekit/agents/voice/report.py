@@ -40,10 +40,8 @@ class SessionReport:
             events_dict.append(event.model_dump())
 
         if self.include_internal_events:
-            for event in self.internal_events:
-                if (data := event.model_dump(mode="json", by_alias=True)) and data[
-                    "event"
-                ] is not None:
+            for e in self.internal_events:
+                if (data := e.model_dump(mode="json", by_alias=True)) and data["event"] is not None:
                     internal_events_dict.append(data)
 
         return {

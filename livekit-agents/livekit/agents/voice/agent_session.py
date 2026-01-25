@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Optional,
@@ -373,8 +374,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().emit(event, arg)
         self.maybe_collect(arg)
 
-    def maybe_collect(self, event: InternalEvent) -> None:
-        """Collect the event if internal events are enabled. AgentEvent should be collected already with `emit`."""
+    def maybe_collect(self, event: InternalEvent | Any) -> None:
+        """Collect the event if internal events are enabled."""
         if self._include_internal_events:
             self._recorded_internal_events.append(TimedInternalEvent(event=event))
 

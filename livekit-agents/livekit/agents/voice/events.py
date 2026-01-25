@@ -4,7 +4,7 @@ import base64
 import time
 from dataclasses import asdict, is_dataclass
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeAlias, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PrivateAttr, model_validator
 from typing_extensions import Self
@@ -34,7 +34,7 @@ from ..types import FlushSentinel, TimedString
 from ..vad import VADEvent, VADEventType
 from .io import PlaybackFinishedEvent, PlaybackStartedEvent
 from .room_io.types import TextInputEvent
-from .run_result import AgentHandoffEvent, RunEvent
+from .run_result import AgentHandoffEvent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -257,7 +257,7 @@ AgentEvent = Annotated[
 ]
 
 
-InternalEvent = Annotated[
+_InternalEvent = Annotated[
     Union[
         AgentEvent,
         InputSpeechStartedEvent,
@@ -274,10 +274,16 @@ InternalEvent = Annotated[
     Field(discriminator="type"),
 ]
 
+# Allow additional events here without a Literal type discriminator
+# which Pydantic doesn't support
+InternalEvent: TypeAlias = Union[
+    _InternalEvent,
+    VADEvent,
+    SpeechEvent,
+]
 
-def _internal_event_serializer(
-    event: InternalEvent | VADEvent | SpeechEvent | RunEvent | Any,
-) -> dict | None:
+
+def _internal_event_serializer(event: InternalEvent) -> dict | None:
     """Serialize an internal event to a dictionary or None.
 
     Args:
@@ -341,7 +347,7 @@ def _internal_event_serializer(
     if isinstance(event, BaseModel):
         return event.model_dump(mode="json")
 
-    if is_dataclass(event):
+    if is_dataclass(event) and not isinstance(event, type):
         return asdict(event)
 
     logger.warning(f"Unknown internal event type: {type(event)}")
@@ -353,8 +359,7 @@ class TimedInternalEvent(BaseModel):
     # use a custom alias for the created_at field to avoid conflicts with the event field
     created_at: float = Field(default_factory=time.time, serialization_alias="__created_at")
     # Allow Any here to avoid RunEvent(AgentHandoffEvent/Agent) definition dependency issue
-    # Allow additional events here without a Literal type discriminator
     event: Annotated[
-        InternalEvent | VADEvent | SpeechEvent | Any,
+        InternalEvent | Any,
         PlainSerializer(_internal_event_serializer),
     ]
