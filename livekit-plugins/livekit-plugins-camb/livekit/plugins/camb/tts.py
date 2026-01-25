@@ -94,14 +94,14 @@ class TTS(tts.TTS):
         )
 
         self._api_key = api_key or os.environ.get("CAMB_API_KEY")
-        if not self._api_key and not is_given(credentials_info) and not is_given(credentials_file):
+        if not self._api_key:
             raise ValueError(
                 "Camb.ai API key must be provided via api_key parameter or "
                 "CAMB_API_KEY environment variable"
             )
 
         if is_given(credentials_info) or is_given(credentials_file):
-            logger.warning("Vertex AI support not yet implemented")
+            logger.warning("Vertex AI credentials provided but not yet implemented - using API key")
 
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
