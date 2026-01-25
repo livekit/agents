@@ -202,7 +202,6 @@ def build_legacy_openai_schema(
     if "required" not in schema:
         schema["required"] = []
 
-
     if internally_tagged:
         return {
             "name": info.name,
@@ -232,7 +231,6 @@ def build_strict_openai_schema(
     # Ensure 'required' field exists for compatibility with strict APIs
     if "required" not in schema:
         schema["required"] = []
-
 
     return {
         "type": "function",
