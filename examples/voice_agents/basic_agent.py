@@ -10,14 +10,14 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
+    TurnHandlingConfig,
     cli,
     inference,
     metrics,
     room_io,
 )
-from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
-from livekit.agents.voice.turn import TurnHandlingConfig
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -111,7 +111,6 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    # log metrics as they are emitted, and total usage after session is over
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)

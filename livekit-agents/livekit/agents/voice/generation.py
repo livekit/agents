@@ -183,7 +183,7 @@ async def _llm_inference_task(
         ),
     )
     if data.ttft is not None:
-        current_span.set_attribute(trace_types.ATTR_LLM_NODE_TTFT, data.ttft)
+        current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     return True
 
 
@@ -266,7 +266,7 @@ async def _tts_inference_task(
             if start_time is not None and data.ttfb is None:
                 data.ttfb = time.perf_counter() - start_time
                 current_span = trace.get_current_span()
-                current_span.set_attribute(trace_types.ATTR_TTS_NODE_TTFB, data.ttfb)
+                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
 
             if timed_text_ch is not None:
                 for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):

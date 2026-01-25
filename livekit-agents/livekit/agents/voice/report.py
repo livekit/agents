@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..llm import ChatContext
-from ..metrics import UsageSummary
+from ..metrics import ModelUsage
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent
 
@@ -27,7 +27,7 @@ class SessionReport:
     """Timestamp when the session started"""
     timestamp: float = field(default_factory=time.time)
     """Timestamp when the session report was created, typically at the end of the session"""
-    usage: list[UsageSummary] | None = None
+    usage: list[ModelUsage] | None = None
     """Usage summaries for the session, one per model/provider combination"""
 
     def to_dict(self) -> dict:
@@ -68,4 +68,4 @@ class SessionReport:
     def _usage_to_dict(self) -> list[dict] | None:
         if self.usage is None:
             return None
-        return [summary.to_dict() for summary in self.usage]
+        return [summary.model_dump(exclude_defaults=True) for summary in self.usage]

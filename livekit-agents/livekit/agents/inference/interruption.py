@@ -28,7 +28,12 @@ from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio, http_context, is_given, log_exceptions, shortuuid
-from ._utils import create_access_token
+from ._utils import (
+    DEFAULT_INFERENCE_URL,
+    STAGING_INFERENCE_URL,
+    create_access_token,
+    get_default_inference_url,
+)
 
 if TYPE_CHECKING:
     from ..vad import VAD
@@ -40,7 +45,6 @@ MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 0.5  # 0.5 second
 REMOTE_INFERENCE_TIMEOUT = 1
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 _FRAMES_PER_SECOND = 40
 
 MSG_INPUT_AUDIO = "input_audio"
@@ -198,12 +202,15 @@ class AdaptiveInterruptionDetector(
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
         lk_base_url = (
-            base_url if base_url else os.getenv("LIVEKIT_REMOTE_EOT_URL", DEFAULT_BASE_URL)
+            base_url
+            if base_url
+            else os.getenv("LIVEKIT_REMOTE_EOT_URL", get_default_inference_url())
         )
         lk_api_key: str = api_key if api_key else ""
         lk_api_secret: str = api_secret if api_secret else ""
-        # use LiveKit credentials if using the default base URL (inference)
-        if lk_base_url == DEFAULT_BASE_URL:
+        # use LiveKit credentials if using the inference service (production or staging)
+        is_inference_url = lk_base_url in (DEFAULT_INFERENCE_URL, STAGING_INFERENCE_URL)
+        if is_inference_url:
             lk_api_key = (
                 api_key
                 if api_key
