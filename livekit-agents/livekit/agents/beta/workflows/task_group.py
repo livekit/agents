@@ -62,7 +62,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self._completed_callbacks: OrderedDict[
             str, Callable[[Any], Coroutine[None, None, None]]
         ] = OrderedDict()
-        self._callback_tasks = []
+        self._callback_tasks = list[asyncio.Task[Any]]()
 
     def add(
         self,
@@ -87,7 +87,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         )
         signature = inspect.signature(on_completed)
         if len(signature.parameters) > 0:
-            self._completed_callbacks[id] = on_completed
+            self._completed_callbacks[id] = on_completed  # type: ignore
 
         else:
 
