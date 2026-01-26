@@ -79,9 +79,9 @@ ISO_639_3_TO_1 = {
 }
 
 
-def iso639_3_to_1(code) -> str | None:
+def iso639_3_to_1(code: str | None) -> str | None:
     """Convert ISO 639-3 to ISO 639-1. Returns None if no mapping exists."""
-    return ISO_639_3_TO_1.get(code.lower())
+    return ISO_639_3_TO_1.get(code.lower()) if code else None
 
 
 @dataclass
