@@ -4,22 +4,25 @@ import asyncio
 import json
 import math
 import time
+from collections import deque
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, Union, cast
 
 from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
 
 from livekit import rtc
 
-from .. import llm, stt, utils, vad
+from .. import inference, llm, stt, utils, vad
+from ..inference.interruption import InterruptionStreamBase
 from ..log import logger
+from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
-from .agent import ModelSettings
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -81,6 +84,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 
 class RecognitionHooks(Protocol):
+    def on_interruption(self, ev: inference.InterruptionEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -100,6 +104,7 @@ class AudioRecognition:
         hooks: RecognitionHooks,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
+        interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
@@ -138,7 +143,27 @@ class AudioRecognition:
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
+
         self._tasks: set[asyncio.Task[Any]] = set()
+
+        # used for adaptive interruption detection
+        self._interruption_atask: asyncio.Task[None] | None = None
+        self._interruption_detection = interruption_detection
+        self._interruption_ch: (
+            aio.Chan[
+                rtc.AudioFrame
+                | InterruptionStreamBase._AgentSpeechStartedSentinel
+                | InterruptionStreamBase._AgentSpeechEndedSentinel
+                | InterruptionStreamBase._OverlapSpeechStartedSentinel
+                | InterruptionStreamBase._OverlapSpeechEndedSentinel
+            ]
+            | None
+        ) = None
+        self._input_started_at: float | None = None
+        self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
+        self._transcript_buffer: deque[SpeechEvent] = deque()
+        self._interruption_enabled: bool = interruption_detection is not None and vad is not None
+        self._agent_speaking: bool = False
 
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
@@ -175,18 +200,196 @@ class AudioRecognition:
     def start(self) -> None:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
+        self.update_interruption_detection(self._interruption_detection)
 
     def stop(self) -> None:
         self.update_stt(None)
         self.update_vad(None)
+        self.update_interruption_detection(None)
+
+    def on_start_of_agent_speech(self) -> None:
+        self._agent_speaking = True
+
+        if (
+            not self._interruption_enabled
+            or not self._interruption_ch
+            or self._interruption_ch.closed
+        ):
+            return
+        self._interruption_ch.send_nowait(InterruptionStreamBase._AgentSpeechStartedSentinel())
+
+    def on_start_of_overlap_speech(
+        self,
+        speech_duration: float | None = None,
+        user_speaking_span: trace.Span | None = None,
+    ) -> None:
+        """Start interruption inference when agent is speaking and overlap speech starts."""
+        if (
+            not self._interruption_enabled
+            or not self._interruption_ch
+            or self._interruption_ch.closed
+        ):
+            return
+        if self._agent_speaking:
+            self._interruption_ch.send_nowait(
+                InterruptionStreamBase._OverlapSpeechStartedSentinel(
+                    speech_duration, user_speaking_span
+                )
+            )
+
+    def on_end_of_overlap_speech(self, user_speaking_span: trace.Span | None = None) -> None:
+        """End interruption inference when agent is speaking and overlap speech ends."""
+        if (
+            not self._interruption_enabled
+            or not self._interruption_ch
+            or self._interruption_ch.closed
+        ):
+            return
+
+        # Only set is_interruption=false if not already set (avoid overwriting true from interruption detection)
+        if user_speaking_span and user_speaking_span.is_recording():
+            if isinstance(user_speaking_span, ReadableSpan):
+                if (
+                    user_speaking_span.attributes
+                    and user_speaking_span.attributes.get(trace_types.ATTR_IS_INTERRUPTION) is None
+                ):
+                    user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
+            else:
+                user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
+
+        self._interruption_ch.send_nowait(InterruptionStreamBase._OverlapSpeechEndedSentinel())
+
+    def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
+        if (
+            not self._interruption_enabled
+            or not self._interruption_ch
+            or self._interruption_ch.closed
+        ):
+            self._agent_speaking = False
+            return
+
+        self._interruption_ch.send_nowait(InterruptionStreamBase._AgentSpeechEndedSentinel())
+
+        if self._agent_speaking:
+            # no interruption is detected, end the inference (idempotent)
+            if not is_given(self._ignore_user_transcript_until):
+                self.on_end_of_overlap_speech()
+            self._ignore_user_transcript_until = (
+                ignore_user_transcript_until
+                if not is_given(self._ignore_user_transcript_until)
+                else min(ignore_user_transcript_until, self._ignore_user_transcript_until)
+            )
+
+            # flush held transcripts if possible
+            task = asyncio.create_task(self._flush_held_transcripts())
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
+
+        self._agent_speaking = False
+
+    async def _flush_held_transcripts(self) -> None:
+        """Flush held transcripts whose *end time* is after the ignore_user_transcript_until timestamp.
+
+        If the event has no timestamps, we assume it is the same as the next valid event.
+        """
+        if not self._interruption_enabled:
+            return
+        if not is_given(self._ignore_user_transcript_until):
+            return
+        if not self._transcript_buffer:
+            return
+
+        if not self._input_started_at:
+            self._transcript_buffer.clear()
+            self._ignore_user_transcript_until = NOT_GIVEN
+            return
+
+        emit_from_index: int | None = None
+        should_flush = False
+        for i, ev in enumerate(self._transcript_buffer):
+            if not ev.alternatives:
+                emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
+                continue
+            if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
+                self._transcript_buffer.clear()
+                self._ignore_user_transcript_until = NOT_GIVEN
+                return
+
+            if (
+                ev.alternatives[0].end_time > 0
+                and ev.alternatives[0].end_time + self._input_started_at
+                < self._ignore_user_transcript_until
+            ):
+                emit_from_index = None
+            else:
+                emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
+                should_flush = True
+                break
+
+        # extract events to emit and reset BEFORE iterating
+        # to prevent recursive calls
+        events_to_emit = (
+            list(self._transcript_buffer)[int(emit_from_index) :]
+            if emit_from_index is not None and should_flush
+            else []
+        )
+        self._transcript_buffer.clear()
+        self._ignore_user_transcript_until = NOT_GIVEN
+
+        for ev in events_to_emit:
+            logger.trace(
+                "re-emitting held user transcript",
+                extra={
+                    "event": ev.type,
+                },
+            )
+            await self._on_stt_event(ev)
+
+    def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
+        """Test if the event should be held until the ignore_user_transcript_until timestamp."""
+        if not self._interruption_enabled:
+            return False
+
+        if self._agent_speaking:
+            return True
+
+        if not is_given(self._ignore_user_transcript_until):
+            return False
+        # sentinel events are always held until
+        # we have something concrete to release them
+        if not ev.alternatives:
+            return True
+        if (
+            # most vendors don't set timestamps properly, in which case we just assume
+            # it is a valid event after the ignore_user_transcript_until timestamp
+            is_given(self._input_started_at)
+            # check if the event should be held if
+            # 1. the stt input stream has started
+            # 2. the current event has a valid start and end time, relative to the input stream start time
+            # 3. the event is for audio sent before the ignore_user_transcript_until timestamp
+            and self._input_started_at is not None
+            and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
+            and ev.alternatives[0].end_time > 0
+            and ev.alternatives[0].end_time + self._input_started_at
+            < self._ignore_user_transcript_until
+        ):
+            return True
+
+        return False
 
     def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
+        if self._input_started_at is None:
+            self._input_started_at = time.time()
+
         self._sample_rate = frame.sample_rate
         if not skip_stt and self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
+
+        if self._interruption_ch is not None:
+            self._interruption_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
         self._closing.set()
@@ -202,6 +405,9 @@ class AudioRecognition:
         if self._vad_atask is not None:
             await aio.cancel_and_wait(self._vad_atask)
 
+        if self._interruption_atask is not None:
+            await aio.cancel_and_wait(self._interruption_atask)
+
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
 
@@ -212,6 +418,10 @@ class AudioRecognition:
             self._stt_atask = asyncio.create_task(
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
             )
+            # reset interruption handling related state
+            self._transcript_buffer.clear()
+            self._ignore_user_transcript_until = NOT_GIVEN
+            self._input_started_at = None
         elif self._stt_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -232,6 +442,43 @@ class AudioRecognition:
             self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
+
+        self._interruption_enabled = (
+            self._interruption_detection is not None and self._vad is not None
+        )
+
+    def update_interruption_detection(
+        self, interruption_detection: inference.AdaptiveInterruptionDetector | None
+    ) -> None:
+        self._interruption_detection = interruption_detection
+        if interruption_detection is not None:
+            self._interruption_ch = aio.Chan[
+                Union[
+                    rtc.AudioFrame,
+                    InterruptionStreamBase._AgentSpeechStartedSentinel,
+                    InterruptionStreamBase._AgentSpeechEndedSentinel,
+                    InterruptionStreamBase._OverlapSpeechStartedSentinel,
+                    InterruptionStreamBase._OverlapSpeechEndedSentinel,
+                ]
+            ]()
+            self._interruption_atask = asyncio.create_task(
+                self._interruption_task(
+                    interruption_detection, self._interruption_ch, self._interruption_atask
+                )
+            )
+            self._transcript_buffer.clear()
+            self._ignore_user_transcript_until = NOT_GIVEN
+            self._input_started_at = None
+        elif self._interruption_atask is not None:
+            task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
+            self._interruption_atask = None
+            self._interruption_ch = None
+
+        self._interruption_enabled = (
+            self._interruption_detection is not None and self._vad is not None
+        )
 
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
@@ -341,6 +588,27 @@ class AudioRecognition:
             # ignore transcript for manual turn detection when user turn already committed
             # and EOU task is done or this is an interim transcript
             return
+
+        # handle interruption detection
+        # - hold the event until the ignore_user_transcript_until expires
+        # - release only relevant events
+        # - allow RECOGNITION_USAGE to pass through immediately
+        if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._interruption_enabled:
+            if self._should_hold_stt_event(ev):
+                logger.trace(
+                    "holding STT event until ignore_user_transcript_until expires",
+                    extra={
+                        "event": ev.type,
+                        "ignore_user_transcript_until": self._ignore_user_transcript_until
+                        if is_given(self._ignore_user_transcript_until)
+                        else None,
+                    },
+                )
+                self._transcript_buffer.append(ev)
+                return
+            elif self._transcript_buffer:
+                await self._flush_held_transcripts()
+                # no return here to allow the new event to be processed normally
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
@@ -502,6 +770,10 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
+    async def _on_interruption_event(self, ev: inference.InterruptionEvent) -> None:
+        if ev.type == "user_interruption_detected":
+            self._hooks.on_interruption(ev)
+
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
@@ -649,6 +921,8 @@ class AudioRecognition:
         audio_input: AsyncIterable[rtc.AudioFrame],
         task: asyncio.Task[None] | None,
     ) -> None:
+        from .agent import ModelSettings
+
         if task is not None:
             await aio.cancel_and_wait(task)
 
@@ -693,6 +967,44 @@ class AudioRecognition:
             await stream.aclose()
 
     @utils.log_exceptions(logger=logger)
+    async def _interruption_task(
+        self,
+        interruption_detection: inference.AdaptiveInterruptionDetector,
+        audio_input: AsyncIterable[
+            rtc.AudioFrame
+            | InterruptionStreamBase._AgentSpeechStartedSentinel
+            | InterruptionStreamBase._AgentSpeechEndedSentinel
+            | InterruptionStreamBase._OverlapSpeechStartedSentinel
+            | InterruptionStreamBase._OverlapSpeechEndedSentinel
+        ],
+        task: asyncio.Task[None] | None,
+    ) -> None:
+        if task is not None:
+            await aio.cancel_and_wait(task)
+
+        stream = interruption_detection.stream()
+
+        @utils.log_exceptions(logger=logger)
+        async def _forward() -> None:
+            async for frame in audio_input:
+                stream.push_frame(frame)
+
+        forward_task = asyncio.create_task(_forward())
+
+        try:
+            async for ev in stream:
+                await self._on_interruption_event(ev)
+        finally:
+            await aio.cancel_and_wait(forward_task)
+            await stream.aclose()
+            if isinstance(audio_input, aio.Chan):
+                while not audio_input.empty():
+                    audio_input.recv_nowait()
+                audio_input.close()
+            else:
+                async for _ in audio_input:
+                    pass
+
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
