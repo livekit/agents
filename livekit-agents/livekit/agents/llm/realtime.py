@@ -182,6 +182,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     @abstractmethod
     def commit_audio(self) -> None: ...
 
+    @abstractmethod
+    def commit_user_turn(self) -> None: ...
+
     # clear the input audio buffer to the server
     @abstractmethod
     def clear_audio(self) -> None: ...

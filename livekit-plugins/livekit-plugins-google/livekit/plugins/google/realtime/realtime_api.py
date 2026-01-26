@@ -1230,6 +1230,9 @@ class RealtimeSession(llm.RealtimeSession):
     def clear_audio(self) -> None:
         pass
 
+    def commit_user_turn(self) -> None:
+        pass
+
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
