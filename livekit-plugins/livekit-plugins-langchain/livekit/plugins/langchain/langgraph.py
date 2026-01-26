@@ -240,7 +240,7 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     if isinstance(msg, str):
         content = msg
     elif isinstance(msg, BaseMessageChunk):
-        content = msg.text()
+        content = msg.text
         if getattr(msg, "id", None):
             message_id = msg.id  # type: ignore
     elif isinstance(msg, dict):
