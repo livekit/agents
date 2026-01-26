@@ -60,6 +60,27 @@ class VADOptions(TypedDict, total=False):
 # https://elevenlabs.io/docs/overview/models#models-overview
 ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 
+# Mapping of ISO 639-3 language codes used by Scribe to ISO 639-1 used by Livekit turn detector multilingual model
+ISO_639_3_TO_1 = {
+    "eng": "en",
+    "spa": "es",
+    "fra": "fr",
+    "deu": "de",
+    "ita": "it",
+    "por": "pt",
+    "nld": "nl",
+    "zho": "zh",
+    "jpn": "ja",
+    "kor": "ko",
+    "ind": "id",
+    "tur": "tr",
+    "rus": "ru",
+    "hin": "hi",
+}
+
+def iso639_3_to_1(code):
+    """Convert ISO 639-3 to ISO 639-1. Returns None if no mapping exists."""
+    return ISO_639_3_TO_1.get(code.lower())
 
 @dataclass
 class STTOptions:
@@ -220,8 +241,9 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
+        normalized_language = iso639_3_to_1(language_code) or language_code
         return self._transcription_to_speech_event(
-            language_code=language_code,
+            language_code=normalized_language,
             text=extracted_text,
             start_time=start_time,
             end_time=end_time,
@@ -483,9 +505,10 @@ class SpeechStream(stt.SpeechStream):
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
 
+        normalized_language = iso639_3_to_1(self._language) or self._language or "en"
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
-            language=self._language or "en",
+            language=normalized_language,
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
