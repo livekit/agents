@@ -77,13 +77,14 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
-        endpoint_url: str = "wss://streaming.assemblyai.com/v3/ws",
+        endpoint_url: str = "streaming.assemblyai.com",
     ):
         """
         Args:
-            endpoint_url: The AssemblyAI streaming WebSocket endpoint URL. Use the EU endpoint
-                (wss://streaming.eu.assemblyai.com/v3/ws) for streaming in the EU. Defaults to
-                wss://streaming.assemblyai.com/v3/ws.
+            endpoint_url: The AssemblyAI streaming endpoint hostname. Use the EU endpoint
+                (streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
+                streaming.assemblyai.com.
+                See https://www.assemblyai.com/docs/universal-streaming for more details.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -362,7 +363,7 @@ class SpeechStream(stt.SpeechStream):
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"{self._endpoint_url}?{urlencode(filtered_config)}"
+        url = f"wss://{self._endpoint_url}/v3/ws?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 
