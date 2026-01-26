@@ -362,11 +362,22 @@ async def _audio_forwarding_task(
         if not out.first_frame_fut.done():
             out.first_frame_fut.set_result(ev.created_at)
 
+    first_frame_captured = False
+
     try:
         audio_output.on("playback_started", _on_playback_started)
+        # resume twice here to ensure the audio_output is resumed
+        # even when no audio is produced during TTS generation.
         audio_output.resume()
 
         async for frame in tts_output:
+            # Resume audio output just before capturing the first frame
+            # This ensures the audio is not paused even if pause() was called
+            # during TTS generation (e.g., due to false interruption detection)
+            if not first_frame_captured:
+                first_frame_captured = True
+                audio_output.resume()
+
             out.audio.append(frame)
 
             if (

@@ -1236,6 +1236,25 @@ class AgentActivity(RecognitionHooks):
         if (
             self._paused_speech
             and (timeout := self._session.options.false_interruption_timeout) is not None
+            and (
+                # Since some STT vendors (e.g. Deepgram) will send interim and final transcripts before
+                # sending the end of speech event, we need to check if:
+                # 1. The resume timer has not been scheduled yet.
+                # 2. The transcript is not long enough for interruption.
+                self._false_interruption_timer is None
+                and (
+                    self._audio_recognition is None
+                    or (
+                        self._session.options.min_interruption_words > 0
+                        and len(
+                            split_words(
+                                self._audio_recognition.current_transcript, split_character=True
+                            )
+                        )
+                        < self._session.options.min_interruption_words
+                    )
+                )
+            )
         ):
             # schedule a resume timer when user stops speaking
             self._start_false_interruption_timer(timeout)
