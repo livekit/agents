@@ -8,7 +8,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.plugins import openai
-from livekit.plugins.openai import AsyncAzureADTokenProvider
+from livekit.plugins.openai.utils import AsyncAzureADTokenProvider
 
 
 class LLM(openai.responses.LLM):
