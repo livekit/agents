@@ -60,8 +60,9 @@ class VADOptions(TypedDict, total=False):
 # https://elevenlabs.io/docs/overview/models#models-overview
 ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 
-# Mapping of ISO 639-3 language codes used by Scribe to ISO 639-1 used by Livekit turn detector multilingual model
-ISO_639_3_TO_1 = {
+# Mapping of ISO 639-3 language codes used by Scribe to ISO 639-1
+# used by Livekit turn detector multilingual model
+ISO_639_3_TO_1: dict[str, str] = {
     "eng": "en",
     "spa": "es",
     "fra": "fr",
