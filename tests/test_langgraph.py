@@ -212,3 +212,48 @@ def test_validation_accepts_supported_modes():
     LLMAdapter(graph, stream_mode="messages")
     LLMAdapter(graph, stream_mode="custom")
     LLMAdapter(graph, stream_mode=["messages", "custom"])
+
+
+# --- Tests: mode isolation ---
+
+
+@pytest.mark.asyncio
+async def test_empty_stream_mode_disables_streaming():
+    """Test stream_mode=[] produces no output (opt-out of streaming)."""
+    graph = build_combined_graph()  # Has both LLM and StreamWriter
+    adapter = LLMAdapter(graph, stream_mode=[])
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_custom_mode_no_messages_output():
+    """Test stream_mode='custom' produces nothing when graph only has LLM."""
+    graph = build_messages_graph()  # LLM only, no StreamWriter
+    adapter = LLMAdapter(graph, stream_mode="custom")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_messages_mode_no_custom_output():
+    """Test stream_mode='messages' produces nothing when graph only has StreamWriter."""
+    graph = build_custom_graph()  # StreamWriter only, no LLM
+    adapter = LLMAdapter(graph, stream_mode="messages")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert chunks == []
