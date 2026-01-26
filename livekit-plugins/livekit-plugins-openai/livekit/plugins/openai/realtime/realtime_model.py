@@ -1208,7 +1208,8 @@ class RealtimeSession(
             if isinstance(tool, llm.FunctionTool):
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             elif isinstance(tool, llm.RawFunctionTool):
-                tool_desc = tool.info.raw_schema
+                # copy to avoid modifying original
+                tool_desc = dict(tool.info.raw_schema)
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
             elif isinstance(tool, llm.ProviderTool):
