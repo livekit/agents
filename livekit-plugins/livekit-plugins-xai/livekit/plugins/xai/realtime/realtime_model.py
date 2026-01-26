@@ -1,6 +1,4 @@
 import os
-from abc import abstractmethod
-from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
@@ -30,6 +28,7 @@ XAI_DEFAULT_TURN_DETECTION = ServerVad(
     create_response=True,
     interrupt_response=True,
 )
+
 
 class RealtimeModel(openai.realtime.RealtimeModel):
     def __init__(

@@ -1,7 +1,7 @@
 """xAI plugin for LiveKit Agents"""
 
 from . import realtime, responses
-from .tools import WebSearch, XSearch, FileSearch
+from .tools import FileSearch, WebSearch, XSearch
 from .version import __version__
 
 __all__ = [
