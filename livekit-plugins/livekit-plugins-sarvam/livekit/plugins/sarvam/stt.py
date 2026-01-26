@@ -78,7 +78,6 @@ class SarvamSTTOptions:
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -92,7 +91,7 @@ class SarvamSTTOptions:
     sample_rate: int = 16000
     flush_signal: bool | None = None
     input_audio_codec: str | None = None
-    mode: Literal["translate", "transcribe", "verbatim", "translit", "codemix"] = "transcribe"
+    #mode: Literal["translate", "transcribe", "verbatim", "translit", "codemix"] = "transcribe"
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -279,9 +278,9 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
-        opts_language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
-        opts_model = self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
-        opts_mode = self._opts.mode if isinstance(mode, type(NOT_GIVEN)) else mode
+        opts_language = self._opts.language if not is_given(language) else language
+        opts_model = self._opts.model if not is_given(model) else model
+        opts_mode = self._opts.mode if not is_given(mode) else mode
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
