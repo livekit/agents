@@ -71,7 +71,8 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         id: str,
         description: str,
         on_completed: Callable[[], Coroutine[None, None, None]]
-        | Callable[[Any], Coroutine[None, None, None]],
+        | Callable[[Any], Coroutine[None, None, None]]
+        | None = None,
     ) -> Self:
         """Adds an AgentTask to the TaskGroup.
 
@@ -79,22 +80,23 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             task_factory (Callable): A callable that returns a task instance
             id (str): An identifier for the task used to access results
             description (str): A description that helps the LLM understand when to regress to this task
-            on_completed (Callable): A callback function that executes each time this task completes, optionally taking in the task result as the only argument
+            on_completed (Callable | None): A callback function that executes each time this task completes, optionally taking in the task result as the only argument. (default: None)
 
         """
         self._registered_factories[id] = _FactoryInfo(
             task_factory=task_factory, id=id, description=description
         )
-        signature = inspect.signature(on_completed)
-        if len(signature.parameters) > 0:
-            self._completed_callbacks[id] = on_completed  # type: ignore
+        if on_completed is not None:
+            signature = inspect.signature(on_completed)
+            if len(signature.parameters) > 0:
+                self._completed_callbacks[id] = on_completed  # type: ignore
 
-        else:
+            else:
 
-            async def callback_wrapper(_: Any) -> None:
-                await on_completed()  # type: ignore
+                async def callback_wrapper(_: Any) -> None:
+                    await on_completed()  # type: ignore
 
-            self._completed_callbacks[id] = callback_wrapper
+                self._completed_callbacks[id] = callback_wrapper
 
         return self
 
