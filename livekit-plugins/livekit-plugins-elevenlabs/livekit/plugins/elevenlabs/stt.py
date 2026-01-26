@@ -78,9 +78,11 @@ ISO_639_3_TO_1 = {
     "hin": "hi",
 }
 
+
 def iso639_3_to_1(code):
     """Convert ISO 639-3 to ISO 639-1. Returns None if no mapping exists."""
     return ISO_639_3_TO_1.get(code.lower())
+
 
 @dataclass
 class STTOptions:
