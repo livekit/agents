@@ -91,7 +91,6 @@ class SarvamSTTOptions:
     sample_rate: int = 16000
     flush_signal: bool | None = None
     input_audio_codec: str | None = None
-    #mode: Literal["translate", "transcribe", "verbatim", "translit", "codemix"] = "transcribe"
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -281,6 +280,8 @@ class STT(stt.STT):
         opts_language = self._opts.language if not is_given(language) else language
         opts_model = self._opts.model if not is_given(model) else model
         opts_mode = self._opts.mode if not is_given(mode) else mode
+        if is_given(mode) and opts_model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -390,6 +391,8 @@ class STT(stt.STT):
         opts_language = language if is_given(language) else self._opts.language
         opts_model = model if is_given(model) else self._opts.model
         opts_mode = mode if is_given(mode) else self._opts.mode
+        if is_given(mode) and opts_model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
@@ -569,7 +572,13 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("Language cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model cannot be empty")
-        if mode is not None and model == "saaras:v3":
+        self._opts.language = language
+        self._opts.model = model
+        if prompt is not None:
+            self._opts.prompt = prompt
+        if mode is not None and model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
+        if model == "saaras:v3":
             allowed_modes: set[str] = {
                 "transcribe",
                 "translate",
@@ -577,17 +586,14 @@ class SpeechStream(stt.SpeechStream):
                 "translit",
                 "codemix",
             }
-            if mode not in allowed_modes:
+            if mode is not None and mode not in allowed_modes:
                 raise ValueError(
                     "mode must be one of transcribe, translate, verbatim, translit, codemix"
                 )
-
-        self._opts.language = language
-        self._opts.model = model
-        if prompt is not None:
-            self._opts.prompt = prompt
-        if mode is not None:
-            self._opts.mode = mode
+            if mode is not None:
+                self._opts.mode = mode
+        else:
+            self._opts.mode = "transcribe"
         self._logger.info(
             "Options updated, triggering reconnection",
             extra={
@@ -595,7 +601,7 @@ class SpeechStream(stt.SpeechStream):
                 "language": language,
                 "model": model,
                 "prompt": prompt,
-                "mode": mode,
+                "mode": self._opts.mode,
             },
         )
         self._reconnect_event.set()
