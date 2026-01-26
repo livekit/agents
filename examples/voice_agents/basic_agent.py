@@ -103,10 +103,10 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
-            # allow the LLM to generate a response while waiting for the end of turn
-            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-            preemptive_generation=True,
         ),
+        # allow the LLM to generate a response while waiting for the end of turn
+        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+        preemptive_generation=True,
     )
 
     # log metrics as they are emitted, and total usage after session is over
