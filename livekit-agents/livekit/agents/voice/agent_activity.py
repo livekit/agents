@@ -1463,17 +1463,25 @@ class AgentActivity(RecognitionHooks):
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
         start_time = time.perf_counter()
+        stop_response = False
         try:
             await self._agent.on_user_turn_completed(
                 temp_mutable_chat_ctx, new_message=user_message
             )
         except StopResponse:
-            return  # ignore this turn
+            stop_response = True
         except Exception:
             logger.exception("error occured during on_user_turn_completed")
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
+
+        # Emit EOUMetrics for early return cases (StopResponse or no LLM)
+        # This ensures transcription_delay is always reported
+        if stop_response or self.llm is None:
+            self._emit_eou_metrics(info, on_user_turn_completed_delay, speech_id=None)
+            if stop_response:
+                return  # ignore this turn
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -1552,6 +1560,15 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt()
 
+        self._emit_eou_metrics(info, on_user_turn_completed_delay, speech_id=speech_handle.id)
+
+    def _emit_eou_metrics(
+        self,
+        info: _EndOfTurnInfo,
+        on_user_turn_completed_delay: float,
+        speech_id: str | None,
+    ) -> None:
+        """Emit EOUMetrics with transcription delay and other timing information."""
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
             metadata = Metadata(model_name="unknown", model_provider=self._turn_detection)
@@ -1565,7 +1582,7 @@ class AgentActivity(RecognitionHooks):
             end_of_utterance_delay=info.end_of_turn_delay or 0.0,
             transcription_delay=info.transcription_delay or 0.0,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
-            speech_id=speech_handle.id,
+            speech_id=speech_id,
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
