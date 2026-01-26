@@ -1,4 +1,5 @@
 import httpx
+from openai import AsyncAzureOpenAI
 from openai.types import Reasoning
 from openai.types.shared_params import ResponsesModel
 
@@ -42,7 +43,7 @@ class LLM(openai.responses.LLM):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
-        azure_client = openai.AsyncAzureOpenAI(
+        azure_client = AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
@@ -56,7 +57,7 @@ class LLM(openai.responses.LLM):
             timeout=timeout
             if timeout
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-        )  # type: ignore
+        )
 
         super().__init__(
             model=model,
