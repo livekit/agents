@@ -43,57 +43,74 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 
+# Known VertexAI models for the Live API
+# See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
+KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        "gemini-live-2.5-flash-preview-native-audio",
+    }
+)
 
-def _get_model_mismatch_hint(model: str, use_vertexai: bool, error_message: str) -> str | None:
+# Known Gemini API models for the Live API
+# See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
+KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-2.5-flash-native-audio-preview-09-2025",
+        "gemini-2.0-flash-exp",
+    }
+)
+
+
+def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     """
-    Generate a helpful hint when a WebSocket 1008 error suggests model/API mismatch.
+    Validate that the model name matches the API being used.
+
+    Raises ValueError if a known model is used with the wrong API configuration.
 
     Args:
         model: The model name being used
         use_vertexai: Whether VertexAI is enabled
+    """
+    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a Gemini API model, but vertexai=True. "
+            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
+            f"or set vertexai=False."
+        )
+
+    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a VertexAI model, but vertexai=False. "
+            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
+            f"or set vertexai=True."
+        )
+
+
+def _get_1008_error_hint(error_message: str) -> str | None:
+    """
+    Generate a hint for WebSocket 1008 policy violation errors.
+
+    This provides a generic hint when the connection fails with a 1008 error,
+    which often indicates the model name doesn't match the API being used.
+
+    Args:
         error_message: The error message from the WebSocket exception
 
     Returns:
-        A helpful hint string, or None if no mismatch detected
+        A helpful hint string, or None if not a 1008 error
     """
-    # Only provide hints for 1008 policy violations
     if "1008" not in error_message and "policy violation" not in error_message.lower():
         return None
 
-    is_vertexai_model = model.startswith("gemini-live-")
-    is_gemini_api_model = model.startswith(("gemini-2.", "gemini-1."))
-
-    if use_vertexai and is_gemini_api_model:
-        suggested_model = None
-        if "09-2025" in model:
-            suggested_model = "gemini-live-2.5-flash-preview-native-audio-09-2025"
-        elif "12-2025" in model or "2.5" in model:
-            suggested_model = "gemini-live-2.5-flash-native-audio"
-
-        hint = (
-            f"\n\nHint: Model '{model}' appears to be a Gemini API model, but VertexAI is enabled. "
-            f"VertexAI requires different model names (prefixed with 'gemini-live-')."
-        )
-        if suggested_model:
-            hint += f" Try using model='{suggested_model}' instead."
-        return hint
-
-    if not use_vertexai and is_vertexai_model:
-        suggested_model = None
-        if "09-2025" in model:
-            suggested_model = "gemini-2.5-flash-native-audio-preview-09-2025"
-        elif "preview" not in model:
-            suggested_model = "gemini-2.5-flash-native-audio-preview-12-2025"
-
-        hint = (
-            f"\n\nHint: Model '{model}' appears to be a VertexAI model, but Gemini API is being used. "
-            f"Gemini API requires different model names."
-        )
-        if suggested_model:
-            hint += f" Try using model='{suggested_model}' instead, or enable vertexai=True."
-        return hint
-
-    return None
+    return (
+        "\n\nHint: A 1008 policy violation error often indicates that the model name "
+        "doesn't match the API being used. VertexAI models typically start with "
+        "'gemini-live-', while Gemini API models start with 'gemini-2.' or similar. "
+        "Please verify your model name matches your API configuration."
+    )
 
 
 @dataclass
@@ -305,6 +322,9 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
+
+        # Validate model/API compatibility for known models
+        _validate_model_api_match(model, use_vertexai)
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -805,8 +825,8 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                # Check if this might be a model/API mismatch and provide helpful hint
-                hint = _get_model_mismatch_hint(self._opts.model, self._opts.vertexai, str(e))
+                # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
+                hint = _get_1008_error_hint(str(e))
                 if hint:
                     logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
                 else:
