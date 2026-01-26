@@ -61,9 +61,11 @@ class TestGoogleADKLLM:
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"session_id": "test-session"})
 
-        with patch("aiohttp.ClientSession") as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
+        # Mock the client session
+        mock_client = AsyncMock()
+        mock_client.post.return_value.__aenter__.return_value = mock_response
 
+        with patch.object(adk_llm, "_ensure_client_session", return_value=mock_client):
             session_id = await adk_llm._create_session()
             assert session_id.startswith("session-")
 
@@ -82,7 +84,7 @@ class TestGoogleADKLLM:
         chat_ctx.messages.append(
             llm.ChatMessage(
                 role=llm.ChatRole.USER,
-                content="Hello, how are you?",
+                content=["Hello, how are you?"],
             )
         )
 
@@ -124,10 +126,12 @@ class TestGoogleADKLLM:
         mock_response.status = 500
         mock_response.text = AsyncMock(return_value="Internal Server Error")
 
-        with patch("aiohttp.ClientSession") as mock_session:
-            mock_session.return_value.__aenter__.return_value.post.return_value.__aenter__.return_value = mock_response
+        # Mock the client session
+        mock_client = AsyncMock()
+        mock_client.post.return_value.__aenter__.return_value = mock_response
 
-            with pytest.raises(RuntimeError, match="Failed to create ADK session"):
+        with patch.object(adk_llm, "_ensure_client_session", return_value=mock_client):
+            with pytest.raises(RuntimeError, match="Internal Server Error"):
                 await adk_llm._create_session()
 
     @pytest.mark.asyncio

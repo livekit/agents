@@ -64,7 +64,7 @@ pytest
 
 # Run with the example
 cd examples
-python voice_agent.py dev
+python basic_voice_agent.py dev
 ```
 
 ### 4. Commit Your Changes

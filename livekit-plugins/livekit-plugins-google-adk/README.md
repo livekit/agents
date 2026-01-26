@@ -48,7 +48,7 @@ If you need to configure agent behavior, do so in your **ADK application configu
 
 ## Architecture
 
-```
+```text
 LiveKit Voice Agent
     ├─ STT: Speech-to-Text (Deepgram, Google, etc.)
     ├─ LLM: Google ADK ⭐ (this plugin)
@@ -95,7 +95,7 @@ pip install -e .
 
 ⚠️ **You must have a running ADK server** at the `api_base_url` you configure. This plugin connects to an external ADK server - it does not run ADK internally.
 
-**Option 1: Official Google ADK Server (Recommended)**
+#### Option 1: Official Google ADK Server (Recommended)
 ```bash
 # Install ADK
 pip install google-adk
@@ -105,7 +105,7 @@ adk api_server
 # Server runs at http://localhost:8000 by default
 ```
 
-**Option 2: Custom ADK-Compatible Server**
+#### Option 2: Custom ADK-Compatible Server
 
 If you're running a custom server (not the official ADK), it **must implement the standard ADK SSE API**:
 - `POST /apps/{app_name}/users/{user_id}/sessions/{session_id}` - Create/verify session
@@ -162,7 +162,7 @@ agent = Agent(
 ### 3. Run the agent
 
 ```bash
-python agent.py dev
+python examples/basic_voice_agent.py dev
 ```
 
 ## Configuration Options
@@ -445,5 +445,5 @@ Apache 2.0
 ## Support
 
 For issues and questions:
-- Google ADK issues: https://github.com/google/adk-python/issues
-- LiveKit issues: https://github.com/livekit/agents/issues
+- Google ADK issues: [https://github.com/google/adk-python/issues](https://github.com/google/adk-python/issues)
+- LiveKit issues: [https://github.com/livekit/agents/issues](https://github.com/livekit/agents/issues)

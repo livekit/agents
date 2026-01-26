@@ -8,6 +8,7 @@ import aiohttp
 
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.utils import NotGivenOr, NOT_GIVEN
 
 from .llm_stream import LLMStream
 
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class LLM(llm.LLM):
+    """
+    Google ADK LLM integration for LiveKit Agents.
+
+    Provides text-only streaming LLM support via Google ADK server.
+    Tools and system prompts are managed by ADK, not LiveKit.
+    """
+
     provider = "google-adk"
 
     def __init__(
@@ -29,6 +37,19 @@ class LLM(llm.LLM):
         request_timeout: float = 30.0,
         **kwargs: Any,
     ) -> None:
+        """
+        Initialize Google ADK LLM.
+
+        Args:
+            api_base_url: URL of the ADK server
+            app_name: ADK application name (must match ADK config)
+            user_id: User identifier for session management
+            model: Model identifier for tracking (default: "google-adk")
+            session_id: Explicit session ID to reuse (optional)
+            auto_create_session: Auto-create session if not provided (default: True)
+            request_timeout: HTTP request timeout in seconds (default: 30.0)
+            **kwargs: Additional arguments passed to base LLM class
+        """
         super().__init__(**kwargs)
         self._api_base_url = api_base_url.rstrip("/")
         self._app_name = app_name
@@ -46,14 +67,25 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
+        """Return the model identifier."""
         return self._model
 
     async def _ensure_client_session(self) -> aiohttp.ClientSession:
+        """Get or create HTTP client session."""
         if self._client_session is None or self._client_session.closed:
             self._client_session = aiohttp.ClientSession()
         return self._client_session
 
     async def _create_session(self) -> str:
+        """
+        Create a new ADK session.
+
+        Returns:
+            The created session ID
+
+        Raises:
+            RuntimeError: If session creation fails
+        """
         session_id = f"session-{int(time.time() * 1000)}"
         url = (
             f"{self._api_base_url}/apps/{self._app_name}"
@@ -73,6 +105,15 @@ class LLM(llm.LLM):
         return session_id
 
     async def _ensure_session(self) -> str:
+        """
+        Ensure session exists, creating if necessary.
+
+        Returns:
+            The session ID
+
+        Raises:
+            RuntimeError: If no session_id and auto_create_session is False
+        """
         if self._session_id is None:
             if not self._auto_create_session:
                 raise RuntimeError("No session_id provided")
@@ -83,15 +124,21 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        **_: Any,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         """
-        IMPORTANT:
-        chat() MUST return an LLMStream, not a coroutine.
-        LiveKit uses: `async with llm.chat(...)`
+        Stream chat completion from Google ADK.
+
+        Note: parallel_tool_calls, tool_choice, and extra_kwargs are accepted
+        for API compatibility but are not used by ADK (tools are configured in ADK).
         """
+        # These parameters are accepted for base class compatibility
+        # but are not used since ADK manages tools internally
+        _ = parallel_tool_calls, tool_choice, extra_kwargs
 
         return LLMStream(
             llm_instance=self,
@@ -104,6 +151,7 @@ class LLM(llm.LLM):
         )
 
     async def aclose(self) -> None:
+        """Close the LLM and cleanup resources."""
         if self._client_session and not self._client_session.closed:
             await self._client_session.close()
             self._client_session = None

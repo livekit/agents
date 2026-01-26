@@ -3,12 +3,15 @@
 import json
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
 from livekit.agents import llm
 from livekit.agents.types import APIConnectOptions
+
+if TYPE_CHECKING:
+    from . import LLM
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +25,35 @@ class LLMStream(llm.LLMStream):
     def __init__(
         self,
         *,
-        llm_instance: llm.LLM,
+        llm_instance: "LLM",
         api_base_url: str,
         app_name: str,
         user_id: str,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool] | None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None,
         conn_options: APIConnectOptions,
         **_: Any,
     ) -> None:
+        """
+        Initialize Google ADK LLM stream.
+
+        Args:
+            llm_instance: Parent LLM instance for session management
+            api_base_url: ADK server URL
+            app_name: ADK application name
+            user_id: User identifier for session
+            chat_ctx: Chat context with conversation history
+            tools: Function tools (must be None for ADK)
+            conn_options: API connection options
+            **_: Additional arguments (unused)
+        """
         super().__init__(
             llm=llm_instance,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
         )
+        self._llm: "LLM" = llm_instance  # Type as concrete LLM for private method access
         self._api_base_url = api_base_url.rstrip("/")
         self._app_name = app_name
         self._user_id = user_id
@@ -44,10 +61,24 @@ class LLMStream(llm.LLMStream):
         self._cancelled = False
 
     async def aclose(self) -> None:
+        """Mark stream as cancelled and close resources."""
         self._cancelled = True
         await super().aclose()
 
     async def _run(self) -> None:
+        """
+        Stream chat completion from ADK via Server-Sent Events.
+
+        Handles:
+        - Session and client retrieval from parent LLM
+        - SSE response parsing and delta emission
+        - Cancellation checks during streaming
+        - Stream termination with finish_reason
+
+        Raises:
+            ValueError: If tools are passed (ADK manages tools internally)
+            RuntimeError: If ADK server returns non-200 response
+        """
         # LLM owns lifecycle, but stream triggers it
         self._session_id = await self._llm._ensure_session()
         self._client = await self._llm._ensure_client_session()
