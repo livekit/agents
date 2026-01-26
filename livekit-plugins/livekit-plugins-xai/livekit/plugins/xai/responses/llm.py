@@ -18,7 +18,7 @@ class LLM(openai.responses.LLM):
     def __init__(
         self,
         *,
-        model: NotGivenOr[str | None] = "grok-4-1-fast-non-reasoning",
+        model: str = "grok-4-1-fast-non-reasoning",
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
