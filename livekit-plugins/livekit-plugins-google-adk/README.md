@@ -6,11 +6,45 @@ LiveKit Agents plugin for [Google ADK (Agent Development Kit)](https://github.co
 
 This plugin enables LiveKit voice agents to leverage Google ADK's powerful orchestration capabilities:
 
-- **Multi-agent coordination** - Complex agent workflows
-- **MCP tool integration** - Access to Model Context Protocol tools
+- **Text-based LLM** - Text-only streaming responses (no audio I/O)
 - **Session management** - Stateful conversations with context
-- **Native telemetry** - Built-in observability and tracing
-- **Streaming support** - Real-time response streaming
+- **Streaming support** - Real-time response streaming via SSE
+- **Multi-agent coordination** - Complex agent workflows (ADK feature)
+- **MCP tool integration** - Access to Model Context Protocol tools (ADK feature)
+
+### ⚠️ Current Limitations
+
+This is a **text-only LLM plugin**. The following features are currently **not supported**:
+
+- ❌ **Audio input/output** - No direct audio streaming (use with LiveKit STT/TTS)
+- ❌ **Gemini Live** - No realtime voice integration
+- ❌ **Advanced authentication** - Basic HTTP connection only
+
+### ✅ Tool Calling Support
+
+✅ **Tool calls ARE fully supported** - Tools are registered directly in your ADK application configuration, not in LiveKit. ADK handles all tool registration, orchestration, and execution through its own configuration (including MCP tool integration).
+
+⚠️ **Important**: Do NOT pass `tools` parameter to the LiveKit `Agent()`. The plugin will raise a `ValueError` if you try. Tools must be configured in ADK, not LiveKit.
+
+### 📝 Important: Instructions Parameter
+
+⚠️ **The `instructions` parameter in `Agent()` is NOT passed to ADK**
+
+When you create a LiveKit `Agent` with Google ADK as the LLM, the `instructions` parameter (system prompt) is **not sent to ADK**. This is because:
+
+- **ADK manages its own prompts**: Google ADK agents handle system prompts, orchestration logic, and multi-agent coordination internally through their own configuration
+- **LiveKit tracking only**: The `instructions` parameter is only used by LiveKit for logging and tracking purposes
+- **Best practice**: Set `instructions=""` when using ADK to make this explicit
+
+```python
+# Correct usage with ADK
+agent = Agent(
+    instructions="",  # Empty - ADK handles prompts internally
+    llm=google_adk.LLM(...),
+)
+```
+
+If you need to configure agent behavior, do so in your **ADK application configuration**, not in the LiveKit Agent instructions.
 
 ## Architecture
 
@@ -55,43 +89,74 @@ cd services/livekit-plugins-google-adk
 pip install -e .
 ```
 
+## Prerequisites
+
+### ADK Server Requirements
+
+⚠️ **You must have a running ADK server** at the `api_base_url` you configure. This plugin connects to an external ADK server - it does not run ADK internally.
+
+**Option 1: Official Google ADK Server (Recommended)**
+```bash
+# Install ADK
+pip install google-adk
+
+# Start the ADK API server
+adk api_server
+# Server runs at http://localhost:8000 by default
+```
+
+**Option 2: Custom ADK-Compatible Server**
+
+If you're running a custom server (not the official ADK), it **must implement the standard ADK SSE API**:
+- `POST /apps/{app_name}/users/{user_id}/sessions/{session_id}` - Create/verify session
+- `POST /run_sse` - Stream chat completions via Server-Sent Events
+
+**Required SSE event format**:
+```json
+data: {"content": {"parts": [{"text": "..."}]}, "partial": true}
+data: {"content": {"parts": [{"text": "..."}]}, "partial": false}
+```
+
+The final event must have `"partial": false` to signal completion.
+
+**HTTP Headers**: The plugin sends standard SSE headers. If your custom server requires authentication or specific headers, you'll need to modify the plugin or use a proxy:
+- `Content-Type: application/json`
+- `Accept: text/event-stream` (implicit in SSE response handling)
+- Authentication headers are not currently supported (see Limitations)
+
 ## Quick Start
 
-### 1. Start your Google ADK server
+**Architecture Overview:**
+- **LiveKit** handles voice session management, STT (speech-to-text), and TTS (text-to-speech)
+- **ADK** handles LLM responses, orchestration, tool execution, and multi-agent coordination
+- **This plugin** bridges the two: converts LiveKit text → ADK → streams back to LiveKit
+
+### 1. Ensure your ADK server is running
 
 ```bash
-cd services/ai-engine
-python -m genkit start --app orchestartor
+adk api_server
+# ADK server should be accessible at http://localhost:8000
 ```
 
 ### 2. Create a LiveKit voice agent with ADK
 
+See the complete working example: [`examples/basic_voice_agent.py`](examples/basic_voice_agent.py)
+
+**Key code snippet:**
 ```python
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.voice import Agent, AgentSession
-from livekit.plugins import google, silero
-from livekit.plugins.google_adk import LLM as GoogleADK
+from livekit.plugins import google, google_adk, silero
 
-async def entrypoint(ctx: JobContext):
-    # Create agent with Google ADK as LLM
-    agent = Agent(
-        instructions="You are a helpful assistant.",
-        stt=google.STT(),
-        llm=GoogleADK(
-            api_base_url="http://localhost:8000",
-            app_name="orchestartor",
-            user_id="user_123",
-        ),
-        tts=google.TTS(),
-        vad=silero.VAD.load(),
-    )
-
-    # Start the session
-    session = AgentSession()
-    await session.start(agent=agent, room=ctx.room)
-
-if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+agent = Agent(
+    instructions="",  # Not passed to ADK - ADK manages prompts internally
+    llm=google_adk.LLM(
+        api_base_url="http://localhost:8000",
+        app_name="orchestrator",  # Must match your ADK app name
+        user_id="user_123",
+    ),
+    stt=google.STT(),
+    tts=google.TTS(),
+    vad=silero.VAD.load(),
+)
 ```
 
 ### 3. Run the agent
@@ -103,18 +168,35 @@ python agent.py dev
 ## Configuration Options
 
 ```python
-GoogleADK(
-    api_base_url="http://localhost:8000",              # ADK server URL
-    app_name="my-agent",                               # ADK app name
-    user_id="user_123",                                # User identifier
-    model="google-adk",                                # Model identifier (for tracking)
-    session_id=None,                                   # Optional: explicit session ID
-    use_room_name_as_session=False,                    # Use LiveKit room name as session ID
-    use_participant_identity_as_session=False,         # Use participant identity as session ID
-    auto_create_session=True,                          # Auto-create session if needed
-    request_timeout=30.0,                              # Request timeout in seconds
+from livekit.plugins import google_adk
+
+google_adk.LLM(
+    api_base_url="http://localhost:8000",              # ADK server URL (required)
+    app_name="<your-adk-app-name>",                    # ADK app name - must match your ADK config (required)
+    user_id="<user-identifier>",                       # User identifier for ADK session (required)
+    model="google-adk",                                # Model identifier for LiveKit tracking (optional)
+    session_id=None,                                   # Optional: explicit session ID to reuse
+    auto_create_session=True,                          # Auto-create session if not provided (default: True)
+    request_timeout=30.0,                              # HTTP request timeout in seconds (default: 30.0)
 )
 ```
+
+### Required Parameters
+
+- **`api_base_url`**: URL of your running ADK server (e.g., `http://localhost:8000`)
+- **`app_name`**: Name of your ADK application - this must exactly match the app name in your ADK configuration
+- **`user_id`**: Unique identifier for the user - used for session management in ADK
+
+### Optional Parameters
+
+- **`model`**: Model identifier used for LiveKit's internal tracking and logging (default: `"google-adk"`)
+- **`session_id`**: Explicit session ID to reuse an existing ADK session. If not provided, a new session will be created
+- **`auto_create_session`**: Whether to automatically create a new session if `session_id` is not provided (default: `True`)
+- **`request_timeout`**: Timeout in seconds for HTTP requests to the ADK server (default: `30.0`)
+
+### Important Notes
+
+⚠️ **Instructions Parameter**: When creating the LiveKit `Agent`, the `instructions` parameter is **NOT passed to ADK**. ADK agents handle their own system prompts and orchestration logic internally. The `instructions` parameter is only used by LiveKit for logging/tracking purposes. We recommend setting it to an empty string `""` when using ADK.
 
 ## Features
 
@@ -124,130 +206,103 @@ The plugin provides flexible session management with four strategies:
 
 #### 1. Auto-Generated Sessions (Default)
 
-Each conversation gets a unique session:
+Each conversation gets a unique session automatically:
 
 ```python
-llm = GoogleADK(
+from livekit.plugins import google_adk
+
+llm = google_adk.LLM(
     api_base_url="http://localhost:8000",
-    app_name="my-agent",
-    user_id="user_123",
+    app_name="<your-adk-app-name>",
+    user_id="<user-identifier>",
     # auto_create_session=True by default
 )
-# Session ID: session-1234567890 (auto-generated)
+# Session ID will be auto-generated: session-1234567890
 ```
 
-#### 2. Room-Based Sessions ⭐ NEW
+**Use case**: Simple chatbots where each conversation is independent and you want ADK to manage session lifecycle.
 
-All participants in the same LiveKit room share one ADK session:
+#### 2. Explicit Session ID
+
+Manually specify a session ID to reuse an existing ADK session:
 
 ```python
-llm = GoogleADK(
+from livekit.plugins import google_adk
+
+llm = google_adk.LLM(
     api_base_url="http://localhost:8000",
-    app_name="my-agent",
-    user_id="user_123",
-    use_room_name_as_session=True,  # Use LiveKit room name
+    app_name="<your-adk-app-name>",
+    user_id="<user-identifier>",
+    session_id="<existing-adk-session-id>",  # Must be a valid ADK session ID
 )
-# Session ID: room-my-meeting-room
-# Use case: Multi-participant conversations, shared context
+# Session ID: <existing-adk-session-id>
 ```
 
-#### 3. Participant-Based Sessions ⭐ NEW
-
-Each participant gets their own isolated ADK session:
-
-```python
-llm = GoogleADK(
-    api_base_url="http://localhost:8000",
-    app_name="my-agent",
-    user_id="user_123",
-    use_participant_identity_as_session=True,  # Use participant identity
-)
-# Session ID: participant-user-abc123
-# Use case: Isolated conversations, personal context
-```
-
-#### 4. Explicit Session ID
-
-Manually specify the session ID:
-
-```python
-llm = GoogleADK(
-    api_base_url="http://localhost:8000",
-    app_name="my-agent",
-    user_id="user_123",
-    session_id="my-custom-session-id",  # Explicit ID
-)
-# Session ID: my-custom-session-id
-# Use case: Resume existing session, custom session management
-```
-
-#### Manual Context Setting
-
-You can also manually set LiveKit context:
-
-```python
-llm = GoogleADK(
-    api_base_url="http://localhost:8000",
-    app_name="my-agent",
-    user_id="user_123",
-    use_room_name_as_session=True,
-)
-
-# Manually set context (useful for testing)
-llm.set_livekit_context(
-    room_name="my-room",
-    participant_identity="user-123",
-)
-```
+**Use case**: Resume an existing conversation, maintain context across multiple LiveKit sessions, or implement custom session management logic outside of LiveKit.
 
 **Which strategy to use?**
 
 | Strategy | Use Case | Session Scope |
 |----------|----------|---------------|
-| **Auto-generated** | Simple chatbots, stateless conversations | Per conversation |
-| **Room-based** | Multi-participant meetings, shared memory | Per LiveKit room |
-| **Participant-based** | Personalized agents, isolated state | Per participant |
+| **Auto-generated** | Simple chatbots, unique per conversation | Per conversation |
 | **Explicit** | Resume sessions, custom logic | Custom |
 
-### Streaming Responses
+### Internal: How Streaming Works
 
-The plugin streams responses in real-time from ADK:
+This section describes internal plugin behavior - **you don't need to manage streaming manually**.
+
+The plugin automatically:
+1. Receives Server-Sent Events (SSE) from ADK with `partial=true` chunks
+2. Emits text deltas to LiveKit in real-time
+3. Converts text to speech via your configured TTS
+4. Waits for final event with `partial=false` before closing the stream
+
+When using the LiveKit `Agent`, all streaming is handled transparently by the plugin.
+
+### Tool Calling
+
+**Tools are registered in ADK, not LiveKit**. ADK manages all tool registration, orchestration, and execution through its own configuration.
 
 ```python
-# Streaming is automatic with LiveKit voice agents
-async for chunk in llm.chat(chat_ctx=context):
-    # Each chunk is yielded as it arrives from ADK
-    print(chunk.choices[0].delta.content)
-```
+from livekit.plugins import google_adk
 
-### Tool Calling (Coming Soon)
-
-```python
-from livekit.agents import llm
-
-# Define tools
-tools = [
-    llm.FunctionInfo(
-        name="get_weather",
-        description="Get weather for a location",
-        parameters={...},
-    )
-]
-
-# Tools are automatically forwarded to ADK
+# No tools parameter needed in LiveKit
+# Tools are configured in your ADK application
 agent = Agent(
-    llm=GoogleADK(...),
-    tools=tools,
+    instructions="",  # Not passed to ADK
+    llm=google_adk.LLM(
+        api_base_url="http://localhost:8000",
+        app_name="<your-adk-app-name>",  # This ADK app has tools configured
+        user_id="<user-identifier>",
+    ),
+    # NO tools parameter - ADK manages tools internally
 )
 ```
 
+**How it works**:
+1. **Register tools in ADK**: Configure tools in your ADK application using MCP (Model Context Protocol) servers or custom tool implementations
+2. **LiveKit is unaware**: The LiveKit agent does not need to know about available tools
+3. **ADK orchestrates**: ADK decides when to call tools, executes them, and handles the results
+4. **Responses stream back**: Tool results are incorporated into ADK's responses, which stream to LiveKit
+
+**Tool registration happens in your ADK application code**, not in configuration files. Refer to the [Google ADK documentation](https://github.com/google/adk-python) for:
+- Connecting MCP servers to your ADK agent
+- Implementing custom tools
+- Tool orchestration and multi-agent coordination
+
+This approach gives you the full power of ADK's tool orchestration without coupling to LiveKit's tool system.
+
 ## Examples
 
-See the [examples](./examples) directory for complete examples:
+See the [examples](./examples) directory for complete working examples:
 
-- **[voice_agent.py](./examples/voice_agent.py)** - Basic voice agent with ADK
-- **[multi_agent.py](./examples/multi_agent.py)** - Multi-agent orchestration (coming soon)
-- **[tool_calling.py](./examples/tool_calling.py)** - Agent with custom tools (coming soon)
+- **[basic_voice_agent.py](./examples/basic_voice_agent.py)** - Basic voice agent with ADK, STT, and TTS
+
+This example demonstrates:
+- Setting up the LiveKit agent with Google ADK
+- Connecting to your ADK server
+- Handling voice sessions with automatic STT/TTS
+- Proper configuration for production use
 
 ## Development
 
@@ -276,24 +331,41 @@ pip install -e ".[dev]"
 # Run tests
 pytest
 
-# Format code (if installed)
-black .
-
-# Lint (if installed)
-ruff check .
+# Format and lint code (using ruff from parent repo)
+ruff format livekit-plugins/livekit-plugins-google-adk
+ruff check livekit-plugins/livekit-plugins-google-adk
 ```
 
 ### Testing
 
+The plugin includes comprehensive unit tests and integration examples.
+
+**Unit Tests** (in `tests/test_llm.py`):
+- ✅ LLM initialization with various configurations
+- ✅ Session creation and management
+- ✅ Chat streaming with SSE responses
+- ✅ Error handling for failed requests
+- ✅ Resource cleanup (client session closing)
+
+**Integration Example** (in `tests/integration/local_adk_e2e.py`):
+- Full end-to-end example with live ADK server
+- See `examples/basic_voice_agent.py` for the recommended reference implementation
+
 ```bash
-# Run all tests
+# Run all unit tests
 pytest
 
 # Run with coverage
 pytest --cov=livekit.plugins.google_adk
 
 # Run specific test
-pytest tests/test_llm.py::test_chat_streaming
+pytest tests/test_llm.py::TestGoogleADKLLM::test_chat_streaming
+
+# Run with verbose output
+pytest -v
+
+# Run integration test (requires running ADK server)
+python tests/integration/local_adk_e2e.py dev
 ```
 
 ## Architecture Details
@@ -331,13 +403,16 @@ class ADKVoiceAgent(Agent):
 ### After (With Plugin)
 
 ```python
+from livekit.plugins import google_adk
+
 agent = Agent(
-    llm=GoogleADK(
+    instructions="",  # Not passed to ADK
+    llm=google_adk.LLM(
         api_base_url="http://localhost:8000",
-        app_name="orchestartor",
-        user_id="user_123",
+        app_name="<your-adk-app-name>",  # Must match your ADK config
+        user_id="<user-identifier>",
     ),
-    # That's it! 4 lines instead of 80+
+    # That's it! Clean and simple - ADK handles all the complexity
 )
 ```
 
