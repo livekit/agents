@@ -190,9 +190,7 @@ class TestHttpOptionsIntegration:
             )
             mock_client_cls.return_value = mock_client
 
-            static_options = types.HttpOptions(
-                timeout=5000, headers={"X-Custom": "static-value"}
-            )
+            static_options = types.HttpOptions(timeout=5000, headers={"X-Custom": "static-value"})
             llm = LLM(
                 model="gemini-2.5-flash",
                 api_key="test-key",
@@ -307,9 +305,7 @@ class TestHttpOptionsIntegration:
             )
             mock_client_cls.return_value = mock_client
 
-            static_options = types.HttpOptions(
-                timeout=5000, headers={"X-Static": "same-value"}
-            )
+            static_options = types.HttpOptions(timeout=5000, headers={"X-Static": "same-value"})
             llm = LLM(
                 model="gemini-2.5-flash",
                 api_key="test-key",
@@ -339,12 +335,16 @@ class TestLLMStreamAttemptNumber:
         """Test that _attempt_number is initialized to 1 in LLMStream."""
         from tests.fake_llm import FakeLLM, FakeLLMResponse
 
-        llm = FakeLLM(fake_responses=[FakeLLMResponse(
-            input="test",
-            content="response",
-            ttft=0.0,
-            duration=0.0,
-        )])
+        llm = FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="test",
+                    content="response",
+                    ttft=0.0,
+                    duration=0.0,
+                )
+            ]
+        )
         chat_ctx = ChatContext()
         chat_ctx.add_message(role="user", content="test")
 
@@ -362,12 +362,16 @@ class TestLLMStreamAttemptNumber:
         """Test that _attempt_number attribute exists on LLMStream subclasses."""
         from tests.fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 
-        llm = FakeLLM(fake_responses=[FakeLLMResponse(
-            input="test",
-            content="response",
-            ttft=0.0,
-            duration=0.0,
-        )])
+        llm = FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="test",
+                    content="response",
+                    ttft=0.0,
+                    duration=0.0,
+                )
+            ]
+        )
         chat_ctx = ChatContext()
         chat_ctx.add_message(role="user", content="test")
 
