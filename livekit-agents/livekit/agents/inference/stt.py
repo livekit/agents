@@ -28,6 +28,7 @@ from ._utils import create_access_token
 
 DeepgramModels = Literal[
     "deepgram/flux-general",
+    "deepgram/flux-general-en",
     "deepgram/nova-3",
     "deepgram/nova-3-medical",
     "deepgram/nova-2",
