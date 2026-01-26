@@ -145,7 +145,7 @@ class LLM(llm.LLM):
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
             retrieval_config (RetrievalConfigOrDict, optional): The retrieval configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
-            http_options (HttpOptions | Callable[[int], HttpOptions], optional): The HTTP options to use for requests. Can be either a static HttpOptions object, or a callable that takes the attempt count (0-indexed) and returns HttpOptions, allowing different options per retry attempt.
+            http_options (HttpOptions | Callable[[int], HttpOptions], optional): The HTTP options to use for requests. Can be either a static HttpOptions object, or a callable that takes the attempt number (1-indexed, where 1 is the first attempt) and returns HttpOptions, allowing different options per retry attempt.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
@@ -430,7 +430,7 @@ class LLMStream(llm.LLMStream):
                 self._extra_kwargs["tools"] = tools_config
             opts_http_options = self._llm._opts.http_options
             if is_given(opts_http_options) and callable(opts_http_options):
-                http_options = opts_http_options(self._attempt_count)
+                http_options = opts_http_options(self._attempt_number)
             elif is_given(opts_http_options):
                 http_options = opts_http_options
             else:

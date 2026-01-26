@@ -168,7 +168,7 @@ class LLMStream(ABC):
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._current_attempt_has_error = False
-        self._attempt_count = 0
+        self._attempt_number = 1
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -194,7 +194,7 @@ class LLMStream(ABC):
         self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
 
         for i in range(self._conn_options.max_retry + 1):
-            self._attempt_count = i
+            self._attempt_number = i + 1
             try:
                 with tracer.start_as_current_span("llm_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
