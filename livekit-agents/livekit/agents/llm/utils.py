@@ -198,6 +198,10 @@ def build_legacy_openai_schema(
     info = function_tool.info
     schema = model.model_json_schema()
 
+    # Ensure 'required' field exists for compatibility with strict APIs like Groq
+    if "required" not in schema:
+        schema["required"] = []
+
     if internally_tagged:
         return {
             "name": info.name,
@@ -223,6 +227,10 @@ def build_strict_openai_schema(
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
+
+    # Ensure 'required' field exists for compatibility with strict APIs
+    if "required" not in schema:
+        schema["required"] = []
 
     return {
         "type": "function",
