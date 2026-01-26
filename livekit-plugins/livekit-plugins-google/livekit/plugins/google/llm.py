@@ -434,9 +434,7 @@ class LLMStream(llm.LLMStream):
             elif is_given(opts_http_options):
                 http_options = opts_http_options
             else:
-                http_options = types.HttpOptions(
-                    timeout=int(self._conn_options.timeout * 1000)
-                )
+                http_options = types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
             if not http_options.headers:
                 http_options.headers = {}
             http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
