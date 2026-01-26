@@ -77,13 +77,13 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
-        endpoint_url: str = "streaming.assemblyai.com",
+        base_url: str = "wss://streaming.assemblyai.com",
     ):
         """
         Args:
-            endpoint_url: The AssemblyAI streaming endpoint hostname. Use the EU endpoint
-                (streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
-                streaming.assemblyai.com.
+            base_url: The AssemblyAI streaming endpoint base URL. Use the EU endpoint
+                (wss://streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
+                wss://streaming.assemblyai.com.
                 See https://www.assemblyai.com/docs/universal-streaming for more details.
         """
         super().__init__(
@@ -94,7 +94,7 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
-        self._endpoint_url = endpoint_url
+        self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
             raise ValueError(
@@ -154,7 +154,7 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
-            endpoint_url=self._endpoint_url,
+            base_url=self._base_url,
         )
         self._streams.add(stream)
         return stream
@@ -199,14 +199,14 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
-        endpoint_url: str,
+        base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
-        self._endpoint_url = endpoint_url
+        self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._reconnect_event = asyncio.Event()
@@ -363,7 +363,7 @@ class SpeechStream(stt.SpeechStream):
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"wss://{self._endpoint_url}/v3/ws?{urlencode(filtered_config)}"
+        url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 
