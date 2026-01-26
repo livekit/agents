@@ -593,8 +593,8 @@ class SpeechStream(stt.SpeechStream):
 
                         # extract token usage if available
                         usage = data.get("usage", {})
-                        input_audio_tokens = usage.get("input_tokens", 0)
-                        output_text_tokens = usage.get("output_tokens", 0)
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
 
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
@@ -602,8 +602,8 @@ class SpeechStream(stt.SpeechStream):
                                 alternatives=[],
                                 recognition_usage=stt.RecognitionUsage(
                                     audio_duration=audio_duration,
-                                    input_audio_tokens=input_audio_tokens,
-                                    output_text_tokens=output_text_tokens,
+                                    input_tokens=input_tokens,
+                                    output_tokens=output_tokens,
                                 ),
                             )
                         )

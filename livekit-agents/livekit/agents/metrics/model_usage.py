@@ -62,9 +62,9 @@ class TTSModelUsage(_BaseModelUsage):
     model: str
     """The model name (e.g., 'eleven_turbo_v2', 'sonic')."""
 
-    input_text_tokens: int = 0
+    input_tokens: int = 0
     """Input text tokens (for token-based TTS billing, e.g., OpenAI TTS)."""
-    output_audio_tokens: int = 0
+    output_tokens: int = 0
     """Output audio tokens (for token-based TTS billing, e.g., OpenAI TTS)."""
     characters_count: int = 0
     """Number of characters synthesized (for character-based TTS billing)."""
@@ -81,9 +81,9 @@ class STTModelUsage(_BaseModelUsage):
     model: str
     """The model name (e.g., 'nova-2', 'best')."""
 
-    input_audio_tokens: int = 0
+    input_tokens: int = 0
     """Input audio tokens (for token-based STT billing)."""
-    output_text_tokens: int = 0
+    output_tokens: int = 0
     """Output text tokens (for token-based STT billing)."""
     audio_duration: float = 0.0
     """Duration of processed audio in seconds."""
@@ -177,16 +177,16 @@ class ModelUsageCollector:
         elif isinstance(metrics, TTSMetrics):
             provider, model = self._extract_provider_model(metrics)
             tts_usage = self._get_tts_usage(provider, model)
-            tts_usage.input_text_tokens += metrics.input_text_tokens
-            tts_usage.output_audio_tokens += metrics.output_audio_tokens
+            tts_usage.input_tokens += metrics.input_tokens
+            tts_usage.output_tokens += metrics.output_tokens
             tts_usage.characters_count += metrics.characters_count
             tts_usage.audio_duration += metrics.audio_duration
 
         elif isinstance(metrics, STTMetrics):
             provider, model = self._extract_provider_model(metrics)
             stt_usage = self._get_stt_usage(provider, model)
-            stt_usage.input_audio_tokens += metrics.input_audio_tokens
-            stt_usage.output_text_tokens += metrics.output_text_tokens
+            stt_usage.input_tokens += metrics.input_tokens
+            stt_usage.output_tokens += metrics.output_tokens
             stt_usage.audio_duration += metrics.audio_duration
 
     def get_summary(self) -> list[ModelUsage]:

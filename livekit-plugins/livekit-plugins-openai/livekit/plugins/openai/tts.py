@@ -313,8 +313,8 @@ class SSEChunkedStream(tts.ChunkedStream):
                         output_tokens = usage.get("output_tokens", 0)
                         if input_tokens or output_tokens:
                             self._set_token_usage(
-                                input_text_tokens=input_tokens,
-                                output_audio_tokens=output_tokens,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
                             )
 
             output_emitter.flush()

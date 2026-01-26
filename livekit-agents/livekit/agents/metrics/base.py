@@ -36,9 +36,9 @@ class STTMetrics(BaseModel):
     """The request duration in seconds, 0.0 if the STT is streaming."""
     audio_duration: float
     """The duration of the pushed audio in seconds."""
-    input_audio_tokens: int = 0
+    input_tokens: int = 0
     """Input audio tokens (for token-based billing)."""
-    output_text_tokens: int = 0
+    output_tokens: int = 0
     """Output text tokens (for token-based billing)."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
@@ -56,9 +56,9 @@ class TTSMetrics(BaseModel):
     cancelled: bool
     characters_count: int
     """Number of characters synthesized (for character-based billing)."""
-    input_text_tokens: int = 0
+    input_tokens: int = 0
     """Input text tokens (for token-based billing, e.g., OpenAI TTS)."""
-    output_audio_tokens: int = 0
+    output_tokens: int = 0
     """Output audio tokens (for token-based billing, e.g., OpenAI TTS)."""
     streamed: bool
     segment_id: str | None = None
