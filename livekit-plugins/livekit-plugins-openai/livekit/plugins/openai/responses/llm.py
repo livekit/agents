@@ -35,7 +35,6 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
 from ..models import _supports_reasoning_effort
-from ..utils import AsyncAzureADTokenProvider
 
 
 @dataclass
@@ -111,62 +110,6 @@ class LLM(llm.LLM):
     @property
     def model(self) -> str:
         return self._opts.model
-
-    @staticmethod
-    def with_azure(
-        *,
-        model: str | ResponsesModel = "gpt-4o",
-        azure_endpoint: str | None = None,
-        azure_deployment: str | None = None,
-        api_version: str | None = None,
-        api_key: str | None = None,
-        azure_ad_token: str | None = None,
-        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
-        organization: str | None = None,
-        project: str | None = None,
-        base_url: str | None = None,
-        user: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
-    ) -> LLM:
-        """
-        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
-        - `api_key` from `AZURE_OPENAI_API_KEY`
-        - `organization` from `OPENAI_ORG_ID`
-        - `project` from `OPENAI_PROJECT_ID`
-        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
-        - `api_version` from `OPENAI_API_VERSION`
-        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """  # noqa: E501
-
-        azure_client = openai.AsyncAzureOpenAI(
-            max_retries=0,
-            azure_endpoint=azure_endpoint,
-            azure_deployment=azure_deployment,
-            api_version=api_version,
-            api_key=api_key,
-            azure_ad_token=azure_ad_token,
-            azure_ad_token_provider=azure_ad_token_provider,
-            organization=organization,
-            project=project,
-            base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-        )  # type: ignore
-
-        return LLM(
-            model=model,
-            client=azure_client,
-            user=user,
-            temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-            reasoning=reasoning,
-        )
 
     def chat(
         self,
