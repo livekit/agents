@@ -39,6 +39,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
+from .languages import iso639_3_to_1
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -59,30 +60,6 @@ class VADOptions(TypedDict, total=False):
 
 # https://elevenlabs.io/docs/overview/models#models-overview
 ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
-
-# Mapping of ISO 639-3 language codes used by Scribe to ISO 639-1
-# used by Livekit turn detector multilingual model
-ISO_639_3_TO_1: dict[str, str] = {
-    "eng": "en",
-    "spa": "es",
-    "fra": "fr",
-    "deu": "de",
-    "ita": "it",
-    "por": "pt",
-    "nld": "nl",
-    "zho": "zh",
-    "jpn": "ja",
-    "kor": "ko",
-    "ind": "id",
-    "tur": "tr",
-    "rus": "ru",
-    "hin": "hi",
-}
-
-
-def iso639_3_to_1(code: str | None) -> str | None:
-    """Convert ISO 639-3 to ISO 639-1. Returns None if no mapping exists."""
-    return ISO_639_3_TO_1.get(code.lower()) if code else None
 
 
 @dataclass
