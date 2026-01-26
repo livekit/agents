@@ -1,7 +1,9 @@
+import asyncio
+import inspect
 import json
 import sys
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
 if sys.version_info >= (3, 11):
@@ -57,11 +59,43 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self._return_exceptions = return_exceptions
         self._visited_tasks = set[str]()
         self._registered_factories: OrderedDict[str, _FactoryInfo] = OrderedDict()
+        self._completed_callbacks: OrderedDict[
+            str, Callable[[Any], Coroutine[None, None, None]]
+        ] = OrderedDict()
+        self._callback_tasks = []
 
-    def add(self, task_factory: Callable[[], AgentTask], *, id: str, description: str) -> Self:
+    def add(
+        self,
+        task_factory: Callable[[], AgentTask],
+        *,
+        id: str,
+        description: str,
+        on_completed: Callable[[], Coroutine[None, None, None]]
+        | Callable[[Any], Coroutine[None, None, None]],
+    ) -> Self:
+        """Adds an AgentTask to the TaskGroup.
+
+        Args:
+            task_factory (Callable): A callable that returns a task instance
+            id (str): An identifier for the task used to access results
+            description (str): A description that helps the LLM understand when to regress to this task
+            on_completed (Callable): A callback function that executes each time this task completes, optionally taking in the task result as the only argument
+
+        """
         self._registered_factories[id] = _FactoryInfo(
             task_factory=task_factory, id=id, description=description
         )
+        signature = inspect.signature(on_completed)
+        if len(signature.parameters) > 0:
+            self._completed_callbacks[id] = on_completed
+
+        else:
+
+            async def callback_wrapper(_: Any) -> None:
+                await on_completed()  # type: ignore
+
+            self._completed_callbacks[id] = callback_wrapper
+
         return self
 
     async def on_enter(self) -> None:
@@ -86,6 +120,11 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 self._visited_tasks.add(task_id)
                 res = await self._current_task
                 task_results[task_id] = res
+
+                callback = self._completed_callbacks[task_id]
+                self._callback_tasks.append(
+                    asyncio.create_task(callback(res), name="task_completed_callback")
+                )
             except _OutOfScopeError as e:
                 task_stack.insert(0, task_id)
                 for task_id in reversed(e.target_task_ids):
@@ -114,7 +153,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
-
+        await asyncio.gather(*self._callback_tasks)
         self.complete(TaskGroupResult(task_results=task_results))
 
     def _build_out_of_scope_tool(self, *, active_task_id: str) -> Optional[FunctionTool]:
