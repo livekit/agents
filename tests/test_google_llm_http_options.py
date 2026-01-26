@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from google.genai import types
@@ -47,18 +47,18 @@ class TestHttpOptionsPolymorphism:
         assert llm._opts.http_options is http_options_factory
         assert callable(llm._opts.http_options)
 
-    def test_lambda_http_options_accepted(self):
-        """Test that lambda http_options factory is accepted."""
+    def test_callable_http_options_produces_expected_results(self):
+        """Test that callable http_options factory produces expected results."""
+
         # Factory uses 1-indexed attempt numbers
-        factory: Callable[[int], types.HttpOptions] = lambda attempt: types.HttpOptions(
-            timeout=4000 + attempt * 1000
-        )
+        def timeout_factory(attempt: int) -> types.HttpOptions:
+            return types.HttpOptions(timeout=4000 + attempt * 1000)
 
         with patch("livekit.plugins.google.llm.Client"):
             llm = LLM(
                 model="gemini-2.5-flash",
                 api_key="test-key",
-                http_options=factory,
+                http_options=timeout_factory,
             )
 
         assert callable(llm._opts.http_options)
