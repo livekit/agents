@@ -1,10 +1,11 @@
 """xAI plugin for LiveKit Agents"""
 
-from . import realtime
+from . import realtime, responses
 from .version import __version__
 
 __all__ = [
     "realtime",
+    "responses",
     "__version__",
 ]
 
