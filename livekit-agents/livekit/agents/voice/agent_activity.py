@@ -118,6 +118,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        self._stt_eos_received: bool = False
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1217,6 +1218,7 @@ class AgentActivity(RecognitionHooks):
             speech_start_time = speech_start_time - ev.speech_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         self._user_silence_event.clear()
+        self._stt_eos_received = False
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1227,6 +1229,9 @@ class AgentActivity(RecognitionHooks):
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration
+        else:
+            self._stt_eos_received = True
+
         self._session._update_user_state(
             "listening",
             last_speaking_time=speech_end_time,
@@ -1236,25 +1241,6 @@ class AgentActivity(RecognitionHooks):
         if (
             self._paused_speech
             and (timeout := self._session.options.false_interruption_timeout) is not None
-            and (
-                # Since some STT vendors (e.g. Deepgram) will send interim and final transcripts before
-                # sending the end of speech event, we need to check if:
-                # 1. The resume timer has not been scheduled yet.
-                # 2. The transcript is not long enough for interruption.
-                self._false_interruption_timer is None
-                and (
-                    self._audio_recognition is None
-                    or (
-                        self._session.options.min_interruption_words > 0
-                        and len(
-                            split_words(
-                                self._audio_recognition.current_transcript, split_character=True
-                            )
-                        )
-                        < self._session.options.min_interruption_words
-                    )
-                )
-            )
         ):
             # schedule a resume timer when user stops speaking
             self._start_false_interruption_timer(timeout)
@@ -1264,8 +1250,21 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        if ev.speech_duration >= self._session.options.min_interruption_duration:
+        if (
+            ev.speech_duration >= self._session.options.min_interruption_duration
+            and self._turn_detection != "stt"
+        ):
             self._interrupt_by_audio_activity()
+        elif (
+            ev.speech_duration >= self._session.options.min_interruption_duration
+            and self._turn_detection == "stt"
+        ):
+            # STT often sends end of speech event after final transcript and
+            # before VAD end of speech event, we only interrupt if
+            # 1. STT EOS hasn't been received yet; or
+            # 2. VAD real EOS is not yet triggered (i.e. VAD speech is still ongoing)
+            if not self._stt_eos_received or ev.raw_accumulated_silence == 0:
+                self._interrupt_by_audio_activity()
 
         if (
             ev.speaking
