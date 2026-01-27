@@ -5,11 +5,11 @@ import pathlib
 
 from dotenv import load_dotenv
 
-from livekit.agents import AgentServer, JobContext, cli
+from livekit.agents import AgentServer, JobContext, cli, inference
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import CloseEvent, ErrorEvent
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.rtc import ParticipantKind
 
 logger = logging.getLogger("my-worker")
@@ -27,9 +27,9 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         vad=silero.VAD.load(),
     )
 

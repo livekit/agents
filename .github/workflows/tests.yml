@@ -49,6 +49,7 @@ jobs:
           tests/test_schema_gemini.py
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
+          tests/test_tools.py
 
   evaluation:
     # don't run tests for PRs on forks
@@ -71,7 +72,8 @@ jobs:
 
       - name: Run evals
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
 
         run: uv run pytest tests/test_workflows.py tests/test_evals.py
 

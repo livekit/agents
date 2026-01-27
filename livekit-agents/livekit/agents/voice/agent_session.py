@@ -141,7 +141,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
@@ -426,7 +426,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._agent
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
@@ -579,7 +579,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
-                    if self._enable_recording:
+                    if self._enable_recording or (c.enabled and c.record):
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
@@ -818,10 +818,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
-
-            if self._room_io:
-                # close room io after close event is emitted, ensure the room io's close callback is called
-                await self._room_io.aclose()
 
             self._cancel_user_away_timer()
             self._user_state = "listening"
@@ -1163,10 +1159,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer = None
 
     def _update_agent_state(
-        self, state: AgentState, *, otel_context: otel_context.Context | None = None
+        self,
+        state: AgentState,
+        *,
+        otel_context: otel_context.Context | None = None,
+        start_time: float | None = None,
     ) -> None:
         if self._agent_state == state:
             return
+
+        start_time_ns = int(start_time * 1_000_000_000) if start_time else None
 
         if state == "speaking":
             self._llm_error_counts = 0
@@ -1174,7 +1176,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span(
-                    "agent_speaking", context=otel_context
+                    "agent_speaking", context=otel_context, start_time=start_time_ns
                 )
 
                 if self._room_io:
@@ -1205,8 +1207,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._user_state == state:
             return
 
+        last_speaking_time_ns = (
+            int(last_speaking_time * 1_000_000_000) if last_speaking_time else None
+        )
+
         if state == "speaking" and self._user_speaking_span is None:
-            self._user_speaking_span = tracer.start_span("user_speaking")
+            self._user_speaking_span = tracer.start_span(
+                "user_speaking", start_time=last_speaking_time_ns
+            )
 
             if self._room_io and self._room_io.linked_participant:
                 _set_participant_attributes(
@@ -1217,7 +1225,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end()
+            self._user_speaking_span.end(end_time=last_speaking_time_ns)
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":

@@ -9,6 +9,7 @@ from livekit import rtc
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
+from ..io import TextOutput
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
 ]
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
@@ -102,6 +104,8 @@ class TextOutputOptions:
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
+    next_in_chain: TextOutput | None = None
+    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
 
 
 @dataclass

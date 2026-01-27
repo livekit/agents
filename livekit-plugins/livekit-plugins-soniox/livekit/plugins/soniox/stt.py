@@ -17,8 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import aiohttp
 
@@ -30,7 +30,6 @@ from livekit.agents import (
     APITimeoutError,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import (
@@ -46,7 +45,6 @@ BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
 # WebSocket messages and tokens.
 KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
-FINALIZE_MESSAGE = '{"type": "finalize"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
@@ -86,7 +84,7 @@ class ContextObject:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str | None = "stt-rt-preview"
+    model: str = "stt-rt-v3"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -108,7 +106,7 @@ class STT(stt.STT):
     with support for multiple languages, custom context, speaker diarization,
     and more.
 
-    For complete API documentation, see: https://soniox.com/docs/speech-to-text/api-reference/websocket-api
+    For complete API documentation, see: https://soniox.com/docs/stt/api-reference/websocket-api
     """
 
     def __init__(
@@ -117,7 +115,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         base_url: str = BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
-        vad: vad.VAD | None = None,
         params: STTOptions | None = None,
     ):
         """Initialize instance of Soniox Speech-to-Text API service.
@@ -127,25 +124,30 @@ class STT(stt.STT):
             base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this
                 module.
             http_session: Optional aiohttp.ClientSession to use for requests.
-            vad: If passed, enable Voice Activity Detection (VAD) for audio frames.
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
+        params = params or STTOptions()
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=False
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
+                diarization=params.enable_speaker_diarization,
             )
         )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
+        if not self._api_key:
+            raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._base_url = base_url
         self._http_session = http_session
-        self._vad_stream = vad.stream() if vad else None
-        self._params = params or STTOptions()
+        self._params = params
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._params.model
 
     @property
     def provider(self) -> str:
@@ -185,13 +187,13 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
-        self._stt = stt
+        self._stt: STT = stt
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
-        self.audio_queue = asyncio.Queue()
+        self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
-        self._last_tokens_received: float | None = None
+        self._reported_duration_ms = 0
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession for WebSocket connections."""
@@ -200,27 +202,27 @@ class SpeechStream(stt.SpeechStream):
 
         return self._stt._http_session
 
-    async def _connect_ws(self):
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
-        # If VAD was passed, disable endpoint detection, otherwise enable it.
-        enable_endpoint_detection = not self._stt._vad_stream
-
-        context = self._stt._params.context
-        if isinstance(context, ContextObject):
-            context = asdict(context)
+        context_raw = self._stt._params.context
+        context_value: dict[str, Any] | str | None
+        if isinstance(context_raw, ContextObject):
+            context_value = asdict(context_raw)
+        else:
+            context_value = context_raw
 
         # Create initial config object.
-        config = {
+        config: dict[str, Any] = {
             "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
-            "enable_endpoint_detection": enable_endpoint_detection,
+            "enable_endpoint_detection": True,
             "sample_rate": self._stt._params.sample_rate,
             "language_hints": self._stt._params.language_hints,
             "language_hints_strict": self._stt._params.language_hints_strict,
-            "context": context,
+            "context": context_value,
             "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,
             "enable_language_identification": self._stt._params.enable_language_identification,
             "client_reference_id": self._stt._params.client_reference_id,
@@ -233,7 +235,26 @@ class SpeechStream(stt.SpeechStream):
         # Set initial configuration message.
         await ws.send_str(json.dumps(config))
         logger.debug("Soniox Speech-to-Text API connection established!")
+
+        # Reset duration tracking on new connection
+        self._reported_duration_ms = 0
         return ws
+
+    def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
+        """Report the total audio duration processed by the STT engine."""
+        to_report_ms = total_audio_proc_ms - self._reported_duration_ms
+        if to_report_ms <= 0:
+            return
+
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(
+                audio_duration=to_report_ms / 1000,
+            ),
+        )
+        self._event_ch.send_nowait(usage_event)
+        self._reported_duration_ms = int(total_audio_proc_ms)
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
@@ -242,17 +263,18 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._connect_ws()
                 self._ws = ws
                 # Create task for audio processing, voice turn detection and message handling.
-                tasks = [
+                tasks: list[asyncio.Task[None]] = [
                     asyncio.create_task(self._prepare_audio_task()),
-                    asyncio.create_task(self._handle_vad_task()),
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
                     asyncio.create_task(self._keepalive_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -266,7 +288,9 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-            # Handle errors.
+                    tasks_group.cancel()
+                    tasks_group.exception()
+
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
@@ -297,7 +321,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.close()
                     self._ws = None
 
-    async def _keepalive_task(self):
+    async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
         try:
@@ -307,26 +331,19 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             logger.error(f"Error while sending keep alive message: {e}")
 
-    async def _prepare_audio_task(self):
-        """Read audio frames, process VAD, and enqueue PCM data for sending."""
+    async def _prepare_audio_task(self) -> None:
+        """Read audio frames and enqueue PCM data for sending."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
             return
 
         async for data in self._input_ch:
-            if self._stt._vad_stream:
-                # If VAD is enabled, push the audio frame to the VAD stream.
-                if isinstance(data, self._FlushSentinel):
-                    self._stt._vad_stream.flush()
-                else:
-                    self._stt._vad_stream.push_frame(data)
-
             if isinstance(data, rtc.AudioFrame):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
 
-    async def _send_audio_task(self):
+    async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
@@ -341,43 +358,50 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
 
-    async def _handle_vad_task(self):
-        """Listen for VAD events to trigger finalize or keepalive messages."""
-        if not self._stt._vad_stream:
-            logger.debug("VAD stream is not enabled, skipping VAD task")
-            return
-
-        async for event in self._stt._vad_stream:
-            if event.type == vad.VADEventType.END_OF_SPEECH:
-                self.audio_queue.put_nowait(FINALIZE_MESSAGE)
-
-    async def _recv_messages_task(self):
+    async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
 
         # Transcription frame will be only sent after we get the "endpoint" event.
         final_transcript_buffer = ""
         # Language code sent by Soniox if language detection is enabled (e.g. "en", "de", "fr")
         final_transcript_language: str = ""
+        final_speaker_id: str | None = None
 
-        def send_endpoint_transcript():
-            nonlocal final_transcript_buffer, final_transcript_language
+        is_speaking = False
+
+        def send_endpoint_transcript() -> None:
+            nonlocal \
+                final_transcript_buffer, \
+                final_transcript_language, \
+                final_speaker_id, \
+                is_speaking
             if final_transcript_buffer:
                 event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
-                            text=final_transcript_buffer, language=final_transcript_language
+                            text=final_transcript_buffer,
+                            language=final_transcript_language,
+                            speaker_id=final_speaker_id,
                         )
                     ],
                 )
                 self._event_ch.send_nowait(event)
+
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+                # Reset buffers.
                 final_transcript_buffer = ""
                 final_transcript_language = ""
+                final_speaker_id = None
+
+                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
+                is_speaking = False
 
         # Method handles receiving messages from the Soniox Speech-to-Text API.
         while self._ws:
@@ -388,17 +412,12 @@ class SpeechStream(stt.SpeechStream):
                             content = json.loads(msg.data)
                             tokens = content["tokens"]
 
-                            if tokens:
-                                if len(tokens) == 1 and tokens[0]["text"] == FINALIZED_TOKEN:
-                                    # Ignore finalized token, prevent auto finalize cycle.
-                                    pass
-                                else:
-                                    # Got at least one token, reset the auto finalize delay.
-                                    self._last_tokens_received = time.time()
-
                             # We will only send the final tokens after we get the "endpoint" event.
                             non_final_transcription = ""
                             non_final_transcription_language: str = ""
+                            non_final_speaker_id: str | None = None
+
+                            total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
 
                             for token in tokens:
                                 if token["is_final"]:
@@ -407,6 +426,7 @@ class SpeechStream(stt.SpeechStream):
                                         # transcript, the rest will be sent as interim tokens
                                         # (even final tokens).
                                         send_endpoint_transcript()
+                                        self._report_processed_audio_duration(total_audio_proc_ms)
                                     else:
                                         final_transcript_buffer += token["text"]
 
@@ -415,6 +435,9 @@ class SpeechStream(stt.SpeechStream):
                                         # Current heuristic is to take the first language we see.
                                         if token.get("language") and not final_transcript_language:
                                             final_transcript_language = token.get("language")
+
+                                        if "speaker" in token and final_speaker_id is None:
+                                            final_speaker_id = str(token["speaker"])
                                 else:
                                     non_final_transcription += token["text"]
                                     if (
@@ -423,15 +446,34 @@ class SpeechStream(stt.SpeechStream):
                                     ):
                                         non_final_transcription_language = token.get("language")
 
+                                    if "speaker" in token and non_final_speaker_id is None:
+                                        non_final_speaker_id = str(token["speaker"])
+
                             if final_transcript_buffer or non_final_transcription:
+                                if not is_speaking:
+                                    # Send START_OF_SPEECH if this is the first transcript.
+                                    is_speaking = True
+                                    self._event_ch.send_nowait(
+                                        stt.SpeechEvent(
+                                            type=SpeechEventType.START_OF_SPEECH,
+                                        )
+                                    )
+
                                 event = stt.SpeechEvent(
                                     type=SpeechEventType.INTERIM_TRANSCRIPT,
                                     alternatives=[
                                         stt.SpeechData(
                                             text=final_transcript_buffer + non_final_transcription,
-                                            language=final_transcript_language
-                                            if final_transcript_language
-                                            else non_final_transcription_language,
+                                            language=(
+                                                final_transcript_language
+                                                if final_transcript_language
+                                                else non_final_transcription_language
+                                            ),
+                                            speaker_id=(
+                                                final_speaker_id
+                                                if final_speaker_id is not None
+                                                else non_final_speaker_id
+                                            ),
                                         )
                                     ],
                                 )
@@ -443,6 +485,7 @@ class SpeechStream(stt.SpeechStream):
                             if error_code or error_message:
                                 # In case of error, still send the final transcript.
                                 send_endpoint_transcript()
+                                self._report_processed_audio_duration(total_audio_proc_ms)
                                 logger.error(f"WebSocket error: {error_code} - {error_message}")
 
                             finished = content.get("finished")
@@ -450,6 +493,7 @@ class SpeechStream(stt.SpeechStream):
                             if finished:
                                 # When finished, still send the final transcript.
                                 send_endpoint_transcript()
+                                self._report_processed_audio_duration(total_audio_proc_ms)
                                 logger.debug("Transcription finished")
 
                         except Exception as e:

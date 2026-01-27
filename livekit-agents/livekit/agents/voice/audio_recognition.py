@@ -180,9 +180,9 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_vad(None)
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
         self._sample_rate = frame.sample_rate
-        if self._stt_ch is not None:
+        if not skip_stt and self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
@@ -373,7 +373,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = ""
             self._final_transcript_received.set()
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 # TODO: this would screw up transcription latency metrics
                 # but we'll live with it for now.
@@ -425,7 +425,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 self._last_speaking_time = time.time()
 
@@ -449,7 +449,8 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            self._last_speaking_time = time.time()
+            if not self._vad or self._last_speaking_time is None:
+                self._last_speaking_time = time.time()
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
@@ -466,9 +467,12 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
+    @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
-            with trace.use_span(self._ensure_user_turn_span()):
+            with trace.use_span(
+                self._ensure_user_turn_span(start_time=time.time() - ev.speech_duration)
+            ):
                 self._hooks.on_start_of_speech(ev)
 
             self._speaking = True
@@ -688,11 +692,13 @@ class AudioRecognition:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
 
-    def _ensure_user_turn_span(self) -> trace.Span:
+    @utils.log_exceptions(logger=logger)
+    def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
 
-        self._user_turn_span = tracer.start_span("user_turn")
+        start_time_ns = int(start_time * 1_000_000_000) if start_time else None
+        self._user_turn_span = tracer.start_span("user_turn", start_time=start_time_ns)
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
