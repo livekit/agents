@@ -32,6 +32,7 @@ members = [
     "livekit-plugins-baseten",
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
+    "livekit-plugins-camb",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
@@ -556,6 +557,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6c/81/3747dad6b14fa2cf53fcf10548cf5aea6913e96fab41a3c198676f8948a5/cachetools-5.5.2.tar.gz", hash = "sha256:1a661caa9175d26759571b2e19580f9d6393969e5dfca11fdb1f947a23e640d4", size = 28380 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/72/76/20fa66124dbe6be5cafeb312ece67de6b61dd91a0247d1ea13db4ebb33c2/cachetools-5.5.2-py3-none-any.whl", hash = "sha256:d26a22bcc62eb95c3beabd9f1ee5e820d3d2704fe2967cbe350e20c8ffcd3f0a", size = 10080 },
+]
+
+[[package]]
+name = "camb-sdk"
+version = "1.5.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+    { name = "websocket-client" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/ff/9978281f50ea3f338198f8d5b0c211b4b1cb12c6c839498fd58c2b92b0b4/camb_sdk-1.5.3.tar.gz", hash = "sha256:52230a4a0f0c0cef9cb1f47d809fc7b7277eba53abc9102ed1c41cb7968ec2e7", size = 83255, upload-time = "2026-01-10T18:55:00.432Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/de/968314977198449b43a883c4b33b045a203bb8d55ed18b0b0343ee893caf/camb_sdk-1.5.3-py3-none-any.whl", hash = "sha256:f14d8cc440d244eb0ce97107f1dec012fdc50ce02fea0dff1f3521296f74fe56", size = 152585, upload-time = "2026-01-10T18:54:58.336Z" },
 ]
 
 [[package]]
@@ -2148,6 +2165,29 @@ requires-dist = [
     { name = "bithuman", specifier = ">=0.5.25" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-camb"
+source = { editable = "livekit-plugins/livekit-plugins-camb" }
+dependencies = [
+    { name = "camb-sdk" },
+    { name = "livekit-agents" },
+    { name = "numpy" },
+]
+
+[package.optional-dependencies]
+vertex = [
+    { name = "google-auth" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "camb-sdk", specifier = ">=1.5.0" },
+    { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
+]
+provides-extras = ["vertex"]
 
 [[package]]
 name = "livekit-plugins-cartesia"
@@ -5292,6 +5332,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/86/ee/5db93b0b57dc0587abdbac4149296ee73275f615d790a82cb5598af0557f/watchfiles-1.0.4-pp310-pypy310_pp73-macosx_11_0_arm64.whl", hash = "sha256:d8d3d9203705b5797f0af7e7e5baa17c8588030aaadb7f6a86107b7247303817", size = 386010 },
     { url = "https://files.pythonhosted.org/packages/75/61/fe0dc5fedf152bfc085a53711f740701f6bdb8ab6b5c950402b681d4858b/watchfiles-1.0.4-pp310-pypy310_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bdef5a1be32d0b07dcea3318a0be95d42c98ece24177820226b56276e06b63b0", size = 450913 },
     { url = "https://files.pythonhosted.org/packages/9f/dd/3c7731af3baf1a9957afc643d176f94480921a690ec3237c9f9d11301c08/watchfiles-1.0.4-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:342622287b5604ddf0ed2d085f3a589099c9ae8b7331df3ae9845571586c4f3d", size = 453474 },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]
