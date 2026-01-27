@@ -1136,7 +1136,6 @@ class RealtimeSessionBeta(
                 response=Response(),
             )
         )
-        self.clear_audio()
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
