@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Optional
 
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
@@ -12,6 +12,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     AgentTask,
+    FunctionTool,
     JobContext,
     RunContext,
     cli,
@@ -26,14 +27,17 @@ load_dotenv()
 
 ValidInsurances = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
 
+
 @dataclass
 class UserData:
     database: FakeDatabase
     insurance: str | None = None
 
+
 @dataclass
 class GetInsuranceResult:
     insurance: str
+
 
 @dataclass
 class ScheduleAppointmentResult:
@@ -41,17 +45,26 @@ class ScheduleAppointmentResult:
     appointment_time: datetime
     visit_reason: str
 
+
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
     def __init__(self):
-        super().__init__(instructions="""
+        super().__init__(
+            instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
-        """)
+        """
+        )
 
     async def on_enter(self):
-        await self.session.generate_reply(instructions="Collect the user's health insurance and inform them of the accepted insurance options.")
+        await self.session.generate_reply(
+            instructions="Collect the user's health insurance and inform them of the accepted insurance options."
+        )
 
     @function_tool()
-    async def record_health_insurance(self, context: RunContext, insurance: Annotated[str, Field(json_schema_extra={"enum": ValidInsurances})]):
+    async def record_health_insurance(
+        self,
+        context: RunContext,
+        insurance: Annotated[str, Field(json_schema_extra={"enum": ValidInsurances})],
+    ):
         """Record the user's health insurance.
 
         Args:
@@ -60,11 +73,13 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
         context.session.userdata.insurance = insurance
         self.complete(GetInsuranceResult(insurance=insurance))
 
+
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
     def __init__(self):
-        super().__init__(instructions="You will now assist the user with selecting a doctor and appointment time.")
+        super().__init__(
+            instructions="You will now assist the user with selecting a doctor and appointment time."
+        )
         self._selected_doctor: str | None = None
-        self._visit_reason: str | None = None
         self._appointment_time: datetime | None = None
 
     async def on_enter(self):
@@ -72,47 +87,109 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         insurance = self.session.userdata.insurance
 
         self._compatible_doctor_records = database.get_compatible_doctors(insurance=insurance)
-        self._available_doctors = [doctor["name"] for doctor in self._compatible_doctor_records]
+
+        available_doctors = [doctor["name"] for doctor in self._compatible_doctor_records]
+        doctor_confirmation_tool = self._build_doctor_selection_tool(
+            available_doctors=available_doctors
+        )
+        current_tools = self.tools
+        current_tools.append(doctor_confirmation_tool)
+        await self.update_tools(current_tools)
 
         if len(self._compatible_doctor_records) > 1:
-            await self.session.generate_reply(instructions=f"These are the doctors compatible with the user's insurance: {self._available_doctors}, prompt the user to choose one.")
+            await self.session.generate_reply(
+                instructions=f"These are the doctors compatible with the user's insurance: {available_doctors}, prompt the user to choose one."
+            )
         else:
-            await self.session.generate_reply(instructions=f"Inform the user that {self._available_doctors} accepts their insurance and confirm if they would like to select that doctor.")
+            await self.session.generate_reply(
+                instructions=f"Inform the user that {available_doctors} accepts their insurance and confirm if they would like to select that doctor."
+            )
 
-    # TODO dynamically build function tool enums based on actual availibilities
-    @function_tool()
-    async def confirm_doctor_selection(self, doctor: str):
-        """Call to confirm the user's doctor selection.
+    def _build_doctor_selection_tool(
+        self, *, available_doctors: list[str]
+    ) -> Optional[FunctionTool]:
+        @function_tool()
+        async def confirm_doctor_selection(
+            selected_doctor: Annotated[
+                str,
+                Field(
+                    description="The names of the available doctors",
+                    json_schema_extra={"items": {"enum": available_doctors}},
+                ),
+            ],
+        ) -> None:
+            """Call to confirm the user's doctor selection.
 
-        Args:
-            doctor (str): Either "Dr. Henry Jekyll" or "Dr. Edward Hyde"
-        """
-        self._selected_doctor = doctor
-        doctor_record = next((d for d in self._compatible_doctor_records if d["name"] == doctor), None)
+            Args:
+                selected_doctor (str): The doctor the user selects
+            """
+            self._selected_doctor = selected_doctor
+            doctor_record = next(
+                (d for d in self._compatible_doctor_records if d["name"] == selected_doctor), None
+            )
 
-        available_times = doctor_record["availability"]
-        await self.session.generate_reply(instructions=f"The selected doctor has availabilities at {available_times}. Ask the user which time slot they prefer.")
+            available_times = doctor_record["availability"]
+            schedule_appointment_tool = self._build_schedule_appointment_tool(
+                available_times=available_times
+            )
+            current_tools = self.tools
+            current_tools.append(schedule_appointment_tool)
+            await self.update_tools(current_tools)
 
+            await self.session.generate_reply(
+                instructions=f"The selected doctor has availabilities at {available_times}. Ask the user which time slot they prefer."
+            )
 
-    @function_tool()
-    async def schedule_appointment(self, appointment_time: str):
-        if not (self._selected_doctor):
-            await self.session.generate_reply(instructions="An appointment cannot be scheduled without selecting a doctor.")
-        else:
+        return confirm_doctor_selection
+
+    def _build_schedule_appointment_tool(
+        self, *, available_times: list[str]
+    ) -> Optional[FunctionTool]:
+        @function_tool()
+        async def schedule_appointment(
+            appointment_time: Annotated[
+                str,
+                Field(
+                    description="The available appointment times",
+                    json_schema_extra={"items": {"enum": available_times}},
+                ),
+            ],
+        ):
+            """Call to confirm the user's selected appointment time.
+
+            Args:
+                appointment_time (str): The user's appointment time selection
+            """
             self._appointment_time = appointment_time
-            await self.session.generate_reply(instructions="Prompt the user for the reason for their visit.")
 
-    @function_tool()
-    async def confirm_visit_reason(self, visit_reason: str):
-        """Call to record the user's reason for their appointment.
+            visit_reason_tool = self._build_visit_reason_tool()
+            current_tools = self.tools
+            current_tools.append(visit_reason_tool)
+            await self.update_tools(current_tools)
 
-        Args:
-            visit_reason (str): The user's reason for visiting a doctor
-        """
-        if not (self._selected_doctor and self._appointment_time):
-            await self.session.generate_reply(instructions="The user must also select a doctor and appointment time.")
-        else:
-            self.complete(ScheduleAppointmentResult(doctor_name=self._selected_doctor, appointment_time=self._appointment_time, visit_reason=visit_reason))
+            await self.session.generate_reply(
+                instructions="Prompt the user for the reason for their visit."
+            )
+
+        return schedule_appointment
+
+    def _build_visit_reason_tool(self) -> Optional[FunctionTool]:
+        @function_tool()
+        async def confirm_visit_reason(visit_reason: str):
+            """Call to record the user's reason for their appointment.
+
+            Args:
+                visit_reason (str): The user's reason for visiting a doctor
+            """
+            self.complete(
+                ScheduleAppointmentResult(
+                    doctor_name=self._selected_doctor,
+                    appointment_time=self._appointment_time,
+                    visit_reason=visit_reason,
+                )
+            )
+
+        return confirm_visit_reason
 
 
 class HealthcareAgent(Agent):
@@ -124,13 +201,17 @@ class HealthcareAgent(Agent):
         self._database = database
 
     async def on_enter(self):
-        await self.session.generate_reply(instructions="Greet the user and gather the reason for their call.")
+        await self.session.generate_reply(
+            instructions="Greet the user and gather the reason for their call."
+        )
 
     def information_tg_factory(self) -> TaskGroup:
         """Creates a TaskGroup that collects user information"""
         task_group = TaskGroup(chat_ctx=self.chat_ctx, return_exceptions=False)
 
-        task_group.add(lambda: GetNameTask(), id="get_name_task", description="Gathers the user's name")
+        task_group.add(
+            lambda: GetNameTask(), id="get_name_task", description="Gathers the user's name"
+        )
         task_group.add(
             lambda: GetDOBTask(), id="get_dob_task", description="Gathers the user's date of birth"
         )
@@ -147,30 +228,40 @@ class HealthcareAgent(Agent):
 
     @function_tool()
     async def schedule_appointment(self):
-        """Call to schedule an appointment for the user.
-        """
+        """Call to schedule an appointment for the user."""
         task_group = self.information_tg_factory()
 
         # Observe how if any information is given early, TaskGroup will fast-forward the respective task. and at any time, user information can be updated
-        task_group.add(lambda: ScheduleAppointmentTask(), id="schedule_appointment_task", description="Selects a doctor and schedules an appointment")
+        task_group.add(
+            lambda: ScheduleAppointmentTask(),
+            id="schedule_appointment_task",
+            description="Selects a doctor and schedules an appointment",
+        )
         results = (await task_group).task_results
 
         appointment_results = results["schedule_appointment_task"]
-        appointment = {"doctor_name": appointment_results.doctor_name,
-                       "appointment_time": appointment_results.appointment_time,
-                       "visit_reason": appointment_results.visit_reason}
+        appointment = {
+            "doctor_name": appointment_results.doctor_name,
+            "appointment_time": appointment_results.appointment_time,
+            "visit_reason": appointment_results.visit_reason,
+        }
 
         db = self.session.userdata.database
-        db.add_patient_record(info={
-            "name": results["get_name_task"],
-            "date_of_birth": results["get_dob_task"],
-            "email": results["get_email_task"],
-            "insurance": results["get_insurance_task"],
-            "appointments": {appointment}
-        })
+        db.add_patient_record(
+            info={
+                "name": results["get_name_task"],
+                "date_of_birth": results["get_dob_task"],
+                "email": results["get_email_task"],
+                "insurance": results["get_insurance_task"],
+                "appointments": {appointment},
+            }
+        )
         self._database.remove_doctor_availability(
             appointment_results.doctor_name,
-            {"date": appointment_results.appointment_time.date(), "time": appointment_results.appointment_time.time()}
+            {
+                "date": appointment_results.appointment_time.date(),
+                "time": appointment_results.appointment_time.time(),
+            },
         )
 
         return "The appointment has been made, ask the user if they need assistance with anything else."
@@ -184,12 +275,22 @@ class HealthcareAgent(Agent):
     #     """Facilitates medicine refill"""
 
     @function_tool()
-    async def update_record(self, field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})]):
+    async def update_record(
+        self,
+        field: Annotated[
+            str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})
+        ],
+    ):
         """Update a specific field in the user's records.
 
         Args:
             field (str): The field to update
         """
+        # TODO: if user profile not found
+        if field == "name":
+            await self.session.generate_reply(
+                instructions="The user may not change their name, they must create a new record."
+            )
         field_to_task = {
             "name": GetNameTask,
             "dob": GetDOBTask,
