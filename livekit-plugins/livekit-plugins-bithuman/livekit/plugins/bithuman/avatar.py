@@ -517,11 +517,11 @@ class AvatarSession:
                         filename="avatar.jpg",
                         content_type="image/jpeg",
                     )
-                except Exception:
+                except Exception as err:
                     # If decode fails despite validation, raise error
                     raise BitHumanException(
                         f"Failed to decode base64 avatar image: {self._avatar_image[:50]}..."
-                    )
+                    ) from err
             else:
                 # Not a URL and not valid base64, raise error
                 raise BitHumanException(
