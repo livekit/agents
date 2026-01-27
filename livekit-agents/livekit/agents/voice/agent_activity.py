@@ -1250,21 +1250,17 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        if (
-            ev.speech_duration >= self._session.options.min_interruption_duration
-            and self._turn_detection != "stt"
+        active_speech = ev.speech_duration >= self._session.options.min_interruption_duration
+        if active_speech and (
+            self._turn_detection != "stt"
+            or not self._stt_eos_received
+            or ev.raw_accumulated_silence == 0
         ):
+            # STT may send EOS before VAD EOS, we only interrupt if:
+            # 1. turn detection is not STT; or
+            # 2. STT EOS hasn't been received yet; or
+            # 3. VAD speech is still ongoing
             self._interrupt_by_audio_activity()
-        elif (
-            ev.speech_duration >= self._session.options.min_interruption_duration
-            and self._turn_detection == "stt"
-        ):
-            # STT often sends end of speech event after final transcript and
-            # before VAD end of speech event, we only interrupt if
-            # 1. STT EOS hasn't been received yet; or
-            # 2. VAD real EOS is not yet triggered (i.e. VAD speech is still ongoing)
-            if not self._stt_eos_received or ev.raw_accumulated_silence == 0:
-                self._interrupt_by_audio_activity()
 
         if (
             ev.speaking
