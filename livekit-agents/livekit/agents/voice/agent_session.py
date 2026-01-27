@@ -141,8 +141,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         {
             "min_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
             "max_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
-            "preemptive_generation": "Use turn_handling=TurnHandlingConfig(...) instead",
-            "user_away_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
             "false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
             "resume_false_interruption": "Use turn_handling=TurnHandlingConfig(...) instead",
             "allow_interruptions": "Use turn_handling=TurnHandlingConfig(...) instead",
@@ -173,14 +171,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         ivr_detection: bool = False,
+        preemptive_generation: bool = False,
+        user_away_timeout: float | None = 15.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
-        user_away_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         discard_audio_if_uninterruptible: NotGivenOr[bool] = NOT_GIVEN,
@@ -201,19 +199,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         low-level streaming logic.
 
         Args:
-            turn_detection (TurnDetectionMode, optional): Strategy for deciding
-                when the user has finished speaking.
-
-                * ``"stt"`` – rely on speech-to-text end-of-utterance cues
-                * ``"vad"`` – rely on Voice Activity Detection start/stop cues
-                * ``"realtime_llm"`` – use server-side detection from a
-                  realtime LLM
-                * ``"manual"`` – caller controls turn boundaries explicitly
-                * ``_TurnDetector`` instance – plug-in custom detector
-
-                If *NOT_GIVEN*, the session chooses the best available mode in
-                priority order ``realtime_llm → vad → stt → manual``; it
-                automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
@@ -247,6 +232,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
+            user_away_timeout (float, optional): If set, set the user state as
+                "away" after this amount of time after user and agent are silent.
+                Defaults to ``15.0`` s, set to ``None`` to disable.
+            preemptive_generation (bool):
+                Whether to speculatively begin LLM and TTS requests before an end-of-turn is
+                detected. When True, the agent sends inference calls as soon as a user
+                transcript is received rather than waiting for a definitive turn boundary. This
+                can reduce response latency by overlapping model inference with user audio,
+                but may incur extra compute if the user interrupts or revises mid-utterance.
+                Defaults to ``False``.
+            min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            turn_detection (NotGivenOr[TurnDetectionMode]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            discard_audio_if_uninterruptible (NotGivenOr[bool]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            min_interruption_duration (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            min_interruption_words (NotGivenOr[int]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            allow_interruptions (NotGivenOr[bool]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            resume_false_interruption (NotGivenOr[bool]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
+            agent_false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingConfig(...) instead.
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -260,8 +265,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             TurnHandlingConfig.migrate(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
-                preemptive_generation=preemptive_generation,
-                user_away_timeout=user_away_timeout,
                 false_interruption_timeout=false_interruption_timeout,
                 turn_detection=turn_detection,
                 discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -285,7 +288,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_endpointing_delay=turn_handling.endpointing_cfg.min_delay,
             max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,
             max_tool_steps=max_tool_steps,
-            user_away_timeout=turn_handling.user_away_timeout,
+            user_away_timeout=user_away_timeout,
             false_interruption_timeout=turn_handling.interruption_cfg.false_interruption_timeout,
             resume_false_interruption=turn_handling.interruption_cfg.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,

@@ -70,7 +70,7 @@ class InferenceProcExecutor(SupervisedProc):
                         "received unexpected inference response",
                         extra={"request_id": msg.request_id},
                     )
-                    return
+                    continue
 
                 with contextlib.suppress(asyncio.InvalidStateError):
                     fut.set_result(msg)

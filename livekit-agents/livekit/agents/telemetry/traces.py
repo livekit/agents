@@ -11,12 +11,13 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace
+from opentelemetry import context as otel_context, trace as trace_api
 from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
@@ -25,7 +26,7 @@ from opentelemetry.sdk._logs import (
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
@@ -45,12 +46,12 @@ if TYPE_CHECKING:
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
-        self._tracer_provider = trace.get_tracer_provider()
-        self._tracer = trace.get_tracer(instrumenting_module_name)
+        self._tracer_provider: trace_api.TracerProvider = trace_api.get_tracer_provider()
+        self._tracer = trace_api.get_tracer(instrumenting_module_name)
 
-    def set_provider(self, tracer_provider: TracerProvider) -> None:
+    def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
         self._tracer_provider = tracer_provider
-        self._tracer = trace.get_tracer(
+        self._tracer = trace_api.get_tracer(
             self._instrumenting_module_name,
             tracer_provider=self._tracer_provider,
         )
@@ -114,7 +115,7 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
 
 def set_tracer_provider(
-    tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
@@ -122,7 +123,7 @@ def set_tracer_provider(
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
     """
-    if metadata:
+    if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
     tracer.set_provider(tracer_provider)
@@ -178,13 +179,20 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    if not isinstance(tracer._tracer_provider, TracerProvider):
-        tracer_provider = TracerProvider(resource=resource)
+    # Check if a tracer provider is not set and set one up
+    # below shows how the ProxyTracerProvider is returned when none have been setup
+    # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+    tracer_provider: trace_api.TracerProvider
+    if isinstance(
+        tracer._tracer_provider, (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider)
+    ):
+        tracer_provider = trace_sdk.TracerProvider(resource=resource)
         set_tracer_provider(tracer_provider)
     else:
         # attach the processor to the existing tracer provider
         tracer_provider = tracer._tracer_provider
-        tracer_provider.resource.merge(resource)
+        if isinstance(tracer_provider, trace_sdk.TracerProvider):
+            tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
@@ -192,8 +200,9 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         session=session,
     )
 
-    tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
-    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    if isinstance(tracer_provider, trace_sdk.TracerProvider):
+        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     logger_provider = get_logger_provider()
     if not isinstance(logger_provider, LoggerProvider):
@@ -450,7 +459,7 @@ async def _upload_session_report(
 
 
 def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, TracerProvider):
+    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
         logger.debug("shutting down telemetry tracer provider")
         tracer_provider.force_flush()
         tracer_provider.shutdown()

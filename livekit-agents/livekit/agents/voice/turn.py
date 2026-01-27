@@ -99,16 +99,6 @@ class TurnHandlingConfig(BaseModel):
             automatically falls back if the necessary model is missing.
         endpointing (EndpointingConfig): Configuration for endpointing.
         interruption (InterruptionConfig): Configuration for interruption handling.
-        user_away_timeout (float, optional): If set, set the user state as
-            "away" after this amount of time after user and agent are silent.
-            Defaults to ``15.0`` s, set to ``None`` to disable.
-        preemptive_generation (bool):
-            Whether to speculatively begin LLM and TTS requests before an end-of-turn is
-            detected. When True, the agent sends inference calls as soon as a user
-            transcript is received rather than waiting for a definitive turn boundary. This
-            can reduce response latency by overlapping model inference with user audio,
-            but may incur extra compute if the user interrupts or revises mid-utterance.
-            Defaults to ``False``.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -120,8 +110,6 @@ class TurnHandlingConfig(BaseModel):
     interruption: InterruptionConfig | InterruptionConfigDict = Field(
         default_factory=InterruptionConfig
     )
-    user_away_timeout: float | None = 15.0
-    preemptive_generation: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         if isinstance(self.endpointing, dict):
@@ -134,8 +122,6 @@ class TurnHandlingConfig(BaseModel):
         cls,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
-        user_away_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         discard_audio_if_uninterruptible: NotGivenOr[bool] = NOT_GIVEN,
@@ -185,10 +171,6 @@ class TurnHandlingConfig(BaseModel):
 
         if is_given(turn_detection):
             kwargs["turn_detection"] = turn_detection
-        if is_given(user_away_timeout):
-            kwargs["user_away_timeout"] = user_away_timeout
-        if is_given(preemptive_generation):
-            kwargs["preemptive_generation"] = preemptive_generation
 
         return cls(**kwargs)
 

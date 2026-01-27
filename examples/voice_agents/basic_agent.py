@@ -18,6 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
+from livekit.agents.voice.turn import TurnHandlingConfig
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -105,10 +106,10 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
-            # allow the LLM to generate a response while waiting for the end of turn
-            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-            preemptive_generation=True,
         ),
+        # allow the LLM to generate a response while waiting for the end of turn
+        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+        preemptive_generation=True,
     )
 
     @session.on("metrics_collected")
