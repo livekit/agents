@@ -46,7 +46,14 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, ProviderTool, StopResponse, ToolError, function_tool
+from .llm.tool_context import (
+    FunctionTool,
+    ProviderTool,
+    StopResponse,
+    ToolError,
+    ToolFlag,
+    function_tool,
+)
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -128,6 +135,7 @@ __all__ = [
     "AutoSubscribe",
     "FunctionTool",
     "function_tool",
+    "ToolFlag",
     "ProviderTool",
     "ChatContext",
     "ChatItem",

@@ -1,20 +1,26 @@
 import asyncio
+from functools import partial
 
-from livekit import durable
-from livekit.agents.durable_scheduler import DurableScheduler, EffectCall
+from livekit.agents import ToolFlag, function_tool
+from livekit.durable import DurableScheduler, EffectCall, durable
 
 
 async def my_network_call() -> None:
     return 6
 
 
-@durable.durable
+@durable
 async def nested_durable() -> None:
     await EffectCall(asyncio.sleep(5))
 
 
-@durable.durable
-async def my_function_tool() -> str:
+@function_tool(name="get_weather", flags=ToolFlag.DURABLE)
+async def my_function_tool(location: str) -> str:
+    """my_function_tool
+
+    Args:
+        location: the location to get the weather for
+    """
     result = await EffectCall(my_network_call())
     print("a", result)
 
@@ -29,7 +35,8 @@ async def my_function_tool() -> str:
 
 async def amain() -> None:
     scheduler = DurableScheduler()
-    scheduler.execute(my_function_tool)
+    print(my_function_tool.info)
+    scheduler.execute(partial(my_function_tool, "New York"))
 
     await asyncio.sleep(5)
     print("dumping scheduler")

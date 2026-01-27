@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Coroutine, Generator
 from types import (
@@ -38,12 +39,11 @@ class DurableFunction:
     """A wrapper for generator functions and async functions that make
     their generator and coroutine instances serializable."""
 
-    __slots__ = ("registered_fn", "__name__", "__qualname__")
+    # __slots__ = ("registered_fn", "__name__", "__qualname__")
 
     def __init__(self, fn: FunctionType):
         self.registered_fn = register_function(fn)
-        self.__name__ = fn.__name__
-        self.__qualname__ = fn.__qualname__
+        functools.update_wrapper(self, fn)
 
     def __call__(self, *args, **kwargs):
         result = self.registered_fn.fn(*args, **kwargs)
