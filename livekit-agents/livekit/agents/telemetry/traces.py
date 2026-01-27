@@ -11,7 +11,7 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace, trace as trace_api
+from opentelemetry import context as otel_context, trace as trace_api
 from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
@@ -46,12 +46,12 @@ if TYPE_CHECKING:
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
-        self._tracer_provider: trace_api.TracerProvider = trace.get_tracer_provider()
-        self._tracer = trace.get_tracer(instrumenting_module_name)
+        self._tracer_provider: trace_api.TracerProvider = trace_api.get_tracer_provider()
+        self._tracer = trace_api.get_tracer(instrumenting_module_name)
 
     def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
         self._tracer_provider = tracer_provider
-        self._tracer = trace.get_tracer(
+        self._tracer = trace_api.get_tracer(
             self._instrumenting_module_name,
             tracer_provider=self._tracer_provider,
         )
@@ -338,7 +338,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb)
+    return MessageToDict(item_pb, preserving_proto_field_name=True)
 
 
 async def _upload_session_report(
@@ -379,6 +379,12 @@ async def _upload_session_report(
             "session.options": vars(report.options),
             "session.report_timestamp": report.timestamp,
             "agent_name": agent_name,
+            "usage": [
+                {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
+                for u in report.model_usage
+            ]
+            if report.model_usage
+            else None,
         },
     )
 

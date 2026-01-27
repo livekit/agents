@@ -28,6 +28,7 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
+from ..metrics import ModelUsage, ModelUsageCollector
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -50,6 +51,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    MetricsCollectedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -129,6 +131,11 @@ class VoiceActivityVideoSampler:
             return True
 
         return False
+
+
+@dataclass
+class AgentSessionUsage:
+    model_usage: list[ModelUsage]
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
@@ -287,6 +294,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            preemptive_generation=preemptive_generation,
             false_interruption_timeout=turn_handling.interruption_cfg.false_interruption_timeout,
             resume_false_interruption=turn_handling.interruption_cfg.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
@@ -295,7 +303,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if is_given(tts_text_transforms)
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
-            preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
@@ -368,12 +375,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
         self._started_at: float | None = None
+        self._usage_collector = ModelUsageCollector()
 
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
+        if isinstance(arg, MetricsCollectedEvent):
+            self._usage_collector.collect(arg.metrics)
         super().emit(event, arg)
 
     @property
@@ -437,6 +447,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
+
+    @property
+    def usage(self) -> AgentSessionUsage:
+        """Returns usage summaries for this session, one per model/provider combination."""
+        return AgentSessionUsage(model_usage=self._usage_collector.flatten())
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
@@ -531,6 +546,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
+            self._usage_collector = ModelUsageCollector()
             self._room_io = None
             self._recorder_io = None
 

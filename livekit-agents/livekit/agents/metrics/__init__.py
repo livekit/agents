@@ -7,6 +7,13 @@ from .base import (
     TTSMetrics,
     VADMetrics,
 )
+from .usage import (
+    LLMModelUsage,
+    ModelUsage,
+    ModelUsageCollector,
+    STTModelUsage,
+    TTSModelUsage,
+)
 from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics
 
@@ -18,6 +25,13 @@ __all__ = [
     "STTMetrics",
     "TTSMetrics",
     "RealtimeModelMetrics",
+    # New model usage classes
+    "LLMModelUsage",
+    "TTSModelUsage",
+    "STTModelUsage",
+    "ModelUsage",
+    "ModelUsageCollector",
+    # Deprecated - use ModelUsageCollector and ModelUsage instead
     "UsageSummary",
     "UsageCollector",
     "log_metrics",

@@ -606,6 +606,8 @@ class AgentActivity(RecognitionHooks):
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection=self._turn_detection,
+            stt_model=self.stt.model if self.stt else None,
+            stt_provider=self.stt.provider if self.stt else None,
         )
         self._audio_recognition.start()
 
@@ -1752,6 +1754,8 @@ class AgentActivity(RecognitionHooks):
                     input=audio_source,
                     model_settings=model_settings,
                     text_transforms=self._session.options.tts_text_transforms,
+                    model=self.tts.model if self.tts else None,
+                    provider=self.tts.provider if self.tts else None,
                 )
                 tasks.append(tts_task)
                 if (
@@ -1934,6 +1938,8 @@ class AgentActivity(RecognitionHooks):
             chat_ctx=chat_ctx,
             tool_ctx=tool_ctx,
             model_settings=model_settings,
+            model=self.llm.model if self.llm else None,
+            provider=self.llm.provider if self.llm else None,
         )
         tasks.append(llm_task)
 
@@ -1950,6 +1956,8 @@ class AgentActivity(RecognitionHooks):
                 input=tts_text_input,
                 model_settings=model_settings,
                 text_transforms=self._session.options.tts_text_transforms,
+                model=self.tts.model if self.tts else None,
+                provider=self.tts.provider if self.tts else None,
             )
             tasks.append(tts_task)
             if (
@@ -2095,9 +2103,9 @@ class AgentActivity(RecognitionHooks):
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
-                assistant_metrics["e2e_latency"] = (
-                    started_speaking_at - user_metrics["stopped_speaking_at"]
-                )
+                e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
+                assistant_metrics["e2e_latency"] = e2e_latency
+                current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         has_speech_message = False
@@ -2462,6 +2470,8 @@ class AgentActivity(RecognitionHooks):
                                 input=tts_text_input,
                                 model_settings=model_settings,
                                 text_transforms=self._session.options.tts_text_transforms,
+                                model=self.tts.model if self.tts else None,
+                                provider=self.tts.provider if self.tts else None,
                             )
 
                             if (
