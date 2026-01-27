@@ -471,6 +471,20 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # Check for system/developer messages that will be dropped
+        system_msg_count = sum(
+            1
+            for item in chat_ctx.items
+            if item.type == "message" and item.role in ["system", "developer"]
+        )
+        if system_msg_count > 0:
+            logger.warning(
+                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                f"message(s) from chat context. Gemini Realtime only supports 'user' and "
+                f"'model' roles. Use update_instructions() to set system-level context instead."
+            )
+
         chat_ctx = chat_ctx.copy(
             exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
         )
@@ -681,6 +695,22 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     async with self._session_lock:
                         self._active_session = session
+
+                        # Check for system/developer messages in initial chat context
+                        system_msg_count = sum(
+                            1
+                            for item in self._chat_ctx.items
+                            if item.type == "message" and item.role in ["system", "developer"]
+                        )
+                        if system_msg_count > 0:
+                            logger.warning(
+                                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                                f"message(s) from initial chat context during session initialization. "
+                                f"Gemini Realtime only supports 'user' and 'model' roles. Use "
+                                f"update_instructions() to set system-level context instead."
+                            )
+
                         turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True,
                             exclude_handoff=True,

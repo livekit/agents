@@ -83,7 +83,12 @@ class Kelly(Agent):
                     inference.LLM("google/gemini-2.5-flash"),
                 ]
             ),
-            stt=FallbackSTTAdapter(stt=[inference.STT("deepgram"), inference.STT("cartesia")]),
+            stt=FallbackSTTAdapter(
+                stt=[
+                    inference.STT("deepgram/nova-3"),
+                    inference.STT("cartesia/ink-whisper"),
+                ]
+            ),
             tts=FallbackTTSAdapter(
                 tts=[
                     inference.TTS("cartesia"),

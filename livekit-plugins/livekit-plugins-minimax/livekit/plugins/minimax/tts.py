@@ -538,6 +538,8 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 json=msg,
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                # large read_bufsize to avoid `ValueError: Chunk too big`
+                read_bufsize=10 * 1024 * 1024,
             ) as resp:
                 resp.raise_for_status()
 
