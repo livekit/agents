@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import os
 import sys
@@ -59,7 +60,6 @@ def _is_valid_base64(s: str) -> bool:
     Returns:
         True if the string is valid base64, False otherwise
     """
-    import base64
     import re
 
     # Base64 strings should only contain A-Z, a-z, 0-9, +, /, and = for padding
@@ -199,7 +199,9 @@ class AvatarSession:
         elif isinstance(avatar_image, str):
             if os.path.exists(avatar_image):
                 self._avatar_image = Image.open(avatar_image)
-            elif avatar_image.startswith("http"):
+            elif avatar_image.startswith(("http://", "https://")):
+                self._avatar_image = avatar_image
+            elif _is_valid_base64(avatar_image):
                 self._avatar_image = avatar_image
             else:
                 raise BitHumanException(f"Invalid avatar image: {avatar_image}")
@@ -414,13 +416,7 @@ class AvatarSession:
             img_byte_arr = io.BytesIO()
             self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
             img_byte_arr.seek(0)
-            import base64
-
             json_data["image"] = base64.b64encode(img_byte_arr.getvalue()).decode("utf-8")
-        elif isinstance(self._avatar_image, bytes):
-            import base64
-
-            json_data["image"] = base64.b64encode(self._avatar_image).decode("utf-8")
         elif isinstance(self._avatar_image, str):
             json_data["image"] = self._avatar_image
 
@@ -506,15 +502,6 @@ class AvatarSession:
                 filename="avatar.jpg",
                 content_type="image/jpeg",
             )
-        elif isinstance(self._avatar_image, bytes):
-            # Upload raw bytes as file
-            img_byte_arr = io.BytesIO(self._avatar_image)
-            form_data.add_field(
-                "avatar_image",
-                img_byte_arr,
-                filename="avatar.jpg",
-                content_type="image/jpeg",
-            )
         elif isinstance(self._avatar_image, str):
             # String can be URL or base64 - check if it's a URL
             if self._avatar_image.startswith(("http://", "https://")):
@@ -522,8 +509,6 @@ class AvatarSession:
             elif _is_valid_base64(self._avatar_image):
                 # Valid base64 string, decode and upload as file
                 try:
-                    import base64
-
                     decoded_image = base64.b64decode(self._avatar_image)
                     img_byte_arr = io.BytesIO(decoded_image)
                     form_data.add_field(
@@ -533,11 +518,16 @@ class AvatarSession:
                         content_type="image/jpeg",
                     )
                 except Exception:
-                    # If decode fails despite validation, treat as URL
-                    form_data.add_field("avatar_image_url", self._avatar_image)
+                    # If decode fails despite validation, raise error
+                    raise BitHumanException(
+                        f"Failed to decode base64 avatar image: {self._avatar_image[:50]}..."
+                    )
             else:
-                # Not a URL and not valid base64, treat as URL
-                form_data.add_field("avatar_image_url", self._avatar_image)
+                # Not a URL and not valid base64, raise error
+                raise BitHumanException(
+                    f"Invalid avatar image string: must be a URL (starting with http:// or https://) "
+                    f"or valid base64 encoded data. Got: {self._avatar_image[:50]}..."
+                )
 
         # Add avatar_id if provided
         if utils.is_given(self._avatar_id):
