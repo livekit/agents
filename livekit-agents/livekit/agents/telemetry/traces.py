@@ -381,9 +381,9 @@ async def _upload_session_report(
             "agent_name": agent_name,
             "usage": [
                 {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
-                for u in report.usage
+                for u in report.model_usage
             ]
-            if report.usage
+            if report.model_usage
             else None,
         },
     )

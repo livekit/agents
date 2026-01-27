@@ -7,7 +7,7 @@ from .base import (
     TTSMetrics,
     VADMetrics,
 )
-from .model_usage import (
+from .usage import (
     LLMModelUsage,
     ModelUsage,
     ModelUsageCollector,

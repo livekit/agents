@@ -133,6 +133,11 @@ class VoiceActivityVideoSampler:
         return False
 
 
+@dataclass
+class AgentSessionUsage:
+    model_usage: list[ModelUsage]
+
+
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
@@ -289,6 +294,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            preemptive_generation=preemptive_generation,
             false_interruption_timeout=turn_handling.interruption_cfg.false_interruption_timeout,
             resume_false_interruption=turn_handling.interruption_cfg.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
@@ -297,7 +303,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if is_given(tts_text_transforms)
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
-            preemptive_generation=turn_handling.preemptive_generation,
             ivr_detection=ivr_detection,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
@@ -444,9 +449,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._tools
 
     @property
-    def usage(self) -> list[ModelUsage]:
+    def usage(self) -> AgentSessionUsage:
         """Returns usage summaries for this session, one per model/provider combination."""
-        return self._usage_collector.get_summary()
+        return AgentSessionUsage(model_usage=self._usage_collector.flatten())
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():

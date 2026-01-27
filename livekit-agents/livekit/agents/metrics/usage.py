@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Literal, Union
 
 from pydantic import BaseModel
@@ -19,7 +18,7 @@ class _BaseModelUsage(BaseModel):
 class LLMModelUsage(_BaseModelUsage):
     """Usage summary for LLM models."""
 
-    type: Literal["llm"] = "llm"
+    type: Literal["llm_usage"] = "llm_usage"
     provider: str
     """The provider name (e.g., 'openai', 'anthropic')."""
     model: str
@@ -56,7 +55,7 @@ class LLMModelUsage(_BaseModelUsage):
 class TTSModelUsage(_BaseModelUsage):
     """Usage summary for TTS models."""
 
-    type: Literal["tts"] = "tts"
+    type: Literal["tts_usage"] = "tts_usage"
     provider: str
     """The provider name (e.g., 'elevenlabs', 'cartesia')."""
     model: str
@@ -75,7 +74,7 @@ class TTSModelUsage(_BaseModelUsage):
 class STTModelUsage(_BaseModelUsage):
     """Usage summary for STT models."""
 
-    type: Literal["stt"] = "stt"
+    type: Literal["stt_usage"] = "stt_usage"
     provider: str
     """The provider name (e.g., 'deepgram', 'assemblyai')."""
     model: str
@@ -189,22 +188,10 @@ class ModelUsageCollector:
             stt_usage.output_tokens += metrics.output_tokens
             stt_usage.audio_duration += metrics.audio_duration
 
-    def get_summary(self) -> list[ModelUsage]:
+    def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""
         result: list[ModelUsage] = []
-        result.extend(deepcopy(u) for u in self._llm_usage.values())
-        result.extend(deepcopy(u) for u in self._tts_usage.values())
-        result.extend(deepcopy(u) for u in self._stt_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._llm_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._tts_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._stt_usage.values())
         return result
-
-    def get_llm_summary(self) -> list[LLMModelUsage]:
-        """Returns a list of LLM usage summaries."""
-        return [deepcopy(u) for u in self._llm_usage.values()]
-
-    def get_tts_summary(self) -> list[TTSModelUsage]:
-        """Returns a list of TTS usage summaries."""
-        return [deepcopy(u) for u in self._tts_usage.values()]
-
-    def get_stt_summary(self) -> list[STTModelUsage]:
-        """Returns a list of STT usage summaries."""
-        return [deepcopy(u) for u in self._stt_usage.values()]

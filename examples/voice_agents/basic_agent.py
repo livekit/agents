@@ -18,7 +18,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
-from livekit.agents.voice.turn import TurnHandlingConfig
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
