@@ -57,7 +57,7 @@ class LLM(openai.responses.LLM):
             timeout=timeout
             if timeout
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-        )
+        )  # type: ignore
 
         super().__init__(
             model=model,
