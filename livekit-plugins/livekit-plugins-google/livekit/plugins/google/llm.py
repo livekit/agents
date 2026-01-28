@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from google.auth._default_async import default_async
 from google.genai import Client, types
@@ -77,7 +77,7 @@ class _LLMOptions:
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
     retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
-    http_options: NotGivenOr[types.HttpOptions]
+    http_options: NotGivenOr[types.HttpOptions | Callable[[int], types.HttpOptions]]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
 
@@ -113,7 +113,9 @@ class LLM(llm.LLM):
         automatic_function_calling_config: NotGivenOr[
             types.AutomaticFunctionCallingConfigOrDict
         ] = NOT_GIVEN,
-        http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        http_options: NotGivenOr[
+            types.HttpOptions | Callable[[int], types.HttpOptions]
+        ] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
     ) -> None:
@@ -143,7 +145,7 @@ class LLM(llm.LLM):
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
             retrieval_config (RetrievalConfigOrDict, optional): The retrieval configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
-            http_options (HttpOptions, optional): The HTTP options to use for the session.
+            http_options (HttpOptions | Callable[[int], HttpOptions], optional): The HTTP options to use for requests. Can be either a static HttpOptions object, or a callable that takes the attempt number (1-indexed, where 1 is the first attempt) and returns HttpOptions, allowing different options per retry attempt.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
@@ -426,9 +428,13 @@ class LLMStream(llm.LLMStream):
             tools_config = create_tools_config(tool_context, _only_single_type=True)
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
-            http_options = self._llm._opts.http_options or types.HttpOptions(
-                timeout=int(self._conn_options.timeout * 1000)
-            )
+            opts_http_options = self._llm._opts.http_options
+            if is_given(opts_http_options) and callable(opts_http_options):
+                http_options = opts_http_options(self._attempt_number)
+            elif is_given(opts_http_options):
+                http_options = opts_http_options
+            else:
+                http_options = types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
             if not http_options.headers:
                 http_options.headers = {}
             http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
