@@ -1,7 +1,9 @@
 import asyncio
 from functools import partial
 
-from livekit.agents import ToolFlag, function_tool
+from livekit.agents import AgentSession, RunContext, ToolFlag, function_tool, Agent
+from livekit.agents.voice import SpeechHandle
+from livekit.agents.llm import FunctionCall
 from livekit.durable import DurableScheduler, EffectCall, durable
 
 
@@ -14,29 +16,49 @@ async def nested_durable() -> None:
     await EffectCall(asyncio.sleep(5))
 
 
-@function_tool(name="get_weather", flags=ToolFlag.DURABLE)
-async def my_function_tool(location: str) -> str:
-    """my_function_tool
+class MyAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You are a weather agent.")
 
-    Args:
-        location: the location to get the weather for
-    """
-    result = await EffectCall(my_network_call())
-    print("a", result)
+    @function_tool(name="get_weather", flags=ToolFlag.DURABLE)
+    async def my_function_tool(self, ctx: RunContext, location: str) -> str:
+        """my_function_tool
 
-    await EffectCall(asyncio.sleep(5))
+        Args:
+            location: the location to get the weather for
+        """
+        print("self", self)
+        print("my_function_tool", ctx, location)
+        result = await EffectCall(my_network_call())
+        print("a", result)
 
-    await nested_durable()
+        await EffectCall(asyncio.sleep(5))
 
-    e = await EffectCall(asyncio.sleep(5))
-    print("b", e)
-    # await MyAgentTask()
+        await nested_durable()
+
+        e = await EffectCall(asyncio.sleep(5))
+        print("b", e)
+        print("self", self)
+        # await MyAgentTask()
 
 
 async def amain() -> None:
+    session = AgentSession()
+    ctx = RunContext(
+        session=session,
+        speech_handle=SpeechHandle(speech_id="speech_123", allow_interruptions=True),
+        function_call=FunctionCall(
+            call_id="function_call_123",
+            name="my_function_tool",
+            arguments="{}",
+        ),
+    )
+
+    agent = MyAgent()
+
     scheduler = DurableScheduler()
-    print(my_function_tool.info)
-    scheduler.execute(partial(my_function_tool, "New York"))
+    print(agent.my_function_tool.info)
+    scheduler.execute(partial(agent.my_function_tool, ctx, "New York"))
 
     await asyncio.sleep(5)
     print("dumping scheduler")
