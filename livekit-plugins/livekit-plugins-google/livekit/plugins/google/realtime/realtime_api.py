@@ -1225,10 +1225,13 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close.set()
 
     def commit_audio(self) -> None:
-        pass
+        logger.warning("commit_audio is not supported by Gemini Realtime API.")
 
     def clear_audio(self) -> None:
-        pass
+        logger.warning("clear_audio is not supported by Gemini Realtime API.")
+
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by Gemini Realtime API.")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
