@@ -53,7 +53,8 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5"]
+SarvamSTTModels = Literal["saarika:v2.5", "saaras:v3"]
+SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 
 class ConnectionState(enum.Enum):
@@ -73,6 +74,7 @@ class SarvamSTTOptions:
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
+        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
@@ -81,6 +83,7 @@ class SarvamSTTOptions:
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     api_key: str
     model: SarvamSTTModels | str = "saarika:v2.5"
+    mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
@@ -97,6 +100,20 @@ class SarvamSTTOptions:
                 self.base_url = base_url
             if self.streaming_url is None:
                 self.streaming_url = streaming_url
+        if self.model == "saaras:v3":
+            allowed_modes: set[str] = {
+                "transcribe",
+                "translate",
+                "verbatim",
+                "translit",
+                "codemix",
+            }
+            if self.mode not in allowed_modes:
+                raise ValueError(
+                    "mode must be one of transcribe, translate, verbatim, translit, codemix"
+                )
+        else:
+            self.mode = "transcribe"
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
 
@@ -151,6 +168,8 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["high_vad_sensitivity"] = str(opts.high_vad_sensitivity).lower()
     if opts.flush_signal is not None:
         params["flush_signal"] = str(opts.flush_signal).lower()
+    if opts.model == "saaras:v3":
+        params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
 
@@ -166,6 +185,7 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
+        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
@@ -177,6 +197,7 @@ class STT(stt.STT):
         *,
         language: str = "en-IN",
         model: SarvamSTTModels | str = "saarika:v2.5",
+        mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -206,6 +227,7 @@ class STT(stt.STT):
             language=language,
             api_key=self._api_key,
             model=model,
+            mode=mode,
             base_url=base_url,
             prompt=prompt,
             high_vad_sensitivity=high_vad_sensitivity,
@@ -236,6 +258,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
+        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Recognize speech using Sarvam.ai API.
@@ -254,8 +277,11 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
-        opts_language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
-        opts_model = self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
+        opts_language = self._opts.language if not is_given(language) else language
+        opts_model = self._opts.model if not is_given(model) else model
+        opts_mode = self._opts.mode if not is_given(mode) else mode
+        if is_given(mode) and opts_model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -269,6 +295,8 @@ class STT(stt.STT):
             form_data.add_field("language_code", opts_language)
         if opts_model:
             form_data.add_field("model", str(opts_model))
+        if opts_model == "saaras:v3":
+            form_data.add_field("mode", str(opts_mode))
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -351,6 +379,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
+        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
@@ -361,11 +390,16 @@ class STT(stt.STT):
         """Create a streaming transcription session."""
         opts_language = language if is_given(language) else self._opts.language
         opts_model = model if is_given(model) else self._opts.model
+        opts_mode = mode if is_given(mode) else self._opts.mode
+        if is_given(mode) and opts_model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
         if not isinstance(opts_model, str):
             opts_model = self._opts.model
+        if not isinstance(opts_mode, str):
+            opts_mode = self._opts.mode
 
         # Handle prompt conversion from NotGiven to None
         final_prompt: str | None
@@ -390,6 +424,7 @@ class STT(stt.STT):
             language=opts_language,
             api_key=self._api_key if self._api_key else "",
             model=opts_model,
+            mode=opts_mode,
             prompt=final_prompt,
             high_vad_sensitivity=opts_high_vad,
             sample_rate=opts_sample_rate,
@@ -524,17 +559,47 @@ class SpeechStream(stt.SpeechStream):
             # Clear reference to help with garbage collection
             pass  # Session reference will be cleared when object is destroyed
 
-    def update_options(self, *, language: str, model: str, prompt: str | None = None) -> None:
+    def update_options(
+        self,
+        *,
+        language: str,
+        model: str,
+        prompt: str | None = None,
+        mode: str | None = None,
+    ) -> None:
         """Update streaming options."""
         if not language or not language.strip():
             raise ValueError("Language cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model cannot be empty")
-
         self._opts.language = language
         self._opts.model = model
+        if model == "saaras:v3":
+            self._opts.base_url = SARVAM_STT_TRANSLATE_BASE_URL
+            self._opts.streaming_url = SARVAM_STT_TRANSLATE_STREAMING_URL
+        else:
+            self._opts.base_url = SARVAM_STT_BASE_URL
+            self._opts.streaming_url = SARVAM_STT_STREAMING_URL
         if prompt is not None:
             self._opts.prompt = prompt
+        if mode is not None and model != "saaras:v3":
+            raise ValueError("mode is only supported when model is saaras:v3")
+        if model == "saaras:v3":
+            allowed_modes: set[str] = {
+                "transcribe",
+                "translate",
+                "verbatim",
+                "translit",
+                "codemix",
+            }
+            if mode is not None and mode not in allowed_modes:
+                raise ValueError(
+                    "mode must be one of transcribe, translate, verbatim, translit, codemix"
+                )
+            if mode is not None:
+                self._opts.mode = mode
+        else:
+            self._opts.mode = "transcribe"
         self._logger.info(
             "Options updated, triggering reconnection",
             extra={
@@ -542,6 +607,7 @@ class SpeechStream(stt.SpeechStream):
                 "language": language,
                 "model": model,
                 "prompt": prompt,
+                "mode": self._opts.mode,
             },
         )
         self._reconnect_event.set()
