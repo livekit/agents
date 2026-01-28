@@ -33,6 +33,7 @@ dependencies = [
     "livekit-api>=1.0.7,<2",
     "livekit-protocol>=1.1.2,<2",
     "livekit-blingfire~=1.0",
+    "livekit-durable~=1.0",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4",

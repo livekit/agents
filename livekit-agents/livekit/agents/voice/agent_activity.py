@@ -14,6 +14,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
+from livekit.durable import DurableScheduler
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
@@ -108,6 +109,7 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._durable_scheduler: DurableScheduler | None = None
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -305,6 +307,12 @@ class AgentActivity(RecognitionHooks):
 
         return use_aligned_transcript is True
 
+    @property
+    def durable_scheduler(self) -> DurableScheduler:
+        if self._durable_scheduler is None:
+            raise RuntimeError("DurableScheduler is not initialized")
+        return self._durable_scheduler
+
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
@@ -452,6 +460,7 @@ class AgentActivity(RecognitionHooks):
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
                 self._started = True
+                self._durable_scheduler = DurableScheduler()
 
                 @tracer.start_as_current_span(
                     "on_enter",
@@ -729,6 +738,10 @@ class AgentActivity(RecognitionHooks):
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
+
+            if self._durable_scheduler is not None:
+                await self._durable_scheduler.aclose()
+                self._durable_scheduler = None
 
             self._agent._activity = None
 
@@ -1991,6 +2004,7 @@ class AgentActivity(RecognitionHooks):
             function_stream=llm_gen_data.function_ch,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
+            durable_scheduler=self.durable_scheduler,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])

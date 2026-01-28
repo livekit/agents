@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import pickle
 import reprlib
 from collections.abc import Awaitable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
-from typing import Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable
 
-from livekit import durable
-from livekit.agents import utils
-from livekit.durable.function import DurableCoroutine, DurableGenerator
+from .function import DurableCoroutine, DurableGenerator, durable
+
+if TYPE_CHECKING:
+    from livekit.agents import AgentTask
 
 
 @coroutine
-@durable.durable
+@durable
 def yields(n: Any) -> Generator[Any, Any, Any]:
     return (yield n)
 
@@ -69,12 +71,18 @@ class EffectCall:
     instances safe to pickle.
     """
 
-    def __init__(self, aw: Awaitable) -> None:
-        self._c: Awaitable = aw  # runtime-only, never pickled
+    def __init__(self, aw: Awaitable | AgentTask) -> None:
+        self._c: Awaitable | AgentTask | None = aw
         self._c_result: Any = None
         self._c_exc: EffectException | None = None
         self._c_ctx: contextvars.Context | None = None
         self._done: bool = False
+
+    @classmethod
+    def _from_exception(cls, exc: BaseException) -> EffectCall:
+        ec = cls(None)  # type: ignore[arg-type]
+        ec._set_exception(exc)
+        return ec
 
     def __await__(self) -> Generator[Any, Any, Any]:
         self._c_ctx = contextvars.copy_context()
@@ -90,19 +98,21 @@ class EffectCall:
         self._done = True
 
     def __getstate__(self) -> dict[str, Any]:
-        if not self._done:
+        if not self._done and not isinstance(self._c, AgentTask):
             raise TypeError("Cannot pickle an unresolved EffectCall")
 
         return {
-            "done": True,
+            "done": self._done,
             "c_result": self._c_result,
             "c_exc": self._c_exc,
+            "c": self._c if not self._done else None,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self._done = state["done"]
         self._c_result = state["c_result"]
         self._c_exc = state["c_exc"]
+        self._c = state["c"]
 
     def __repr__(self) -> str:
         if not self._done:
@@ -121,31 +131,38 @@ class DurableInvalidStateError(RuntimeError):
 @dataclass
 class DurableTask:
     generator: DurableGenerator
-    next_value: Any = None
-    next_action: Literal["send", "throw"] = "send"
+    fnc_name: str
+    next_value: EffectCall | None = None
     at_checkpoint: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
         # exclude the at_checkpoint event from the pickled state
-        return (DurableTask, (self.generator, self.next_value, self.next_action))
+        return (self.__class__, (self.generator, self.fnc_name, self.next_value))
 
 
 class DurableScheduler:
-    def __init__(self) -> None:
-        self._tasks: dict[asyncio.Task[None], DurableTask] = {}
+    def __init__(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._loop = loop or asyncio.get_event_loop()
+        self._tasks: dict[asyncio.Task[Any], DurableTask] = {}
 
         self._can_execute = asyncio.Event()
         self._can_execute.set()
         self._ckpt_lock = asyncio.Lock()
 
-    def execute(self, fnc: Callable[[], DurableCoroutine] | DurableTask) -> asyncio.Task[None]:
+    def execute(self, fnc: Callable[[], DurableCoroutine] | DurableTask) -> asyncio.Task[Any]:
         if isinstance(fnc, DurableTask):
             task = fnc
         else:
-            g = fnc().__await__()
-            task = DurableTask(g)
+            try:
+                if isinstance(fnc, functools.partial):
+                    fnc_name = fnc.func.__qualname__
+                else:
+                    fnc_name = fnc.__qualname__
+            except AttributeError:
+                fnc_name = "<unknown function>"
+            task = DurableTask(fnc().__await__(), fnc_name=fnc_name)
 
-        exe_task = asyncio.create_task(self._execute(task))
+        exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
         exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task))
 
@@ -165,7 +182,17 @@ class DurableScheduler:
             finally:
                 self._can_execute.set()
 
-    def restore(self, states: bytes) -> list[asyncio.Task[None]]:
+    def checkpoint_no_wait(self) -> bytes:
+        tasks = list(self._tasks.values())
+        not_resolved = [task.fnc_name for task in tasks if not task.at_checkpoint.is_set()]
+        if not_resolved:
+            raise DurableInvalidStateError(
+                "`checkpoint_no_wait` must be called when the executions are awaiting "
+                f"an `AgentTask` or a resolved `EffectCall`. These executions are not ready: {not_resolved}"
+            )
+        return pickle.dumps(tasks)
+
+    def restore(self, states: bytes) -> list[asyncio.Task[Any]]:
         tasks = pickle.loads(states)
         exe_tasks = []
         for task in tasks:
@@ -173,49 +200,55 @@ class DurableScheduler:
         return exe_tasks
 
     async def aclose(self) -> None:
-        await utils.aio.cancel_and_wait(*self._tasks.keys())
+        from livekit.agents.utils.aio import cancel_and_wait
+
+        await cancel_and_wait(*self._tasks.keys())
         self._tasks.clear()
 
-    async def _execute(self, task: DurableTask) -> None:
+    async def _execute(self, task: DurableTask) -> Any:
+        from livekit.agents import AgentTask
+
         __tracebackhide__ = True
 
         async def _execute_step(ec: EffectCall) -> None:
             try:
-                if not ec._c:
+                if not ec._c or ec._c_ctx is None:
                     raise RuntimeError("invalid EffectCall state")
 
-                exe_task = ec._c_ctx.run(asyncio.create_task, ec._c)
+                exe_task = ec._c_ctx.run(self._loop.create_task, ec._c)
                 val = await exe_task
                 ec._set_result(val)
             except Exception as e:
                 ec._set_exception(e)
 
         g = task.generator
-
+        nv: EffectCall | Any = task.next_value
         while True:
             try:
-                # TODO: only dump when the action is send?
+                # TODO: if throw, execute to the next yield point before checkpointing?
                 task.at_checkpoint.set()
                 await self._can_execute.wait()
 
                 task.at_checkpoint.clear()
-                nv = (
-                    g.send(task.next_value)
-                    if task.next_action == "send"
-                    else g.throw(task.next_value)
-                )
+                if nv is None:
+                    nv = g.send(None)
+                elif isinstance(nv, EffectCall) and nv._done:
+                    nv = g.throw(nv._c_exc) if nv._c_exc else g.send(nv._c_result)
+                else:
+                    # the next value is not yet resolved, e.g. restored from awaiting an AgentTask
+                    pass
 
                 if isinstance(nv, EffectCall):
+                    task.next_value = nv
+
+                    if isinstance(nv._c, AgentTask):
+                        # allow pickling the AgentTask before it's resolved
+                        task.at_checkpoint.set()
+
                     await _execute_step(nv)
                     assert nv._done
 
                     print("nv", nv)
-                    if nv._c_exc:
-                        task.next_value = nv._c_exc
-                        task.next_action = "throw"
-                    else:
-                        task.next_value = nv._c_result
-                        task.next_action = "send"
                 else:
                     exc = DurableInvalidStateError(
                         f"Unsupported awaitable yielded: {nv!r}.\n"
@@ -223,8 +256,8 @@ class DurableScheduler:
                         "You awaited something that can’t be checkpointed/replayed.\n"
                         ">> Wrap it in EffectCall(...)."
                     )
-                    task.next_value = exc
-                    task.next_action = "throw"
+                    nv = EffectCall._from_exception(exc)
+                    task.next_value = nv
 
-            except StopIteration:
-                break
+            except StopIteration as e:
+                return e.value

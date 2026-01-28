@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import pickle
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
-from typing_extensions import Self
 
 from livekit import rtc
 
@@ -457,6 +455,14 @@ class Agent:
         self._rehydrated = True
 
     @staticmethod
+    def _rehydrate(cls: type[Agent], agent_id: str) -> Agent:
+        # TODO: find the rehydrated agent by id
+        return None
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        return (self._rehydrate, (self.__class__, self._id))
+
+    @staticmethod
     def create_from_state(state: dict[str, Any]) -> Agent:
         cls = state["cls"]
         obj: Agent = cls(**state.get("init_kwargs", {}))
@@ -835,6 +841,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
     async def __await_impl(self) -> TaskResult_T:
+        # TODO: make it re-entrant
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
@@ -870,7 +877,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         current_task.add_done_callback(_handle_task_done)
 
-        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .agent_activity import (_AgentActivityContextVar,
+                                     _SpeechHandleContextVar)
 
         # TODO(theomonnom): add a global lock for inline tasks
         # This may currently break in the case we use parallel tool calls.

@@ -41,6 +41,8 @@ class MyAgent(Agent):
         print("self", self)
         # await MyAgentTask()
 
+        return "task done"
+
 
 async def amain() -> None:
     session = AgentSession()
@@ -68,7 +70,8 @@ async def amain() -> None:
 
     scheduler = DurableScheduler()
     print("loading scheduler")
-    await asyncio.gather(*scheduler.restore(states))
+    results = await asyncio.gather(*scheduler.restore(states))
+    print("results", results)
 
 
 asyncio.run(amain())
