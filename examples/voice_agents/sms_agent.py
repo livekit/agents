@@ -104,7 +104,7 @@ async def text_handler(ctx: TextMessageContext):
 
     session = AgentSession(
         llm="openai/gpt-4.1-mini",
-        state_passphrase="my-secret-passphrase",
+        # state_passphrase="my-secret-passphrase",
     )
     if ctx.session_data:
         await session.rehydrate(ctx.session_data)

@@ -1168,6 +1168,8 @@ def _sms_text_mode(
     sess_data_file: str,
     loop: asyncio.AbstractEventLoop,
 ) -> None:
+    from ..utils.session_store import SessionStore
+
     while True:
         try:
             text = prompt(Text.from_markup("  [bold]User input[/bold]: "), console=c.console)
@@ -1178,6 +1180,7 @@ def _sms_text_mode(
             c.console.bell()
             continue
 
+        # TODO: use SessionStore to load the session data
         if os.path.exists(sess_data_file):
             with open(sess_data_file, "rb") as rf:
                 session_data = rf.read()
@@ -1206,7 +1209,7 @@ def _sms_text_mode(
         c.print(text, tag="You")
         c.wait_for_io_acquisition()
 
-        def _collect_responses(output_queue: queue.Queue[str | bytes]) -> None:
+        def _collect_responses(output_queue: queue.Queue[str | dict[str, Any]]) -> None:
             async def _collect() -> None:
                 text_ctx = get_job_context().text_message_context
                 if text_ctx is None:
@@ -1222,16 +1225,17 @@ def _sms_text_mode(
                     logger.warning("no session data available")
                     output_queue.put(b"", block=False)
                 else:
-                    output_queue.put(session.serialize(), block=False)
+                    output_queue.put(session.get_state(), block=False)
 
             task = asyncio.create_task(_collect())
             task.add_done_callback(_done_callback)
 
-        response_queue = queue.Queue[str | bytes]()
+        response_queue = queue.Queue[str | dict[str, Any]]()
         c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
 
+        new_state: dict[str, Any] | None = None
         while True:
-            resp: str | bytes = ""
+            resp: str | dict[str, Any] = ""
             with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
                 while True:
                     try:
@@ -1241,14 +1245,27 @@ def _sms_text_mode(
                         pass
             if isinstance(resp, str) and resp:
                 c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
-            elif isinstance(resp, bytes):
-                session_data = resp
+            elif isinstance(resp, dict):
+                new_state = resp
                 break
 
         # save the session data
-        if session_data:
-            with open(sess_data_file, "wb") as wf:
-                wf.write(session_data)
+        if new_state:
+            chnageset_dir = pathlib.Path(sess_data_file).with_suffix(".changesets")
+            chnageset_dir.mkdir(parents=True, exist_ok=True)
+            with SessionStore.from_session_state(new_state) as store:
+                # compute the changeset
+                if os.path.exists(sess_data_file):
+                    with SessionStore(db_file=sess_data_file) as old_store:
+                        delta = old_store.compute_delta(store)
+
+                    name = f"{delta.base_version[:8]}-{delta.new_version[:8]}.changeset"
+                    with open(chnageset_dir / name, "wb") as wf:
+                        wf.write(delta.dumps())
+
+                with open(sess_data_file, "wb") as wf:
+                    wf.write(store.export_database())
+
             logger.debug("session data saved", extra={"session_data_file": sess_data_file})
 
         # release the console for next run

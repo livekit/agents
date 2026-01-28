@@ -84,11 +84,11 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     def get_init_kwargs(self) -> dict[str, Any]:
         return self._init_kwargs
 
-    def __getstate__(self) -> dict[str, Any]:
-        return super().__getstate__() | {"current_address": self._current_address}
+    def get_state(self) -> dict[str, Any]:
+        return super().get_state() | {"current_address": self._current_address}
 
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        super().__setstate__(state)
+    def set_state(self, state: dict[str, Any]) -> None:
+        super().set_state(state)
         self._current_address = state["current_address"]
 
     async def on_enter(self) -> None:
