@@ -9,6 +9,7 @@ This directory contains examples demonstrating how to integrate visual avatars w
 These providers work with pre-configured avatars using unique avatar identifiers:
 
 - **[Anam](./anam/)** - [Platform](https://anam.ai/) | [Integration Guide](https://docs.anam.ai/third-party-integrations/livekit)
+- **[Avatario](./avatario/)** - [Platform](https://avatario.ai/) | [Integration Guide](https://avatario.ai/docs/integrations/livekit)
 - **[Beyond Presence (Bey)](./bey/)** - [Platform](https://bey.dev/) | [Integration Guide](https://docs.bey.dev/integration/livekit)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
 - **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/api-reference/livekit-agent-integration)
