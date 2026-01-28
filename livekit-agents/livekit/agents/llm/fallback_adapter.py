@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext
@@ -259,8 +259,14 @@ class FallbackLLMStream(LLMStream):
                         self._event_ch.send_nowait(result)
 
                     return
-                except Exception:  # exceptions already logged inside _try_synthesize
-                    if llm_status.available:
+                except Exception as e:  # exceptions already logged inside _try_synthesize
+                    # Don't mark LLM unavailable if this was a client-initiated cancellation (499)
+                    # The LLM service is healthy - we just cancelled the request
+                    is_client_cancellation = (
+                        isinstance(e, APIStatusError) and e.status_code == 499
+                    )
+
+                    if llm_status.available and not is_client_cancellation:
                         llm_status.available = False
                         self._fallback_adapter.emit(
                             "llm_availability_changed",
