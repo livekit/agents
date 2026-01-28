@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -39,7 +39,7 @@ class AvatarioAPI:
         video_info: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: Optional[aiohttp.ClientSession] = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Initializes the AvatarioAPI client.
@@ -58,7 +58,7 @@ class AvatarioAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Any
+        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
     ) -> None:
         if self._owns_session and self._session:
             await self._session.close()
@@ -110,10 +110,8 @@ class AvatarioAPI:
         """
 
         if self._session is None:
-            raise RuntimeError(
-                "Session not initialized. Use 'async with AvatarioAPI(...)'."
-            )
-        last_exc: Optional[Exception] = None
+            raise RuntimeError("Session not initialized. Use 'async with AvatarioAPI(...)'.")
+        last_exc: Exception | None = None
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import os
-from typing import Optional
+from dataclasses import asdict, dataclass
 
 import aiohttp
 
@@ -34,7 +33,7 @@ class AvatarSession:
     class VideoInfo:
         video_height: int = 720
         video_width: int = 1280
-        custom_background_url: Optional[str] = None
+        custom_background_url: str | None = None
 
     def __init__(
         self,
@@ -64,7 +63,7 @@ class AvatarSession:
                                      room. Defaults to "avatario-avatar-agent"
             conn_options: Connection options for the aiohttp session.
         """
-        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
         self._video_info = asdict(video_info)
@@ -76,18 +75,20 @@ class AvatarSession:
             raise AvatarioException("AVATARIO_AVATAR_ID must be set")
         self._avatar_id = avatario_avatar_id
 
-        avatario_api_key = (
-            api_key if utils.is_given(api_key) else os.getenv("AVATARIO_API_KEY")
-        )
+        avatario_api_key = api_key if utils.is_given(api_key) else os.getenv("AVATARIO_API_KEY")
         if not avatario_api_key:
             raise AvatarioException("AVATARIO_API_KEY must be set")
         self._api_key = avatario_api_key
 
         self._avatar_participant_identity = (
-            avatar_participant_identity if utils.is_given(avatar_participant_identity) else _AVATAR_AGENT_IDENTITY
+            avatar_participant_identity
+            if utils.is_given(avatar_participant_identity)
+            else _AVATAR_AGENT_IDENTITY
         )
         self._avatar_participant_name = (
-            avatar_participant_name if utils.is_given(avatar_participant_name) else _AVATAR_AGENT_NAME
+            avatar_participant_name
+            if utils.is_given(avatar_participant_name)
+            else _AVATAR_AGENT_NAME
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -108,9 +109,7 @@ class AvatarSession:
         """Entrypoint to start the video avatar session"""
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (
-            os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
-        )
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise AvatarioException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
