@@ -235,7 +235,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "gemini tts: client error",
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
-                retryable=False if e.code != 429 else True,
+                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
