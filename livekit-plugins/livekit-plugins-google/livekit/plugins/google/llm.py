@@ -23,6 +23,7 @@ from typing import Any, cast
 from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
+from google.oauth2.service_account import Credentials
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
@@ -101,6 +102,8 @@ class LLM(llm.LLM):
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
+        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -120,19 +123,19 @@ class LLM(llm.LLM):
         """
         Create a new instance of Google GenAI LLM.
 
-        Environment Requirements:
-        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file or use any of the other Google Cloud auth methods.
-        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
-        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
-        and the location defaults to "us-central1".
-        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+        Requirements:
+        For Vertex AI (when `vertexai=True` or `GOOGLE_GENAI_USE_VERTEXAI` is truthy), credentials must be provided either via `credentials_info`, `credentials_file`, or Application Default Credentials (see https://cloud.google.com/docs/authentication/application-default-credentials). Project is resolved in this order: `project` arg > service account `project_id` > `GOOGLE_CLOUD_PROJECT` env > ADC. Location is resolved in this order: `location` arg > `GOOGLE_CLOUD_LOCATION` env > default `us-central1`. API key is not required.
+
+        For the Google Gemini API (default, when `vertexai=False`), provide `api_key` or set `GOOGLE_API_KEY`. `project` and `location` are not needed.
 
         Args:
             model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-001".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. If not provided, it attempts to read from the `GOOGLE_GENAI_USE_VERTEXAI` environment variable. Defaults to False.
-                project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
-                location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
+            project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
+            location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
+            credentials_info(dict): Key-value pairs of authentication credential information (only for VertexAI). Defaults to None.
+            credentials_file(str): Name of the JSON file that contains authentication credentials for Google Cloud (only for VertexAI). Defaults to None.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
@@ -148,33 +151,39 @@ class LLM(llm.LLM):
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
         super().__init__()
-        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location: str | None = (
-            location
-            if is_given(location)
-            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
         use_vertexai = (
             vertexai
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
-        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
-
+        gemini_api_key: str | None = None
+        gcp_project: str | None = None
+        gcp_location: str | None = None
+        gcp_credentials: Credentials | None = None
         if use_vertexai:
+            if is_given(credentials_info):
+                gcp_credentials = Credentials.from_service_account_info(credentials_info)  # type: ignore
+            elif is_given(credentials_file):
+                gcp_credentials = Credentials.from_service_account_file(credentials_file)  # type: ignore
+
+            if is_given(project):
+                gcp_project = project
+            elif gcp_credentials and gcp_credentials.project_id:
+                gcp_project = gcp_credentials.project_id
+            else:
+                gcp_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
             if not gcp_project:
                 _, gcp_project = default_async(  # type: ignore
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
-            if not gcp_project or not gcp_location:
-                raise ValueError(
-                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
-                )
-            gemini_api_key = None  # VertexAI does not require an API key
 
+            gcp_location = (
+                location
+                if is_given(location)
+                else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+            )
         else:
-            gcp_project = None
-            gcp_location = None
+            gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -219,6 +228,7 @@ class LLM(llm.LLM):
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
+            credentials=gcp_credentials,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
