@@ -63,7 +63,7 @@ class AvatarSession:
                 api_key=resolved_api_key,
                 conn_options=conn_options,
             )
-        self._is_sandbox = is_sandbox
+        self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
