@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from livekit import api, rtc
 
-from ... import utils
+from ... import DEFAULT_API_CONNECT_OPTIONS, utils
 from ...job import get_job_context
 from ...log import logger
 from ...types import (
@@ -232,6 +232,16 @@ class RoomIO:
 
         if self._audio_output:
             await self._audio_output.aclose()
+
+        if (task := self._delete_room_task) is not None:
+            try:
+                await asyncio.wait_for(task, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "automatic room deletion timed out",
+                    extra={"room": self._room.name},
+                )
+                self._tasks.add(task)
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
