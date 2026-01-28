@@ -53,7 +53,7 @@ class LLMStream(llm.LLMStream):
             tools=tools or [],
             conn_options=conn_options,
         )
-        self._llm: "LLM" = llm_instance  # Type as concrete LLM for private method access
+        self._llm: LLM = llm_instance  # Type as concrete LLM for private method access
         self._api_base_url = api_base_url.rstrip("/")
         self._app_name = app_name
         self._user_id = user_id

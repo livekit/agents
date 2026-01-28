@@ -7,8 +7,12 @@ from typing import Any
 import aiohttp
 
 from livekit.agents import llm
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils import NotGivenOr, NOT_GIVEN
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 
 from .llm_stream import LLMStream
 
