@@ -41,6 +41,7 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
+    type: Literal["synthesized_audio"] = "synthesized_audio"
 
 
 @dataclass

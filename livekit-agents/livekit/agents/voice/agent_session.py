@@ -49,13 +49,15 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    InternalEvent,
+    TimedInternalEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
-from .run_result import RunResult
+from .run_result import RunEvent, RunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -324,6 +326,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._on_audio_output_changed,
             self._on_text_output_changed,
         )
+        self._prev_audio_output: io.AudioOutput | None = None
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
@@ -357,7 +360,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
+        self._recorded_internal_events: list[TimedInternalEvent] = []
         self._enable_recording: bool = False
+        self._include_internal_events: bool = False
         self._started_at: float | None = None
 
         # ivr activity
@@ -366,6 +371,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
         super().emit(event, arg)
+        self.maybe_collect(arg)
+
+    def maybe_collect(self, event: InternalEvent | RunEvent) -> None:
+        """Collect the event if internal events are enabled."""
+        if self._include_internal_events:
+            self._recorded_internal_events.append(TimedInternalEvent(event=event))
 
     @property
     def userdata(self) -> Userdata_T:
@@ -433,7 +444,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(user_input=user_input, output_type=output_type)
+        run_state = RunResult(agent_session=self, user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
@@ -450,6 +461,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
+        include_internal_events: bool = False,
     ) -> RunResult: ...
 
     @overload
@@ -464,6 +476,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
+        include_internal_events: bool = False,
     ) -> None: ...
 
     async def start(
@@ -477,6 +490,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: NotGivenOr[bool] = NOT_GIVEN,
+        include_internal_events: bool = False,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -489,6 +503,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio
+            include_internal_events: Whether to include internal events in the session report
         """
         async with self._lock:
             if self._started:
@@ -504,6 +519,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     record = job_ctx.job.enable_recording
 
                 self._enable_recording = record
+                self._include_internal_events = include_internal_events
 
                 if self._enable_recording:
                     job_ctx.init_recording()
@@ -522,6 +538,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
+            self._recorded_internal_events = []
             self._room_io = None
             self._recorder_io = None
 
@@ -624,12 +641,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                     self._job_context_cb_registered = True
 
+            if self._output.audio:
+                self._prev_audio_output = self._output.audio
+                self._prev_audio_output.on("playback_started", self.maybe_collect)
+                self._prev_audio_output.on("playback_finished", self.maybe_collect)
+
             run_state: RunResult | None = None
             if capture_run:
                 if self._global_run_state is not None and not self._global_run_state.done():
                     raise RuntimeError("nested runs are not supported")
 
-                run_state = RunResult(output_type=None)
+                run_state = RunResult(agent_session=self, output_type=None)
                 self._global_run_state = run_state
 
             # it is ok to await it directly, there is no previous task to drain
@@ -781,6 +803,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # detach the inputs and outputs
                 self.input.audio = None
                 self.input.video = None
+                if self._prev_audio_output is not None:
+                    self._prev_audio_output.off("playback_started", self.maybe_collect)
+                    self._prev_audio_output.off("playback_finished", self.maybe_collect)
+                    self._prev_audio_output = None
                 self.output.audio = None
                 self.output.transcription = None
 
@@ -1296,6 +1322,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     def _on_audio_output_changed(self) -> None:
+        if self._prev_audio_output is not None:
+            self._prev_audio_output.off("playback_started", self.maybe_collect)
+            self._prev_audio_output.off("playback_finished", self.maybe_collect)
+
         if (
             self._started
             and self._opts.resume_false_interruption
@@ -1306,6 +1336,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "resume_false_interruption is enabled, but the audio output does not support pause, ignored",
                 extra={"audio_output": audio_output.label},
             )
+
+        if self.output.audio is not None:
+            self._prev_audio_output = self.output.audio
+            self._prev_audio_output.on("playback_started", self.maybe_collect)
+            self._prev_audio_output.on("playback_finished", self.maybe_collect)
 
     def _on_text_output_changed(self) -> None:
         pass

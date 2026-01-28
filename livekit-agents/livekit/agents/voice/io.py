@@ -124,12 +124,14 @@ class PlaybackFinishedEvent:
     synchronized_transcript: str | None = None
     """Transcript synced with playback; may be partial if the audio was interrupted
     When None, the transcript is not synchronized with the playback"""
+    type: Literal["playback_finished"] = "playback_finished"
 
 
 @dataclass
 class PlaybackStartedEvent:
     created_at: float
     """The timestamp (time.time())when the playback started"""
+    type: Literal["playback_started"] = "playback_started"
 
 
 @dataclass

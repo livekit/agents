@@ -407,10 +407,12 @@ class RoomIO:
         async def _read_text(text_input_cb: TextInputCallback) -> None:
             text = await reader.read_all()
 
+            text_event = TextInputEvent(text=text, info=reader.info, participant=participant)
             text_input_result = text_input_cb(
                 self._agent_session,
-                TextInputEvent(text=text, info=reader.info, participant=participant),
+                text_event,
             )
+            self._agent_session.maybe_collect(text_event)
             if asyncio.iscoroutine(text_input_result):
                 await text_input_result
 

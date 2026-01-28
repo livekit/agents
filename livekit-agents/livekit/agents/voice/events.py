@@ -1,25 +1,50 @@
 from __future__ import annotations
 
+import base64
 import time
+from dataclasses import asdict, is_dataclass
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    Union,
+    get_args,
+)
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PrivateAttr, model_validator
 from typing_extensions import Self
+
+from livekit import rtc
 
 from ..llm import (
     LLM,
+    ChatChunk,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
+    GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
+    InputTranscriptionCompleted,
     LLMError,
+    LLMOutputEvent,
     RealtimeModel,
     RealtimeModelError,
 )
 from ..log import logger
 from ..metrics import AgentMetrics
-from ..stt import STT, STTError
-from ..tts import TTS, TTSError
+from ..stt import STT, SpeechEvent, STTError
+from ..tts import TTS, SynthesizedAudio, TTSError
+from ..types import FlushSentinel, TimedString
+from ..vad import VADEvent, VADEventType
+from .io import PlaybackFinishedEvent, PlaybackStartedEvent
+from .room_io.types import TextInputEvent
+from .run_result import AgentHandoffEvent, RunEvent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -205,7 +230,7 @@ class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | RealtimeModelError | Any
-    source: LLM | STT | TTS | RealtimeModel | Any
+    source: LLM | STT | TTS | RealtimeModel | Any = Field(..., exclude=True)
     created_at: float = Field(default_factory=time.time)
 
 
@@ -240,3 +265,118 @@ AgentEvent = Annotated[
     ],
     Field(discriminator="type"),
 ]
+
+
+_InternalEvent = Annotated[
+    Union[
+        AgentEvent,
+        InputSpeechStartedEvent,
+        InputSpeechStoppedEvent,
+        InputTranscriptionCompleted,
+        GenerationCreatedEvent,
+        PlaybackFinishedEvent,
+        PlaybackStartedEvent,
+        TextInputEvent,
+        SynthesizedAudio,
+        FlushSentinel,
+        LLMOutputEvent,
+    ],
+    Field(discriminator="type"),
+]
+
+# Allow additional events here without a Literal type discriminator
+# which Pydantic doesn't support
+InternalEvent: TypeAlias = Union[
+    _InternalEvent,
+    VADEvent,
+    SpeechEvent,
+]
+
+
+def _serialize_audio_frame(frame: rtc.AudioFrame) -> dict:
+    return {
+        "sample_rate": frame.sample_rate,
+        "num_channels": frame.num_channels,
+        "samples_per_channel": frame.samples_per_channel,
+        "data": base64.b64encode(frame.data).decode("utf-8"),
+    }
+
+
+def _internal_event_serializer(event: InternalEvent | RunEvent) -> dict | None:
+    """Serialize an internal event to a dictionary or None.
+
+    Args:
+        event: The internal event to serialize.
+
+    Returns:
+        A dictionary representing the event or None if the event should be ignored.
+    """
+
+    if isinstance(event, AgentHandoffEvent):
+        data = asdict(event)
+        data["item"] = event.item.model_dump(mode="json")
+        # replace agent objects with their ids
+        data["old_agent"] = event.old_agent.id if event.old_agent else None
+        data["new_agent"] = event.new_agent.id if event.new_agent else None
+        return data
+
+    if isinstance(event, get_args(RunEvent)):
+        data = asdict(event)
+        data["item"] = event.item.model_dump(mode="json")
+        return data
+
+    if isinstance(event, SynthesizedAudio):
+        data = asdict(event)
+        data["frame"] = _serialize_audio_frame(event.frame)
+        return data
+
+    if isinstance(event, VADEvent):
+        # skip inference done events, they are too frequent and too noisy
+        if event.type == VADEventType.INFERENCE_DONE:
+            return None
+        # remove audio frames from VAD event since we can reproduce them cheaply
+        data = asdict(event)
+        data["frames"] = []
+        return data
+
+    if isinstance(event, GenerationCreatedEvent):
+        # skip message_stream and function_stream as they are not serializable
+        return {
+            "message_stream": None,
+            "function_stream": None,
+            "user_initiated": event.user_initiated,
+            "response_id": event.response_id,
+            "type": event.type,
+        }
+
+    if isinstance(event, LLMOutputEvent):
+        data = asdict(event)
+        if isinstance(event.data, rtc.AudioFrame):
+            data["data"] = _serialize_audio_frame(event.data)
+        elif isinstance(event.data, TimedString):
+            data["data"] = event.data.to_dict()
+        elif isinstance(event.data, str):
+            data["data"] = event.data
+        elif isinstance(event.data, ChatChunk):
+            data["data"] = event.data.model_dump(mode="json")
+        return data
+
+    if isinstance(event, BaseModel):
+        return event.model_dump(mode="json")
+
+    if is_dataclass(event) and not isinstance(event, type):
+        return asdict(event)
+
+    logger.warning(f"Unknown internal event type: {type(event)}")
+    return None
+
+
+class TimedInternalEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # use a custom alias for the created_at field to avoid conflicts with the event field
+    created_at: float = Field(default_factory=time.time, serialization_alias="__created_at")
+    # Allow Any here to avoid RunEvent(AgentHandoffEvent/Agent) definition dependency issue
+    event: Annotated[
+        InternalEvent | Any,
+        PlainSerializer(_internal_event_serializer),
+    ]
