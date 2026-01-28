@@ -39,6 +39,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
+from .languages import iso639_3_to_1
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -220,8 +221,9 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
+        normalized_language = iso639_3_to_1(language_code) or language_code
         return self._transcription_to_speech_event(
-            language_code=language_code,
+            language_code=normalized_language,
             text=extracted_text,
             start_time=start_time,
             end_time=end_time,
@@ -483,9 +485,10 @@ class SpeechStream(stt.SpeechStream):
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
 
+        normalized_language = iso639_3_to_1(self._language) or self._language or "en"
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
-            language=self._language or "en",
+            language=normalized_language,
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
