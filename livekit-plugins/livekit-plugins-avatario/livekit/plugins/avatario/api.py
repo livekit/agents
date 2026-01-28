@@ -75,7 +75,7 @@ class AvatarioAPI:
         Args:
             livekit_agent_identity: the participant identity of the agent in room.
             properties: A dictionary consisting of room url and token used by the
-                        avatario particpant to join the room.
+                        avatario participant to join the room.
         """
         if not utils.is_given(livekit_agent_identity):
             raise AvatarioException(
