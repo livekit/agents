@@ -16,6 +16,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
+import weakref
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
 # context variable for passing passphrase during pickle/unpickle
 # set by AgentSession before serialization/deserialization
 _state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
+
+
+_REHYDRATED_AGENTS = weakref.WeakValueDictionary[str, "Agent"]()
 
 
 @dataclass
@@ -93,6 +97,8 @@ class Agent:
         self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
         self._rehydrated = False
+        # durable functions state that needs to be restored after activity is started
+        self._pending_durable_state: bytes | None = None
 
     def get_init_kwargs(self) -> dict[str, Any]:
         return {
@@ -425,6 +431,16 @@ class Agent:
             # only use get_init_kwargs if it's defined directly on type(self), not inherited
             init_kwargs = self.get_init_kwargs()
 
+        # durable functions
+        durable_state: bytes | None = None
+        if not self._activity:
+            durable_state = self._pending_durable_state
+        else:
+            try:
+                durable_state = self._activity.durable_scheduler.checkpoint_no_wait()
+            except Exception:
+                logger.exception("error checkpointing durable functions")
+
         return {
             "cls": type(self),
             "id": self._id,
@@ -432,6 +448,7 @@ class Agent:
             "tools": list(tool_ctx.function_tools.keys()),
             "chat_ctx": chat_ctx,
             "parent_agent": None,
+            "durable_state": durable_state,
         }
 
     def set_state(self, state: dict[str, Any]) -> None:
@@ -453,21 +470,40 @@ class Agent:
 
         # skip on_enter when rehydrating
         self._rehydrated = True
-
-    @staticmethod
-    def _rehydrate(cls: type[Agent], agent_id: str) -> Agent:
-        # TODO: find the rehydrated agent by id
-        return None
-
-    def __reduce__(self) -> str | tuple[Any, ...]:
-        return (self._rehydrate, (self.__class__, self._id))
+        self._pending_durable_state = state.get("durable_state", None)
 
     @staticmethod
     def create_from_state(state: dict[str, Any]) -> Agent:
         cls = state["cls"]
-        obj: Agent = cls(**state.get("init_kwargs", {}))
-        obj.set_state(state)
-        return obj
+        agent: Agent = cls(**state.get("init_kwargs", {}))
+        agent.set_state(state)
+        print(f"create_from_state: {agent.id}")
+        if agent.id in _REHYDRATED_AGENTS:
+            raise RuntimeError(
+                f"Agent with id {agent.id} already exists, please avoid creating agents with the same id"
+            )
+        _REHYDRATED_AGENTS[agent.id] = agent
+        return agent
+
+    @staticmethod
+    def _lookup_agent(cls: type[Agent], agent_id: str) -> Agent:
+        agent = _REHYDRATED_AGENTS.get(agent_id)
+        if agent is None:
+            raise RuntimeError(f"Agent with id {agent_id} not found")
+
+        if agent.__class__ != cls:
+            raise RuntimeError(f"Agent with id {agent_id} is not of type {cls.__name__}")
+
+        return agent
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        # NOTE: we don't pickle/unpickle agents directly,
+        # instead, we save the agent state collected by `Agent.get_state()` in the AgentSession's state.
+        # When rehydrating the session, the agent will be recreated via `Agent.create_from_state()`
+        # and registered in `_REHYDRATED_AGENTS` for future lookup. This is to ensure the agents pickled
+        # in durable functions are referring to the same agent instance as in AgentSession.
+
+        return (self._lookup_agent, (self.__class__, self._id))
 
     def is_rehydrated(self) -> bool:
         return self._rehydrated
@@ -843,7 +879,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
     async def __await_impl(self) -> TaskResult_T:
         # TODO: make it re-entrant
         if self.__started:
-            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
+            if not self.is_rehydrated() or self._old_agent is None:
+                raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
+            else:
+                try:
+                    return await asyncio.shield(self.__fut)
+
+                finally:
+                    await self.__switch_to_old_agent(
+                        old_agent=self._old_agent, session=self.session, speech_handle=None
+                    )
 
         self.__started = True
 
@@ -856,7 +901,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         task_info = _get_activity_task_info(current_task)
         if not task_info or not task_info.inline_task:
             raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
+                f"{self.__class__.__name__} should only be awaited inside tool_functions "
+                f"or the on_enter/on_exit methods of an Agent, current task: {current_task.get_name()}"
             )
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
@@ -877,8 +923,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         current_task.add_done_callback(_handle_task_done)
 
-        from .agent_activity import (_AgentActivityContextVar,
-                                     _SpeechHandleContextVar)
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
         # TODO(theomonnom): add a global lock for inline tasks
         # This may currently break in the case we use parallel tool calls.

@@ -90,17 +90,19 @@ class RunContext(Generic[Userdata_T]):
 
     def __getstate__(self) -> dict[str, Any]:
         return {
-            "session": None,
-            "speech_handle": None,
             "function_call": self.function_call,
             "initial_step_idx": self._initial_step_idx,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        self._session = state["session"]  # TODO: point to the rehydrated session
-        self._speech_handle = state["speech_handle"]
+        from ..job import get_job_context
+
+        job_ctx = get_job_context()
+        self._session = job_ctx.primary_agent_session
+
+        self._speech_handle = None
         self._function_call = state["function_call"]
-        self._initial_step_idx = state["initial_step_idx"]
+        self._initial_step_idx = state.get("initial_step_idx", 0)
 
 
 EventTypes = Literal[

@@ -8,7 +8,7 @@ import reprlib
 from collections.abc import Awaitable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
 from .function import DurableCoroutine, DurableGenerator, durable
 
@@ -49,7 +49,10 @@ class EffectException(Exception):
         return self.exc_type
 
 
-class EffectCall:
+TaskResult_T = TypeVar("TaskResult_T")
+
+
+class EffectCall(Generic[TaskResult_T]):
     """
     An awaitable wrapper used to execute a coroutine outside of the current
     DurableFunction scheduler.
@@ -71,8 +74,8 @@ class EffectCall:
     instances safe to pickle.
     """
 
-    def __init__(self, aw: Awaitable | AgentTask) -> None:
-        self._c: Awaitable | AgentTask | None = aw
+    def __init__(self, aw: Awaitable[TaskResult_T] | AgentTask[TaskResult_T]) -> None:
+        self._c: Awaitable[TaskResult_T] | AgentTask[TaskResult_T] | None = aw
         self._c_result: Any = None
         self._c_exc: EffectException | None = None
         self._c_ctx: contextvars.Context | None = None
@@ -84,7 +87,7 @@ class EffectCall:
         ec._set_exception(exc)
         return ec
 
-    def __await__(self) -> Generator[Any, Any, Any]:
+    def __await__(self) -> Generator[Any, Any, TaskResult_T]:
         self._c_ctx = contextvars.copy_context()
         return yields(self)
 
@@ -150,6 +153,8 @@ class DurableScheduler:
         self._ckpt_lock = asyncio.Lock()
 
     def execute(self, fnc: Callable[[], DurableCoroutine] | DurableTask) -> asyncio.Task[Any]:
+        from livekit.agents.voice.agent import _get_activity_task_info
+
         if isinstance(fnc, DurableTask):
             task = fnc
         else:
@@ -165,6 +170,10 @@ class DurableScheduler:
         exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
         exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task))
+        # pass through __livekit_agents_activity_task
+        current_task = asyncio.current_task()
+        if agent_activity_task_info := _get_activity_task_info(current_task):
+            setattr(exe_task, "__livekit_agents_activity_task", agent_activity_task_info)
 
         return exe_task
 

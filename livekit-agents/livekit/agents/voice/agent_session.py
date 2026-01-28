@@ -596,7 +596,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if job_ctx._primary_agent_session is None:
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 elif self._enable_recording:
                     raise RuntimeError(
@@ -876,17 +876,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         history = state["history"]
         self._chat_ctx = llm.ChatContext.from_dict(history)
 
-        # TODO: save to TextMessageContext?
         try:
-            job_ctx = get_job_context()
-            job_ctx._primary_agent_session = self
+            job_ctx: JobContext | None = get_job_context()
         except RuntimeError:
-            pass
+            job_ctx = None
+
+        if job_ctx is not None:
+            if (
+                job_ctx._primary_agent_session is not None
+                and job_ctx._primary_agent_session is not self
+            ):
+                raise RuntimeError("Only the primary agent session can be rehydrated")
+            job_ctx._primary_agent_session = self
 
         agent = Agent.create_from_state(state["agent"])
         if self._started:
             # only allow rehydrate session that not started yet?
-            await self._update_activity(agent)
+            # await self._update_activity(agent)
+            raise RuntimeError("Cannot rehydrate session that has already started")
         else:
             await self.start(agent=agent)
 

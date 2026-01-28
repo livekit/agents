@@ -461,6 +461,10 @@ class AgentActivity(RecognitionHooks):
                 await self._start_session()
                 self._started = True
                 self._durable_scheduler = DurableScheduler()
+                if durable_state := self._agent._pending_durable_state:
+                    # TODO: keep the tasks somewhere
+                    self._durable_scheduler.restore(durable_state)
+                    self._agent._pending_durable_tasks = None
 
                 @tracer.start_as_current_span(
                     "on_enter",
