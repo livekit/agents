@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, TypeAlias
 
 from livekit import rtc
 
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
+from ..io import TextOutput
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
 ]
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
@@ -44,8 +46,9 @@ class NoiseCancellationParams:
     track: rtc.Track
 
 
-NoiseCancellationSelector = Callable[
-    [NoiseCancellationParams], Optional[rtc.NoiseCancellationOptions]
+NoiseCancellationSelector: TypeAlias = Callable[
+    [NoiseCancellationParams],
+    rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
 ]
 
 
@@ -65,7 +68,12 @@ class AudioInputOptions:
     num_channels: int = 1
     frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None = None
+    noise_cancellation: (
+        rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None
+    ) = None
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
@@ -96,6 +104,8 @@ class TextOutputOptions:
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
+    next_in_chain: TextOutput | None = None
+    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
 
 
 @dataclass
@@ -168,6 +178,8 @@ class RoomOptions:
 
         if isinstance(options, RoomOptions):
             return options
+        elif is_given(options):
+            raise ValueError(f"expected RoomOptions, got {type(options)}")
         else:
             return cls()
 
@@ -240,7 +252,9 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     audio_frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | None = None
+    noise_cancellation: rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None = (
+        None
+    )
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,

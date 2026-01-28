@@ -16,7 +16,7 @@ __all__ = ["STT", "__version__"]
 
 
 class RTZRPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

@@ -16,22 +16,9 @@ pip install livekit-plugins-turn-detector
 
 ## Usage
 
-### English model
-
-The English model is the smaller of the two models. It requires 200MB of RAM and completes inference in ~10ms
-
-```python
-from livekit.plugins.turn_detector.english import EnglishModel
-
-session = AgentSession(
-    ...
-    turn_detection=EnglishModel(),
-)
-```
-
 ### Multilingual model
 
-We've trained a separate multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish`
+We've trained a multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish`
 
 The multilingual model requires ~400MB of RAM and completes inferences in ~25ms.
 

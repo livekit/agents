@@ -91,7 +91,8 @@ class StreamAdapterWrapper(RecognizeStream):
         self._language = language
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
-        pass  # do nothing
+        async for _ in event_aiter:
+            pass
 
     async def _run(self) -> None:
         vad_stream = self._vad.stream()

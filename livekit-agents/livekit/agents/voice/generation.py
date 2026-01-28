@@ -23,10 +23,6 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.tool_context import (
-    is_function_tool,
-    is_raw_function_tool,
-)
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
@@ -97,23 +93,28 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list(tool_ctx.function_tools.values())
+    tools = tool_ctx.flatten()
 
-    current_span.set_attribute(
-        trace_types.ATTR_CHAT_CTX,
-        json.dumps(
-            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
-        ),
-    )
-    current_span.set_attribute(
-        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+    current_span.set_attributes(
+        {
+            trace_types.ATTR_CHAT_CTX: json.dumps(
+                chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+            ),
+            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+            trace_types.ATTR_PROVIDER_TOOLS: [
+                type(tool).__name__ for tool in tool_ctx.provider_tools
+            ],
+            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
+        }
     )
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node
 
-    # update the tool context after llm node
+    # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
+    # are using the newer tools.
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
 
     if isinstance(llm_node, str):
@@ -150,6 +151,7 @@ async def _llm_inference_task(
                             call_id=tool.call_id,
                             name=tool.name,
                             arguments=tool.arguments,
+                            extra=tool.extra or {},
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
@@ -334,7 +336,8 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None]
+    first_frame_fut: asyncio.Future[float]
+    """Future that will be set with the timestamp of the first frame's capture"""
 
 
 def perform_audio_forwarding(
@@ -354,8 +357,15 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
     try:
+        audio_output.on("playback_started", _on_playback_started)
         audio_output.resume()
+
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -377,16 +387,16 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
-
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
 
     finally:
+        audio_output.off("playback_started", _on_playback_started)
+
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.cancel()
+
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
@@ -475,7 +485,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={

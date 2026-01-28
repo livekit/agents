@@ -80,6 +80,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -103,9 +104,11 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass
@@ -324,7 +327,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting, self._connection_failed = (
+            True,
+            False,
+            False,
+            False,
+        )
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -578,6 +586,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if self._inference_executor and not self._inference_executor.is_alive():
                     return web.Response(status=503, text="inference process not running")
 
+                if self._connection_failed:
+                    return web.Response(status=503, text="failed to connect to livekit")
+
                 return web.Response(text="OK")
 
             async def worker(_: Any) -> web.Response:
@@ -817,7 +828,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._update_worker_status()
 
             async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes:
+                for proc in self._proc_pool.processes.copy():
                     if proc.running_job:
                         await proc.join()
 
@@ -886,9 +897,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def aclose(self) -> None:
         async with self._lock:
-            if self._closed:
-                raise RuntimeError("cannot simulate job, the worker is closed")
-
             if self._closed:
                 if self._close_future is not None:
                     await self._close_future
@@ -1016,6 +1024,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._max_retry:
+                    self._connection_failed = True
                     raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
                     ) from None
@@ -1146,13 +1155,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject() -> None:
+        async def _on_reject(terminate: bool) -> None:
             nonlocal answered
             answered = True
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
+            availability_resp.availability.terminate = terminate
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
@@ -1225,7 +1235,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
-                await _on_reject()
+                await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._tasks.add(user_task)
