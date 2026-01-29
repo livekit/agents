@@ -17,10 +17,11 @@
 See https://docs.livekit.io/agents/integrations/tts/resemble/ for more information.
 """
 
+from .models import TTSModels
 from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "SynthesizeStream", "__version__"]
+__all__ = ["TTS", "TTSModels", "ChunkedStream", "SynthesizeStream", "__version__"]
 
 from livekit.agents import Plugin
 

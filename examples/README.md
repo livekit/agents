@@ -26,7 +26,7 @@ A comprehensive collection of voice-based agent examples, including basic voice 
 
 ### 🖼️ [Avatar Agents](./avatar_agents/)
 
-Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Bey, BitHuman, Hedra, Simli, and Tavus.
+Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Avatario, Bey, BitHuman, Hedra, Simli, and Tavus.
 
 ### 🔄 [Warm Transfer](./warm-transfer/)
 

@@ -109,12 +109,22 @@ class ConsoleAudioInput(io.AudioInput):
         super().__init__(label="Console")
         self._loop = loop
         self._audio_ch: aio.Chan[rtc.AudioFrame] = aio.Chan()
+        self._attached = True
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._attached:
+            # drop frames if the input is detached
+            return
         self._audio_ch.send_nowait(frame)
 
     async def __anext__(self) -> rtc.AudioFrame:
         return await self._audio_ch.__anext__()
+
+    def on_attached(self) -> None:
+        self._attached = True
+
+    def on_detached(self) -> None:
+        self._attached = False
 
 
 class ConsoleAudioOutput(io.AudioOutput):
@@ -722,7 +732,9 @@ class FrequencyVisualizer:
 
         if self.show_shortcuts:
             for shortcut_key, desc in AUDIO_SHORTCUTS:
-                table.add_row(Text.assemble(("   ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim")))
+                table.add_row(
+                    Text.assemble(("   ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim"))
+                )
         else:
             table.add_row(Text("   ? for shortcuts", style="dim"))
 
@@ -976,14 +988,18 @@ def prompt(
             table.add_row(Text.assemble(("\u276f ", "bold"), (input_text, ""), ("\u2588", "white")))
         else:
             table.add_row(
-                Text.assemble(("\u276f ", "bold"), ("\u2588", "white"), (" ", ""), (placeholder, "dim italic"))
+                Text.assemble(
+                    ("\u276f ", "bold"), ("\u2588", "white"), (" ", ""), (placeholder, "dim italic")
+                )
             )
 
         table.add_row(Text(line_char * width, style="dim"))
 
         if show_shortcuts:
             for shortcut_key, desc in TEXT_SHORTCUTS:
-                table.add_row(Text.assemble(("  ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim")))
+                table.add_row(
+                    Text.assemble(("  ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim"))
+                )
         elif not buffer:
             table.add_row(Text("  ? for shortcuts", style="dim"))
 
@@ -1160,6 +1176,7 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
         if not is_error:
             try:
                 import json
+
                 json_start = output.find("{")
                 if json_start >= 0:
                     json_str = output[json_start:]

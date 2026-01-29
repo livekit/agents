@@ -463,7 +463,8 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
 
         @utils.log_exceptions(logger=logger)
@@ -516,7 +517,10 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(message="deepgram connection closed unexpectedly")
+                    raise APIStatusError(
+                        message=f"deepgram connection closed unexpectedly: "
+                        f"code={ws.close_code}, reason={msg.extra if msg.extra else 'no reason provided'}"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)

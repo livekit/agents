@@ -31,6 +31,7 @@ from aws_sdk_bedrock_runtime.models import (
     ValidationException,
 )
 from smithy_aws_core.identity import AWSCredentialsIdentity
+from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
 
 from livekit import rtc
@@ -1493,6 +1494,7 @@ class RealtimeSession(  # noqa: F811
                     ModelNotReadyException,
                     ModelErrorException,
                     ModelStreamErrorException,
+                    InvalidEventBytes,
                 ) as re:
                     logger.warning(
                         f"Retryable error: {re}\nAttempting to recover...", exc_info=True
