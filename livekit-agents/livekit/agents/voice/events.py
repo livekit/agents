@@ -95,10 +95,10 @@ class RunContext(Generic[Userdata_T]):
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        from ..job import get_job_context
+        from .agent_session import _AgentSessionContextVar
 
-        job_ctx = get_job_context()
-        self._session = job_ctx.primary_agent_session
+        session = _AgentSessionContextVar.get()
+        self._session = session
 
         self._speech_handle = None
         self._function_call = state["function_call"]

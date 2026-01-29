@@ -33,7 +33,7 @@ from .speech_handle import SpeechHandle
 from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
-    from livekit.durable import DurableScheduler
+    from livekit.durable.scheduler import DurableScheduler
 
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
@@ -610,7 +610,13 @@ async def _execute_tools_task(
 
                     try:
                         if tool_flags & llm.ToolFlag.DURABLE:
-                            val = await durable_scheduler.execute(function_callable)
+                            val = await durable_scheduler.execute(
+                                function_callable,
+                                metadata={
+                                    "num_steps": speech_handle.num_steps,
+                                    "function_call": fnc_call.model_dump_json(),
+                                },
+                            )
                         else:
                             val = await function_callable()
 

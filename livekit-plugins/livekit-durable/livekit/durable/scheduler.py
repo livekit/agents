@@ -136,11 +136,15 @@ class DurableTask:
     generator: DurableGenerator
     fnc_name: str
     next_value: EffectCall | None = None
+    metadata: dict[str, Any] | None = None
     at_checkpoint: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
         # exclude the at_checkpoint event from the pickled state
-        return (self.__class__, (self.generator, self.fnc_name, self.next_value))
+        return (
+            self.__class__,
+            (self.generator, self.fnc_name, self.next_value, self.metadata),
+        )
 
 
 class DurableScheduler:
@@ -152,11 +156,18 @@ class DurableScheduler:
         self._can_execute.set()
         self._ckpt_lock = asyncio.Lock()
 
-    def execute(self, fnc: Callable[[], DurableCoroutine] | DurableTask) -> asyncio.Task[Any]:
+    def execute(
+        self,
+        fnc: Callable[[], DurableCoroutine] | DurableTask,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> asyncio.Task[Any]:
         from livekit.agents.voice.agent import _get_activity_task_info
 
         if isinstance(fnc, DurableTask):
             task = fnc
+            if metadata is not None:
+                task.metadata = metadata
         else:
             try:
                 if isinstance(fnc, functools.partial):
@@ -165,7 +176,8 @@ class DurableScheduler:
                     fnc_name = fnc.__qualname__
             except AttributeError:
                 fnc_name = "<unknown function>"
-            task = DurableTask(fnc().__await__(), fnc_name=fnc_name)
+
+            task = DurableTask(fnc().__await__(), fnc_name=fnc_name, metadata=metadata)
 
         exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
@@ -187,7 +199,7 @@ class DurableScheduler:
                 for task in tasks:
                     await task.at_checkpoint.wait()
 
-                return pickle.dumps(tasks)
+                return pickle.dumps(tasks) if tasks else b""
             finally:
                 self._can_execute.set()
 
@@ -199,10 +211,13 @@ class DurableScheduler:
                 "`checkpoint_no_wait` must be called when the executions are awaiting "
                 f"an `AgentTask` or a resolved `EffectCall`. These executions are not ready: {not_resolved}"
             )
-        return pickle.dumps(tasks)
+        return pickle.dumps(tasks) if tasks else b""
 
-    def restore(self, states: bytes) -> list[asyncio.Task[Any]]:
-        tasks = pickle.loads(states)
+    def restore(self, states: bytes | list[DurableTask]) -> list[asyncio.Task[Any]]:
+        if not states:
+            return []
+
+        tasks = pickle.loads(states) if isinstance(states, bytes) else states
         exe_tasks = []
         for task in tasks:
             print("restoring task", task)
