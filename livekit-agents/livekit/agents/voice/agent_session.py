@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import pickle
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -352,6 +351,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        self._rehydrated_agents: dict[str, Agent] = {}
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -881,6 +881,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         except RuntimeError:
             job_ctx = None
 
+        # set the primary agent session before creating the agent
         if job_ctx is not None:
             if (
                 job_ctx._primary_agent_session is not None
@@ -889,13 +890,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 raise RuntimeError("Only the primary agent session can be rehydrated")
             job_ctx._primary_agent_session = self
 
-        agent = Agent.create_from_state(state["agent"])
+        current_agent = Agent.create_from_state(state["agent"])
+
+        # restore the durable state for all paused agents
+        for agent in self._rehydrated_agents.values():
+            if agent is not current_agent:
+                activity = AgentActivity(agent=agent, sess=self)
+                activity._rehydrate(agent._pending_durable_state)
+                agent._pending_durable_state = None
+
         if self._started:
             # only allow rehydrate session that not started yet?
-            # await self._update_activity(agent)
+            # await self._update_activity(current_agent)
             raise RuntimeError("Cannot rehydrate session that has already started")
         else:
-            await self.start(agent=agent)
+            await self.start(agent=current_agent)
 
     def update_options(
         self,

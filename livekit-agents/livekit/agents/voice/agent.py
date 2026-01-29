@@ -16,7 +16,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
-import weakref
+from ..job import get_job_context, JobContext
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -30,9 +30,6 @@ if TYPE_CHECKING:
 # context variable for passing passphrase during pickle/unpickle
 # set by AgentSession before serialization/deserialization
 _state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
-
-
-_REHYDRATED_AGENTS = weakref.WeakValueDictionary[str, "Agent"]()
 
 
 @dataclass
@@ -440,7 +437,7 @@ class Agent:
                 durable_state = self._activity.durable_scheduler.checkpoint_no_wait()
             except Exception:
                 logger.exception("error checkpointing durable functions")
-
+        print(f"durable_state, agent: {self._id}", durable_state[:10])
         return {
             "cls": type(self),
             "id": self._id,
@@ -477,17 +474,34 @@ class Agent:
         cls = state["cls"]
         agent: Agent = cls(**state.get("init_kwargs", {}))
         agent.set_state(state)
-        print(f"create_from_state: {agent.id}")
-        if agent.id in _REHYDRATED_AGENTS:
-            raise RuntimeError(
-                f"Agent with id {agent.id} already exists, please avoid creating agents with the same id"
-            )
-        _REHYDRATED_AGENTS[agent.id] = agent
+
+        # register the agent to the AgentSession's rehydrated agents collection
+        try:
+            job_ctx: JobContext | None = get_job_context()
+        except RuntimeError:
+            job_ctx = None
+
+        if job_ctx is not None:
+            agent_session = job_ctx._primary_agent_session
+            registry = agent_session._rehydrated_agents
+            if agent.id in registry:
+                raise RuntimeError(
+                    f"Agent with id {agent.id} already exists, please avoid creating agents with the same id"
+                )
+            registry[agent.id] = agent
+
+            # # recreate an AgentActivity for the agent
+            # agent_activity = AgentActivity(agent=agent, sess=agent_session)
+            # agent_activity._rehydrate(state.get("durable_state", None))
+
         return agent
 
     @staticmethod
     def _lookup_agent(cls: type[Agent], agent_id: str) -> Agent:
-        agent = _REHYDRATED_AGENTS.get(agent_id)
+        job_ctx = get_job_context()
+        registry = job_ctx._primary_agent_session._rehydrated_agents
+
+        agent = registry.get(agent_id)
         if agent is None:
             raise RuntimeError(f"Agent with id {agent_id} not found")
 
@@ -839,7 +853,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
-        self.__awaited: bool = False
+        # self.__awaited: bool = False
         self._old_agent: Agent | None = None
         self._update_agent_task: asyncio.Task[None] | None = None
 
@@ -864,17 +878,19 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         if speech_handle:
             speech_handle._maybe_run_final_output = result
 
+        logger.info(f"{self.__class__.__name__} completed with result: {result}")
+
         # if not self.__inline_mode:
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
 
-        # workaround before durable functions are implemented
-        # the AgentTask is rehydrated without being awaited, switch to the old agent when it's done
-        if not self.__awaited and self._old_agent:
-            self._update_agent_task = asyncio.create_task(
-                self.__switch_to_old_agent(
-                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
-                )
-            )
+        # # workaround before durable functions are implemented
+        # # the AgentTask is rehydrated without being awaited, switch to the old agent when it's done
+        # if not self.__awaited and self._old_agent:
+        #     self._update_agent_task = asyncio.create_task(
+        #         self.__switch_to_old_agent(
+        #             old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+        #         )
+        #     )
 
     async def __await_impl(self) -> TaskResult_T:
         # TODO: make it re-entrant
@@ -883,9 +899,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
             else:
                 try:
+                    print(f"awaiting {self.__class__.__name__}")
                     return await asyncio.shield(self.__fut)
 
                 finally:
+                    print(f"switching to old agent: {self._old_agent._id}")
                     await self.__switch_to_old_agent(
                         old_agent=self._old_agent, session=self.session, speech_handle=None
                     )
@@ -1002,7 +1020,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
-        self.__awaited = True
+        # self.__awaited = True
         return self.__await_impl().__await__()
 
     def get_state(self) -> dict[str, Any]:

@@ -460,11 +460,13 @@ class AgentActivity(RecognitionHooks):
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
                 self._started = True
+
+                # restore the durable state if any
                 self._durable_scheduler = DurableScheduler()
-                if durable_state := self._agent._pending_durable_state:
-                    # TODO: keep the tasks somewhere
-                    self._durable_scheduler.restore(durable_state)
-                    self._agent._pending_durable_tasks = None
+                if self._agent._pending_durable_state:
+                    print(f"restoring durable state, agent: {self._agent._id}", self._agent._pending_durable_state[:10])
+                    self._durable_scheduler.restore(self._agent._pending_durable_state)
+                    self._agent._pending_durable_state = None
 
                 @tracer.start_as_current_span(
                     "on_enter",
@@ -487,6 +489,15 @@ class AgentActivity(RecognitionHooks):
                     _set_activity_task_info(task, inline_task=True)
             finally:
                 start_span.end()
+
+    def _rehydrate(self, durable_state: bytes | None) -> None:
+        self._started = True
+        self._agent._activity = self
+
+        self._durable_scheduler = DurableScheduler()
+        if durable_state:
+            print(f"restoring durable state, agent: {self._agent._id}", durable_state[:10])
+            self._durable_scheduler.restore(durable_state)
 
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."

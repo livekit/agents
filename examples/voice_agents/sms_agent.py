@@ -87,7 +87,11 @@ class MyAgent(Agent):
         )
         get_email_task.configure(llm="openai/gpt-4.1")
 
-        email_result = await EffectCall(get_email_task)
+        try:
+            email_result = await EffectCall(get_email_task)
+        except Exception as e:
+            logger.exception("Error getting email address")
+            return "Error getting email address."
 
         # TODO: serialize durable function calls
         email_address = email_result.email_address

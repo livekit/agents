@@ -10,10 +10,9 @@ from dataclasses import dataclass, field
 from types import coroutine
 from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
-from .function import DurableCoroutine, DurableGenerator, durable
+from livekit.agents.voice.agent import AgentTask
 
-if TYPE_CHECKING:
-    from livekit.agents import AgentTask
+from .function import DurableCoroutine, DurableGenerator, durable
 
 
 @coroutine
@@ -116,6 +115,7 @@ class EffectCall(Generic[TaskResult_T]):
         self._c_result = state["c_result"]
         self._c_exc = state["c_exc"]
         self._c = state["c"]
+        self._c_ctx = contextvars.copy_context()  # TODO: restore the context?
 
     def __repr__(self) -> str:
         if not self._done:
@@ -205,6 +205,7 @@ class DurableScheduler:
         tasks = pickle.loads(states)
         exe_tasks = []
         for task in tasks:
+            print("restoring task", task)
             exe_tasks.append(self.execute(task))
         return exe_tasks
 
@@ -216,6 +217,7 @@ class DurableScheduler:
 
     async def _execute(self, task: DurableTask) -> Any:
         from livekit.agents import AgentTask
+        from livekit.agents.voice.agent import _get_activity_task_info
 
         __tracebackhide__ = True
 
@@ -224,10 +226,28 @@ class DurableScheduler:
                 if not ec._c or ec._c_ctx is None:
                     raise RuntimeError("invalid EffectCall state")
 
-                exe_task = ec._c_ctx.run(self._loop.create_task, ec._c)
+                if isinstance(ec._c, AgentTask):
+
+                    async def _execute() -> Any:
+                        print("executing agent task", ec._c)
+                        return await ec._c
+
+                    coro = _execute()
+                else:
+                    coro = ec._c
+
+                exe_task = ec._c_ctx.run(self._loop.create_task, coro)
+
+                current_task = asyncio.current_task()
+                if agent_activity_task_info := _get_activity_task_info(current_task):
+                    setattr(exe_task, "__livekit_agents_activity_task", agent_activity_task_info)
+
                 val = await exe_task
                 ec._set_result(val)
             except Exception as e:
+                import traceback
+
+                traceback.print_exc()
                 ec._set_exception(e)
 
         g = task.generator
@@ -253,7 +273,9 @@ class DurableScheduler:
                     if isinstance(nv._c, AgentTask):
                         # allow pickling the AgentTask before it's resolved
                         task.at_checkpoint.set()
+                        print("setting checkpoint for agent task", nv._c)
 
+                    print("executing effect call", nv)
                     await _execute_step(nv)
                     assert nv._done
 

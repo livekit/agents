@@ -12,6 +12,7 @@ from typing import Any
 import apsw
 
 from ..log import logger
+from . import is_given
 
 # Fixed size for SHA-1 hash (40 hex characters)
 VERSION_SIZE = 40
@@ -43,7 +44,7 @@ class SessionDelta:
         if len(data) < VERSION_SIZE * 2:
             raise ValueError(f"Data too short: expected at least {VERSION_SIZE * 2} bytes")
 
-        base_ver_bytes = data[: VERSION_SIZE]
+        base_ver_bytes = data[:VERSION_SIZE]
         new_ver_bytes = data[VERSION_SIZE : VERSION_SIZE * 2]
         changeset_bytes = data[VERSION_SIZE * 2 :]
 
@@ -450,6 +451,9 @@ class SessionStore:
         init_kwargs = agent_state.get("init_kwargs", {})
         chat_ctx_dict = agent_state.get("chat_ctx", {})
         durable_state = agent_state.get("durable_state", None)
+
+        # filter out NOT_GIVEN values
+        init_kwargs = {k: v for k, v in init_kwargs.items() if is_given(v)}
 
         # Extract custom fields
         standard_fields = {
