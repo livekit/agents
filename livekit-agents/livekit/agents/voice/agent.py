@@ -17,6 +17,7 @@ from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 from ..job import get_job_context, JobContext
+from livekit.agents import job
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -855,7 +856,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # self.__awaited: bool = False
         self._old_agent: Agent | None = None
-        self._update_agent_task: asyncio.Task[None] | None = None
+        # self._update_agent_task: asyncio.Task[None] | None = None
+        self._await_task: asyncio.Task[None] | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -880,6 +882,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         logger.info(f"{self.__class__.__name__} completed with result: {result}")
 
+        if self._await_task:
+            self.session._global_run_state._watch_handle(self._await_task)
+
         # if not self.__inline_mode:
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
 
@@ -893,6 +898,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         #     )
 
     async def __await_impl(self) -> TaskResult_T:
+        self._await_task = asyncio.current_task()
+
         # TODO: make it re-entrant
         if self.__started:
             if not self.is_rehydrated() or self._old_agent is None:
