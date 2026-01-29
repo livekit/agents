@@ -2,7 +2,7 @@
 
 Support for voice synthesis with [Voice.AI](https://voice.ai).
 
-See https://docs.livekit.io/agents/integrations/tts/voiceai/ for more information.
+See [LiveKit VoiceAI TTS docs](https://docs.livekit.io/agents/integrations/tts/voiceai/) for more information.
 
 ## Installation
 
