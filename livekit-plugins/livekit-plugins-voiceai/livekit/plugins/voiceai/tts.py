@@ -743,7 +743,7 @@ class _Connection:
         if not (ctx := self._context_data.get(context_id)) or ctx.timeout_timer:
             return
 
-        timeout = ctx.stream._conn_options.timeout
+        timeout = self._opts.inactivity_timeout
 
         def _on_timeout() -> None:
             if not ctx.waiter.done():
