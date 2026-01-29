@@ -64,6 +64,7 @@ class SpeechData:
 @dataclass
 class RecognitionUsage:
     audio_duration: float
+    """Incremental audio duration/usage in seconds"""
 
 
 @dataclass

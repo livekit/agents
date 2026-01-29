@@ -606,6 +606,7 @@ class SpeechStream(stt.SpeechStream):
             ],
         ) -> None:
             has_started = False
+            last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
@@ -671,6 +672,16 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
                     has_started = False
+
+                if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=_get_request_id(resp),
+                            recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                        )
+                    )
+                    last_usage_event_time += audio_duration
 
         while True:
             audio_pushed = False
@@ -853,3 +864,32 @@ def _streaming_recognize_response_to_speech_data(
     )
 
     return data
+
+
+def _get_audio_duration(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+    last_usage_event_time: float,
+) -> float:
+    """Calculate the audio duration from the response.
+
+    References:
+        - https://docs.cloud.google.com/python/docs/reference/speech/latest/google.cloud.speech_v1.types.StreamingRecognizeResponse
+        - https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/StreamingRecognitionResult
+    """
+    # total_billed_time is only set "if this is the last response in the stream"
+    # use speech event time/offset before the last response is received
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        if resp.metadata.total_billed_duration:
+            return _duration_to_seconds(resp.metadata.total_billed_duration) - last_usage_event_time
+        return _duration_to_seconds(resp.speech_event_offset) - last_usage_event_time
+    if resp.total_billed_time:
+        return _duration_to_seconds(resp.total_billed_time) - last_usage_event_time
+    return _duration_to_seconds(resp.speech_event_time) - last_usage_event_time
+
+
+def _get_request_id(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+) -> str:
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        return resp.metadata.request_id
+    return str(resp.request_id)
