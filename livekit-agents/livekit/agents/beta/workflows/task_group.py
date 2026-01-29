@@ -31,6 +31,13 @@ class TaskGroupResult:
     task_results: dict[str, Any]
 
 
+@dataclass
+class TaskCompletedEvent:
+    agent_task: AgentTask
+    task_id: str
+    result: Any
+
+
 class _OutOfScopeError(ToolError):
     def __init__(self, target_task_ids: list) -> None:
         self.target_task_ids = target_task_ids
@@ -43,14 +50,15 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         summarize_chat_ctx: bool = True,
         return_exceptions: bool = False,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        on_task_completed: Callable[[str, Any], Coroutine[None, None, None]] | None = None,
+        on_task_completed: Callable[[TaskCompletedEvent], Coroutine[None, None, None]]
+        | None = None,
     ):
         """TaskGroup orchestrates a sequence of multiple AgentTasks. It also allows for users to regress to previous tasks if requested.
 
         Args:
             summarize_chat_ctx (bool): Whether or not to summarize the interactions within the TaskGroup into one message and merge the context. Defaults to True.
             return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
-            on_task_completed (Callable[]): A callable that executes upon each task completion. The callback takes the task ID and its corresponding result as arguments.
+            on_task_completed (Callable[]): A callable that executes upon each task completion. The callback takes in a single argument of a TaskCompletedEvent.
         """
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
@@ -102,7 +110,11 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 res = await self._current_task
                 task_results[task_id] = res
                 if self._task_completed_callback is not None:
-                    await self._task_completed_callback(task_id, res)
+                    await self._task_completed_callback(
+                        TaskCompletedEvent(
+                            agent_task=self._current_task, task_id=task_id, result=res
+                        )
+                    )
             except _OutOfScopeError as e:
                 task_stack.insert(0, task_id)
                 for task_id in reversed(e.target_task_ids):
