@@ -53,7 +53,7 @@ except ImportError as e:
         # If running as standalone script, raise the error immediately
         raise
 
-from livekit import rtc
+from livekit import rtc  # noqa: E402
 
 # Import audio utilities - handle both standalone and module usage
 try:

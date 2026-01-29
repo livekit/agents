@@ -21,7 +21,6 @@ for real-time noise suppression in LiveKit voice agents.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterable
 from typing import Any
 
 import numpy as np
