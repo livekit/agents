@@ -21,7 +21,7 @@ import weakref
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import Any, Callable, Union, cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -320,7 +320,7 @@ class STT(stt.STT):
     ) -> cloud_speech_v2.RecognitionConfig | cloud_speech_v1.RecognitionConfig:
         config = self._sanitize_options(language=language)
         if self._config.version == 2:
-            recognition_config_kwargs: dict = {
+            recognition_config_kwargs: dict[str, Any] = {
                 "explicit_decoding_config": cloud_speech_v2.ExplicitDecodingConfig(
                     encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
                     sample_rate_hertz=sample_rate,
@@ -552,7 +552,7 @@ class SpeechStream(stt.SpeechStream):
         self,
     ) -> cloud_speech_v2.StreamingRecognitionConfig | cloud_speech_v1.StreamingRecognitionConfig:
         if self._config.version == 2:
-            recognition_config_kwargs: dict = {
+            recognition_config_kwargs: dict[str, Any] = {
                 "explicit_decoding_config": cloud_speech_v2.ExplicitDecodingConfig(
                     encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
                     sample_rate_hertz=self._config.sample_rate,
