@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
-from ..types import NOT_GIVEN, NotGivenOr
 from ..log import logger
 
 Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
+
 
 @dataclass
 class JudgmentResult:
@@ -86,8 +86,7 @@ def _has_handoffs(chat_ctx: ChatContext) -> bool:
     Excludes initial agent assignments (where old_agent_id is None).
     """
     return any(
-        item.type == "agent_handoff" and item.old_agent_id is not None
-        for item in chat_ctx.items
+        item.type == "agent_handoff" and item.old_agent_id is not None for item in chat_ctx.items
     )
 
 
@@ -147,9 +146,7 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
 
 
 class Judge:
-    def __init__(
-        self, *, llm: LLM | None = None, instructions: str, name: str = "custom"
-    ) -> None:
+    def __init__(self, *, llm: LLM | None = None, instructions: str, name: str = "custom") -> None:
         self._llm = llm
         self._instructions = instructions
         self._name = name

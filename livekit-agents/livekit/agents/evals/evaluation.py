@@ -73,6 +73,7 @@ class EvaluationResult:
         """True if no judgments explicitly failed. Maybes are allowed."""
         return not any(j.failed for j in self.judgments.values())
 
+
 class JudgeGroup:
     """A group of judges that evaluate conversations together.
 
