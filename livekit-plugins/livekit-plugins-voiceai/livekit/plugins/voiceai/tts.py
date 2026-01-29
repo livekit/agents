@@ -49,6 +49,7 @@ _DefaultEncoding: TTSEncoding = "mp3"
 # API configuration
 API_BASE_URL = "https://dev.voice.ai"
 WS_INACTIVITY_TIMEOUT = 180
+WS_CONNECT_TIMEOUT = 30
 
 
 def _get_content_type(encoding: TTSEncoding) -> str:
@@ -537,7 +538,9 @@ class _Connection:
         ).replace("http://", "ws://")
 
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
-        self._ws = await self._session.ws_connect(url, headers=headers)
+        self._ws = await asyncio.wait_for(
+            self._session.ws_connect(url, headers=headers), WS_CONNECT_TIMEOUT
+        )
 
         self._send_task = asyncio.create_task(self._send_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())
