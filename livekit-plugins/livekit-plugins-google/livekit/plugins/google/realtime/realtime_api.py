@@ -184,7 +184,7 @@ class RealtimeModel(llm.RealtimeModel):
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
             tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
-            tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Defaults to IMMEDIATELY to ensure Gemini generates a response after tool execution in voice mode.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
@@ -196,6 +196,8 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription = types.AudioTranscriptionConfig()
         if not is_given(output_audio_transcription):
             output_audio_transcription = types.AudioTranscriptionConfig()
+        if not is_given(tool_response_scheduling):
+            tool_response_scheduling = types.FunctionResponseScheduling.IMMEDIATELY
 
         server_turn_detection = True
         if (
