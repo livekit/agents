@@ -21,7 +21,7 @@ import weakref
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import Any, Callable, Union, cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -78,6 +78,8 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     profanity_filter: bool
+    denoise_audio: NotGivenOr[bool] = NOT_GIVEN
+    snr_threshold: NotGivenOr[float] = NOT_GIVEN
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
     @property
@@ -114,6 +116,22 @@ class STTOptions:
             )
         return None
 
+    def build_denoiser_config(self) -> cloud_speech_v2.DenoiserConfig | None:
+        """Build DenoiserConfig for V2 API only. Returns None for V1 API."""
+        if self.version != 2:
+            return None
+
+        if not is_given(self.denoise_audio) and not is_given(self.snr_threshold):
+            return None
+
+        kwargs: dict[str, bool | float] = {}
+        if is_given(self.denoise_audio):
+            kwargs["denoise_audio"] = self.denoise_audio
+        if is_given(self.snr_threshold):
+            kwargs["snr_threshold"] = self.snr_threshold
+
+        return cloud_speech_v2.DenoiserConfig(**kwargs)
+
 
 class STT(stt.STT):
     def __init__(
@@ -136,6 +154,8 @@ class STT(stt.STT):
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
+        denoise_audio: NotGivenOr[bool] = NOT_GIVEN,
+        snr_threshold: NotGivenOr[float] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -163,6 +183,14 @@ class STT(stt.STT):
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
+            denoise_audio(bool): whether to enable audio denoising to reduce background noise
+            (default: None). Setting to True can help reduce background music or noises like
+            rain and street traffic. Note: cannot remove background human voices.
+            snr_threshold(float): signal-to-noise ratio threshold to control the minimum
+            loudness of speech required for transcription. This helps filter out non-speech
+            audio or background noise. A higher value means the user needs to speak louder
+            for transcription. Recommended values: 10.0-100.0 when denoise_audio=True,
+            0.5-5.0 when denoise_audio=False. (default: None)
         """
         if not is_given(use_streaming):
             use_streaming = True
@@ -216,6 +244,8 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
+            denoise_audio=denoise_audio,
+            snr_threshold=snr_threshold,
             keywords=keywords,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -290,23 +320,27 @@ class STT(stt.STT):
     ) -> cloud_speech_v2.RecognitionConfig | cloud_speech_v1.RecognitionConfig:
         config = self._sanitize_options(language=language)
         if self._config.version == 2:
-            return cloud_speech_v2.RecognitionConfig(
-                explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
+            recognition_config_kwargs: dict[str, Any] = {
+                "explicit_decoding_config": cloud_speech_v2.ExplicitDecodingConfig(
                     encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
                     sample_rate_hertz=sample_rate,
                     audio_channel_count=num_channels,
                 ),
-                adaptation=config.build_adaptation(),
-                features=cloud_speech_v2.RecognitionFeatures(
+                "adaptation": config.build_adaptation(),
+                "features": cloud_speech_v2.RecognitionFeatures(
                     enable_automatic_punctuation=config.punctuate,
                     enable_spoken_punctuation=config.spoken_punctuation,
                     enable_word_time_offsets=config.enable_word_time_offsets,
                     enable_word_confidence=config.enable_word_confidence,
                     profanity_filter=config.profanity_filter,
                 ),
-                model=config.model,
-                language_codes=config.languages,
-            )
+                "model": config.model,
+                "language_codes": config.languages,
+            }
+            denoiser_config = config.build_denoiser_config()
+            if denoiser_config is not None:
+                recognition_config_kwargs["denoiser_config"] = denoiser_config
+            return cloud_speech_v2.RecognitionConfig(**recognition_config_kwargs)
         return cloud_speech_v1.RecognitionConfig(
             encoding=cloud_speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=sample_rate,
@@ -398,6 +432,8 @@ class STT(stt.STT):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        denoise_audio: NotGivenOr[bool] = NOT_GIVEN,
+        snr_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -425,6 +461,10 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(denoise_audio):
+            self._config.denoise_audio = denoise_audio
+        if is_given(snr_threshold):
+            self._config.snr_threshold = snr_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -436,6 +476,8 @@ class STT(stt.STT):
                 profanity_filter=profanity_filter,
                 model=model,
                 keywords=keywords,
+                denoise_audio=denoise_audio,
+                snr_threshold=snr_threshold,
             )
 
     async def aclose(self) -> None:
@@ -473,6 +515,8 @@ class SpeechStream(stt.SpeechStream):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        denoise_audio: NotGivenOr[bool] = NOT_GIVEN,
+        snr_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -497,6 +541,10 @@ class SpeechStream(stt.SpeechStream):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(denoise_audio):
+            self._config.denoise_audio = denoise_audio
+        if is_given(snr_threshold):
+            self._config.snr_threshold = snr_threshold
 
         self._reconnect_event.set()
 
@@ -504,24 +552,28 @@ class SpeechStream(stt.SpeechStream):
         self,
     ) -> cloud_speech_v2.StreamingRecognitionConfig | cloud_speech_v1.StreamingRecognitionConfig:
         if self._config.version == 2:
-            return cloud_speech_v2.StreamingRecognitionConfig(
-                config=cloud_speech_v2.RecognitionConfig(
-                    explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
-                        encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                        sample_rate_hertz=self._config.sample_rate,
-                        audio_channel_count=1,
-                    ),
-                    adaptation=self._config.build_adaptation(),
-                    language_codes=self._config.languages,
-                    model=self._config.model,
-                    features=cloud_speech_v2.RecognitionFeatures(
-                        enable_automatic_punctuation=self._config.punctuate,
-                        enable_word_time_offsets=self._config.enable_word_time_offsets,
-                        enable_spoken_punctuation=self._config.spoken_punctuation,
-                        enable_word_confidence=self._config.enable_word_confidence,
-                        profanity_filter=self._config.profanity_filter,
-                    ),
+            recognition_config_kwargs: dict[str, Any] = {
+                "explicit_decoding_config": cloud_speech_v2.ExplicitDecodingConfig(
+                    encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=self._config.sample_rate,
+                    audio_channel_count=1,
                 ),
+                "adaptation": self._config.build_adaptation(),
+                "language_codes": self._config.languages,
+                "model": self._config.model,
+                "features": cloud_speech_v2.RecognitionFeatures(
+                    enable_automatic_punctuation=self._config.punctuate,
+                    enable_word_time_offsets=self._config.enable_word_time_offsets,
+                    enable_spoken_punctuation=self._config.spoken_punctuation,
+                    enable_word_confidence=self._config.enable_word_confidence,
+                    profanity_filter=self._config.profanity_filter,
+                ),
+            }
+            denoiser_config = self._config.build_denoiser_config()
+            if denoiser_config is not None:
+                recognition_config_kwargs["denoiser_config"] = denoiser_config
+            return cloud_speech_v2.StreamingRecognitionConfig(
+                config=cloud_speech_v2.RecognitionConfig(**recognition_config_kwargs),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                     interim_results=self._config.interim_results,
                     enable_voice_activity_events=self._config.enable_voice_activity_events,
