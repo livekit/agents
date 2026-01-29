@@ -10,8 +10,17 @@ from pydantic import BaseModel, Field
 from livekit import rtc
 
 from .. import utils
-from ..llm import ChatItem, ChatMessage, FunctionTool, RawFunctionTool, Toolset
+from ..llm import (
+    ChatItem,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionTool,
+    RawFunctionTool,
+    Toolset,
+)
 from ..log import logger
+from ..metrics import AgentMetrics
 from ..types import (
     RPC_GET_AGENT_INFO,
     RPC_GET_CHAT_HISTORY,
@@ -38,63 +47,60 @@ if TYPE_CHECKING:
     from .room_io.types import TextInputCallback
 
 
-class ClientStateChangedEvent(BaseModel):
-    """Sent when agent or user state changes."""
-
-    type: Literal["state_changed"] = "state_changed"
-    agent_state: AgentState
-    user_state: UserState
-    timestamp: float
+class ClientAgentStateChangedEvent(BaseModel):
+    type: Literal["agent_state_changed"] = "agent_state_changed"
+    old_state: AgentState
+    new_state: AgentState
+    created_at: float
 
 
-class ClientConversationItemEvent(BaseModel):
-    """Sent when a conversation item is added."""
+class ClientUserStateChangedEvent(BaseModel):
+    type: Literal["user_state_changed"] = "user_state_changed"
+    old_state: UserState
+    new_state: UserState
+    created_at: float
 
-    type: Literal["conversation_item"] = "conversation_item"
+
+class ClientConversationItemAddedEvent(BaseModel):
+    type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage
-    timestamp: float
+    created_at: float
 
 
-class ClientTranscriptEvent(BaseModel):
-    """Sent when user speech is transcribed."""
-
-    type: Literal["transcript"] = "transcript"
+class ClientUserInputTranscribedEvent(BaseModel):
+    type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
     language: str | None
-    timestamp: float
+    created_at: float
 
 
-class ClientFunctionCallEvent(BaseModel):
-    """Sent when function tools are executed."""
+class ClientFunctionToolsExecutedEvent(BaseModel):
+    type: Literal["function_tools_executed"] = "function_tools_executed"
+    function_calls: list[FunctionCall]
+    function_call_outputs: list[FunctionCallOutput | None]
+    created_at: float
 
-    type: Literal["function_call"] = "function_call"
-    functions: list[dict[str, Any]]  # List of {name, arguments, result}
-    timestamp: float
 
-
-class ClientMetricsEvent(BaseModel):
-    """Sent when metrics are collected."""
-
-    type: Literal["metrics"] = "metrics"
-    metrics: dict[str, Any]
-    timestamp: float
+class ClientMetricsCollectedEvent(BaseModel):
+    type: Literal["metrics_collected"] = "metrics_collected"
+    metrics: AgentMetrics
+    created_at: float
 
 
 class ClientErrorEvent(BaseModel):
-    """Sent when an error occurs."""
-
     type: Literal["error"] = "error"
     message: str
-    timestamp: float
+    created_at: float
 
 
 ClientEvent = Annotated[
-    ClientStateChangedEvent
-    | ClientConversationItemEvent
-    | ClientTranscriptEvent
-    | ClientFunctionCallEvent
-    | ClientMetricsEvent
+    ClientAgentStateChangedEvent
+    | ClientUserStateChangedEvent
+    | ClientConversationItemAddedEvent
+    | ClientUserInputTranscribedEvent
+    | ClientFunctionToolsExecutedEvent
+    | ClientMetricsCollectedEvent
     | ClientErrorEvent,
     Field(discriminator="type"),
 ]
@@ -298,18 +304,18 @@ class ClientEventsHandler:
         self._event_handlers_registered = True
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
-        client_event = ClientStateChangedEvent(
-            agent_state=event.new_state,
-            user_state=self._session.user_state,
-            timestamp=event.created_at,
+        client_event = ClientAgentStateChangedEvent(
+            old_state=event.old_state,
+            new_state=event.new_state,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
-        client_event = ClientStateChangedEvent(
-            agent_state=self._session.agent_state,
-            user_state=event.new_state,
-            timestamp=event.created_at,
+        client_event = ClientUserStateChangedEvent(
+            old_state=event.old_state,
+            new_state=event.new_state,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
@@ -317,52 +323,43 @@ class ClientEventsHandler:
         if not isinstance(event.item, ChatMessage):
             return
 
-        client_event = ClientConversationItemEvent(
+        client_event = ClientConversationItemAddedEvent(
             item=event.item,
-            timestamp=event.created_at,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
-        client_event = ClientTranscriptEvent(
+        client_event = ClientUserInputTranscribedEvent(
             transcript=event.transcript,
             is_final=event.is_final,
             language=event.language,
-            timestamp=event.created_at,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
     def _on_function_tools_executed(self, event: FunctionToolsExecutedEvent) -> None:
-        functions = []
-        for call, output in event.zipped():
-            func_info: dict[str, Any] = {
-                "name": call.name,
-                "call_id": call.call_id,
-                "arguments": call.arguments,
-            }
-            if output:
-                func_info["result"] = output.output
-                func_info["is_error"] = output.is_error
-            functions.append(func_info)
-
-        client_event = ClientFunctionCallEvent(
-            functions=functions,
-            timestamp=event.created_at,
+        client_event = ClientFunctionToolsExecutedEvent(
+            function_calls=event.function_calls,
+            function_call_outputs=event.function_call_outputs,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
     def _on_metrics_collected(self, event: MetricsCollectedEvent) -> None:
-        metrics_dict = event.metrics.model_dump() if event.metrics else {}
-        client_event = ClientMetricsEvent(
-            metrics=metrics_dict,
-            timestamp=event.created_at,
+        if event.metrics is None:
+            return
+
+        client_event = ClientMetricsCollectedEvent(
+            metrics=event.metrics,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
     def _on_error(self, event: ErrorEvent) -> None:
         client_event = ClientErrorEvent(
             message=str(event.error) if event.error else "Unknown error",
-            timestamp=event.created_at,
+            created_at=event.created_at,
         )
         self._stream_client_event(client_event)
 
@@ -490,11 +487,12 @@ class ClientEventsHandler:
 
 
 RemoteSessionEventTypes = Literal[
-    "state_changed",
-    "conversation_item",
-    "transcript",
-    "function_call",
-    "metrics",
+    "agent_state_changed",
+    "user_state_changed",
+    "conversation_item_added",
+    "user_input_transcribed",
+    "function_tools_executed",
+    "metrics_collected",
     "error",
 ]
 
@@ -511,8 +509,9 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
     Example:
         ```python
         session = RemoteSession(room, agent_identity="agent")
-        session.on("state_changed", lambda ev: print(f"State: {ev.agent_state}"))
-        session.on("conversation_item", lambda ev: print(f"Message: {ev.item}"))
+        session.on("agent_state_changed", lambda ev: print(f"Agent state: {ev.new_state}"))
+        session.on("user_state_changed", lambda ev: print(f"User state: {ev.new_state}"))
+        session.on("conversation_item_added", lambda ev: print(f"Message: {ev.item}"))
         await session.start()
 
         # Query current state
