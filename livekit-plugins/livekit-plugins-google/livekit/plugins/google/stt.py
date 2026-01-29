@@ -124,7 +124,7 @@ class STTOptions:
         if not is_given(self.denoise_audio) and not is_given(self.snr_threshold):
             return None
 
-        kwargs = {}
+        kwargs: dict[str, bool | float] = {}
         if is_given(self.denoise_audio):
             kwargs["denoise_audio"] = self.denoise_audio
         if is_given(self.snr_threshold):
