@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from livekit import rtc
 
@@ -36,9 +36,6 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
     from .room_io import RoomIO
     from .room_io.types import TextInputCallback
-
-
-# --- Client Event Types (explicitly defined for client API) ---
 
 
 class ClientStateChangedEvent(BaseModel):
@@ -92,17 +89,15 @@ class ClientErrorEvent(BaseModel):
     timestamp: float
 
 
-ClientEvent = Union[
-    ClientStateChangedEvent,
-    ClientConversationItemEvent,
-    ClientTranscriptEvent,
-    ClientFunctionCallEvent,
-    ClientMetricsEvent,
-    ClientErrorEvent,
+ClientEvent = Annotated[
+    ClientStateChangedEvent
+    | ClientConversationItemEvent
+    | ClientTranscriptEvent
+    | ClientFunctionCallEvent
+    | ClientMetricsEvent
+    | ClientErrorEvent,
+    Field(discriminator="type"),
 ]
-
-
-# --- RPC Response Types ---
 
 
 class ClientSessionState(BaseModel):
@@ -142,11 +137,7 @@ class SendMessageResponse(BaseModel):
     items: list[ChatItem]
 
 
-# --- Helpers ---
-
-
 def _tool_names(tools: list[Any]) -> list[str]:
-    """Extract tool names from a list of tools."""
     result: list[str] = []
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):
@@ -154,9 +145,6 @@ def _tool_names(tools: list[Any]) -> list[str]:
         elif isinstance(tool, Toolset):
             result.extend(_tool_names(tool.tools))
     return result
-
-
-# --- Handler ---
 
 
 class ClientEventsHandler:
@@ -208,11 +196,8 @@ class ClientEventsHandler:
             return
 
         self._started = True
-
-        # Register RPC handlers
         self._register_rpc_handlers()
 
-        # Subscribe to session events if streaming is enabled
         if self._stream_events:
             self._register_event_handlers()
 
@@ -223,7 +208,6 @@ class ClientEventsHandler:
 
         self._started = False
 
-        # Unregister text stream handler
         if self._text_stream_handler_registered:
             try:
                 self._room.unregister_text_stream_handler(TOPIC_CHAT)
@@ -231,7 +215,6 @@ class ClientEventsHandler:
                 pass
             self._text_stream_handler_registered = False
 
-        # Unregister RPC handlers
         if self._rpc_handlers_registered:
             try:
                 self._room.local_participant.unregister_rpc_method(RPC_GET_SESSION_STATE)
@@ -242,7 +225,6 @@ class ClientEventsHandler:
                 pass
             self._rpc_handlers_registered = False
 
-        # Unregister event handlers
         if self._event_handlers_registered:
             self._session.off("agent_state_changed", self._on_agent_state_changed)
             self._session.off("user_state_changed", self._on_user_state_changed)
@@ -253,7 +235,6 @@ class ClientEventsHandler:
             self._session.off("error", self._on_error)
             self._event_handlers_registered = False
 
-        # Cancel all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
 
@@ -276,7 +257,6 @@ class ClientEventsHandler:
                 )
 
     def _register_rpc_handlers(self) -> None:
-        """Register RPC method handlers."""
         if self._rpc_handlers_registered:
             return
 
@@ -292,23 +272,18 @@ class ClientEventsHandler:
         self._rpc_handlers_registered = True
 
     async def _rpc_get_state(self, data: rtc.RpcInvocationData) -> str:
-        """RPC method for getting session state."""
         return await self._handle_get_state(data)
 
     async def _rpc_get_history(self, data: rtc.RpcInvocationData) -> str:
-        """RPC method for getting chat history."""
         return await self._handle_get_history(data)
 
     async def _rpc_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
-        """RPC method for getting agent info."""
         return await self._handle_get_agent_info(data)
 
     async def _rpc_send_message(self, data: rtc.RpcInvocationData) -> str:
-        """RPC method for sending a message."""
         return await self._handle_send_message(data)
 
     def _register_event_handlers(self) -> None:
-        """Subscribe to session events for streaming."""
         if self._event_handlers_registered:
             return
 
@@ -321,8 +296,6 @@ class ClientEventsHandler:
         self._session.on("error", self._on_error)
 
         self._event_handlers_registered = True
-
-    # --- Event handlers that transform framework events to client events ---
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         client_event = ClientStateChangedEvent(
@@ -379,7 +352,6 @@ class ClientEventsHandler:
         self._stream_client_event(client_event)
 
     def _on_metrics_collected(self, event: MetricsCollectedEvent) -> None:
-        # Convert metrics to dict
         metrics_dict = event.metrics.model_dump() if event.metrics else {}
         client_event = ClientMetricsEvent(
             metrics=metrics_dict,
@@ -413,14 +385,12 @@ class ClientEventsHandler:
         return [linked.identity]
 
     def _stream_client_event(self, event: ClientEvent) -> None:
-        """Queue a client event for streaming."""
         task = asyncio.create_task(self._send_client_event(event))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     @utils.log_exceptions(logger=logger)
     async def _send_client_event(self, event: ClientEvent) -> None:
-        """Stream a client event to the linked participant."""
         if not self._room.isconnected():
             return
 
@@ -440,10 +410,7 @@ class ClientEventsHandler:
         except Exception as e:
             logger.warning("failed to stream event to clients", exc_info=e)
 
-    # --- RPC handlers ---
-
     async def _handle_get_state(self, data: rtc.RpcInvocationData) -> str:
-        """RPC handler to get current session state."""
         agent = self._session._agent
 
         state = ClientSessionState(
@@ -457,12 +424,10 @@ class ClientEventsHandler:
         return state.model_dump_json()
 
     async def _handle_get_history(self, data: rtc.RpcInvocationData) -> str:
-        """RPC handler to get the agent<>user conversation turns."""
         response = ChatHistoryResponse(items=list(self._session.history.items))
         return response.model_dump_json()
 
     async def _handle_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
-        """RPC handler to get agent info."""
         agent = self._session._agent
 
         tools: list[str] = []
@@ -481,15 +446,11 @@ class ClientEventsHandler:
         return response.model_dump_json()
 
     async def _handle_send_message(self, data: rtc.RpcInvocationData) -> str:
-        """RPC handler to send a message and get the response."""
         from .run_result import RunResult
 
         request = SendMessageRequest.model_validate_json(data.payload)
-
-        # Run the agent with the user's input and wait for completion
         run_result: RunResult[None] = await self._session.run(user_input=request.text)
 
-        # Collect all ChatItems from the run events
         items: list[ChatItem] = []
         for event in run_result.events:
             items.append(event.item)
@@ -497,13 +458,8 @@ class ClientEventsHandler:
         response = SendMessageResponse(items=items)
         return response.model_dump_json()
 
-    # --- Text input handler ---
-
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
-        """Handle incoming text messages from clients."""
         linked_participant = self._room_io.linked_participant
-
-        # Validate participant if we have a linked participant
         if linked_participant and participant_identity != linked_participant.identity:
             return
 
@@ -532,8 +488,6 @@ class ClientEventsHandler:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-
-# --- RemoteSession (client-side) ---
 
 RemoteSessionEventTypes = Literal[
     "state_changed",
@@ -590,7 +544,6 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         self._started = False
 
     async def start(self) -> None:
-        """Start receiving events from the agent."""
         if self._started:
             return
 
@@ -598,7 +551,6 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         self._room.register_text_stream_handler(TOPIC_CLIENT_EVENTS, self._on_event_stream)
 
     async def aclose(self) -> None:
-        """Stop receiving events."""
         if not self._started:
             return
 
@@ -609,14 +561,12 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             pass
 
     def _on_event_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
-        """Handle incoming event stream."""
         if participant_identity != self._agent_identity:
             return
 
         asyncio.create_task(self._read_event(reader))
 
     async def _read_event(self, reader: rtc.TextStreamReader) -> None:
-        """Read and parse an event from the stream."""
         try:
             data = await reader.read_all()
             event = self._parse_event(data)
@@ -626,34 +576,15 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning("failed to parse client event", exc_info=e)
 
     def _parse_event(self, data: str) -> ClientEvent | None:
-        """Parse a JSON event into the appropriate type."""
-        import json
+        from pydantic import TypeAdapter
 
         try:
-            obj = json.loads(data)
-            event_type = obj.get("type")
-
-            if event_type == "state_changed":
-                return ClientStateChangedEvent.model_validate(obj)
-            elif event_type == "conversation_item":
-                return ClientConversationItemEvent.model_validate(obj)
-            elif event_type == "transcript":
-                return ClientTranscriptEvent.model_validate(obj)
-            elif event_type == "function_call":
-                return ClientFunctionCallEvent.model_validate(obj)
-            elif event_type == "metrics":
-                return ClientMetricsEvent.model_validate(obj)
-            elif event_type == "error":
-                return ClientErrorEvent.model_validate(obj)
-            else:
-                logger.warning(f"unknown client event type: {event_type}")
-                return None
+            return TypeAdapter(ClientEvent).validate_json(data)
         except Exception as e:
             logger.warning(f"failed to parse event: {e}")
             return None
 
     async def fetch_session_state(self) -> ClientSessionState:
-        """Fetch the current session state."""
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_SESSION_STATE,
@@ -662,7 +593,6 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         return ClientSessionState.model_validate_json(response)
 
     async def fetch_chat_history(self) -> ChatHistoryResponse:
-        """Fetch the chat history."""
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_CHAT_HISTORY,
@@ -671,7 +601,6 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         return ChatHistoryResponse.model_validate_json(response)
 
     async def fetch_agent_info(self) -> AgentInfoResponse:
-        """Fetch agent info."""
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_AGENT_INFO,
