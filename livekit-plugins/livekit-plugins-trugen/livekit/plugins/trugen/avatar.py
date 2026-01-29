@@ -25,7 +25,7 @@ from .log import logger
 _BASE_API_URL = "https://api.trugen.ai"
 _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
-_DEFAULT_AVATAR_ID = "45e3f732"
+_DEFAULT_AVATAR_ID = "7d881c1b"
 
 
 class TrugenException(Exception):
@@ -77,9 +77,9 @@ class AvatarSession:
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise Exception(
-                "livekit_url, livekit_api_key, and livekit_api_secret not found,"
-                "either pass then as arguments here or set enviroment variables."
+            raise TrugenException(
+                "livekit_url, livekit_api_key, and livekit_api_secret not found; "
+                "either pass them as arguments here or set environment variables."
             )
 
         job_ctx = get_job_context()
@@ -106,7 +106,7 @@ class AvatarSession:
 
     async def _start_session(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
-        for i in range(self._conn_options.max_retry):
+        for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     f"{self._api_url}/v1/sessions",
@@ -136,7 +136,7 @@ class AvatarSession:
                 else:
                     logger.exception("API Error; Unable to trigger TruGen.AI API backend.")
 
-                if i < self._conn_options.max_retry - 1:
+                if i < self._conn_options.max_retry:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Max retries exhaused; Unable to start TruGen.AI Avatar Session.")
+        raise APIConnectionError("Max retries exhausted; Unable to start TruGen.AI Avatar Session.")
