@@ -16,7 +16,7 @@ def _new_session_ctx() -> _ClientFactory:
 
     def _new_session() -> aiohttp.ClientSession:
         nonlocal g_session
-        if g_session is None:
+        if g_session is None or g_session.closed:
             logger.debug("http_session(): creating a new httpclient ctx")
 
             from ..job import get_job_context

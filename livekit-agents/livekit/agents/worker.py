@@ -80,6 +80,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -103,7 +104,9 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
         return cls._instance._get_avg()
 
