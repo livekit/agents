@@ -427,13 +427,12 @@ class Agent:
 
         # durable functions
         durable_state: bytes | None = None
-        if not self._activity:
-            durable_state = self._pending_durable_state
-        else:
+        if self._activity:
             try:
                 durable_state = self._activity.durable_scheduler.checkpoint_no_wait()
             except Exception:
                 logger.exception("error checkpointing durable functions")
+
         print(f"durable_state, agent: {self._id}", durable_state[:10] if durable_state else None)
         return {
             "cls": type(self),
