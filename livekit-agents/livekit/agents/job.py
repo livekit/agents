@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import functools
 import inspect
@@ -27,11 +26,10 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urlparse
 
 import aiohttp
-from opentelemetry import trace
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
@@ -39,7 +37,7 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report, trace_types, tracer
+from .telemetry import _upload_session_report
 from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
@@ -741,4 +739,3 @@ class JobRequest:
 class _JobShutdownInfo:
     user_initiated: bool
     reason: str
-

@@ -223,6 +223,7 @@ class AgentConfigUpdate(BaseModel):
     _tools: list[Tool] = PrivateAttr(default_factory=list)
     """Full tool definitions (in-memory only, not serialized)."""
 
+
 ChatItem = Annotated[
     Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
     Field(discriminator="type"),
