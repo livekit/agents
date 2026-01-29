@@ -585,6 +585,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room=room,
                     room_io=self._room_io,
                 )
+
+                # Register text input handler if configured
+                text_input_opts = room_options.get_text_input_options()
+                if text_input_opts:
+                    self._client_events_handler.register_text_input(text_input_opts.text_input_cb)
+
                 await self._client_events_handler.start()
 
             if job_ctx:
