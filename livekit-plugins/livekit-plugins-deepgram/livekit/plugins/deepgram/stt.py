@@ -21,7 +21,7 @@ import os
 import weakref
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 import aiohttp
 
@@ -40,11 +40,14 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils.codecs import AudioEncoding as EncoderAudioEncoding, AudioStreamEncoder
 from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
+
+AudioEncoding = Literal["linear16", "opus", "mp3"]
 
 
 @dataclass
@@ -65,6 +68,7 @@ class STTOptions:
     keyterms: list[str]
     profanity_filter: bool
     endpoint_url: str
+    encoding: AudioEncoding = "linear16"
     vad_events: bool = True
     numerals: bool = False
     mip_opt_out: bool = False
@@ -97,6 +101,7 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        encoding: AudioEncoding = "linear16",
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -125,6 +130,9 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
+            encoding: Audio encoding format to use. Defaults to "linear16" (raw PCM).
+                     Supported values: "linear16" (raw PCM), "opus" (Opus in OGG), "mp3".
+                     Using "opus" or "mp3" reduces bandwidth but requires encoding overhead.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -172,6 +180,7 @@ class STT(stt.STT):
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
             endpoint_url=base_url,
+            encoding=encoding,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -285,6 +294,7 @@ class STT(stt.STT):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[AudioEncoding] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = language
@@ -322,6 +332,8 @@ class STT(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(encoding):
+            self._opts.encoding = cast(AudioEncoding, encoding)
 
         for stream in self._streams:
             stream.update_options(
@@ -341,6 +353,7 @@ class STT(stt.STT):
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
                 endpoint_url=endpoint_url,
+                encoding=encoding,
             )
 
     def _sanitize_options(
@@ -391,6 +404,78 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
+    async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send raw PCM audio frames to the websocket."""
+        samples_50ms = self._opts.sample_rate // 20
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=self._opts.num_channels,
+            samples_per_channel=samples_50ms,
+        )
+
+        has_ended = False
+        async for data in self._input_ch:
+            frames: list[rtc.AudioFrame] = []
+            if isinstance(data, rtc.AudioFrame):
+                frames.extend(audio_bstream.write(data.data.tobytes()))
+            elif isinstance(data, self._FlushSentinel):
+                frames.extend(audio_bstream.flush())
+                has_ended = True
+
+            for frame in frames:
+                self._audio_duration_collector.push(frame.duration)
+                await ws.send_bytes(frame.data.tobytes())
+
+                if has_ended:
+                    self._audio_duration_collector.flush()
+                    await ws.send_str(SpeechStream._FINALIZE_MSG)
+                    has_ended = False
+
+    async def _send_encoded(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send encoded audio (opus/mp3) to the websocket."""
+        # Map our encoding names to the encoder's format names
+        encoder_format: EncoderAudioEncoding = "opus" if self._opts.encoding == "opus" else "mp3"
+
+        encoder = AudioStreamEncoder(
+            sample_rate=self._opts.sample_rate,
+            num_channels=self._opts.num_channels,
+            format=encoder_format,
+        )
+
+        async def encoder_consumer() -> None:
+            async for chunk in encoder:
+                await ws.send_bytes(chunk.data)
+
+        consumer_task = asyncio.create_task(encoder_consumer())
+
+        try:
+            has_ended = False
+            async for data in self._input_ch:
+                if isinstance(data, rtc.AudioFrame):
+                    self._audio_duration_collector.push(data.duration)
+                    encoder.push(data)
+                elif isinstance(data, self._FlushSentinel):
+                    has_ended = True
+                    self._audio_duration_collector.flush()
+
+                if has_ended:
+                    encoder.end_input()
+                    await consumer_task
+                    consumer_task = asyncio.create_task(encoder_consumer())
+                    await ws.send_str(SpeechStream._FINALIZE_MSG)
+                    encoder = AudioStreamEncoder(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=self._opts.num_channels,
+                        format=encoder_format,
+                    )
+                    has_ended = False
+
+            encoder.end_input()
+            await consumer_task
+        finally:
+            await utils.aio.gracefully_cancel(consumer_task)
+            await encoder.aclose()
+
     def update_options(
         self,
         *,
@@ -412,6 +497,7 @@ class SpeechStream(stt.SpeechStream):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[AudioEncoding] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = language
@@ -449,6 +535,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(encoding):
+            self._opts.encoding = cast(AudioEncoding, encoding)
 
         self._reconnect_event.set()
 
@@ -471,31 +559,10 @@ class SpeechStream(stt.SpeechStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
-            # forward audio to deepgram in chunks of 50ms
-            samples_50ms = self._opts.sample_rate // 20
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=self._opts.num_channels,
-                samples_per_channel=samples_50ms,
-            )
-
-            has_ended = False
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
-
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
-
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        await ws.send_str(SpeechStream._FINALIZE_MSG)
-                        has_ended = False
+            if self._opts.encoding == "linear16":
+                await self._send_pcm(ws)
+            else:
+                await self._send_encoded(ws)
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
@@ -573,7 +640,6 @@ class SpeechStream(stt.SpeechStream):
             "smart_format": self._opts.smart_format,
             "no_delay": self._opts.no_delay,
             "interim_results": self._opts.interim_results,
-            "encoding": "linear16",
             "vad_events": self._opts.vad_events,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
@@ -583,6 +649,9 @@ class SpeechStream(stt.SpeechStream):
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
         }
+        # skip encoding for containerized formats (mp3, ogg-opus)
+        if self._opts.encoding == "linear16":
+            live_config["encoding"] = "linear16"
         if self._opts.enable_diarization:
             live_config["diarize"] = True
         if self._opts.keywords:
