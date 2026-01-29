@@ -53,14 +53,14 @@ class AvatarSession:
                 "The api_key not found; set this by passing api_key to the client or "
                 "by setting the TRUGEN_API_KEY environment variable"
             )
-        self._avatar_participant_identity = (
-            _AVATAR_AGENT_IDENTITY
-            if avatar_participant_identity is NOT_GIVEN
-            else avatar_participant_identity
-        )
-        self._avatar_participant_name = (
-            _AVATAR_AGENT_NAME if avatar_participant_name is NOT_GIVEN else avatar_participant_name
-        )
+        if avatar_participant_identity is NOT_GIVEN or avatar_participant_identity is None:
+            self._avatar_participant_identity: str = _AVATAR_AGENT_IDENTITY
+        else:
+            self._avatar_participant_identity = avatar_participant_identity
+        if avatar_participant_name is NOT_GIVEN or avatar_participant_name is None:
+            self._avatar_participant_name: str = _AVATAR_AGENT_NAME
+        else:
+            self._avatar_participant_name = avatar_participant_name
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
 
@@ -145,13 +145,18 @@ class AvatarSession:
                     return
 
             except Exception as e:
-                if isinstance(e, APIConnectionError):
+                if isinstance(e, APIStatusError):
+                    logger.warning(
+                        "API Error; Unable to trigger TruGen.AI API backend.",
+                        extra={"status_code": e.status_code, "body": e.body},
+                    )
+                    if not e.retryable:
+                        raise
+                else:
                     logger.warning(
                         "API Error; Unable to trigger TruGen.AI API backend.",
                         extra={"error": str(e)},
                     )
-                else:
-                    logger.exception("API Error; Unable to trigger TruGen.AI API backend.")
 
                 if i < self._conn_options.max_retry:
                     await asyncio.sleep(self._conn_options.retry_interval)
