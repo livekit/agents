@@ -1074,7 +1074,7 @@ class RealtimeSession(
             self._realtime_model._opts.truncation = cast(
                 Union[RealtimeTruncation, None], truncation
             )
-            session.truncation = cast(Union[RealtimeTruncation, None], truncation)  # type: ignore
+            session.truncation = cast(Union[RealtimeTruncation, None], truncation)
             has_changes = True
 
         has_audio_config = False
