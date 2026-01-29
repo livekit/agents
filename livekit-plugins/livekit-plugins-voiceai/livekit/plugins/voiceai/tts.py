@@ -97,8 +97,6 @@ class TTS(tts.TTS):
         Args:
             voice_id (NotGivenOr[str]): Voice ID. If not provided, uses the default built-in voice.
             model (TTSModels | str): TTS model to use. Defaults to "voiceai-tts-v1-latest".
-                Model is automatically selected based on language if not specified.
-                English uses non-multilingual models; other languages use multilingual models.
             encoding (NotGivenOr[TTSEncoding]): Audio output format. Defaults to "mp3".
                 Options: "mp3" (compressed), "wav" (uncompressed), "pcm" (raw 16-bit).
             api_key (NotGivenOr[str]): Voice.AI API key. Can be set via argument or
