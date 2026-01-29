@@ -76,6 +76,7 @@ class _TTSOptions:
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
     buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
+    auto_mode: NotGivenOr[bool] = NOT_GIVEN
 
     @property
     def mime_type(self) -> str:
@@ -355,6 +356,8 @@ class _InworldConnection:
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    if is_given(opts.auto_mode):
+                        pkt["create"]["autoMode"] = opts.auto_mode
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -713,6 +716,7 @@ class TTS(tts.TTS):
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        auto_mode: NotGivenOr[bool] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
         ws_url: str = DEFAULT_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -746,6 +750,10 @@ class TTS(tts.TTS):
                 in the buffer that automatically triggers audio generation. Defaults to 1000.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
                 before starting generation. Defaults to 3000.
+            auto_mode (bool, optional): Whether to use auto mode. Recommended when texts are sent
+                in full sentences/phrases. When enabled, the server controls flushing of buffered
+                text to achieve minimal latency while maintaining high quality audio output.
+                Defaults to True.
             base_url (str, optional): The base URL for the Inworld TTS API.
                 Defaults to "https://api.inworld.ai/".
             ws_url (str, optional): The WebSocket URL for streaming TTS.
@@ -797,6 +805,7 @@ class TTS(tts.TTS):
             max_buffer_delay_ms=max_buffer_delay_ms
             if is_given(max_buffer_delay_ms)
             else DEFAULT_MAX_BUFFER_DELAY_MS,
+            auto_mode=auto_mode if is_given(auto_mode) else True,
         )
 
         self._max_connections = max_connections
@@ -847,6 +856,7 @@ class TTS(tts.TTS):
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        auto_mode: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -864,6 +874,7 @@ class TTS(tts.TTS):
             text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
+            auto_mode (bool, optional): Whether to use auto mode for server-controlled flushing.
         """
         if is_given(voice):
             self._opts.voice = voice
@@ -887,6 +898,8 @@ class TTS(tts.TTS):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
+        if is_given(auto_mode):
+            self._opts.auto_mode = auto_mode
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -1080,7 +1093,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
-                connection.flush_context(context_id)
+            connection.flush_context(context_id)
             connection.close_context(context_id)
 
         tasks = [
