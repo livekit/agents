@@ -17,9 +17,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        llm=google.realtime.RealtimeModel(
-            voice="kore"
-        ),
+        llm=google.realtime.RealtimeModel(voice="kore"),
         resume_false_interruption=False,
     )
 

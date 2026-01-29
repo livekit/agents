@@ -44,17 +44,23 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        self._avatar_id = avatar_id or _DEFAULT_AVATAR_ID
-        self._api_url = _BASE_API_URL
-        self._api_key = api_key or os.getenv("TRUGEN_API_KEY")
-        if self._api_key is None:
+        self._avatar_id = (
+            _DEFAULT_AVATAR_ID if avatar_id is NOT_GIVEN or avatar_id is None else avatar_id
+        )
+        self._api_key = os.getenv("TRUGEN_API_KEY") if api_key is NOT_GIVEN else api_key
+        if not self._api_key:
             raise TrugenException(
                 "The api_key not found; set this by passing api_key to the client or "
                 "by setting the TRUGEN_API_KEY environment variable"
             )
-
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        self._avatar_participant_identity = (
+            _AVATAR_AGENT_IDENTITY
+            if avatar_participant_identity is NOT_GIVEN
+            else avatar_participant_identity
+        )
+        self._avatar_participant_name = (
+            _AVATAR_AGENT_NAME if avatar_participant_name is NOT_GIVEN else avatar_participant_name
+        )
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
 
@@ -73,10 +79,21 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+        if livekit_url is NOT_GIVEN:
+            livekit_url = os.getenv("LIVEKIT_URL") or NOT_GIVEN
+        if livekit_api_key is NOT_GIVEN:
+            livekit_api_key = os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN
+        if livekit_api_secret is NOT_GIVEN:
+            livekit_api_secret = os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
+
+        if (
+            livekit_url is NOT_GIVEN
+            or livekit_api_key is NOT_GIVEN
+            or livekit_api_secret is NOT_GIVEN
+            or not livekit_url
+            or not livekit_api_key
+            or not livekit_api_secret
+        ):
             raise TrugenException(
                 "livekit_url, livekit_api_key, and livekit_api_secret not found; "
                 "either pass them as arguments here or set environment variables."
@@ -109,7 +126,7 @@ class AvatarSession:
         for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/sessions",
+                    f"{_BASE_API_URL}/v1/sessions",
                     headers={
                         "x-api-key": self._api_key,
                     },
