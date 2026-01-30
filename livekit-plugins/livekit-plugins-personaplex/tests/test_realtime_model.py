@@ -253,12 +253,14 @@ class TestPersonaplexOptions:
             text_prompt="test prompt",
             seed=99,
             silence_threshold_ms=750,
+            use_ssl=True,
         )
         assert opts.base_url == "host:123"
         assert opts.voice == "VARF0"
         assert opts.text_prompt == "test prompt"
         assert opts.seed == 99
         assert opts.silence_threshold_ms == 750
+        assert opts.use_ssl is True
 
     def test_none_seed(self) -> None:
         opts = _PersonaplexOptions(
