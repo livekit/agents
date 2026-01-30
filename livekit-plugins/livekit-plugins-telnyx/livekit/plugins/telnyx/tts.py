@@ -184,9 +184,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 output_emitter.push(frame.data.tobytes())
 
         try:
-            async with self._tts._session_manager.ensure_session().ws_connect(
-                url, headers=headers, timeout=self._conn_options.timeout
-            ) as ws:
+            ws = await asyncio.wait_for(
+                self._tts._session_manager.ensure_session().ws_connect(url, headers=headers),
+                self._conn_options.timeout,
+            )
+            async with ws:
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -208,4 +210,3 @@ class SynthesizeStream(tts.SynthesizeStream):
             await decoder.aclose()
 
         output_emitter.end_segment()
-

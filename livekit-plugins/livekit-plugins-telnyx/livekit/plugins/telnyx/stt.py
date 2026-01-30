@@ -86,12 +86,11 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        config = self._opts
-        if is_given(language):
-            config.language = language
+        resolved_language = language if is_given(language) else self._opts.language
 
         stream = self.stream(language=language, conn_options=conn_options)
-        for frame in buffer:
+        frames = buffer if isinstance(buffer, list) else [buffer]
+        for frame in frames:
             stream.push_frame(frame)
         stream.end_input()
 
@@ -105,7 +104,7 @@ class STT(stt.STT):
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
                 stt.SpeechData(
-                    language=config.language,
+                    language=resolved_language,
                     text=final_text,
                 )
             ],
@@ -300,4 +299,3 @@ class SpeechStream(stt.RecognizeStream):
                     alternatives=alternatives,
                 )
             )
-

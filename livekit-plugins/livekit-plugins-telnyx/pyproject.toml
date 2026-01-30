@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Telnyx implementation for LiveKit Agents"
 dependencies = [
     "livekit-agents>=0.8.0",
-    "livekit-api>=0.6.0"
+    "livekit-api>=0.6.0",
+    "aiohttp>=3.10.0",
 ]
 
 [tool.hatch.build.targets.wheel]
