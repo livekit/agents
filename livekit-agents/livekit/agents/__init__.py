@@ -34,6 +34,7 @@ from .job import (
     JobExecutorType,
     JobProcess,
     JobRequest,
+    TextMessageContext,
     get_job_context,
 )
 from .llm.chat_context import (
@@ -45,7 +46,14 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, ProviderTool, StopResponse, ToolError, function_tool
+from .llm.tool_context import (
+    FunctionTool,
+    ProviderTool,
+    StopResponse,
+    ToolError,
+    ToolFlag,
+    function_tool,
+)
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -121,11 +129,13 @@ __all__ = [
     "JobProcess",
     "JobContext",
     "JobRequest",
+    "TextMessageContext",
     "get_job_context",
     "JobExecutorType",
     "AutoSubscribe",
     "FunctionTool",
     "function_tool",
+    "ToolFlag",
     "ProviderTool",
     "ChatContext",
     "ChatItem",

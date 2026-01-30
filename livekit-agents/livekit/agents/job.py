@@ -41,7 +41,7 @@ from .log import logger
 from .telemetry import _upload_session_report, trace_types, tracer
 from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
-from .utils import http_context, is_given, wait_for_participant
+from .utils import aio, http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .voice.agent_session import AgentSession
     from .voice.report import SessionReport
+    from .voice.run_result import RunEvent
 
 
 def get_job_context() -> JobContext:
@@ -95,6 +96,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    text_request: agent.TextMessageRequest | None = None
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -127,6 +129,36 @@ class _ContextLogFieldsFilter(logging.Filter):
                 setattr(record, key, value)
 
         return True
+
+
+class TextMessageContext:
+    def __init__(self, *, text: str, session_data: bytes | None = None) -> None:
+        self._text = text
+        self._session_data = session_data
+
+        self._response_ch: aio.Chan[str] = aio.Chan()
+
+    async def send_response(self, ev: RunEvent | str) -> None:
+        # simulate sending result
+        if isinstance(ev, str):
+            await self._response_ch.send(ev)
+        elif ev.type == "message" and (text := ev.item.text_content):
+            await self._response_ch.send(text)
+
+    def mark_done(self) -> None:
+        self._response_ch.close()
+
+    @property
+    def session_data(self) -> bytes | None:
+        return self._session_data
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def response_ch(self) -> aio.Chan[str]:
+        return self._response_ch
 
 
 class JobContext:
@@ -163,6 +195,14 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+
+        self._text_message_context = (
+            TextMessageContext(
+                text=self._info.text_request.text, session_data=self._info.text_request.session_data
+            )
+            if self._info.text_request
+            else None
+        )
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -248,6 +288,12 @@ class JobContext:
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
 
+    @property
+    def primary_agent_session(self) -> AgentSession:
+        if self._primary_agent_session is None:
+            raise RuntimeError("No primary agent session found")
+        return self._primary_agent_session
+
     def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
         from .voice.report import SessionReport
 
@@ -329,6 +375,10 @@ class JobContext:
             return identity
 
         return self._room.local_participant.identity
+
+    @property
+    def text_message_context(self) -> TextMessageContext | None:
+        return self._text_message_context
 
     @property
     def log_context_fields(self) -> dict[str, Any]:
