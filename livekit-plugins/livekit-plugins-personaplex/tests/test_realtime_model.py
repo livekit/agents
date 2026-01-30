@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
-import struct
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import numpy as np
 import pytest
 
-from livekit.plugins.personaplex import RealtimeModel, RealtimeSession
+from livekit.plugins.personaplex import RealtimeModel
 from livekit.plugins.personaplex.realtime.realtime_model import (
-    DEFAULT_SILENCE_THRESHOLD_MS,
+    _SPECIAL_TOKENS,
     INITIAL_RETRY_DELAY,
     MAX_RETRY_DELAY,
     MSG_AUDIO,
@@ -21,9 +17,7 @@ from livekit.plugins.personaplex.realtime.realtime_model import (
     SAMPLE_RATE,
     _PersonaplexOptions,
     _ResponseGeneration,
-    _SPECIAL_TOKENS,
 )
-
 
 # -- RealtimeModel init tests --
 
@@ -193,8 +187,8 @@ class TestAudioConversion:
 
 class TestResponseGeneration:
     def test_defaults(self) -> None:
-        from livekit.agents import llm, utils
         from livekit import rtc
+        from livekit.agents import llm, utils
 
         gen = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),

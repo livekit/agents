@@ -357,12 +357,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
                 logger.info(f"Connected to PersonaPlex server at {self._opts.base_url}")
 
-                send_task = asyncio.create_task(
-                    self._send_task(ws_conn), name="_send_task"
-                )
-                recv_task = asyncio.create_task(
-                    self._recv_task(ws_conn), name="_recv_task"
-                )
+                send_task = asyncio.create_task(self._send_task(ws_conn), name="_send_task")
+                recv_task = asyncio.create_task(self._recv_task(ws_conn), name="_recv_task")
                 restart_wait_task = asyncio.create_task(
                     self._session_should_close.wait(), name="_restart_wait"
                 )
@@ -378,9 +374,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                             task.result()
                 finally:
                     await ws_conn.close()
-                    await utils.aio.cancel_and_wait(
-                        send_task, recv_task, restart_wait_task
-                    )
+                    await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
 
                 if restart_wait_task not in done and self._msg_ch.closed:
                     break
@@ -462,9 +456,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                         self._handle_text_token(payload)
 
                     else:
-                        logger.warning(
-                            f"Unknown PersonaPlex message type: 0x{msg_type:02x}"
-                        )
+                        logger.warning(f"Unknown PersonaPlex message type: 0x{msg_type:02x}")
                 except Exception:
                     logger.exception("Error handling PersonaPlex message")
 
