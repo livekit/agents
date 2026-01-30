@@ -978,7 +978,6 @@ class AgentActivity(RecognitionHooks):
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
         if self._rt_session is not None:
             self._rt_session.commit_user_turn()
-            return
 
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
