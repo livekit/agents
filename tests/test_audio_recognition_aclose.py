@@ -51,6 +51,7 @@ class TestAudioRecognitionAclose:
 
         This leaves _end_of_turn_task orphaned and never awaited.
         """
+
         async def long_running_task():
             await asyncio.sleep(10)
 
