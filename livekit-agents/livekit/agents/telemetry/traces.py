@@ -382,7 +382,6 @@ async def _upload_session_report(
             severity_text=severity_text,
         )
 
-
     eval_logger = _get_logger("evaluations")
     if tagger.evaluations:
         for evaluation in tagger.evaluations:

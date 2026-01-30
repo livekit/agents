@@ -94,8 +94,10 @@ class Tagger:
         """
         for name, judgment in result.judgments.items():
             self._tags.add(f"lk.judge.{name}:{judgment.verdict}")
-            self._evaluation_results.append({
-                "name": name,
-                "verdict": judgment.verdict,
-                "reasoning": judgment.reasoning,
-            })
+            self._evaluation_results.append(
+                {
+                    "name": name,
+                    "verdict": judgment.verdict,
+                    "reasoning": judgment.reasoning,
+                }
+            )
