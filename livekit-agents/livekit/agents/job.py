@@ -265,6 +265,7 @@ class JobContext:
 
         sr = SessionReport(
             enable_recording=session._enable_recording,
+            include_internal_events=session._include_internal_events,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -273,6 +274,7 @@ class JobContext:
             audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
             started_at=session._started_at,
             events=session._recorded_events,
+            internal_events=session._recorded_internal_events,
             chat_history=session.history.copy(),
         )
 

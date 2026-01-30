@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, find_function_tools
+from ..llm import ChatContext, LLMOutputEvent, RealtimeModel, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .io import TimedString
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .audio_recognition import TurnDetectionMode
-    from .io import TimedString
 
 
 @dataclass
@@ -391,6 +391,7 @@ class Agent:
                 try:
                     async for event in stream:
                         yield event
+                        activity.session.maybe_collect(event)
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
 
@@ -417,6 +418,9 @@ class Agent:
             ) as stream:
                 async for chunk in stream:
                     yield chunk
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_chunk_output", data=chunk)
+                    )
 
         @staticmethod
         async def tts_node(
@@ -447,6 +451,7 @@ class Agent:
                 try:
                     async for ev in stream:
                         yield ev.frame
+                        activity.session.maybe_collect(ev)
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
 
@@ -455,8 +460,17 @@ class Agent:
             agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
         ) -> AsyncGenerator[str | TimedString, None]:
             """Default implementation for `Agent.transcription_node`"""
+            activity = agent._get_activity_or_raise()
             async for delta in text:
                 yield delta
+                if isinstance(delta, TimedString):
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_timed_string_output", data=delta)
+                    )
+                else:
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_str_output", data=delta)
+                    )
 
         @staticmethod
         async def realtime_audio_output_node(
@@ -470,6 +484,9 @@ class Agent:
 
             async for frame in audio:
                 yield frame
+                activity.session.maybe_collect(
+                    LLMOutputEvent(type="realtime_audio_output", data=frame)
+                )
 
     @property
     def realtime_llm_session(self) -> llm.RealtimeSession:

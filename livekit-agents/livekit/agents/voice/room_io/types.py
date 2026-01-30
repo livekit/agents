@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional, TypeAlias
+from typing import TYPE_CHECKING, Callable, Literal, Optional, TypeAlias
 
 from livekit import rtc
 
@@ -33,6 +33,7 @@ class TextInputEvent:
     text: str
     info: rtc.TextStreamInfo
     participant: rtc.RemoteParticipant
+    type: Literal["text_input"] = "text_input"
 
 
 TextInputCallback = Callable[

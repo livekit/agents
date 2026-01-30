@@ -6,17 +6,19 @@ from pathlib import Path
 
 from ..llm import ChatContext
 from .agent_session import AgentSessionOptions
-from .events import AgentEvent
+from .events import AgentEvent, TimedInternalEvent
 
 
 @dataclass
 class SessionReport:
     enable_recording: bool
+    include_internal_events: bool
     job_id: str
     room_id: str
     room: str
     options: AgentSessionOptions
     events: list[AgentEvent]
+    internal_events: list[TimedInternalEvent]
     chat_history: ChatContext
     audio_recording_path: Path | None = None
     audio_recording_started_at: float | None = None
@@ -29,6 +31,7 @@ class SessionReport:
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
+        internal_events_dict: list[dict] = []
 
         for event in self.events:
             if event.type == "metrics_collected":
@@ -36,11 +39,17 @@ class SessionReport:
 
             events_dict.append(event.model_dump())
 
+        if self.include_internal_events:
+            for e in self.internal_events:
+                if (data := e.model_dump(mode="json", by_alias=True)) and data["event"] is not None:
+                    internal_events_dict.append(data)
+
         return {
             "job_id": self.job_id,
             "room_id": self.room_id,
             "room": self.room,
             "events": events_dict,
+            "internal_events": internal_events_dict,
             "audio_recording_path": (
                 str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
             ),

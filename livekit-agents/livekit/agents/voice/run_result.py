@@ -31,6 +31,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .agent_session import AgentSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -68,7 +69,14 @@ RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, A
 
 
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, user_input: str | None = None, output_type: type[Run_T] | None) -> None:
+    def __init__(
+        self,
+        *,
+        agent_session: AgentSession,
+        user_input: str | None = None,
+        output_type: type[Run_T] | None,
+    ) -> None:
+        self._agent_session = agent_session
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
@@ -83,6 +91,13 @@ class RunResult(Generic[Run_T]):
     def events(self) -> list[RunEvent]:
         """List of all recorded events generated during the run."""
         return self._recorded_items
+
+    def _record_event(self, event: RunEvent, index: int | None = None) -> None:
+        self._agent_session.maybe_collect(event)
+        if index is None:
+            self._recorded_items.append(event)
+        else:
+            self._recorded_items.insert(index, event)
 
     @functools.cached_property
     def expect(self) -> RunAssert:
@@ -139,7 +154,7 @@ class RunResult(Generic[Run_T]):
     ) -> None:
         event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
         index = self._find_insertion_index(created_at=event.item.created_at)
-        self._recorded_items.insert(index, event)
+        self._record_event(event, index=index)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
@@ -155,7 +170,7 @@ class RunResult(Generic[Run_T]):
 
         if event is not None:
             index = self._find_insertion_index(created_at=event.item.created_at)
-            self._recorded_items.insert(index, event)
+            self._record_event(event, index=index)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         self._handles.add(handle)
