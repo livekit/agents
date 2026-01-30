@@ -262,14 +262,15 @@ class FallbackAdapter(
         for stt in self._stt_instances:
             stt.off("metrics_collected", self._on_metrics_collected)
 
-    def update_options(self, **kwargs) -> None:
+    def update_options(self, **kwargs: Any) -> None:
         """Update options for all underlying STT instances.
 
         This method propagates option changes (language, model, etc.) to all
         STT instances managed by this fallback adapter.
         """
         for stt in self._stt_instances:
-            stt.update_options(**kwargs)
+            if hasattr(stt, "update_options"):
+                stt.update_options(**kwargs)
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
