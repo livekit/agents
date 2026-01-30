@@ -1,6 +1,6 @@
 from typing import Literal
 
-# Voice.AI TTS Models
+# Voice.ai TTS Models
 TTSModels = Literal[
     "voiceai-tts-v1-latest",
     "voiceai-tts-v1-2025-12-19",

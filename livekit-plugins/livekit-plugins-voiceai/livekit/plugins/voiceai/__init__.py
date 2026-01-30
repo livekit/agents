@@ -1,6 +1,6 @@
-"""Voice.AI TTS plugin for LiveKit Agents
+"""Voice.ai TTS plugin for LiveKit Agents
 
-Custom TTS plugin connecting to Voice.AI API for voice cloning and synthesis.
+Custom TTS plugin connecting to Voice.ai API for voice cloning and synthesis.
 """
 
 from .models import TTSEncoding, TTSLanguages, TTSModels
@@ -22,7 +22,7 @@ from .log import logger
 
 
 class VoiceAIPlugin(Plugin):
-    """Voice.AI plugin for LiveKit Agents framework."""
+    """Voice.ai plugin for LiveKit Agents framework."""
 
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)

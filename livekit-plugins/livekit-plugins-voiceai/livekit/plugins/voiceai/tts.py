@@ -40,7 +40,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import TTSEncoding, TTSLanguages, TTSModels
 
-# Voice.AI TTS outputs at 32kHz sample rate
+# Voice.ai TTS outputs at 32kHz sample rate
 SAMPLE_RATE = 32000
 
 # Default encoding for audio output
@@ -63,7 +63,7 @@ def _get_content_type(encoding: TTSEncoding) -> str:
 
 @dataclass
 class Voice:
-    """Represents a Voice.AI voice.
+    """Represents a Voice.ai voice.
 
     Attributes:
         id: Unique voice identifier
@@ -93,16 +93,16 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
-        Create a new instance of Voice.AI TTS.
+        Create a new instance of Voice.ai TTS.
 
         Args:
             voice_id (NotGivenOr[str]): Voice ID. If not provided, uses the default built-in voice.
             model (TTSModels | str): TTS model to use. Defaults to "voiceai-tts-v1-latest".
             encoding (NotGivenOr[TTSEncoding]): Audio output format. Defaults to "mp3".
                 Options: "mp3" (compressed), "wav" (uncompressed), "pcm" (raw 16-bit).
-            api_key (NotGivenOr[str]): Voice.AI API key. Can be set via argument or
+            api_key (NotGivenOr[str]): Voice.ai API key. Can be set via argument or
                 `VOICEAI_API_KEY` environment variable.
-            base_url (NotGivenOr[str]): Custom base URL for the API. Defaults to Voice.AI production.
+            base_url (NotGivenOr[str]): Custom base URL for the API. Defaults to Voice.ai production.
             language (TTSLanguages | str): Language code (ISO 639-1). Defaults to "en".
                 Supported: en, ca, sv, es, fr, de, it, pt, pl, ru, nl.
             temperature (float): Sampling temperature (0.0-2.0). Defaults to 1.0.
@@ -119,7 +119,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=False,  # Voice.AI doesn't provide word-level alignment yet
+                aligned_transcript=False,  # Voice.ai doesn't provide word-level alignment yet
             ),
             sample_rate=SAMPLE_RATE,
             num_channels=1,
@@ -128,7 +128,7 @@ class TTS(tts.TTS):
         voiceai_api_key = api_key if is_given(api_key) else os.environ.get("VOICEAI_API_KEY")
         if not voiceai_api_key:
             raise ValueError(
-                "Voice.AI API key is required, either as argument or set VOICEAI_API_KEY environment variable"
+                "Voice.ai API key is required, either as argument or set VOICEAI_API_KEY environment variable"
             )
 
         if not is_given(word_tokenizer):
@@ -343,7 +343,7 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streamed TTS using WebSocket multi-stream API
 
-    Uses Voice.AI multi-stream WebSocket:
+    Uses Voice.ai multi-stream WebSocket:
     wss://dev.voice.ai/api/v1/tts/multi-stream
     """
 
@@ -380,7 +380,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
-            raise APIConnectionError("could not connect to Voice.AI") from e
+            raise APIConnectionError("could not connect to Voice.ai") from e
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
@@ -749,7 +749,7 @@ class _Connection:
         def _on_timeout() -> None:
             if not ctx.waiter.done():
                 ctx.waiter.set_exception(
-                    APITimeoutError(f"Voice.AI TTS timed out after {timeout} seconds")
+                    APITimeoutError(f"Voice.ai TTS timed out after {timeout} seconds")
                 )
             self._cleanup_context(context_id)
 
