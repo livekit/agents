@@ -1,8 +1,9 @@
 # LiquidAI Audio plugin for LiveKit Agents
 
-Support for the LFM2.5-Audio family of SST from LiquidAI.
+Support for the Audio family of SST/TTS from LiquidAI.
 
-https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF
+See [https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) for more information.
+
 
 ## Installation
 

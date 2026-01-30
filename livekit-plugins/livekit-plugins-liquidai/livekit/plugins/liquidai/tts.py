@@ -176,9 +176,9 @@ class ChunkedStream(tts.ChunkedStream):
 
                         # Convert float32 samples to int16
                         float_samples = np.frombuffer(pcm_bytes, dtype=np.float32)
-                        int16_samples = np.clip(
-                            float_samples * 32767, -32768, 32767
-                        ).astype(np.int16)
+                        int16_samples = np.clip(float_samples * 32767, -32768, 32767).astype(
+                            np.int16
+                        )
 
                         # Push the converted audio data
                         output_emitter.push(int16_samples.tobytes())
