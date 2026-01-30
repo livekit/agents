@@ -205,7 +205,7 @@ class TTS(tts.TTS):
             audio_format (TTSAudioFormat, optional): The audio format to use. Defaults to "mp3".
             pronunciation_dict (dict[str, list[str]] | None, optional): Defines pronunciation rules for specific characters or symbols.
             intensity (int | None, optional): Corresponds to the "Strong/Softer" slider on the official page. Range [-100, 100].
-            language_boost(TTSLanguageBoost | None, optional): Controls whether recognition for specific minority languages and dialects is enhanced. Defaults to None.
+            language_boost (TTSLanguageBoost | None, optional): Controls whether recognition for specific minority languages and dialects is enhanced. Defaults to None.
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
