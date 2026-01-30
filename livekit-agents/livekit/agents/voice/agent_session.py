@@ -582,7 +582,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # Initialize the client events handler for exposing session state to clients
                 self._client_events_handler = ClientEventsHandler(
                     session=self,
-                    room=room,
                     room_io=self._room_io,
                 )
 

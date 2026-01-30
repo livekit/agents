@@ -106,9 +106,11 @@ ClientEvent = Annotated[
 ]
 
 
-class ClientSessionState(BaseModel):
-    """Current state of the agent session."""
+class GetSessionStateRequest(BaseModel):
+    pass
 
+
+class GetSessionStateResponse(BaseModel):
     agent_state: AgentState
     user_state: UserState
     agent_id: str
@@ -116,15 +118,19 @@ class ClientSessionState(BaseModel):
     created_at: float
 
 
-class ChatHistoryResponse(BaseModel):
-    """Response containing the agent<>user conversation turns."""
+class GetChatHistoryRequest(BaseModel):
+    pass
 
+
+class GetChatHistoryResponse(BaseModel):
     items: list[ChatMessage]
 
 
-class AgentInfoResponse(BaseModel):
-    """Information about the current agent."""
+class GetAgentInfoRequest(BaseModel):
+    pass
 
+
+class GetAgentInfoResponse(BaseModel):
     id: str
     instructions: str | None
     tools: list[str]
@@ -132,14 +138,10 @@ class AgentInfoResponse(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    """Request to send a message to the agent."""
-
     text: str
 
 
 class SendMessageResponse(BaseModel):
-    """Response from sending a message to the agent."""
-
     items: list[ChatItem]
 
 
@@ -166,27 +168,10 @@ class ClientEventsHandler:
     def __init__(
         self,
         session: AgentSession,
-        room: rtc.Room,
         room_io: RoomIO,
-        *,
-        expose_instructions: bool = False,
-        stream_events: bool = True,
     ) -> None:
-        """
-        Initialize the ClientEventsHandler.
-
-        Args:
-            session: The AgentSession to expose events from.
-            room: The LiveKit room to publish events to.
-            room_io: The RoomIO instance for participant context.
-            expose_instructions: Whether to include agent instructions in responses.
-            stream_events: Whether to automatically stream events to clients.
-        """
         self._session = session
-        self._room = room
         self._room_io = room_io
-        self._expose_instructions = expose_instructions
-        self._stream_events = stream_events
 
         self._text_input_cb: TextInputCallback | None = None
         self._text_stream_handler_registered = False
@@ -196,16 +181,17 @@ class ClientEventsHandler:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._started = False
 
+    @property
+    def _room(self) -> rtc.Room:
+        return self._room_io.room
+
     async def start(self) -> None:
-        """Register RPC handlers and subscribe to session events."""
         if self._started:
             return
 
         self._started = True
         self._register_rpc_handlers()
-
-        if self._stream_events:
-            self._register_event_handlers()
+        self._register_event_handlers()
 
     async def aclose(self) -> None:
         """Cleanup and unregister handlers."""
@@ -266,28 +252,21 @@ class ClientEventsHandler:
         if self._rpc_handlers_registered:
             return
 
-        self._room.local_participant.register_rpc_method(RPC_GET_SESSION_STATE, self._rpc_get_state)
         self._room.local_participant.register_rpc_method(
-            RPC_GET_CHAT_HISTORY, self._rpc_get_history
+            RPC_GET_SESSION_STATE, self._rpc_get_session_state
+        )
+        self._room.local_participant.register_rpc_method(
+            RPC_GET_CHAT_HISTORY, self._rpc_get_chat_history
         )
         self._room.local_participant.register_rpc_method(
             RPC_GET_AGENT_INFO, self._rpc_get_agent_info
         )
-        self._room.local_participant.register_rpc_method(RPC_SEND_MESSAGE, self._rpc_send_message)
+        self._room.local_participant.register_rpc_method(
+            RPC_SEND_MESSAGE, self._rpc_send_message
+        )
 
         self._rpc_handlers_registered = True
 
-    async def _rpc_get_state(self, data: rtc.RpcInvocationData) -> str:
-        return await self._handle_get_state(data)
-
-    async def _rpc_get_history(self, data: rtc.RpcInvocationData) -> str:
-        return await self._handle_get_history(data)
-
-    async def _rpc_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
-        return await self._handle_get_agent_info(data)
-
-    async def _rpc_send_message(self, data: rtc.RpcInvocationData) -> str:
-        return await self._handle_send_message(data)
 
     def _register_event_handlers(self) -> None:
         if self._event_handlers_registered:
@@ -407,42 +386,36 @@ class ClientEventsHandler:
         except Exception as e:
             logger.warning("failed to stream event to clients", exc_info=e)
 
-    async def _handle_get_state(self, data: rtc.RpcInvocationData) -> str:
-        agent = self._session._agent
+    async def _rpc_get_session_state(self, data: rtc.RpcInvocationData) -> str:
+        agent = self._session.current_agent
 
-        state = ClientSessionState(
+        response = GetSessionStateResponse(
             agent_state=self._session.agent_state,
             user_state=self._session.user_state,
-            agent_id=agent.id if agent else "unknown",
+            agent_id=agent.id,
             options=asdict(self._session.options),
             created_at=self._session._started_at or time.time(),
         )
 
-        return state.model_dump_json()
-
-    async def _handle_get_history(self, data: rtc.RpcInvocationData) -> str:
-        response = ChatHistoryResponse(items=list(self._session.history.items))
         return response.model_dump_json()
 
-    async def _handle_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
-        agent = self._session._agent
+    async def _rpc_get_chat_history(self, data: rtc.RpcInvocationData) -> str:
+        response = GetChatHistoryResponse(items=list(self._session.history.items))
+        return response.model_dump_json()
 
-        tools: list[str] = []
-        chat_ctx_items: list[ChatItem] = []
-        if agent:
-            tools = _tool_names(agent.tools)
-            chat_ctx_items = list(agent.chat_ctx.items)
+    async def _rpc_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
+        agent = self._session.current_agent
 
-        response = AgentInfoResponse(
-            id=agent.id if agent else "unknown",
-            instructions=agent.instructions if agent and self._expose_instructions else None,
-            tools=tools,
-            chat_ctx=chat_ctx_items,
+        response = GetAgentInfoResponse(
+            id=agent.id,
+            instructions=agent.instructions,
+            tools=_tool_names(agent.tools),
+            chat_ctx=list(agent.chat_ctx.items),
         )
 
         return response.model_dump_json()
 
-    async def _handle_send_message(self, data: rtc.RpcInvocationData) -> str:
+    async def _rpc_send_message(self, data: rtc.RpcInvocationData) -> str:
         from .run_result import RunResult
 
         request = SendMessageRequest.model_validate_json(data.payload)
@@ -530,17 +503,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         room: rtc.Room,
         agent_identity: str,
     ) -> None:
-        """
-        Initialize the receiver.
-
-        Args:
-            room: The LiveKit room to receive events from.
-            agent_identity: The identity of the agent participant.
-        """
         super().__init__()
         self._room = room
         self._agent_identity = agent_identity
         self._started = False
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> None:
         if self._started:
@@ -559,11 +526,16 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         except ValueError:
             pass
 
+        await utils.aio.cancel_and_wait(*self._tasks)
+        self._tasks.clear()
+
     def _on_event_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._agent_identity:
             return
 
-        asyncio.create_task(self._read_event(reader))
+        task = asyncio.create_task(self._read_event(reader))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _read_event(self, reader: rtc.TextStreamReader) -> None:
         try:
@@ -583,39 +555,34 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning(f"failed to parse event: {e}")
             return None
 
-    async def fetch_session_state(self) -> ClientSessionState:
+    async def fetch_session_state(self) -> GetSessionStateResponse:
+        request = GetSessionStateRequest()
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_SESSION_STATE,
-            payload="",
+            payload=request.model_dump_json(),
         )
-        return ClientSessionState.model_validate_json(response)
+        return GetSessionStateResponse.model_validate_json(response)
 
-    async def fetch_chat_history(self) -> ChatHistoryResponse:
+    async def fetch_chat_history(self) -> GetChatHistoryResponse:
+        request = GetChatHistoryRequest()
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_CHAT_HISTORY,
-            payload="",
+            payload=request.model_dump_json(),
         )
-        return ChatHistoryResponse.model_validate_json(response)
+        return GetChatHistoryResponse.model_validate_json(response)
 
-    async def fetch_agent_info(self) -> AgentInfoResponse:
+    async def fetch_agent_info(self) -> GetAgentInfoResponse:
+        request = GetAgentInfoRequest()
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,
             method=RPC_GET_AGENT_INFO,
-            payload="",
+            payload=request.model_dump_json(),
         )
-        return AgentInfoResponse.model_validate_json(response)
+        return GetAgentInfoResponse.model_validate_json(response)
 
     async def send_message(self, text: str) -> SendMessageResponse:
-        """Send a message to the agent and wait for the response.
-
-        Args:
-            text: The message to send.
-
-        Returns:
-            SendMessageResponse containing all items generated during the run.
-        """
         request = SendMessageRequest(text=text)
         response = await self._room.local_participant.perform_rpc(
             destination_identity=self._agent_identity,

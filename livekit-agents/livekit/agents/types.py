@@ -29,22 +29,22 @@ TOPIC_CLIENT_EVENTS = "lk.agent.events"
 Topic for streaming agent events to room participants.
 """
 
-RPC_GET_SESSION_STATE = "lk.agent.getSessionState"
+RPC_GET_SESSION_STATE = "lk.agent.get_session_state"
 """
 RPC method to get the current session state.
 """
 
-RPC_GET_CHAT_HISTORY = "lk.agent.getChatHistory"
+RPC_GET_CHAT_HISTORY = "lk.agent.get_chat_history"
 """
 RPC method to get the agent<>user conversation turns.
 """
 
-RPC_GET_AGENT_INFO = "lk.agent.getAgentInfo"
+RPC_GET_AGENT_INFO = "lk.agent.get_agent_info"
 """
 RPC method to get information about the current agent.
 """
 
-RPC_SEND_MESSAGE = "lk.agent.sendMessage"
+RPC_SEND_MESSAGE = "lk.agent.send_message"
 """
 RPC method to send a message and get the agent's response.
 """
