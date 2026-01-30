@@ -12,6 +12,10 @@ from typing import Any
 import apsw
 
 from ..log import logger
+from . import is_given
+
+# Fixed size for SHA-1 hash (40 hex characters)
+VERSION_SIZE = 40
 
 
 @dataclass
@@ -20,17 +24,14 @@ class SessionDelta:
     new_version: str  # Hash of the new version (content-addressable)
     changeset: bytes  # SQLite changeset bytes (binary delta)
 
-    # Fixed size for SHA-1 hash (40 hex characters)
-    VERSION_SIZE = 40
-
     def dumps(self) -> bytes:
-        base_ver_bytes = (self.base_version or ("0" * self.VERSION_SIZE)).encode("ascii")
+        base_ver_bytes = (self.base_version or ("0" * VERSION_SIZE)).encode("ascii")
         new_ver_bytes = self.new_version.encode("ascii")
 
-        if len(base_ver_bytes) != self.VERSION_SIZE:
-            raise ValueError(f"base_version must be {self.VERSION_SIZE} characters")
-        if len(new_ver_bytes) != self.VERSION_SIZE:
-            raise ValueError(f"new_version must be {self.VERSION_SIZE} characters")
+        if len(base_ver_bytes) != VERSION_SIZE:
+            raise ValueError(f"base_version must be {VERSION_SIZE} characters")
+        if len(new_ver_bytes) != VERSION_SIZE:
+            raise ValueError(f"new_version must be {VERSION_SIZE} characters")
 
         return base_ver_bytes + new_ver_bytes + self.changeset
 
@@ -40,16 +41,16 @@ class SessionDelta:
             with open(data, "rb") as f:
                 data = f.read()
 
-        if len(data) < cls.VERSION_SIZE * 2:
-            raise ValueError(f"Data too short: expected at least {cls.VERSION_SIZE * 2} bytes")
+        if len(data) < VERSION_SIZE * 2:
+            raise ValueError(f"Data too short: expected at least {VERSION_SIZE * 2} bytes")
 
-        base_ver_bytes = data[: cls.VERSION_SIZE]
-        new_ver_bytes = data[cls.VERSION_SIZE : cls.VERSION_SIZE * 2]
-        changeset_bytes = data[cls.VERSION_SIZE * 2 :]
+        base_ver_bytes = data[:VERSION_SIZE]
+        new_ver_bytes = data[VERSION_SIZE : VERSION_SIZE * 2]
+        changeset_bytes = data[VERSION_SIZE * 2 :]
 
         base_version = base_ver_bytes.decode("ascii")
         # convert "0"*40 back to None
-        if base_version == "0" * cls.VERSION_SIZE:
+        if base_version == "0" * VERSION_SIZE:
             base_version = None
 
         new_version = new_ver_bytes.decode("ascii")
@@ -82,11 +83,12 @@ SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS agent (
         id TEXT PRIMARY KEY,
         runtime TEXT NOT NULL,
-        type_data BLOB,
+        class_type BLOB,
         parent_id TEXT,
         tools_json TEXT,
         init_kwargs_json TEXT,
         custom_state_json TEXT,
+        durable_state BLOB,
         FOREIGN KEY (parent_id) REFERENCES agent(id)
     );
 
@@ -109,7 +111,6 @@ class SessionStore:
 
         Args:
             db_path: Path to SQLite database file, if None, a temporary database will be created
-            create_schema: If True, creates schema if it doesn't exist
         """
         self._temp_file: Path | None = None
         if db_file is None or isinstance(db_file, bytes):
@@ -449,17 +450,29 @@ class SessionStore:
         agent_tools = agent_state.get("tools", [])
         init_kwargs = agent_state.get("init_kwargs", {})
         chat_ctx_dict = agent_state.get("chat_ctx", {})
+        durable_state = agent_state.get("durable_state", None)
+
+        # filter out NOT_GIVEN values
+        init_kwargs = {k: v for k, v in init_kwargs.items() if is_given(v)}
 
         # Extract custom fields
-        standard_fields = {"cls", "id", "init_kwargs", "tools", "chat_ctx", "parent_agent"}
+        standard_fields = {
+            "cls",
+            "id",
+            "init_kwargs",
+            "tools",
+            "chat_ctx",
+            "parent_agent",
+            "durable_state",
+        }
         custom_state = {k: v for k, v in agent_state.items() if k not in standard_fields}
 
         # Write agent metadata
         cursor.execute(
             """
             INSERT INTO agent
-            (id, runtime, type_data, parent_id, tools_json, init_kwargs_json, custom_state_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, runtime, class_type, parent_id, tools_json, init_kwargs_json, custom_state_json, durable_state)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 agent_id,
@@ -469,6 +482,7 @@ class SessionStore:
                 json.dumps(agent_tools) if agent_tools else None,
                 json.dumps(init_kwargs) if init_kwargs else None,
                 json.dumps(custom_state) if custom_state else None,
+                durable_state,
             ),
         )
 
@@ -483,19 +497,27 @@ class SessionStore:
     def _load_agent(self, cursor: apsw.Cursor, agent_id: str) -> dict[str, Any] | None:
         """Load agent state recursively including parent agents."""
         row = cursor.execute(
-            "SELECT runtime, type_data, parent_id, tools_json, init_kwargs_json, custom_state_json FROM agent WHERE id = ?",
+            "SELECT runtime, class_type, parent_id, tools_json, init_kwargs_json, custom_state_json, durable_state FROM agent WHERE id = ?",
             (agent_id,),
         ).fetchone()
 
         if not row:
             return None
 
-        runtime, type_data_blob, parent_id, tools_json, init_kwargs_json, custom_state_json = row
+        (
+            runtime,
+            class_type_blob,
+            parent_id,
+            tools_json,
+            init_kwargs_json,
+            custom_state_json,
+            durable_state,
+        ) = row
 
         # unpickle agent class (Python runtime only for now)
         if runtime != "python":
             raise ValueError(f"Unsupported agent runtime: {runtime}")
-        agent_class = pickle.loads(type_data_blob) if type_data_blob else None
+        agent_class = pickle.loads(class_type_blob) if class_type_blob else None
 
         # parse JSON fields
         tools = json.loads(tools_json) if tools_json else []
@@ -520,6 +542,7 @@ class SessionStore:
             "init_kwargs": init_kwargs,
             "tools": tools,
             "chat_ctx": chat_ctx,
+            "durable_state": durable_state,
             **custom_state,
         }
 

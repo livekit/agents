@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
-import pickle
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -98,6 +98,7 @@ Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
+_AgentSessionContextVar = contextvars.ContextVar["AgentSession"]("agents_session")
 
 
 @runtime_checkable
@@ -352,6 +353,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        self._rehydrated_agents: dict[str, Agent] = {}
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -596,7 +598,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if job_ctx._primary_agent_session is None:
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 elif self._enable_recording:
                     raise RuntimeError(
@@ -638,7 +640,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(
-                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
+                asyncio.create_task(
+                    self._update_activity(
+                        self._agent,
+                        wait_on_enter=False,
+                        new_activity="start" if not self._agent._rehydrated else "resume",
+                    )
+                )
             )
 
             try:
@@ -849,12 +857,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "userdata": self._userdata,
             "tools": list(tool_ctx.function_tools.keys()),
             "history": history,
-            "agent": self._agent.get_state(),
+            "agent": self._agent._get_state(),
         }
 
     async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
         """Restore session state from bytes."""
         from ..utils.session_store import SessionStore
+
+        if self._started:
+            # TODO(long): allow rehydrating a session that has already started?
+            raise RuntimeError("Cannot rehydrate session that has already started")
 
         if isinstance(state, bytes):
             with SessionStore(db_file=state) as store:
@@ -876,19 +888,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         history = state["history"]
         self._chat_ctx = llm.ChatContext.from_dict(history)
 
-        # TODO: save to TextMessageContext?
+        tk = _AgentSessionContextVar.set(self)
         try:
-            job_ctx = get_job_context()
-            job_ctx._primary_agent_session = self
-        except RuntimeError:
-            pass
+            agent = Agent._from_state(state["agent"])
+        finally:
+            _AgentSessionContextVar.reset(tk)
 
-        agent = Agent.create_from_state(state["agent"])
-        if self._started:
-            # only allow rehydrate session that not started yet?
-            await self._update_activity(agent)
-        else:
-            await self.start(agent=agent)
+        await self.start(agent=agent)
+
+    def _register_rehydrated_agent(self, agent: Agent) -> None:
+        if agent.id in self._rehydrated_agents:
+            raise RuntimeError(
+                f"Agent with id {agent.id} already registered, please avoid creating agents with the same id"
+            )
+        self._rehydrated_agents[agent.id] = agent
 
     def update_options(
         self,

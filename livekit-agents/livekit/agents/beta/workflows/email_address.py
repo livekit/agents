@@ -136,9 +136,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         if not self.done():
             self.complete(ToolError(f"couldn't get the email address: {reason}"))
 
-    def get_state(self) -> dict[str, Any]:
-        return super().get_state() | {"current_email": self._current_email}
+    def _get_state(self) -> dict[str, Any]:
+        return super()._get_state() | {"current_email": self._current_email}
 
-    def set_state(self, state: dict[str, Any]) -> None:
-        super().set_state(state)
+    def _set_state(self, state: dict[str, Any]) -> None:
+        super()._set_state(state)
         self._current_email = state["current_email"]

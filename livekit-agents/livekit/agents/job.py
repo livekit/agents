@@ -288,6 +288,12 @@ class JobContext:
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
 
+    @property
+    def primary_agent_session(self) -> AgentSession:
+        if self._primary_agent_session is None:
+            raise RuntimeError("No primary agent session found")
+        return self._primary_agent_session
+
     def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
         from .voice.report import SessionReport
 

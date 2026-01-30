@@ -13,7 +13,8 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.beta.workflows import GetEmailTask
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import ToolFlag, function_tool
+from livekit.durable import EffectCall
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -71,9 +72,10 @@ class MyAgent(Agent):
 
         return "sunny with a temperature of 70 degrees."
 
-    @function_tool
+    @function_tool(flags=ToolFlag.DURABLE)
     async def register_for_weather(self, context: RunContext):
         """Called when the user wants to register for the weather event."""
+        logger.info("register_for_weather called")
 
         get_email_task = GetEmailTask(
             extra_instructions=(
@@ -85,9 +87,7 @@ class MyAgent(Agent):
         )
         get_email_task.configure(llm="openai/gpt-4.1")
 
-        email_result = await get_email_task
-
-        # TODO: serialize durable function calls
+        email_result = await EffectCall(get_email_task)
         email_address = email_result.email_address
 
         logger.info(f"User's email address: {email_address}")

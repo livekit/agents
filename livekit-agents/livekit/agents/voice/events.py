@@ -39,7 +39,7 @@ class RunContext(Generic[Userdata_T]):
         function_call: FunctionCall,
     ) -> None:
         self._session = session
-        self._speech_handle = speech_handle
+        self._speech_handle: SpeechHandle | None = speech_handle
         self._function_call = function_call
 
         self._initial_step_idx = speech_handle.num_steps - 1
@@ -50,6 +50,8 @@ class RunContext(Generic[Userdata_T]):
 
     @property
     def speech_handle(self) -> SpeechHandle:
+        if self._speech_handle is None:
+            raise RuntimeError("SpeechHandle is not available after deserialization")
         return self._speech_handle
 
     @property
@@ -69,6 +71,9 @@ class RunContext(Generic[Userdata_T]):
         Raises:
             RuntimeError: If the SpeechHandle is already interrupted.
         """
+        if self._speech_handle is None:
+            return
+
         self.speech_handle.allow_interruptions = False
 
     async def wait_for_playout(self) -> None:
@@ -78,7 +83,26 @@ class RunContext(Generic[Userdata_T]):
         assistant turn to complete (including all function tools),
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
+        if self._speech_handle is None:
+            return
+
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "function_call": self.function_call,
+            "initial_step_idx": self._initial_step_idx,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        from .agent_session import _AgentSessionContextVar
+
+        session = _AgentSessionContextVar.get()
+        self._session = session
+
+        self._speech_handle = None
+        self._function_call = state["function_call"]
+        self._initial_step_idx = state.get("initial_step_idx", 0)
 
 
 EventTypes = Literal[
