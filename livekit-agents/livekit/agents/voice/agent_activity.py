@@ -16,7 +16,13 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
-from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
+from ..llm.tool_context import (
+    FunctionToolInfo,
+    RawFunctionToolInfo,
+    StopResponse,
+    ToolFlag,
+    get_fnc_tool_names,
+)
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -308,6 +314,13 @@ class AgentActivity(RecognitionHooks):
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
+        # Record the configuration change
+        config_update = llm.AgentConfigUpdate(
+            instructions=instructions,
+            agent_id=self._agent.id,
+        )
+        self._agent._chat_ctx.insert(config_update)
+
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
         else:
@@ -316,8 +329,24 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
+        # Compute tool diff before updating
+        old_tool_names = set(get_fnc_tool_names(self._agent._tools))
+        new_tool_names = set(get_fnc_tool_names(tools))
+        tools_added = list(new_tool_names - old_tool_names) or None
+        tools_removed = list(old_tool_names - new_tool_names) or None
+
         tools = list(set(tools))
         self._agent._tools = tools
+
+        # Record the configuration change
+        config_update = llm.AgentConfigUpdate(
+            tools_added=tools_added,
+            tools_removed=tools_removed,
+            agent_id=self._agent.id,
+        )
+        # Store full tool definitions in-memory (not serialized)
+        config_update._tools = llm.ToolContext(tools).flatten()
+        self._agent._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -570,6 +599,15 @@ class AgentActivity(RecognitionHooks):
                 )
             except ValueError:
                 logger.exception("failed to update the instructions")
+
+        # Record initial agent configuration
+        initial_config = llm.AgentConfigUpdate(
+            instructions=self._agent.instructions,
+            tools_added=get_fnc_tool_names(self.tools) or None,
+            agent_id=self._agent.id,
+        )
+        initial_config._tools = llm.ToolContext(self.tools).flatten()
+        self._agent._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
