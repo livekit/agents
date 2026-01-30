@@ -6,6 +6,8 @@ livekit-agents = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-avatario = { workspace = true }
+livekit-plugins-asyncai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }

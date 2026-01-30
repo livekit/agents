@@ -45,7 +45,7 @@ class EndCallTool(Toolset):
             on_tool_called: Callback to call when the tool is called.
             on_tool_completed: Callback to call when the tool is completed.
         """
-        super().__init__()
+        super().__init__(id="end_call")
         self._delete_room = delete_room
         self._extra_description = extra_description
 

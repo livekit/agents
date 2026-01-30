@@ -31,14 +31,19 @@ if TYPE_CHECKING:
     from ..voice.events import RunContext
 
 
-class Tool(ABC):  # noqa: B024
-    pass
+class Tool(ABC):
+    @property
+    @abstractmethod
+    def id(self) -> str: ...
 
 
 class ProviderTool(Tool):
-    """Tool that provided by the LLM provider."""
+    def __init__(self, *, id: str) -> None:
+        self._id = id
 
-    pass
+    @property
+    def id(self) -> str:
+        return self._id
 
 
 class Toolset(ABC):
@@ -52,11 +57,16 @@ class Toolset(ABC):
         ctx: RunContext
         output: Any | Exception | None
 
+    def __init__(self, *, id: str) -> None:
+        self._id = id
+
+    @property
+    def id(self) -> str:
+        return self._id
+
     @property
     @abstractmethod
-    def tools(self) -> list[Tool]:
-        """Tools exposed by the toolset."""
-        pass
+    def tools(self) -> list[Tool]: ...
 
 
 # Used by ToolChoice
@@ -150,6 +160,10 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
         self._info: _InfoT = info
         self._instance = instance
         functools.update_wrapper(self, func)
+
+    @property
+    def id(self) -> str:
+        return self._info.name
 
     @property
     def info(self) -> _InfoT:
@@ -248,7 +262,11 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
+        info = RawFunctionToolInfo(
+            name=raw_schema["name"],
+            raw_schema={**raw_schema},
+            flags=flags,
+        )
         return RawFunctionTool(func, info)
 
     def deco_func(func: Callable[_P, _R]) -> FunctionTool[_P, _R]:
