@@ -210,8 +210,23 @@ class AgentHandoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class AgentConfigUpdate(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["agent_config_update"] = Field(default="agent_config_update")
+
+    instructions: str | None = None
+    tools_added: list[str] | None = None
+    tools_removed: list[str] | None = None
+
+    created_at: float = Field(default_factory=time.time)
+
+    _tools: list[Tool] = PrivateAttr(default_factory=list)
+    """Full tool definitions (in-memory only, not serialized)."""
+
+
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff], Field(discriminator="type")
+    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
+    Field(discriminator="type"),
 ]
 
 
