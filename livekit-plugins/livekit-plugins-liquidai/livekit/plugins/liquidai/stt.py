@@ -100,8 +100,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            if is_given(language):
-                self._opts.language = language
+            # Use local variable to avoid mutating instance state
+            effective_language = language if is_given(language) else self._opts.language
 
             # Convert audio buffer to WAV bytes and base64 encode
             wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
@@ -142,7 +142,7 @@ class STT(stt.STT):
             text = "".join(text_chunks)
             logger.debug(f"STT transcription: {text}")
 
-            return self._transcription_to_speech_event(text=text)
+            return self._transcription_to_speech_event(text=text, language=effective_language)
 
         except openai.APITimeoutError as e:
             raise APIConnectionError() from e
@@ -154,10 +154,10 @@ class STT(stt.STT):
             logger.error(f"STT error: {e}")
             raise APIConnectionError() from e
 
-    def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(self, text: str, language: str) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=self._opts.language)],
+            alternatives=[stt.SpeechData(text=text, language=language)],
         )
 
     async def aclose(self) -> None:
