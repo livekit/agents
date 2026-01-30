@@ -22,13 +22,20 @@ MessagesDict = dict[int, type[Message]]
 
 
 def _read_message(data: bytes, messages: MessagesDict) -> Message:
-    bio = io.BytesIO(data)
-    msg_id = read_int(bio)
-    msg = messages[msg_id]()
-    if isinstance(msg, DataMessage):
-        msg.read(bio)
+    try:
+        bio = io.BytesIO(data)
+        msg_id = read_int(bio)
 
-    return msg
+        if msg_id not in messages:
+            raise ValueError(f"Unknown message ID: {msg_id}")
+
+        msg = messages[msg_id]()
+        if isinstance(msg, DataMessage):
+            msg.read(bio)
+
+        return msg
+    except Exception as e:
+        raise ValueError(f"Failed to parse message: {e}") from e
 
 
 def _write_message(msg: Message) -> bytes:
