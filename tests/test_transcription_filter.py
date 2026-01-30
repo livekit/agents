@@ -1,6 +1,10 @@
 import pytest
 
-from livekit.agents.voice.transcription.filters import filter_emoji, filter_markdown
+from livekit.agents.voice.transcription.filters import (
+    apply_text_transforms,
+    filter_emoji,
+    filter_markdown,
+)
 
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
 
@@ -240,3 +244,119 @@ async def test_emoji_filter(chunk_size: int):
     assert result == EMOJI_EXPECTED_OUTPUT
 
     print("\n=== EMOJI TEST COMPLETE ===")
+
+
+# Complex TTS preprocessing test combining multiple filters
+TTS_INPUT = """Meeting on 2024-12-25 with 15% discount!
+Call 555-123-4567 or email john.doe@example.com for details.
+
+**Special Offer**: $42.50 regular price, now only $12.99!
+Distance: 15.3 mi from downtown. Weight: 85.6 kg capacity.
+
+The API uses NASA technology with 99.5% uptime.
+Population: 1,234,567 people in 2024.
+
+```python
+def calculate(x):
+    return x * 2
+```
+
+Contact info:
+- Phone: 555-987-6543
+- Rate: 67%
+- Price: $0.50/unit
+
+Meeting at 14:30 today. Temperature: 72 degrees.
+_Important_: This costs $5 and takes 3 hours.
+I have 5 apples and 23 oranges.
+
+HTML & CSS files on AWS S3 — $0.023/GB cost."""
+
+TTS_EXPECTED_OUTPUT = """Meeting on Wednesday, December twenty five, 2024 with fifteen percent discount!
+Call five five five one two three four five six seven or email john dot doe at example dot com for details.
+
+**Special Offer**: forty two dollars and fifty cents regular price, now only twelve dollars and ninety nine cents!
+Distance: 15 point 3 miles from downtown. Weight: 85 point 6 kilograms capacity.
+
+The api uses nasa technology with 99 point 5 percent uptime.
+Population: 1234567 people in 2024.
+
+
+def calculate(x):
+    return x * two
+
+
+Contact info:
+Phone: five five five nine eight seven six five four three
+Rate: sixty seven percent
+Price: zero dollars and fifty cents/unit
+
+Meeting at 14:30 today. Temperature: seventy two degrees.
+Important: This costs five dollars and takes three hours.
+I have five apples and twenty three oranges.
+
+html & css files on aws S3 — zero point zero two three dollars/G B cost."""
+
+
+@pytest.mark.parametrize("chunk_size", [15, 50, 100])
+async def test_tts_preprocessing_combined(chunk_size: int):
+    """Comprehensive TTS preprocessing test combining multiple filters."""
+
+    print("=== COMPREHENSIVE TTS PREPROCESSING TEST ===")
+    print(f"Input length: {len(TTS_INPUT)} characters")
+    print(f"Expected length: {len(TTS_EXPECTED_OUTPUT)} characters")
+
+    print(f"\n--- Testing with chunk_size={chunk_size} ---")
+
+    # Define the filter chain for TTS preprocessing (subset of DEFAULT_TTS_TEXT_TRANSFORMS)
+    # Note: exclude replace_newlines_with_periods to preserve line structure for testing
+    filters = [
+        "filter_markdown",
+        "filter_emoji",
+        "format_dates",
+        "format_times",
+        "format_emails",
+        "format_phone_numbers",
+        "format_acronyms",
+        "format_dollar_amounts",
+        "format_distances",
+        "format_units",
+        "format_percentages",
+        "format_numbers",  # Must be LAST to not interfere with other formatters
+    ]
+
+    # Stream the input with specified chunk size
+    async def stream_text():
+        for i in range(0, len(TTS_INPUT), chunk_size):
+            yield TTS_INPUT[i : i + chunk_size]
+
+    # Process through the filter chain
+    result = ""
+    async for chunk in apply_text_transforms(stream_text(), filters):
+        result += chunk
+
+    # Compare results
+    if result.strip() == TTS_EXPECTED_OUTPUT.strip():
+        print("✓ PASS")
+    else:
+        print("✗ FAIL")
+        print(f"Expected first 150 chars: {repr(TTS_EXPECTED_OUTPUT[:150])}")
+        print(f"Got first 150 chars:      {repr(result[:150])}")
+
+        # Show differences
+        expected_lines = TTS_EXPECTED_OUTPUT.strip().split("\n")
+        result_lines = result.strip().split("\n")
+
+        print("\nLine-by-line differences:")
+        max_lines = max(len(expected_lines), len(result_lines))
+        for i in range(max_lines):
+            exp = expected_lines[i] if i < len(expected_lines) else "<missing>"
+            got = result_lines[i] if i < len(result_lines) else "<missing>"
+            if exp != got:
+                print(f"Line {i + 1}:")
+                print(f"  Expected: {repr(exp)}")
+                print(f"  Got:      {repr(got)}")
+
+    assert result.strip() == TTS_EXPECTED_OUTPUT.strip()
+
+    print("\n=== TTS PREPROCESSING TEST COMPLETE ===")
