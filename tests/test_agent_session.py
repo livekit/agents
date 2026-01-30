@@ -196,22 +196,23 @@ async def test_tool_call() -> None:
 
     # chat context
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 6
+    assert len(chat_ctx_items) == 7
     assert chat_ctx_items[0].type == "message"
     assert chat_ctx_items[0].role == "system"
-    assert chat_ctx_items[1].type == "message"
-    assert chat_ctx_items[1].role == "user"
-    assert chat_ctx_items[1].text_content == "What's the weather in Tokyo?"
+    assert chat_ctx_items[1].type == "agent_config_update"
     assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].text_content == "Let me check the weather for you."
-    assert chat_ctx_items[3].type == "function_call"
-    assert chat_ctx_items[3].name == "get_weather"
-    assert chat_ctx_items[4].type == "function_call_output"
-    assert chat_ctx_items[4].output == "The weather in Tokyo is sunny today."
-    assert chat_ctx_items[5].type == "message"
-    assert chat_ctx_items[5].role == "assistant"
-    assert chat_ctx_items[5].text_content == "The weather in Tokyo is sunny today."
+    assert chat_ctx_items[2].role == "user"
+    assert chat_ctx_items[2].text_content == "What's the weather in Tokyo?"
+    assert chat_ctx_items[3].type == "message"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].text_content == "Let me check the weather for you."
+    assert chat_ctx_items[4].type == "function_call"
+    assert chat_ctx_items[4].name == "get_weather"
+    assert chat_ctx_items[5].type == "function_call_output"
+    assert chat_ctx_items[5].output == "The weather in Tokyo is sunny today."
+    assert chat_ctx_items[6].type == "message"
+    assert chat_ctx_items[6].role == "assistant"
+    assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
 
 
 @pytest.mark.parametrize(
@@ -247,10 +248,11 @@ async def test_interruption(
     t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 4
-    assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].interrupted is True
+    assert len(chat_ctx_items) == 5
+    assert chat_ctx_items[1].type == "agent_config_update"
+    assert chat_ctx_items[3].type == "message"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].interrupted is True
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
@@ -353,21 +355,22 @@ async def test_interruption_by_text_input() -> None:
     assert agent_state_events[6].new_state == "listening"
 
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 5
+    assert len(chat_ctx_items) == 6
     assert chat_ctx_items[0].type == "message"
     assert chat_ctx_items[0].role == "system"
-    assert chat_ctx_items[1].type == "message"
-    assert chat_ctx_items[1].role == "user"
-    assert chat_ctx_items[1].text_content == "Tell me a story."
+    assert chat_ctx_items[1].type == "agent_config_update"
     assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].interrupted is True  # assistant message should be before text input
+    assert chat_ctx_items[2].role == "user"
+    assert chat_ctx_items[2].text_content == "Tell me a story."
     assert chat_ctx_items[3].type == "message"
-    assert chat_ctx_items[3].role == "user"
-    assert chat_ctx_items[3].text_content == "stop from text input"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].interrupted is True  # assistant message should be before text input
     assert chat_ctx_items[4].type == "message"
-    assert chat_ctx_items[4].role == "assistant"
-    assert chat_ctx_items[4].text_content == "Ok, I'll stop now."
+    assert chat_ctx_items[4].role == "user"
+    assert chat_ctx_items[4].text_content == "stop from text input"
+    assert chat_ctx_items[5].type == "message"
+    assert chat_ctx_items[5].role == "assistant"
+    assert chat_ctx_items[5].text_content == "Ok, I'll stop now."
 
 
 @pytest.mark.parametrize(
@@ -414,17 +417,18 @@ async def test_interruption_before_speaking(
 
     assert len(playback_finished_events) == 0
 
-    assert len(agent.chat_ctx.items) == 3
+    assert len(agent.chat_ctx.items) == 4
     assert agent.chat_ctx.items[0].type == "message"
     assert agent.chat_ctx.items[0].role == "system"
-    assert agent.chat_ctx.items[1].type == "message"
-    assert agent.chat_ctx.items[1].role == "user"
-    assert agent.chat_ctx.items[1].text_content == "Tell me a story."
-    # before we insert an empty assistant message with interrupted=True
-    # now we ignore it when the text is empty
+    assert agent.chat_ctx.items[1].type == "agent_config_update"
     assert agent.chat_ctx.items[2].type == "message"
     assert agent.chat_ctx.items[2].role == "user"
-    assert agent.chat_ctx.items[2].text_content == "Stop!"
+    assert agent.chat_ctx.items[2].text_content == "Tell me a story."
+    # before we insert an empty assistant message with interrupted=True
+    # now we ignore it when the text is empty
+    assert agent.chat_ctx.items[3].type == "message"
+    assert agent.chat_ctx.items[3].role == "user"
+    assert agent.chat_ctx.items[3].text_content == "Stop!"
 
 
 async def test_generate_reply() -> None:
@@ -500,23 +504,24 @@ async def test_generate_reply() -> None:
     )
 
     # chat context
-    assert len(agent.chat_ctx.items) == 7
+    assert len(agent.chat_ctx.items) == 8
     assert agent.chat_ctx.items[0].type == "message"
     assert agent.chat_ctx.items[0].role == "system"
-    assert agent.chat_ctx.items[1].type == "message"
-    assert agent.chat_ctx.items[1].role == "assistant"
-    assert agent.chat_ctx.items[1].text_content == "What can I do for you!"
+    assert agent.chat_ctx.items[1].type == "agent_config_update"
     assert agent.chat_ctx.items[2].type == "message"
-    assert agent.chat_ctx.items[2].role == "user"
-    assert agent.chat_ctx.items[2].text_content == "bye"
+    assert agent.chat_ctx.items[2].role == "assistant"
+    assert agent.chat_ctx.items[2].text_content == "What can I do for you!"
     assert agent.chat_ctx.items[3].type == "message"
-    assert agent.chat_ctx.items[3].role == "assistant"
-    assert agent.chat_ctx.items[3].text_content == "session.say from on_user_turn_completed"
-    assert agent.chat_ctx.items[4].type == "function_call"
-    assert agent.chat_ctx.items[5].type == "message"
-    assert agent.chat_ctx.items[5].role == "assistant"
-    assert agent.chat_ctx.items[5].text_content == "Goodbye! have a nice day!"
-    assert agent.chat_ctx.items[6].type == "function_call_output"
+    assert agent.chat_ctx.items[3].role == "user"
+    assert agent.chat_ctx.items[3].text_content == "bye"
+    assert agent.chat_ctx.items[4].type == "message"
+    assert agent.chat_ctx.items[4].role == "assistant"
+    assert agent.chat_ctx.items[4].text_content == "session.say from on_user_turn_completed"
+    assert agent.chat_ctx.items[5].type == "function_call"
+    assert agent.chat_ctx.items[6].type == "message"
+    assert agent.chat_ctx.items[6].role == "assistant"
+    assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
 @pytest.mark.parametrize(

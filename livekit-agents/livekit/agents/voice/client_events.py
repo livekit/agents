@@ -261,12 +261,9 @@ class ClientEventsHandler:
         self._room.local_participant.register_rpc_method(
             RPC_GET_AGENT_INFO, self._rpc_get_agent_info
         )
-        self._room.local_participant.register_rpc_method(
-            RPC_SEND_MESSAGE, self._rpc_send_message
-        )
+        self._room.local_participant.register_rpc_method(RPC_SEND_MESSAGE, self._rpc_send_message)
 
         self._rpc_handlers_registered = True
-
 
     def _register_event_handlers(self) -> None:
         if self._event_handlers_registered:
