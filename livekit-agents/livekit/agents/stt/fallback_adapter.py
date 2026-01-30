@@ -265,12 +265,18 @@ class FallbackAdapter(
     def update_options(self, **kwargs: Any) -> None:
         """Update options for all underlying STT instances.
 
-        This method propagates option changes (language, model, etc.) to all
-        STT instances managed by this fallback adapter.
+        Args:
+            **kwargs: Option key-value pairs to propagate to underlying STT instances.
         """
         for stt in self._stt_instances:
             if hasattr(stt, "update_options"):
-                stt.update_options(**kwargs)
+                try:
+                    stt.update_options(**kwargs)
+                except TypeError as e:
+                    logger.warning(
+                        f"Failed to update options for {stt.label}: {e}. "
+                        "This STT may have incompatible update_options signature."
+                    )
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
