@@ -267,6 +267,11 @@ class FallbackAdapter(
 
         Args:
             **kwargs: Option key-value pairs to propagate to underlying STT instances.
+
+        Note:
+            Ensure kwargs are compatible with all STT providers in the fallback chain.
+            Different providers may use different parameter names (e.g., `language` vs
+            `languages`) or have different required parameters.
         """
         for stt in self._stt_instances:
             if hasattr(stt, "update_options"):
@@ -275,7 +280,7 @@ class FallbackAdapter(
                 except TypeError as e:
                     logger.warning(
                         f"Failed to update options for {stt.label}: {e}. "
-                        "This STT may have incompatible update_options signature."
+                        "Ensure kwargs are compatible with this provider's update_options signature."
                     )
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
