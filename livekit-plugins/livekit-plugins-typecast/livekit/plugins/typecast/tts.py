@@ -336,13 +336,25 @@ class ChunkedStream(tts.ChunkedStream):
                         body=error_body,
                     )
 
-                # Initialize output emitter with audio/wav mime type
-                # AudioEmitter will handle WAV header parsing automatically
+                # Map audio_format to MIME type
+                audio_format = self._opts.output_options.audio_format
+                if audio_format == "mp3":
+                    mime_type = "audio/mpeg"
+                elif audio_format == "wav":
+                    mime_type = "audio/wav"
+                else:
+                    raise ValueError(
+                        f"Unsupported audio format: {audio_format}. "
+                        "Supported formats are 'wav' and 'mp3'."
+                    )
+
+                # Initialize output emitter with appropriate MIME type
+                # Typecast v1 API always outputs 44,100 Hz audio regardless of user options
                 output_emitter.initialize(
                     request_id=request_id,
-                    sample_rate=self._opts.sample_rate,
+                    sample_rate=44100,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/wav",
+                    mime_type=mime_type,
                 )
 
                 # Read and emit audio in chunks
