@@ -52,6 +52,7 @@ class _PersonaplexOptions:
     text_prompt: str
     seed: int | None
     silence_threshold_ms: int
+    use_ssl: bool = False
 
 
 @dataclass
@@ -118,7 +119,8 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
         resolved_url: str = base_url or os.environ.get("PERSONAPLEX_URL") or "localhost:8998"
-        # Strip protocol prefix if user provided one - we'll add ws:// in session
+        # Detect SSL from the scheme before stripping it
+        use_ssl = resolved_url.startswith(("wss://", "https://"))
         for prefix in ("ws://", "wss://", "http://", "https://"):
             if resolved_url.startswith(prefix):
                 resolved_url = resolved_url[len(prefix) :]
@@ -130,6 +132,7 @@ class RealtimeModel(llm.RealtimeModel):
             text_prompt=text_prompt,
             seed=seed,
             silence_threshold_ms=silence_threshold_ms,
+            use_ssl=use_ssl,
         )
 
         self._http_session_owned = False
@@ -237,7 +240,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._pending_generation_fut = fut
 
         if is_given(instructions):
-            logger.info(
+            logger.warning(
                 "PersonaPlex does not support dynamic instructions. "
                 "Instruction changes require reconnection via update_instructions()."
             )
@@ -333,7 +336,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             params["seed"] = str(self._opts.seed)
 
         query = urlencode(params, quote_via=quote)
-        return f"ws://{self._opts.base_url}/api/chat?{query}"
+        scheme = "wss" if self._opts.use_ssl else "ws"
+        return f"{scheme}://{self._opts.base_url}/api/chat?{query}"
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -484,7 +488,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._opus_writer.append_pcm(pcm_float)
         opus_bytes = self._opus_writer.read_bytes()
 
-        if opus_bytes and len(opus_bytes) > 0:
+        if opus_bytes:
             # Prepend audio message type
             message = bytes([MSG_AUDIO]) + opus_bytes
             with contextlib.suppress(utils.aio.channel.ChanClosed):
