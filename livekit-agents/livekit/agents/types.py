@@ -22,6 +22,12 @@ const { state, ... } = useVoiceAssistant();
 ```
 """
 
+ATTRIBUTE_AGENT_NAME = "lk.agent.name"
+"""
+The name of the agent, stored in the agent's attributes.
+This is set when the agent joins a room and can be used to identify the agent type.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 TOPIC_CLIENT_EVENTS = "lk.agent.events"
