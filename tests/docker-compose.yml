@@ -60,9 +60,9 @@ services:
       - LMNT_API_KEY
       - INWORLD_API_KEY
       - MISTRAL_API_KEY
-      - INYAAI_API_KEY
-      - INYAAI_ORG_ID
-      - INYAAI_USER_ID
+      - GNANI_API_KEY
+      - GNANI_ORG_ID
+      - GNANI_USER_ID
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"

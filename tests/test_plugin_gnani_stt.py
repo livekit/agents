@@ -1,4 +1,5 @@
-"""Tests for InyaAI (Gnani) STT plugin"""
+
+"""Tests for Gnani STT plugin"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,22 +7,22 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import stt
+from livekit.agents import APIConnectionError, APIStatusError, stt
 from livekit.agents.stt import SpeechData, SpeechEventType
-from livekit.plugins.inyaai import STT
+from livekit.plugins.gnani import STT
 
 from .conftest import TEST_CONNECT_OPTIONS
 
 
-class TestInyaAISTT:
-    """Test suite for InyaAI STT plugin"""
+class TestGnaniSTT:
+    """Test suite for Gnani STT plugin"""
 
     @pytest.fixture
     def mock_api_credentials(self, monkeypatch):
         """Set up mock API credentials"""
-        monkeypatch.setenv("INYAAI_API_KEY", "test-api-key")
-        monkeypatch.setenv("INYAAI_ORG_ID", "test-org-id")
-        monkeypatch.setenv("INYAAI_USER_ID", "test-user-id")
+        monkeypatch.setenv("GNANI_API_KEY", "test-api-key")
+        monkeypatch.setenv("GNANI_ORG_ID", "test-org-id")
+        monkeypatch.setenv("GNANI_USER_ID", "test-user-id")
 
     @pytest.fixture
     def audio_buffer(self):
@@ -44,7 +45,7 @@ class TestInyaAISTT:
         """Test STT initialization with credentials"""
         stt_instance = STT(language="en-IN")
         assert stt_instance.model == "gnani-stt-v3"
-        assert stt_instance.provider == "InyaAI"
+        assert stt_instance.provider == "Gnani"
         assert stt_instance._opts.language == "en-IN"
 
     async def test_stt_initialization_with_params(self):
@@ -63,36 +64,36 @@ class TestInyaAISTT:
     async def test_stt_missing_credentials(self, monkeypatch):
         """Test that STT raises error when credentials are missing"""
         # Clear all environment variables
-        monkeypatch.delenv("INYAAI_API_KEY", raising=False)
-        monkeypatch.delenv("INYAAI_ORG_ID", raising=False)
-        monkeypatch.delenv("INYAAI_USER_ID", raising=False)
+        monkeypatch.delenv("GNANI_API_KEY", raising=False)
+        monkeypatch.delenv("GNANI_ORG_ID", raising=False)
+        monkeypatch.delenv("GNANI_USER_ID", raising=False)
 
-        with pytest.raises(ValueError, match="InyaAI API key is required"):
+        with pytest.raises(ValueError, match="Gnani API key is required"):
             STT(language="en-IN")
 
     async def test_stt_missing_org_id(self, monkeypatch):
         """Test that STT raises error when organization ID is missing"""
         # Clear all environment variables first
-        monkeypatch.delenv("INYAAI_API_KEY", raising=False)
-        monkeypatch.delenv("INYAAI_ORG_ID", raising=False)
-        monkeypatch.delenv("INYAAI_USER_ID", raising=False)
+        monkeypatch.delenv("GNANI_API_KEY", raising=False)
+        monkeypatch.delenv("GNANI_ORG_ID", raising=False)
+        monkeypatch.delenv("GNANI_USER_ID", raising=False)
 
         # Set only API key
-        monkeypatch.setenv("INYAAI_API_KEY", "test-api-key")
-        with pytest.raises(ValueError, match="InyaAI Organization ID is required"):
+        monkeypatch.setenv("GNANI_API_KEY", "test-api-key")
+        with pytest.raises(ValueError, match="Gnani Organization ID is required"):
             STT(language="en-IN")
 
     async def test_stt_missing_user_id(self, monkeypatch):
         """Test that STT raises error when user ID is missing"""
         # Clear all environment variables first
-        monkeypatch.delenv("INYAAI_API_KEY", raising=False)
-        monkeypatch.delenv("INYAAI_ORG_ID", raising=False)
-        monkeypatch.delenv("INYAAI_USER_ID", raising=False)
+        monkeypatch.delenv("GNANI_API_KEY", raising=False)
+        monkeypatch.delenv("GNANI_ORG_ID", raising=False)
+        monkeypatch.delenv("GNANI_USER_ID", raising=False)
 
         # Set only API key and org ID
-        monkeypatch.setenv("INYAAI_API_KEY", "test-api-key")
-        monkeypatch.setenv("INYAAI_ORG_ID", "test-org-id")
-        with pytest.raises(ValueError, match="InyaAI User ID is required"):
+        monkeypatch.setenv("GNANI_API_KEY", "test-api-key")
+        monkeypatch.setenv("GNANI_ORG_ID", "test-org-id")
+        with pytest.raises(ValueError, match="Gnani User ID is required"):
             STT(language="en-IN")
 
     async def test_update_options(self, mock_api_credentials):
@@ -145,8 +146,6 @@ class TestInyaAISTT:
 
     async def test_recognize_api_error(self, mock_api_credentials, audio_buffer, job_process):
         """Test handling of API errors"""
-        from livekit.agents import APIConnectionError
-
         stt_instance = STT(language="en-IN")
 
         # Mock the API response with error
@@ -157,15 +156,13 @@ class TestInyaAISTT:
         with patch.object(aiohttp.ClientSession, "post") as mock_post:
             mock_post.return_value.__aenter__.return_value = mock_response
 
-            with pytest.raises(APIConnectionError):
+            with pytest.raises(APIStatusError):
                 await stt_instance.recognize(buffer=audio_buffer, conn_options=TEST_CONNECT_OPTIONS)
 
     async def test_recognize_connection_error(
         self, mock_api_credentials, audio_buffer, job_process
     ):
         """Test handling of connection errors"""
-        from livekit.agents import APIConnectionError
-
         stt_instance = STT(language="en-IN")
 
         with patch.object(aiohttp.ClientSession, "post") as mock_post:
@@ -178,8 +175,6 @@ class TestInyaAISTT:
         self, mock_api_credentials, audio_buffer, job_process
     ):
         """Test handling of unsuccessful API response"""
-        from livekit.agents import APIConnectionError
-
         stt_instance = STT(language="en-IN")
 
         # Mock the API response with success=False
