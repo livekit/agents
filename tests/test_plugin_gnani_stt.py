@@ -1,4 +1,3 @@
-
 """Tests for Gnani STT plugin"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
