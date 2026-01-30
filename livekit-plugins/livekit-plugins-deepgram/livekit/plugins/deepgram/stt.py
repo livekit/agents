@@ -102,6 +102,7 @@ class STT(stt.STT):
         mip_opt_out: bool = False,
         vad_events: bool = True,
         encoding: AudioEncoding = "linear16",
+        record_audio: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -133,7 +134,7 @@ class STT(stt.STT):
             encoding: Audio encoding format to use. Defaults to "linear16" (raw PCM).
                      Supported values: "linear16" (raw PCM), "opus" (Opus in OGG), "mp3".
                      Using "opus" or "mp3" reduces bandwidth but requires encoding overhead.
-
+            record_audio: Whether to record the audio. Defaults to False.
         Raises:
             ValueError: If no API key is provided or found in environment variables.
 
@@ -183,6 +184,7 @@ class STT(stt.STT):
             encoding=encoding,
         )
         self._session = http_session
+        self._recording = record_audio
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -406,6 +408,8 @@ class SpeechStream(stt.SpeechStream):
 
     async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send raw PCM audio frames to the websocket."""
+        import numpy as np
+
         samples_50ms = self._opts.sample_rate // 20
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
@@ -414,22 +418,41 @@ class SpeechStream(stt.SpeechStream):
         )
 
         has_ended = False
-        async for data in self._input_ch:
-            frames: list[rtc.AudioFrame] = []
-            if isinstance(data, rtc.AudioFrame):
-                frames.extend(audio_bstream.write(data.data.tobytes()))
-            elif isinstance(data, self._FlushSentinel):
-                frames.extend(audio_bstream.flush())
-                has_ended = True
+        audio_buffer = []
+        try:
+            async for data in self._input_ch:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                elif isinstance(data, self._FlushSentinel):
+                    frames.extend(audio_bstream.flush())
+                    has_ended = True
 
-            for frame in frames:
-                self._audio_duration_collector.push(frame.duration)
-                await ws.send_bytes(frame.data.tobytes())
+                for frame in frames:
+                    if self._stt._recording:
+                        audio_buffer.append(np.frombuffer(frame.data.tobytes(), dtype=np.int16))
+                    self._audio_duration_collector.push(frame.duration)
+                    await ws.send_bytes(frame.data.tobytes())
 
-                if has_ended:
-                    self._audio_duration_collector.flush()
-                    await ws.send_str(SpeechStream._FINALIZE_MSG)
-                    has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await ws.send_str(SpeechStream._FINALIZE_MSG)
+                        has_ended = False
+        finally:
+            try:
+                import soundfile as sf
+
+                if self._request_id:
+                    logger.info(f"Recording audio to {self._request_id}.wav")
+                    sf.write(
+                        f"{self._request_id}.wav",
+                        np.concatenate(audio_buffer),
+                        self._opts.sample_rate,
+                    )
+                else:
+                    logger.info("No request ID, not recording audio")
+            except Exception as e:
+                logger.exception(f"Failed to record audio: {e}")
 
     async def _send_encoded(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send encoded audio (opus/mp3) to the websocket."""
@@ -443,8 +466,23 @@ class SpeechStream(stt.SpeechStream):
         )
 
         async def encoder_consumer() -> None:
-            async for chunk in encoder:
-                await ws.send_bytes(chunk.data)
+            audio_buffer = []
+            try:
+                async for chunk in encoder:
+                    if self._stt._recording:
+                        audio_buffer.append(chunk.data)
+                    await ws.send_bytes(chunk.data)
+            except BaseException:
+                if self._request_id:
+                    if encoder_format == "opus":
+                        logger.info(f"Recording audio to {self._request_id}.ogg")
+                        with open(f"{self._request_id}.ogg", "wb") as f:
+                            f.write(b"".join(audio_buffer))
+                    else:
+                        logger.info(f"Recording audio to {self._request_id}.mp3")
+                        with open(f"{self._request_id}.mp3", "wb") as f:
+                            f.write(b"".join(audio_buffer))
+                raise
 
         consumer_task = asyncio.create_task(encoder_consumer())
 
