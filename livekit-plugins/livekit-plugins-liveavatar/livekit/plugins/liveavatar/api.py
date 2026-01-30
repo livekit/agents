@@ -53,6 +53,7 @@ class LiveAvatarAPI:
         livekit_token: str,
         room: rtc.Room,
         avatar_id: str,
+        is_sandbox: bool = False,
     ) -> dict[str, Any]:
         """Create a new streaming session, return a session id"""
 
@@ -65,6 +66,7 @@ class LiveAvatarAPI:
         payload = {
             "mode": "CUSTOM",
             "avatar_id": avatar_id,
+            "is_sandbox": is_sandbox,
             "livekit_config": livekit_config,
         }
 

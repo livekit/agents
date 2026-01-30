@@ -27,24 +27,21 @@ from ..utils import is_given
 from ._utils import create_access_token
 
 DeepgramModels = Literal[
-    "deepgram",
+    "deepgram/flux-general",
+    "deepgram/flux-general-en",
     "deepgram/nova-3",
-    "deepgram/nova-3-general",
     "deepgram/nova-3-medical",
     "deepgram/nova-2",
-    "deepgram/nova-2-general",
     "deepgram/nova-2-medical",
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
-CartesiaModels = Literal[
-    "cartesia",
-    "cartesia/ink-whisper",
-]
+CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
-    "assemblyai",
     "assemblyai/universal-streaming",
+    "assemblyai/universal-streaming-multilingual",
 ]
+ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -72,6 +69,15 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+
+
+class ElevenlabsOptions(TypedDict, total=False):
+    commit_strategy: Literal["manual", "vad"]
+    include_timestamps: bool
+    vad_silence_threshold_secs: float
+    vad_threshold: float
+    min_speech_duration_ms: int
+    min_silence_duration_ms: int
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -123,6 +129,7 @@ STTModels = Union[
     DeepgramModels,
     CartesiaModels,
     AssemblyAIModels,
+    ElevenlabsModels,
     Literal["auto"],  # automatically select a provider based on the language
 ]
 STTEncoding = Literal["pcm_s16le"]
@@ -202,6 +209,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: ElevenlabsModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -228,7 +252,11 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | AssemblyaiOptions
+            | ElevenlabsOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,

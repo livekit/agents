@@ -357,7 +357,9 @@ class AudioRecognition:
 
             self._hooks.on_final_transcript(
                 ev,
-                speaking=self._speaking if self._vad else None,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
             )
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
@@ -401,7 +403,12 @@ class AudioRecognition:
                     self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
+            self._hooks.on_interim_transcript(
+                ev,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
+            )
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -440,7 +447,12 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
+            self._hooks.on_interim_transcript(
+                ev,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
+            )
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
