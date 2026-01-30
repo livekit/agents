@@ -41,6 +41,8 @@ MSG_TEXT = 0x02
 _SPECIAL_TOKENS = {0, 3}
 
 DEFAULT_SILENCE_THRESHOLD_MS = 500
+MAX_RETRY_DELAY = 30.0
+INITIAL_RETRY_DELAY = 1.0
 
 
 @dataclass
@@ -250,7 +252,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
 
-        timeout_handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        timeout_handle = asyncio.get_running_loop().call_later(10.0, _on_timeout)
         fut.add_done_callback(lambda _: timeout_handle.cancel())
         return fut
 
@@ -335,6 +337,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        retry_delay = INITIAL_RETRY_DELAY
+
         while not self._msg_ch.closed:
             self._session_should_close.clear()
             self._handshake_event.clear()
@@ -349,11 +353,16 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
                 ws_conn = await http_session.ws_connect(ws_url)
                 self._closing = False
+                retry_delay = INITIAL_RETRY_DELAY  # reset on successful connect
 
                 logger.info(f"Connected to PersonaPlex server at {self._opts.base_url}")
 
-                send_task = asyncio.create_task(self._send_task(ws_conn), name="_send_task")
-                recv_task = asyncio.create_task(self._recv_task(ws_conn), name="_recv_task")
+                send_task = asyncio.create_task(
+                    self._send_task(ws_conn), name="_send_task"
+                )
+                recv_task = asyncio.create_task(
+                    self._recv_task(ws_conn), name="_recv_task"
+                )
                 restart_wait_task = asyncio.create_task(
                     self._session_should_close.wait(), name="_restart_wait"
                 )
@@ -369,7 +378,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                             task.result()
                 finally:
                     await ws_conn.close()
-                    await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
+                    await utils.aio.cancel_and_wait(
+                        send_task, recv_task, restart_wait_task
+                    )
 
                 if restart_wait_task not in done and self._msg_ch.closed:
                     break
@@ -405,7 +416,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 if not is_recoverable or self._msg_ch.closed:
                     break
 
-                await asyncio.sleep(1.0)
+                logger.debug(f"Retrying in {retry_delay:.1f}s")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
 
     @utils.log_exceptions(logger=logger)
     async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -437,18 +450,23 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 msg_type = data[0]
                 payload = data[1:]
 
-                if msg_type == MSG_HANDSHAKE:
-                    logger.debug("PersonaPlex handshake received")
-                    self._handshake_event.set()
+                try:
+                    if msg_type == MSG_HANDSHAKE:
+                        logger.debug("PersonaPlex handshake received")
+                        self._handshake_event.set()
 
-                elif msg_type == MSG_AUDIO:
-                    self._handle_audio_data(payload)
+                    elif msg_type == MSG_AUDIO:
+                        self._handle_audio_data(payload)
 
-                elif msg_type == MSG_TEXT:
-                    self._handle_text_token(payload)
+                    elif msg_type == MSG_TEXT:
+                        self._handle_text_token(payload)
 
-                else:
-                    logger.warning(f"Unknown PersonaPlex message type: 0x{msg_type:02x}")
+                    else:
+                        logger.warning(
+                            f"Unknown PersonaPlex message type: 0x{msg_type:02x}"
+                        )
+                except Exception:
+                    logger.exception("Error handling PersonaPlex message")
 
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSED,
@@ -510,7 +528,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=len(pcm_int16),
             )
-            gen.audio_ch.send_nowait(frame)
+            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                gen.audio_ch.send_nowait(frame)
 
             # Reset silence timer on every audio frame
             self._reset_silence_timer()
@@ -541,7 +560,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             gen = self._current_generation
             assert gen is not None
 
-            gen.text_ch.send_nowait(text)
+            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                gen.text_ch.send_nowait(text)
             gen.output_text += text
 
         except Exception as e:
@@ -579,6 +599,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=response_id,
         )
         self.emit("generation_created", generation_ev)
 
@@ -591,6 +612,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 message_stream=gen.message_ch,
                 function_stream=gen.function_ch,
                 user_initiated=True,
+                response_id=gen.response_id,
             )
             self._pending_generation_fut.set_result(ev)
             self._pending_generation_fut = None
@@ -676,7 +698,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     def _reset_silence_timer(self) -> None:
         self._cancel_silence_timer()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         threshold_s = self._opts.silence_threshold_ms / 1000.0
         self._silence_timer_handle = loop.call_later(threshold_s, self._on_silence_timeout)
 
