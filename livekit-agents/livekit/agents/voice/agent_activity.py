@@ -1015,6 +1015,13 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
+        if self._rt_session is not None:
+            # only commit if there is no STT
+            if self._audio_recognition is None or self._audio_recognition._stt is None:
+                self._rt_session.commit_audio()
+                self._rt_session.generate_reply()
+                return
+
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
