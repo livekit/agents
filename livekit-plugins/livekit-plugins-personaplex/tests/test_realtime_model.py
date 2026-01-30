@@ -114,43 +114,54 @@ class TestRealtimeModelInit:
 # -- URL building tests --
 
 
-class TestBuildWsUrl:
-    def _make_session_opts(self, **kwargs: object) -> _PersonaplexOptions:
-        defaults = {
-            "base_url": "localhost:8998",
-            "voice": "NATF2",
-            "text_prompt": "You are helpful.",
-            "seed": None,
-            "silence_threshold_ms": 500,
-        }
-        defaults.update(kwargs)
-        return _PersonaplexOptions(**defaults)  # type: ignore[arg-type]
+class TestSessionOptions:
+    """Test that session-level options are configured correctly."""
 
-    def test_basic_url(self) -> None:
-        opts = self._make_session_opts()
-        model = RealtimeModel()
-        model._opts = opts
-        # We can't easily call _build_ws_url without a session,
-        # but we can test the opts are set correctly
+    def _make_opts(
+        self,
+        *,
+        base_url: str = "localhost:8998",
+        voice: str = "NATF2",
+        text_prompt: str = "You are helpful.",
+        seed: int | None = None,
+        silence_threshold_ms: int = 500,
+        use_ssl: bool = False,
+    ) -> _PersonaplexOptions:
+        return _PersonaplexOptions(
+            base_url=base_url,
+            voice=voice,
+            text_prompt=text_prompt,
+            seed=seed,
+            silence_threshold_ms=silence_threshold_ms,
+            use_ssl=use_ssl,
+        )
+
+    def test_default_opts(self) -> None:
+        opts = self._make_opts()
         assert opts.base_url == "localhost:8998"
         assert opts.voice == "NATF2"
+        assert opts.use_ssl is False
 
-    def test_seed_in_url(self) -> None:
-        opts = self._make_session_opts(seed=42)
+    def test_seed_opt(self) -> None:
+        opts = self._make_opts(seed=42)
         assert opts.seed == 42
+
+    def test_ssl_opt(self) -> None:
+        opts = self._make_opts(use_ssl=True)
+        assert opts.use_ssl is True
 
 
 # -- Text token handling tests --
 
 
-class TestHandleTextToken:
-    def test_special_token_filtered(self) -> None:
-        """Special tokens (0, 3) should be filtered out."""
+class TestSpecialTokens:
+    """Verify the special token set used for filtering."""
+
+    def test_special_tokens_present(self) -> None:
         assert 0 in _SPECIAL_TOKENS
         assert 3 in _SPECIAL_TOKENS
 
-    def test_normal_token_not_filtered(self) -> None:
-        """Non-special numeric tokens should pass through."""
+    def test_normal_tokens_absent(self) -> None:
         assert 1 not in _SPECIAL_TOKENS
         assert 42 not in _SPECIAL_TOKENS
 
@@ -209,18 +220,18 @@ class TestResponseGeneration:
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
         )
 
-        assert gen.response_id == "test-123"
-        assert gen._first_token_timestamp is None
-        assert gen._completed_timestamp is None
-        assert gen._done is False
-        assert gen.output_text == ""
-        assert gen._created_timestamp > 0
-
-        # Cleanup
-        gen.message_ch.close()
-        gen.function_ch.close()
-        gen.text_ch.close()
-        gen.audio_ch.close()
+        try:
+            assert gen.response_id == "test-123"
+            assert gen._first_token_timestamp is None
+            assert gen._completed_timestamp is None
+            assert gen._done is False
+            assert gen.output_text == ""
+            assert gen._created_timestamp > 0
+        finally:
+            gen.message_ch.close()
+            gen.function_ch.close()
+            gen.text_ch.close()
+            gen.audio_ch.close()
 
 
 # -- Retry / backoff constants tests --
