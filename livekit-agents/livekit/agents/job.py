@@ -136,14 +136,11 @@ class TextMessageContext:
         self._text = text
         self._session_data = session_data
 
-        self._response_ch: aio.Chan[str] = aio.Chan()
+        self._response_ch: aio.Chan[RunEvent] = aio.Chan()
 
-    async def send_response(self, ev: RunEvent | str) -> None:
+    async def send_response(self, ev: RunEvent) -> None:
         # simulate sending result
-        if isinstance(ev, str):
-            await self._response_ch.send(ev)
-        elif ev.type == "message" and (text := ev.item.text_content):
-            await self._response_ch.send(text)
+        await self._response_ch.send(ev)
 
     def mark_done(self) -> None:
         self._response_ch.close()
@@ -157,7 +154,7 @@ class TextMessageContext:
         return self._text
 
     @property
-    def response_ch(self) -> aio.Chan[str]:
+    def response_ch(self) -> aio.Chan[RunEvent]:
         return self._response_ch
 
 

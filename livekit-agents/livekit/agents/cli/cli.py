@@ -1172,7 +1172,11 @@ def _sms_text_mode(
 
     while True:
         try:
-            text = prompt(Text.from_markup("  [bold]User input[/bold]: "), console=c.console)
+            text = prompt(
+                Text.from_markup("  [bold]User input[/bold]: "),
+                console=c.console,
+                placeholder="Type to talk to your agent",
+            )
         except KeyboardInterrupt:
             break
 
@@ -1206,10 +1210,19 @@ def _sms_text_mode(
             loop,
         )
 
-        c.print(text, tag="You")
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u25cf ", "#1FD5F9"),
+                ("You", "bold #1FD5F9"),
+            )
+        )
+        for line in text.split("\n"):
+            c.console.print(Text(f"    {line}"))
+
         c.wait_for_io_acquisition()
 
-        def _collect_responses(output_queue: queue.Queue[str | dict[str, Any]]) -> None:
+        def _collect_responses(output_queue: queue.Queue[RunEvent | dict[str, Any]]) -> None:
             async def _collect() -> None:
                 text_ctx = get_job_context().text_message_context
                 if text_ctx is None:
@@ -1230,21 +1243,23 @@ def _sms_text_mode(
             task = asyncio.create_task(_collect())
             task.add_done_callback(_done_callback)
 
-        response_queue = queue.Queue[str | dict[str, Any]]()
+        response_queue = queue.Queue[RunEvent | dict[str, Any]]()
         c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
 
         new_state: dict[str, Any] | None = None
         while True:
-            resp: str | dict[str, Any] = ""
-            with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+            resp: RunEvent | dict[str, Any] = ""
+            with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
                         resp = response_queue.get(timeout=0.1)
                         break
                     except queue.Empty:
                         pass
-            if isinstance(resp, str) and resp:
-                c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+            if isinstance(resp, RunEvent):
+                # c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+                _print_run_event(c, resp)
+
             elif isinstance(resp, dict):
                 new_state = resp
                 break
