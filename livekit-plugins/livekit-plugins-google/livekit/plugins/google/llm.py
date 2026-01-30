@@ -49,6 +49,18 @@ def _is_gemini_3_flash_model(model: str) -> bool:
     return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
 
 
+def _requires_thought_signatures(model: str) -> bool:
+    """Check if model requires thought_signature handling for multi-turn function calling.
+
+    Gemini 2.5+ models require thought signatures to be stored from responses and
+    passed back in subsequent requests for proper multi-turn function calling.
+    """
+    if _is_gemini_3_model(model):
+        return True
+    model_lower = model.lower()
+    return "gemini-2.5" in model_lower or model_lower.startswith("gemini-2.5")
+
+
 @dataclass
 class _LLMOptions:
     model: ChatModels | str
@@ -208,7 +220,7 @@ class LLM(llm.LLM):
             project=gcp_project,
             location=gcp_location,
         )
-        # Store thought_signatures for Gemini 3 multi-turn function calling
+        # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
 
     @property
@@ -401,9 +413,9 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            # Pass thought_signatures for Gemini 3 multi-turn function calling
+            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
             thought_sigs = (
-                self._llm._thought_signatures if _is_gemini_3_model(self._model) else None
+                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
             )
             turns_dict, extra_data = self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
@@ -503,7 +515,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=False if e.code != 429 else True,
+                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
@@ -535,9 +547,9 @@ class LLMStream(llm.LLMStream):
                 call_id=part.function_call.id or utils.shortuuid("function_call_"),
             )
 
-            # Store thought_signature for Gemini 3 multi-turn function calling
+            # Store thought_signature for Gemini 2.5+ multi-turn function calling
             if (
-                _is_gemini_3_model(self._model)
+                _requires_thought_signatures(self._model)
                 and hasattr(part, "thought_signature")
                 and part.thought_signature
             ):

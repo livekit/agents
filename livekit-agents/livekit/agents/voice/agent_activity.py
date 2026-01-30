@@ -118,6 +118,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        self._stt_eos_received: bool = False
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1217,6 +1218,7 @@ class AgentActivity(RecognitionHooks):
             speech_start_time = speech_start_time - ev.speech_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         self._user_silence_event.clear()
+        self._stt_eos_received = False
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1227,6 +1229,9 @@ class AgentActivity(RecognitionHooks):
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration
+        else:
+            self._stt_eos_received = True
+
         self._session._update_user_state(
             "listening",
             last_speaking_time=speech_end_time,
@@ -1245,7 +1250,16 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        if ev.speech_duration >= self._session.options.min_interruption_duration:
+        active_speech = ev.speech_duration >= self._session.options.min_interruption_duration
+        if active_speech and (
+            self._turn_detection != "stt"
+            or not self._stt_eos_received
+            or ev.raw_accumulated_silence == 0
+        ):
+            # STT may send EOS before VAD EOS, we only interrupt if:
+            # 1. turn detection is not STT; or
+            # 2. STT EOS hasn't been received yet; or
+            # 3. VAD speech is still ongoing
             self._interrupt_by_audio_activity()
 
         if (
