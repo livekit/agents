@@ -574,12 +574,6 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("Model cannot be empty")
         self._opts.language = language
         self._opts.model = model
-        # if model.startswith("saaras:v2.5"):
-        #     self._opts.base_url = SARVAM_STT_TRANSLATE_BASE_URL
-        #     self._opts.streaming_url = SARVAM_STT_TRANSLATE_STREAMING_URL
-        # else:
-        #     self._opts.base_url = SARVAM_STT_BASE_URL
-        #     self._opts.streaming_url = SARVAM_STT_STREAMING_URL
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
         if prompt is not None:
             self._opts.prompt = prompt
