@@ -483,6 +483,14 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=RuntimeError(f"unknown AI function `{fnc_call.name}`"),
+                        include_error_details_in_llm_output=True,
+                    )
+                )
                 continue
 
             if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
@@ -697,7 +705,12 @@ class ToolExecutionOutput:
 
 
 def make_tool_output(
-    *, fnc_call: llm.FunctionCall, output: Any, exception: BaseException | None
+    *,
+    fnc_call: llm.FunctionCall,
+    output: Any,
+    exception: BaseException | None,
+    show_error: bool = False,
+    include_error_details_in_llm_output: bool = False,
 ) -> ToolExecutionOutput:
     from .agent import Agent
 
@@ -730,12 +743,20 @@ def make_tool_output(
         )
 
     if exception is not None:
+        error_str = "An internal error occurred"
+
+        # Only send the actual error message, when it's explictly
+        # allowed as it may contain sensitive information
+        if include_error_details_in_llm_output:
+            message = str(exception).strip()
+            error_str = f"An internal error occurred: {message}"
+
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
             fnc_call_out=llm.FunctionCallOutput(
                 name=fnc_call.name,
                 call_id=fnc_call.call_id,
-                output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
+                output=error_str,
                 is_error=True,
             ),
             agent_task=None,
