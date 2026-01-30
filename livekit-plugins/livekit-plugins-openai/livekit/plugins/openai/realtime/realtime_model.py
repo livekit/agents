@@ -60,7 +60,6 @@ from openai.types.realtime import (
     RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
-    ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
     ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
