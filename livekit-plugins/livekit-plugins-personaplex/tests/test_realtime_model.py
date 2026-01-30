@@ -38,14 +38,25 @@ class TestRealtimeModelInit:
     def test_strips_wss_prefix(self) -> None:
         model = RealtimeModel(base_url="wss://myhost:9000")
         assert model._opts.base_url == "myhost:9000"
+        assert model._opts.use_ssl is True
 
     def test_strips_http_prefix(self) -> None:
         model = RealtimeModel(base_url="http://myhost:9000")
         assert model._opts.base_url == "myhost:9000"
+        assert model._opts.use_ssl is False
 
     def test_strips_https_prefix(self) -> None:
         model = RealtimeModel(base_url="https://myhost:9000")
         assert model._opts.base_url == "myhost:9000"
+        assert model._opts.use_ssl is True
+
+    def test_no_ssl_by_default(self) -> None:
+        model = RealtimeModel()
+        assert model._opts.use_ssl is False
+
+    def test_ws_prefix_no_ssl(self) -> None:
+        model = RealtimeModel(base_url="ws://myhost:9000")
+        assert model._opts.use_ssl is False
 
     def test_env_var_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PERSONAPLEX_URL", "envhost:1234")
