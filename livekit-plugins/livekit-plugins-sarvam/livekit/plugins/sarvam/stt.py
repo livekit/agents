@@ -53,7 +53,7 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saaras:v3"]
+SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 
@@ -127,7 +127,7 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     Returns:
         Tuple of (base_url, streaming_url)
     """
-    if model.startswith("saaras:"):
+    if model.startswith("saaras:v2.5"):
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     else:  # saarika models
         return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
@@ -574,7 +574,7 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("Model cannot be empty")
         self._opts.language = language
         self._opts.model = model
-        if model == "saaras:v3":
+        if model.startswith("saaras:v2.5"):
             self._opts.base_url = SARVAM_STT_TRANSLATE_BASE_URL
             self._opts.streaming_url = SARVAM_STT_TRANSLATE_STREAMING_URL
         else:
