@@ -336,7 +336,7 @@ class TTS(tts.TTS):
             self._opts.timbre = timbre
 
         if utils.is_given(language_boost):
-            self._opts.language_boost = language_boost
+            self._opts.language_boost = cast(Optional[TTSLanguageBoost], language_boost)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
