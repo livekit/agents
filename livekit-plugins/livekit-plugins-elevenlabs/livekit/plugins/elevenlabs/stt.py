@@ -384,7 +384,10 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="ElevenLabs STT connection closed unexpectedly",
+                        retryable=True,
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
@@ -396,10 +399,29 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
+        reconnect_attempt = 0
+        max_reconnect_attempts = 5
+
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         while True:
             try:
+                if reconnect_attempt > 0:
+                    logger.info(
+                        "Reconnecting to ElevenLabs STT (attempt %d/%d)",
+                        reconnect_attempt + 1,
+                        max_reconnect_attempts,
+                    )
+                    # Reset speaking state on reconnection
+                    self._speaking = False
+                    # Add exponential backoff
+                    await asyncio.sleep(min(2**reconnect_attempt, 10))
+
+                reconnect_attempt += 1
+                if reconnect_attempt > max_reconnect_attempts:
+                    logger.error("Max reconnection attempts reached for ElevenLabs STT")
+                    break
+
                 ws = await self._connect_ws()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -423,6 +445,8 @@ class SpeechStream(stt.SpeechStream):
                         break
 
                     self._reconnect_event.clear()
+                    # Reset reconnection counter on successful reconnection
+                    reconnect_attempt = 0
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
