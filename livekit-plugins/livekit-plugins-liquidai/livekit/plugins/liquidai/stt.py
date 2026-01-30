@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from typing import cast
 
 import httpx
 import openai
+from openai import AsyncStream
+from openai.types.chat import ChatCompletionChunk
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, stt
@@ -118,14 +121,16 @@ class STT(stt.STT):
             ]
 
             # Call the streaming chat completion API
-            stream = await self._client.chat.completions.create(
-                model="",
+            response = await self._client.chat.completions.create(
+                model="LFM2.5-Audio",
                 messages=messages,  # type: ignore
                 stream=True,
                 max_tokens=512,
                 extra_body={"reset_context": True},
                 timeout=conn_options.timeout,
             )
+            # When stream=True, the response is always an AsyncStream
+            stream = cast(AsyncStream[ChatCompletionChunk], response)
 
             # Collect text from the stream
             text_chunks: list[str] = []

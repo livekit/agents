@@ -1,6 +1,6 @@
 # LiquidAI Audio plugin for LiveKit Agents
 
-Support for the Audio family of SST/TTS from LiquidAI.
+Support for the Audio family of STT/TTS from LiquidAI.
 
 See [https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) for more information.
 
@@ -13,7 +13,7 @@ pip install livekit-plugins-liquidai
 
 ## Pre-requisites
 
-Start audio server
+Start audio server. `llama-liquid-audio-server` is inside LFM2.5-Audio-1.5B-GGUF's `runners` folder.
 
 ```bash
 export CKPT=/path/to/LFM2.5-Audio-1.5B-GGUF

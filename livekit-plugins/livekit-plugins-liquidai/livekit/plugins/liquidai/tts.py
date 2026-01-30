@@ -3,10 +3,13 @@ from __future__ import annotations
 import base64
 import uuid
 from dataclasses import dataclass
+from typing import cast
 
 import httpx
 import numpy as np
 import openai
+from openai import AsyncStream
+from openai.types.chat import ChatCompletionChunk
 
 from livekit.agents import (
     APIConnectionError,
@@ -141,14 +144,16 @@ class ChunkedStream(tts.ChunkedStream):
             ]
 
             # Call the streaming chat completion API
-            stream = await self._client.chat.completions.create(
-                model="",
+            response = await self._client.chat.completions.create(
+                model="LFM2.5-Audio",
                 messages=messages,  # type: ignore
                 stream=True,
                 max_tokens=2048,
                 extra_body={"reset_context": True},
                 timeout=self._conn_options.timeout,
             )
+            # When stream=True, the response is always an AsyncStream
+            stream = cast(AsyncStream[ChatCompletionChunk], response)
 
             # Initialize the emitter with PCM format
             output_emitter.initialize(
