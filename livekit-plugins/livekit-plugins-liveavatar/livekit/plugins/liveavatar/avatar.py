@@ -22,7 +22,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import QueueAudioOutput
+from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -219,6 +219,14 @@ class AvatarSession:
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
+                elif isinstance(audio_frame, AudioSegmentEnd):
+                    if self._audio_playing:
+                        self._audio_playing = False
+                        self._audio_buffer.notify_playback_finished(
+                            playback_position=self._playback_position,
+                            interrupted=False,
+                        )
+                        self._playback_position = 0.0
 
         async def _keep_alive_task() -> None:
             try:
