@@ -119,7 +119,6 @@ class ToolFlag(Flag):
 
 @dataclass
 class FunctionToolInfo:
-    id: str
     name: str
     description: str | None
     flags: ToolFlag
@@ -143,7 +142,6 @@ class RawFunctionDescription(TypedDict):
 
 @dataclass
 class RawFunctionToolInfo:
-    id: str
     name: str
     raw_schema: dict[str, Any]
     flags: ToolFlag
@@ -165,7 +163,7 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
 
     @property
     def id(self) -> str:
-        return self._info.id
+        return self._info.name
 
     @property
     def info(self) -> _InfoT:
@@ -265,9 +263,8 @@ def function_tool(
             raise ValueError("raw function description must contain a parameters key")
 
         info = RawFunctionToolInfo(
-            id=func.__name__,
-            raw_schema={**raw_schema},
             name=raw_schema["name"],
+            raw_schema={**raw_schema},
             flags=flags,
         )
         return RawFunctionTool(func, info)
@@ -277,7 +274,6 @@ def function_tool(
 
         docstring = parse_from_object(func)
         info = FunctionToolInfo(
-            id=func.__name__,
             name=name or func.__name__,
             description=description or docstring.description,
             flags=flags,

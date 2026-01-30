@@ -101,9 +101,8 @@ class DummyAgent(Agent):
 
 
 class DummyProviderTool(ProviderTool):
-    def __init__(self, name: str):
-        super().__init__(id=name)
-        self.name = name
+    def __init__(self, id: str):
+        super().__init__(id=id)
 
 
 class MockToolset1(Toolset):
