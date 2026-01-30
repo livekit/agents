@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from typing import cast
@@ -145,6 +146,8 @@ class STT(stt.STT):
 
         except openai.APITimeoutError as e:
             raise APIConnectionError() from e
+        except asyncio.CancelledError:
+            raise
         except openai.APIStatusError as e:
             raise APIConnectionError() from e
         except Exception as e:

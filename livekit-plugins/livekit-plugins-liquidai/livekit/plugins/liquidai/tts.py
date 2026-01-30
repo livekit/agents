@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import uuid
 from dataclasses import dataclass
@@ -138,8 +139,11 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             # Create messages for the API
+            system_prompt = self._opts.system_prompt
+            if self._opts.voice and self._opts.voice not in system_prompt:
+                system_prompt = f"{system_prompt}\nVoice: {self._opts.voice}"
             messages = [
-                {"role": "system", "content": self._opts.system_prompt},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self.input_text},
             ]
 
@@ -192,6 +196,8 @@ class ChunkedStream(tts.ChunkedStream):
 
         except openai.APITimeoutError:
             raise APIConnectionError() from None
+        except asyncio.CancelledError:
+            raise
         except openai.APIStatusError as e:
             logger.error(f"TTS API error: {e}")
             raise APIConnectionError() from e
