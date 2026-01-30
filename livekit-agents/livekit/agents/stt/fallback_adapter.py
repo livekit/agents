@@ -280,7 +280,7 @@ class FallbackAdapter(
                 except TypeError as e:
                     logger.warning(
                         f"Failed to update options for {stt.label}: {e}. "
-                        "Ensure kwargs are compatible with this provider's update_options signature."
+                        "Ensure options passed are compatible with this provider's update_options signature."
                     )
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
