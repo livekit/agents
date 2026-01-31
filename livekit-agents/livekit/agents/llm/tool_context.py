@@ -192,13 +192,21 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
 class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool"""
 
-    pass
+    def __init__(
+        self, func: Callable[_P, _R], info: FunctionToolInfo, instance: Any = None
+    ) -> None:
+        super().__init__(func, info, instance)
+        self.__livekit_tool_info = self._info
 
 
 class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
-    pass
+    def __init__(
+        self, func: Callable[_P, _R], info: RawFunctionToolInfo, instance: Any = None
+    ) -> None:
+        super().__init__(func, info, instance)
+        self.__livekit_raw_tool_info = self._info
 
 
 @overload
@@ -305,23 +313,43 @@ def get_raw_function_info(f: RawFunctionTool) -> RawFunctionToolInfo:
     return f.info
 
 
-def _normalize_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
+def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
     """Convert a wrapped tool to a FunctionTool or RawFunctionTool with a warning."""
+    if not callable(tool):
+        return None
+
+    if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        return tool
+
+    resolved_tool: FunctionTool | RawFunctionTool | None = None
     if (
-        callable(tool)
-        and hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
+        hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
         and isinstance(tool.__wrapped__, (FunctionTool, RawFunctionTool))
     ):
         wrapped = tool.__wrapped__
+        resolved_tool = wrapped.__class__(tool, wrapped.info)  # type: ignore
+
+    elif (info := getattr(tool, "__livekit_tool_info", None)) and isinstance(
+        info, FunctionToolInfo
+    ):
+        resolved_tool = FunctionTool(tool, info)
+
+    elif info := getattr(tool, "__livekit_raw_tool_info", None) and isinstance(
+        info, RawFunctionToolInfo
+    ):
+        resolved_tool = RawFunctionTool(tool, info)
+
+    if resolved_tool:
+        tool_name = resolved_tool.info.name
         logger.warning(
-            f"function tool {wrapped.info.name} is wrapped, this may cause unexpected behavior "
-            "and may not be supported in future versions, please wrap the original function before converting to a function tool.",
+            f"function tool {tool_name} is wrapped, this may cause unexpected behavior and not be supported in future versions, "
+            "please wrap the original function before converting to a function tool.",
             extra={
-                "function_tool": wrapped.info.name,
+                "function_tool": tool_name,
             },
         )
-        return wrapped.__class__(tool, wrapped.info)  # type: ignore
-    return None
+
+    return resolved_tool
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
@@ -329,7 +357,7 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
     for _, member in inspect.getmembers(cls_or_obj):
         if isinstance(member, (FunctionTool, RawFunctionTool)):
             methods.append(member)
-        elif normalized_tool := _normalize_wrapped_tool(member):
+        elif normalized_tool := _resolve_wrapped_tool(member):
             methods.append(normalized_tool)
 
     return methods
@@ -425,7 +453,7 @@ class ToolContext:
                     add_tool(t)
                 self._tool_sets.append(tool)
 
-            elif normalized_tool := _normalize_wrapped_tool(tool):
+            elif normalized_tool := _resolve_wrapped_tool(tool):
                 add_tool(normalized_tool)
 
             elif callable(tool):

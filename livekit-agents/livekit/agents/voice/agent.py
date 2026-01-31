@@ -163,8 +163,8 @@ class Agent:
         for tool in tools:
             if isinstance(tool, (llm.Tool, llm.Toolset)):
                 valid_tools.append(tool)
-            elif normalized_tool := llm.tool_context._normalize_wrapped_tool(tool):
-                valid_tools.append(normalized_tool)
+            elif resolved_tool := llm.tool_context._resolve_wrapped_tool(tool):
+                valid_tools.append(resolved_tool)
             else:
                 raise TypeError(f"Invalid tool type: {type(tool)}. Expected Tool or ToolSet.")
 
