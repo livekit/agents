@@ -355,6 +355,8 @@ class _InworldConnection:
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    # Always enable auto_mode since we always use SentenceTokenizer
+                    pkt["create"]["autoMode"] = True
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -1080,6 +1082,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
+                # To be removed once auto_mode is released
                 connection.flush_context(context_id)
             connection.close_context(context_id)
 
