@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Unio
 
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeGuard
 
+from ..log import logger
 from . import _provider_format
 
 if TYPE_CHECKING:
@@ -156,10 +157,10 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     """Base class for function tool wrappers with descriptor support."""
 
     def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
+        functools.update_wrapper(self, func)
         self._func = func
         self._info: _InfoT = info
         self._instance = instance
-        functools.update_wrapper(self, func)
 
     @property
     def id(self) -> str:
@@ -303,11 +304,33 @@ def get_raw_function_info(f: RawFunctionTool) -> RawFunctionToolInfo:
     return f.info
 
 
+def _normalize_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
+    """Convert a wrapped tool to a FunctionTool or RawFunctionTool with a warning."""
+    if (
+        callable(tool)
+        and hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
+        and isinstance(tool.__wrapped__, (FunctionTool, RawFunctionTool))
+    ):
+        wrapped = tool.__wrapped__
+        logger.warning(
+            f"function tool {wrapped.info.name} is wrapped, this may cause unexpected behavior "
+            "and may not be supported in future versions, please wrap the original function before converting to a function tool.",
+            extra={
+                "function_tool": wrapped.info.name,
+            },
+        )
+        return wrapped.__class__(tool, wrapped.info, wrapped._instance)
+    return None
+
+
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
     methods: list[FunctionTool | RawFunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
         if isinstance(member, (FunctionTool, RawFunctionTool)):
             methods.append(member)
+        elif normalized_tool := _normalize_wrapped_tool(member):
+            methods.append(normalized_tool)
+
     return methods
 
 
@@ -400,6 +423,15 @@ class ToolContext:
                 for t in tool.tools:
                     add_tool(t)
                 self._tool_sets.append(tool)
+
+            elif normalized_tool := _normalize_wrapped_tool(tool):
+                add_tool(normalized_tool)
+
+            elif callable(tool):
+                raise ValueError(
+                    "Expected an instance of FunctionTool or RawFunctionTool, got a callable object. "
+                    "If it's a wrapped tool, please consider wrapping the original function before converting to a function tool."
+                )
 
             else:
                 raise ValueError(f"unknown tool type: {type(tool)}")
