@@ -319,7 +319,6 @@ class ClientEventsHandler:
             data = await reader.read_all()
             request = StreamRequest.model_validate_json(data)
 
-            # Route to appropriate handler
             response_payload: str
             error: str | None = None
 
@@ -736,19 +735,16 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             payload=payload,
         )
 
-        # Create future for response
         future: asyncio.Future[StreamResponse] = asyncio.Future()
         self._pending_requests[request_id] = future
 
         try:
-            # Send request via text stream
             await self._room.local_participant.send_text(
                 request.model_dump_json(),
                 topic=TOPIC_AGENT_REQUEST,
                 destination_identities=[self._agent_identity],
             )
 
-            # Wait for response
             response = await asyncio.wait_for(future, timeout=timeout)
 
             if response.error:
