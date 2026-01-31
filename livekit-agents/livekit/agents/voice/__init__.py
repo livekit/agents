@@ -16,6 +16,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
+from .guardrail import Guardrail
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -30,6 +31,7 @@ __all__ = [
     "Agent",
     "ModelSettings",
     "AgentTask",
+    "Guardrail",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
