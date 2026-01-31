@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 import aiohttp
+from typing_extensions import override
 from yarl import URL
 
 from livekit.agents import llm
@@ -131,16 +132,17 @@ class LLM(llm.LLM):
             self._session_id = await self._create_session()
         return self._session_id
 
+    @override
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: None = None,  # type: ignore[override]
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> LLMStream:
+    ) -> "LLMStream":
         """
         Stream chat completion from Google ADK.
 
@@ -161,6 +163,7 @@ class LLM(llm.LLM):
             conn_options=conn_options,
         )
 
+    @override
     async def aclose(self) -> None:
         """Close the LLM and cleanup resources."""
         if self._client_session and not self._client_session.closed:

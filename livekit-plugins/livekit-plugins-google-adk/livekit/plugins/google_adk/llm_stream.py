@@ -30,7 +30,7 @@ class LLMStream(llm.LLMStream):
         app_name: str,
         user_id: str,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None,
+        tools: None,
         conn_options: APIConnectOptions,
         **_: Any,
     ) -> None:
@@ -50,7 +50,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(
             llm=llm_instance,
             chat_ctx=chat_ctx,
-            tools=tools or [],
+            tools=list(tools) if tools else [],
             conn_options=conn_options,
         )
         self._llm: LLM = llm_instance  # Type as concrete LLM for private method access
