@@ -60,7 +60,6 @@ from openai.types.realtime import (
     RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
-    ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
     ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
@@ -938,10 +937,6 @@ class RealtimeSession(
                         self._handle_response_audio_delta(
                             ResponseAudioDeltaEvent.construct(**event)
                         )
-                    elif event["type"] == "response.output_audio_transcript.done":
-                        self._handle_response_audio_transcript_done(
-                            ResponseAudioTranscriptDoneEvent.construct(**event)
-                        )
                     elif event["type"] == "response.output_audio.done":
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
@@ -1012,10 +1007,11 @@ class RealtimeSession(
             max_output_tokens=self._realtime_model._opts.max_response_output_tokens,
             tool_choice=to_oai_tool_choice(self._realtime_model._opts.tool_choice),
             tracing=self._realtime_model._opts.tracing,
-            truncation=self._realtime_model._opts.truncation,
         )
         if self._instructions is not None:
             session.instructions = self._instructions
+        if self._realtime_model._opts.truncation is not None:
+            session.truncation = self._realtime_model._opts.truncation
 
         # initial session update
         return SessionUpdateEvent(
@@ -1602,15 +1598,6 @@ class RealtimeSession(
                 samples_per_channel=len(data) // 2,
             )
         )
-
-    def _handle_response_audio_transcript_done(
-        self, event: ResponseAudioTranscriptDoneEvent
-    ) -> None:
-        assert self._current_generation is not None, "current_generation is None"
-        # also need to sync existing item's context
-        remote_item = self._remote_chat_ctx.get(event.item_id)
-        if remote_item and event.transcript and isinstance(remote_item.item, llm.ChatMessage):
-            remote_item.item.content.append(event.transcript)
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
