@@ -421,6 +421,7 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
+        exclude_metrics: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -439,9 +440,11 @@ class ChatContext:
 
             items.append(item)
 
-        exclude_fields = set()
+        exclude_fields: set[str] = set()
         if exclude_timestamp:
             exclude_fields.add("created_at")
+        if exclude_metrics:
+            exclude_fields.add("metrics")
 
         return {
             "items": [
