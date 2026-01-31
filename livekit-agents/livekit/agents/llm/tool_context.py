@@ -183,6 +183,7 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
         return bound_tool
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        logger.info(f"Calling tool {self._info.name} with args: {args} and kwargs: {kwargs}")
         if self._instance is not None:
             return self._func(self._instance, *args, **kwargs)
         return self._func(*args, **kwargs)
@@ -319,7 +320,7 @@ def _normalize_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
                 "function_tool": wrapped.info.name,
             },
         )
-        return wrapped.__class__(tool, wrapped.info, wrapped._instance)
+        return wrapped.__class__(tool, wrapped.info)  # type: ignore
     return None
 
 
