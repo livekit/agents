@@ -566,14 +566,14 @@ class AudioRecognition:
                         eou_detection_span.set_attributes(
                             {
                                 trace_types.ATTR_CHAT_CTX: json.dumps(
-                                    llm.ChatContext(
-                                        chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:]
-                                    ).copy(
+                                    llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
+                                    .copy(
                                         exclude_function_call=True,
                                         exclude_instructions=True,
                                         exclude_empty_message=True,
                                         exclude_handoff=True,
-                                    ).to_dict(
+                                    )
+                                    .to_dict(
                                         exclude_audio=True,
                                         exclude_image=True,
                                         exclude_timestamp=True,
