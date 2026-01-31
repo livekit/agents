@@ -177,17 +177,20 @@ async def test_tool_call() -> None:
     check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
     check_timestamp(playback_finished_events[1].playback_position, 3.0, speed_factor=speed)
 
-    assert len(agent_state_events) == 6
+    assert len(agent_state_events) == 7
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
     assert (
-        agent_state_events[3].new_state == "thinking"
-    )  # from speaking to thinking when tool call is executed
+        agent_state_events[3].new_state == "processing"
+    )  # from speaking to processing when tool call is executed
     check_timestamp(agent_state_events[3].created_at - t_origin, 5.5, speed_factor=speed)
-    assert agent_state_events[4].new_state == "speaking"
-    assert agent_state_events[5].new_state == "listening"
+    assert (
+        agent_state_events[4].new_state == "thinking"
+    )  # from processing to thinking for LLM inference
+    assert agent_state_events[5].new_state == "speaking"
+    assert agent_state_events[6].new_state == "listening"
 
     assert len(tool_executed_events) == 1
     assert tool_executed_events[0].function_calls[0].name == "get_weather"
