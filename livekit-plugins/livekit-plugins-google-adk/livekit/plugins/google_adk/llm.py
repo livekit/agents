@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 import aiohttp
+from yarl import URL
 
 from livekit.agents import llm
 from livekit.agents.types import (
@@ -91,9 +92,15 @@ class LLM(llm.LLM):
             RuntimeError: If session creation fails
         """
         session_id = f"session-{int(time.time() * 1000)}"
+        # Use yarl URL builder to handle encoding automatically
         url = (
-            f"{self._api_base_url}/apps/{self._app_name}"
-            f"/users/{self._user_id}/sessions/{session_id}"
+            URL(self._api_base_url)
+            / "apps"
+            / self._app_name
+            / "users"
+            / self._user_id
+            / "sessions"
+            / session_id
         )
 
         client = await self._ensure_client_session()
