@@ -136,7 +136,7 @@ class GetAgentInfoResponse(BaseModel):
     id: str
     instructions: str | None
     tools: list[str]
-    chat_ctx: list[ChatItem]  # No size limit with text streams
+    chat_ctx: list[ChatItem]
 
 
 class SendMessageRequest(BaseModel):
@@ -378,7 +378,7 @@ class ClientEventsHandler:
             id=agent.id,
             instructions=agent.instructions,
             tools=_tool_names(agent.tools),
-            chat_ctx=list(agent.chat_ctx.items),  # No size limit with text streams
+            chat_ctx=list(agent.chat_ctx.items),
         )
         return response.model_dump_json()
 
@@ -533,27 +533,13 @@ class ClientEventsHandler:
 
     async def _rpc_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
         agent = self._session.current_agent
-        chat_ctx_items = list(agent.chat_ctx.items)
-
-        # Try with chat_ctx first, fall back to None if payload too large (15KB limit)
         response = GetAgentInfoResponse(
             id=agent.id,
             instructions=agent.instructions,
             tools=_tool_names(agent.tools),
-            chat_ctx=chat_ctx_items,
+            chat_ctx=list(agent.chat_ctx.items),
         )
-        payload = response.model_dump_json()
-
-        if len(payload.encode("utf-8")) > 15000:  # Leave some margin under 15KB
-            response = GetAgentInfoResponse(
-                id=agent.id,
-                instructions=agent.instructions,
-                tools=_tool_names(agent.tools),
-                chat_ctx=None,
-            )
-            payload = response.model_dump_json()
-
-        return payload
+        return response.model_dump_json()
 
     async def _rpc_send_message(self, data: rtc.RpcInvocationData) -> str:
         from .run_result import RunResult
