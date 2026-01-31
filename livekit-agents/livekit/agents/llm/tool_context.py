@@ -196,7 +196,7 @@ class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
         self, func: Callable[_P, _R], info: FunctionToolInfo, instance: Any = None
     ) -> None:
         super().__init__(func, info, instance)
-        self.__livekit_tool_info = self._info
+        setattr(self, "__livekit_tool_info", self._info)
 
 
 class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
@@ -206,7 +206,7 @@ class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
         self, func: Callable[_P, _R], info: RawFunctionToolInfo, instance: Any = None
     ) -> None:
         super().__init__(func, info, instance)
-        self.__livekit_raw_tool_info = self._info
+        setattr(self, "__livekit_raw_tool_info", self._info)
 
 
 @overload
