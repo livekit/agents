@@ -299,22 +299,14 @@ class ClientEventsHandler:
             return
 
         try:
-            self._room.register_text_stream_handler(
-                TOPIC_AGENT_REQUEST, self._on_stream_request
-            )
+            self._room.register_text_stream_handler(TOPIC_AGENT_REQUEST, self._on_stream_request)
             self._request_handler_registered = True
         except ValueError:
-            logger.warning(
-                f"text stream handler for topic '{TOPIC_AGENT_REQUEST}' already set"
-            )
+            logger.warning(f"text stream handler for topic '{TOPIC_AGENT_REQUEST}' already set")
 
-    def _on_stream_request(
-        self, reader: rtc.TextStreamReader, participant_identity: str
-    ) -> None:
+    def _on_stream_request(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         """Handle incoming text stream requests."""
-        task = asyncio.create_task(
-            self._handle_stream_request(reader, participant_identity)
-        )
+        task = asyncio.create_task(self._handle_stream_request(reader, participant_identity))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -697,9 +689,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _on_response_stream(
-        self, reader: rtc.TextStreamReader, participant_identity: str
-    ) -> None:
+    def _on_response_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._agent_identity:
             return
 
@@ -737,9 +727,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning(f"failed to parse event: {e}")
             return None
 
-    async def _send_request(
-        self, method: str, payload: str, timeout: float = 60.0
-    ) -> str:
+    async def _send_request(self, method: str, payload: str, timeout: float = 60.0) -> str:
         """Send a request via text stream and wait for response."""
         request_id = utils.shortuuid("req_")
         request = StreamRequest(
@@ -799,9 +787,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         return GetAgentInfoResponse.model_validate_json(response)
 
-    async def send_message(
-        self, text: str, response_timeout: float = 60.0
-    ) -> SendMessageResponse:
+    async def send_message(self, text: str, response_timeout: float = 60.0) -> SendMessageResponse:
         request = SendMessageRequest(text=text)
         response = await self._send_request(
             method="send_message",
