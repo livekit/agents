@@ -80,8 +80,13 @@ class FakeAudioOutput(AudioOutput):
             self._flush_handle.cancel()
 
         self._flush_handle = None
+        # Calculate played duration based on real elapsed time, capped at pushed duration
+        # This matches the behavior of ConsoleAudioOutput and accounts for speed_factor
+        # in tests (check_timestamp multiplies by speed_factor to convert to test time)
+        played_duration = time.time() - self._start_time
+        played_duration = min(max(0, played_duration), self._pushed_duration)
         self.on_playback_finished(
-            playback_position=min(self._pushed_duration, time.time() - self._start_time),
+            playback_position=played_duration,
             interrupted=True,
             synchronized_transcript=None,
         )
