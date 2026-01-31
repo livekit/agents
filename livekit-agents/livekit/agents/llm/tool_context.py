@@ -334,7 +334,7 @@ def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
     ):
         resolved_tool = FunctionTool(tool, info)
 
-    elif info := getattr(tool, "__livekit_raw_tool_info", None) and isinstance(
+    elif (info := getattr(tool, "__livekit_raw_tool_info", None)) and isinstance(
         info, RawFunctionToolInfo
     ):
         resolved_tool = RawFunctionTool(tool, info)
