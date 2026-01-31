@@ -1138,9 +1138,6 @@ class RealtimeSession(
     def clear_audio(self) -> None:
         logger.warning("clear audio is not supported by Ultravox.")
 
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Ultravox.")
-
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Resample audio frame to the required sample rate."""
         if self._input_resampler:

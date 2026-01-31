@@ -1120,23 +1120,6 @@ class RealtimeSessionBeta(
         self.send_event(InputAudioBufferClearEvent(type="input_audio_buffer.clear"))
         self._pushed_duration_s = 0
 
-    def commit_user_turn(self) -> None:
-        if self._realtime_model._opts.turn_detection is not None and (
-            self._realtime_model._opts.turn_detection.interrupt_response
-            or self._realtime_model._opts.turn_detection.create_response
-        ):
-            logger.warning(
-                "commit_user_turn is triggered when auto response is enabled. Model behavior may be unexpected."
-            )
-
-        self.commit_audio()
-        self.send_event(
-            ResponseCreateEvent(
-                type="response.create",
-                response=Response(),
-            )
-        )
-
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
