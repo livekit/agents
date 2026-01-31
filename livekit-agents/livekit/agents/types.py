@@ -28,6 +28,12 @@ The name of the agent, stored in the agent's attributes.
 This is set when the agent joins a room and can be used to identify the agent type.
 """
 
+ATTRIBUTE_SIMULATOR = "lk.simulator"
+"""
+Indicates that the participant is a simulator for testing purposes.
+When set to "true", the agent will skip audio input/output processing.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 TOPIC_CLIENT_EVENTS = "lk.agent.events"
@@ -53,6 +59,16 @@ RPC method to get information about the current agent.
 RPC_SEND_MESSAGE = "lk.agent.send_message"
 """
 RPC method to send a message and get the agent's response.
+"""
+
+TOPIC_AGENT_REQUEST = "lk.agent.request"
+"""
+Topic for sending requests to the agent via text streams (no size limit).
+"""
+
+TOPIC_AGENT_RESPONSE = "lk.agent.response"
+"""
+Topic for receiving responses from the agent via text streams (no size limit).
 """
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"

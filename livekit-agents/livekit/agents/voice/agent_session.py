@@ -590,7 +590,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if text_input_opts:
                     self._client_events_handler.register_text_input(text_input_opts.text_input_cb)
 
-                await self._client_events_handler.start()
+                # Note: client_events_handler.start() is called after room connection below
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -657,6 +657,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
+
+            # Start client events handler after room is connected (requires local_participant)
+            if self._client_events_handler is not None:
+                await self._client_events_handler.start()
 
             # important: no await should be done after this!
 

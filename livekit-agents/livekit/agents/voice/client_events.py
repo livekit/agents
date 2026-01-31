@@ -26,6 +26,8 @@ from ..types import (
     RPC_GET_CHAT_HISTORY,
     RPC_GET_SESSION_STATE,
     RPC_SEND_MESSAGE,
+    TOPIC_AGENT_REQUEST,
+    TOPIC_AGENT_RESPONSE,
     TOPIC_CHAT,
     TOPIC_CLIENT_EVENTS,
 )
@@ -123,7 +125,7 @@ class GetChatHistoryRequest(BaseModel):
 
 
 class GetChatHistoryResponse(BaseModel):
-    items: list[ChatMessage]
+    items: list[ChatItem]
 
 
 class GetAgentInfoRequest(BaseModel):
@@ -134,7 +136,7 @@ class GetAgentInfoResponse(BaseModel):
     id: str
     instructions: str | None
     tools: list[str]
-    chat_ctx: list[ChatItem]
+    chat_ctx: list[ChatItem]  # No size limit with text streams
 
 
 class SendMessageRequest(BaseModel):
@@ -143,6 +145,23 @@ class SendMessageRequest(BaseModel):
 
 class SendMessageResponse(BaseModel):
     items: list[ChatItem]
+
+
+# Text stream request/response protocol (no size limit unlike RPC)
+class StreamRequest(BaseModel):
+    """Request sent via text stream."""
+
+    request_id: str
+    method: str
+    payload: str  # JSON-encoded method-specific request
+
+
+class StreamResponse(BaseModel):
+    """Response sent via text stream."""
+
+    request_id: str
+    payload: str  # JSON-encoded method-specific response
+    error: str | None = None
 
 
 def _tool_names(tools: list[Any]) -> list[str]:
@@ -176,6 +195,7 @@ class ClientEventsHandler:
         self._text_input_cb: TextInputCallback | None = None
         self._text_stream_handler_registered = False
         self._rpc_handlers_registered = False
+        self._request_handler_registered = False
         self._event_handlers_registered = False
 
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -191,6 +211,7 @@ class ClientEventsHandler:
 
         self._started = True
         self._register_rpc_handlers()
+        self._register_request_handler()
         self._register_event_handlers()
 
     async def aclose(self) -> None:
@@ -216,6 +237,13 @@ class ClientEventsHandler:
             except Exception:
                 pass
             self._rpc_handlers_registered = False
+
+        if self._request_handler_registered:
+            try:
+                self._room.unregister_text_stream_handler(TOPIC_AGENT_REQUEST)
+            except ValueError:
+                pass
+            self._request_handler_registered = False
 
         if self._event_handlers_registered:
             self._session.off("agent_state_changed", self._on_agent_state_changed)
@@ -264,6 +292,118 @@ class ClientEventsHandler:
         self._room.local_participant.register_rpc_method(RPC_SEND_MESSAGE, self._rpc_send_message)
 
         self._rpc_handlers_registered = True
+
+    def _register_request_handler(self) -> None:
+        """Register text stream handler for requests (no size limit unlike RPC)."""
+        if self._request_handler_registered:
+            return
+
+        try:
+            self._room.register_text_stream_handler(
+                TOPIC_AGENT_REQUEST, self._on_stream_request
+            )
+            self._request_handler_registered = True
+        except ValueError:
+            logger.warning(
+                f"text stream handler for topic '{TOPIC_AGENT_REQUEST}' already set"
+            )
+
+    def _on_stream_request(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        """Handle incoming text stream requests."""
+        task = asyncio.create_task(
+            self._handle_stream_request(reader, participant_identity)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    @utils.log_exceptions(logger=logger)
+    async def _handle_stream_request(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        """Process a text stream request and send response."""
+        try:
+            data = await reader.read_all()
+            request = StreamRequest.model_validate_json(data)
+
+            # Route to appropriate handler
+            response_payload: str
+            error: str | None = None
+
+            try:
+                if request.method == "get_session_state":
+                    response_payload = await self._stream_get_session_state(request.payload)
+                elif request.method == "get_chat_history":
+                    response_payload = await self._stream_get_chat_history(request.payload)
+                elif request.method == "get_agent_info":
+                    response_payload = await self._stream_get_agent_info(request.payload)
+                elif request.method == "send_message":
+                    response_payload = await self._stream_send_message(request.payload)
+                else:
+                    response_payload = ""
+                    error = f"Unknown method: {request.method}"
+            except Exception as e:
+                response_payload = ""
+                error = str(e)
+
+            # Send response
+            response = StreamResponse(
+                request_id=request.request_id,
+                payload=response_payload,
+                error=error,
+            )
+
+            await self._room.local_participant.send_text(
+                response.model_dump_json(),
+                topic=TOPIC_AGENT_RESPONSE,
+                destination_identities=[participant_identity],
+            )
+
+        except Exception as e:
+            logger.warning("failed to handle stream request", exc_info=e)
+
+    async def _stream_get_session_state(self, payload: str) -> str:
+        """Handle get_session_state via text stream."""
+        agent = self._session.current_agent
+        response = GetSessionStateResponse(
+            agent_state=self._session.agent_state,
+            user_state=self._session.user_state,
+            agent_id=agent.id,
+            options=asdict(self._session.options),
+            created_at=self._session._started_at or time.time(),
+        )
+        return response.model_dump_json()
+
+    async def _stream_get_chat_history(self, payload: str) -> str:
+        """Handle get_chat_history via text stream."""
+        response = GetChatHistoryResponse(items=list(self._session.history.items))
+        return response.model_dump_json()
+
+    async def _stream_get_agent_info(self, payload: str) -> str:
+        """Handle get_agent_info via text stream (no size limit)."""
+        agent = self._session.current_agent
+        response = GetAgentInfoResponse(
+            id=agent.id,
+            instructions=agent.instructions,
+            tools=_tool_names(agent.tools),
+            chat_ctx=list(agent.chat_ctx.items),  # No size limit with text streams
+        )
+        return response.model_dump_json()
+
+    async def _stream_send_message(self, payload: str) -> str:
+        """Handle send_message via text stream."""
+        from .run_result import RunResult
+
+        request = SendMessageRequest.model_validate_json(payload)
+        run_result: RunResult[None] = await self._session.run(user_input=request.text)
+
+        items: list[ChatItem] = []
+        for event in run_result.events:
+            items.append(event.item)
+
+        response = SendMessageResponse(items=items)
+        return response.model_dump_json()
 
     def _register_event_handlers(self) -> None:
         if self._event_handlers_registered:
@@ -402,15 +542,27 @@ class ClientEventsHandler:
 
     async def _rpc_get_agent_info(self, data: rtc.RpcInvocationData) -> str:
         agent = self._session.current_agent
+        chat_ctx_items = list(agent.chat_ctx.items)
 
+        # Try with chat_ctx first, fall back to None if payload too large (15KB limit)
         response = GetAgentInfoResponse(
             id=agent.id,
             instructions=agent.instructions,
             tools=_tool_names(agent.tools),
-            chat_ctx=list(agent.chat_ctx.items),
+            chat_ctx=chat_ctx_items,
         )
+        payload = response.model_dump_json()
 
-        return response.model_dump_json()
+        if len(payload.encode("utf-8")) > 15000:  # Leave some margin under 15KB
+            response = GetAgentInfoResponse(
+                id=agent.id,
+                instructions=agent.instructions,
+                tools=_tool_names(agent.tools),
+                chat_ctx=None,
+            )
+            payload = response.model_dump_json()
+
+        return payload
 
     async def _rpc_send_message(self, data: rtc.RpcInvocationData) -> str:
         from .run_result import RunResult
@@ -505,6 +657,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         self._agent_identity = agent_identity
         self._started = False
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._pending_requests: dict[str, asyncio.Future[StreamResponse]] = {}
 
     async def start(self) -> None:
         if self._started:
@@ -512,6 +665,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
         self._started = True
         self._room.register_text_stream_handler(TOPIC_CLIENT_EVENTS, self._on_event_stream)
+        self._room.register_text_stream_handler(TOPIC_AGENT_RESPONSE, self._on_response_stream)
 
     async def aclose(self) -> None:
         if not self._started:
@@ -522,6 +676,15 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             self._room.unregister_text_stream_handler(TOPIC_CLIENT_EVENTS)
         except ValueError:
             pass
+        try:
+            self._room.unregister_text_stream_handler(TOPIC_AGENT_RESPONSE)
+        except ValueError:
+            pass
+
+        # Cancel pending requests
+        for future in self._pending_requests.values():
+            future.cancel()
+        self._pending_requests.clear()
 
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
@@ -533,6 +696,28 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         task = asyncio.create_task(self._read_event(reader))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _on_response_stream(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        if participant_identity != self._agent_identity:
+            return
+
+        task = asyncio.create_task(self._read_response(reader))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _read_response(self, reader: rtc.TextStreamReader) -> None:
+        """Read and dispatch a response to the waiting request."""
+        try:
+            data = await reader.read_all()
+            response = StreamResponse.model_validate_json(data)
+
+            future = self._pending_requests.pop(response.request_id, None)
+            if future and not future.done():
+                future.set_result(response)
+        except Exception as e:
+            logger.warning("failed to read stream response", exc_info=e)
 
     async def _read_event(self, reader: rtc.TextStreamReader) -> None:
         try:
@@ -552,38 +737,75 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning(f"failed to parse event: {e}")
             return None
 
+    async def _send_request(
+        self, method: str, payload: str, timeout: float = 60.0
+    ) -> str:
+        """Send a request via text stream and wait for response."""
+        request_id = utils.shortuuid("req_")
+        request = StreamRequest(
+            request_id=request_id,
+            method=method,
+            payload=payload,
+        )
+
+        # Create future for response
+        future: asyncio.Future[StreamResponse] = asyncio.Future()
+        self._pending_requests[request_id] = future
+
+        try:
+            # Send request via text stream
+            await self._room.local_participant.send_text(
+                request.model_dump_json(),
+                topic=TOPIC_AGENT_REQUEST,
+                destination_identities=[self._agent_identity],
+            )
+
+            # Wait for response
+            response = await asyncio.wait_for(future, timeout=timeout)
+
+            if response.error:
+                raise Exception(response.error)
+
+            return response.payload
+
+        except asyncio.TimeoutError:
+            self._pending_requests.pop(request_id, None)
+            raise
+        except Exception:
+            self._pending_requests.pop(request_id, None)
+            raise
+
     async def fetch_session_state(self) -> GetSessionStateResponse:
         request = GetSessionStateRequest()
-        response = await self._room.local_participant.perform_rpc(
-            destination_identity=self._agent_identity,
-            method=RPC_GET_SESSION_STATE,
+        response = await self._send_request(
+            method="get_session_state",
             payload=request.model_dump_json(),
         )
         return GetSessionStateResponse.model_validate_json(response)
 
     async def fetch_chat_history(self) -> GetChatHistoryResponse:
         request = GetChatHistoryRequest()
-        response = await self._room.local_participant.perform_rpc(
-            destination_identity=self._agent_identity,
-            method=RPC_GET_CHAT_HISTORY,
+        response = await self._send_request(
+            method="get_chat_history",
             payload=request.model_dump_json(),
         )
         return GetChatHistoryResponse.model_validate_json(response)
 
     async def fetch_agent_info(self) -> GetAgentInfoResponse:
         request = GetAgentInfoRequest()
-        response = await self._room.local_participant.perform_rpc(
-            destination_identity=self._agent_identity,
-            method=RPC_GET_AGENT_INFO,
+        response = await self._send_request(
+            method="get_agent_info",
             payload=request.model_dump_json(),
         )
         return GetAgentInfoResponse.model_validate_json(response)
 
-    async def send_message(self, text: str) -> SendMessageResponse:
+    async def send_message(
+        self, text: str, response_timeout: float = 60.0
+    ) -> SendMessageResponse:
         request = SendMessageRequest(text=text)
-        response = await self._room.local_participant.perform_rpc(
-            destination_identity=self._agent_identity,
-            method=RPC_SEND_MESSAGE,
+        response = await self._send_request(
+            method="send_message",
             payload=request.model_dump_json(),
+            timeout=response_timeout,
         )
         return SendMessageResponse.model_validate_json(response)

@@ -11,6 +11,7 @@ from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
+    ATTRIBUTE_SIMULATOR,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -299,6 +300,24 @@ class RoomIO:
 
         participant = await self._participant_available_fut
         self.set_participant(participant.identity)
+
+        # check if participant is a simulator - disable audio I/O for faster testing
+        if participant.attributes.get(ATTRIBUTE_SIMULATOR) == "true":
+            logger.info(
+                "simulator participant detected, disabling audio I/O",
+                extra={"participant": participant.identity},
+            )
+            # disable audio input
+            if self._audio_input:
+                await self._audio_input.aclose()
+                self._audio_input = None
+                self._agent_session.input.audio = None
+
+            # disable audio output
+            if self._audio_output:
+                await self._audio_output.aclose()
+                self._audio_output = None
+                self._agent_session.output.audio = None
 
         # init outputs
         if self._agent_tr_output:
