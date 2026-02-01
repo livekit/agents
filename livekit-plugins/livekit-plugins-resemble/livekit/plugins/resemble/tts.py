@@ -254,10 +254,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
@@ -274,7 +274,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if input_stream is None:
                         # new segment (after flush for e.g)
                         input_stream = self._opts.tokenizer.stream()
-                        self._segments_ch.send_nowait(input_stream)
+                        segments_ch.send_nowait(input_stream)
                     input_stream.push_text(text)
                 elif isinstance(text, self._FlushSentinel):
                     if input_stream is not None:
@@ -284,10 +284,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             if input_stream is not None:
                 input_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
-            async for input_stream in self._segments_ch:
+            async for input_stream in segments_ch:
                 await self._run_ws(input_stream, output_emitter)
 
         tasks = [
