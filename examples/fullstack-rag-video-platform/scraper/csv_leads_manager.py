@@ -62,7 +62,9 @@ class CSVLeadsManager:
     - Tag management
     """
 
-    def __init__(self, base_dir: str = "/home/user/Documents/dealmachine_data/organized"):
+    def __init__(self, base_dir: str = None):
+        if base_dir is None:
+            base_dir = str(Path.home() / "Documents/dealmachine_data/organized")
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 

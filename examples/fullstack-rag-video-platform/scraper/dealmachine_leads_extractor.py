@@ -54,9 +54,11 @@ class DealMachineLeadsExtractor:
 
     def __init__(
         self,
-        documents_dir: str = "/home/user/Documents/dealmachine_data/leads",
+        documents_dir: str = None,
         headless: bool = True
     ):
+        if documents_dir is None:
+            documents_dir = str(Path.home() / "Documents/dealmachine_data/leads")
         self.documents_dir = Path(documents_dir)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless

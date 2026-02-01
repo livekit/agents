@@ -50,7 +50,7 @@ async def run_complete_workflow(email: str, password: str, max_leads: int = 1000
     print("-" * 70)
 
     extractor = DealMachineLeadsExtractor(
-        documents_dir="/home/user/Documents/dealmachine_data/leads/raw"
+        documents_dir=str(Path.home() / "Documents/dealmachine_data/leads/raw")
     )
 
     leads = await extractor.smart_extract(
@@ -71,11 +71,11 @@ async def run_complete_workflow(email: str, password: str, max_leads: int = 1000
     print("-" * 70)
 
     manager = CSVLeadsManager(
-        base_dir="/home/user/Documents/dealmachine_data/leads/organized"
+        base_dir=str(Path.home() / "Documents/dealmachine_data/leads/organized")
     )
 
     # Find the latest CSV file
-    raw_dir = Path("/home/user/Documents/dealmachine_data/leads/raw")
+    raw_dir = Path.home() / "Documents/dealmachine_data/leads/raw"
     csv_files = list(raw_dir.glob("clean_leads_*.csv"))
 
     if csv_files:
@@ -140,8 +140,8 @@ async def run_complete_workflow(email: str, password: str, max_leads: int = 1000
     print(manager.generate_report())
 
     print("\n📁 ALL FILES SAVED TO:")
-    print(f"   Raw data: /home/user/Documents/dealmachine_data/leads/raw/")
-    print(f"   Organized: /home/user/Documents/dealmachine_data/leads/organized/")
+    print(f"   Raw data: {Path.home()}/Documents/dealmachine_data/leads/raw/")
+    print(f"   Organized: {Path.home()}/Documents/dealmachine_data/leads/organized/")
 
     print("\n📊 EXPORTED FILES:")
     print(f"   • 1 Master CSV with all {len(manager.leads)} leads")
@@ -217,7 +217,7 @@ async def run_demo_workflow():
     ]
 
     # Create sample CSV file
-    demo_dir = Path("/home/user/Documents/dealmachine_data/leads/demo")
+    demo_dir = Path.home() / "Documents/dealmachine_data/leads/demo"
     demo_dir.mkdir(parents=True, exist_ok=True)
 
     sample_csv = demo_dir / "sample_leads.csv"
@@ -232,7 +232,7 @@ async def run_demo_workflow():
 
     # Run manager workflow
     manager = CSVLeadsManager(
-        base_dir="/home/user/Documents/dealmachine_data/leads/demo_organized"
+        base_dir=str(Path.home() / "Documents/dealmachine_data/leads/demo_organized")
     )
 
     print("\n📥 Importing sample leads...")
