@@ -51,7 +51,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
-from .types import NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -1175,6 +1175,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                self._agent_name
+            )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)

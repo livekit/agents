@@ -1,5 +1,6 @@
 from . import remote_chat_context, utils
 from .chat_context import (
+    AgentConfigUpdate,
     AgentHandoff,
     AudioContent,
     ChatContent,
@@ -62,6 +63,7 @@ __all__ = [
     "FunctionCallOutput",
     "AudioContent",
     "ImageContent",
+    "AgentConfigUpdate",
     "AgentHandoff",
     "MetricsReport",
     "ChatItem",

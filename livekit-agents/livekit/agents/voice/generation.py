@@ -98,7 +98,12 @@ async def _llm_inference_task(
     current_span.set_attributes(
         {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+                chat_ctx.to_dict(
+                    exclude_audio=True,
+                    exclude_image=True,
+                    exclude_timestamp=True,
+                    exclude_metrics=True,
+                )
             ),
             trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
             trace_types.ATTR_PROVIDER_TOOLS: [
