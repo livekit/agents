@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
@@ -208,6 +208,10 @@ class LLMStream(ABC):
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
 
                 if self._conn_options.max_retry == 0 or not e.retryable:
