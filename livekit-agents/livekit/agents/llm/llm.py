@@ -56,6 +56,12 @@ class FunctionToolCall(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
+
+
 class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
@@ -384,3 +390,39 @@ class LLMStream(ABC):
                         yield chunk.delta.content
 
         return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                if result.fnc_call_out:
+                    ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+        )
