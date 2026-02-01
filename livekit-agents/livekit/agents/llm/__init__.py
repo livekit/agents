@@ -1,4 +1,5 @@
 from . import remote_chat_context, utils
+from .utils import execute_function_call, FunctionCallResult
 from .chat_context import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -18,6 +19,7 @@ from .llm import (
     LLM,
     ChatChunk,
     ChoiceDelta,
+    CollectedResponse,
     CompletionUsage,
     FunctionToolCall,
     LLMError,
@@ -55,6 +57,9 @@ from .tool_context import (
 __all__ = [
     "LLM",
     "LLMStream",
+    "CollectedResponse",
+    "execute_function_call",
+    "FunctionCallResult",
     "ChatContext",
     "ChatRole",
     "ChatMessage",
