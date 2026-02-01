@@ -1,4 +1,4 @@
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 
 class FakeDatabase:
@@ -55,9 +55,7 @@ class FakeDatabase:
 
     def get_compatible_doctors(self, insurance: str) -> list:
         return [
-            doctor
-            for doctor in self._doctor_records
-            if insurance in doctor["accepted_insurances"]
+            doctor for doctor in self._doctor_records if insurance in doctor["accepted_insurances"]
         ]
 
     def update_patient_record(self, name: str, **fields) -> bool:
@@ -72,11 +70,14 @@ class FakeDatabase:
         if record is None:
             return False
         record.setdefault("appointments", []).append(appointment)
+        appt_time = appointment["appointment_time"]
+        if isinstance(appt_time, str):
+            appt_time = datetime.fromisoformat(appt_time)
         self.remove_doctor_availability(
             appointment["doctor_name"],
             {
-                "date": appointment["appointment_time"].date(),
-                "time": appointment["appointment_time"].time(),
+                "date": appt_time.date(),
+                "time": appt_time.time(),
             },
         )
         return True
@@ -91,10 +92,13 @@ class FakeDatabase:
             return False
         doctor = self.get_doctor_by_name(appointment["doctor_name"])
         if doctor is not None:
+            appt_time = appointment["appointment_time"]
+            if isinstance(appt_time, str):
+                appt_time = datetime.fromisoformat(appt_time)
             doctor["availability"].append(
                 {
-                    "date": appointment["appointment_time"].date(),
-                    "time": appointment["appointment_time"].time(),
+                    "date": appt_time.date(),
+                    "time": appt_time.time(),
                 }
             )
         return True
@@ -102,9 +106,7 @@ class FakeDatabase:
     def add_patient_record(self, info: dict) -> None:
         self._patient_records.append(info)
 
-    def remove_doctor_availability(
-        self, doctor_name: str, appointment_time: dict
-    ) -> None:
+    def remove_doctor_availability(self, doctor_name: str, appointment_time: dict) -> None:
         for doctor in self._doctor_records:
             if doctor["name"] == doctor_name:
                 doctor["availability"] = [
