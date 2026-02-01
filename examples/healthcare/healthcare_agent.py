@@ -329,7 +329,11 @@ class GetLabResultsTask(AgentTask[None]):
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
-            instructions="You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.",
+            instructions=(
+                "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
+                "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
+                "Call 'schedule_appointment' to schedule a new appointment."
+            ),
             tools=[
                 EndCallTool(
                     end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
@@ -509,7 +513,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(
-        agent=HealthcareAgent(),
+        agent=HealthcareAgent(database=db),
         room=ctx.room,
     )
 
