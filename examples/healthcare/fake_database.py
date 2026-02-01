@@ -41,15 +41,70 @@ class FakeDatabase:
     def doctor_records(self) -> list:
         return self._doctor_records
 
+    def get_patient_by_name(self, name: str) -> dict | None:
+        return next(
+            (record for record in self._patient_records if record["name"] == name),
+            None,
+        )
+
+    def get_doctor_by_name(self, name: str) -> dict | None:
+        return next(
+            (record for record in self._doctor_records if record["name"] == name),
+            None,
+        )
+
     def get_compatible_doctors(self, insurance: str) -> list:
         return [
-            doctor for doctor in self._doctor_records if insurance in doctor["accepted_insurances"]
+            doctor
+            for doctor in self._doctor_records
+            if insurance in doctor["accepted_insurances"]
         ]
+
+    def update_patient_record(self, name: str, **fields) -> bool:
+        record = self.get_patient_by_name(name)
+        if record is None:
+            return False
+        record.update(fields)
+        return True
+
+    def add_appointment(self, name: str, appointment: dict) -> bool:
+        record = self.get_patient_by_name(name)
+        if record is None:
+            return False
+        record.setdefault("appointments", []).append(appointment)
+        self.remove_doctor_availability(
+            appointment["doctor_name"],
+            {
+                "date": appointment["appointment_time"].date(),
+                "time": appointment["appointment_time"].time(),
+            },
+        )
+        return True
+
+    def cancel_appointment(self, name: str, appointment: dict) -> bool:
+        record = self.get_patient_by_name(name)
+        if record is None or "appointments" not in record:
+            return False
+        try:
+            record["appointments"].remove(appointment)
+        except ValueError:
+            return False
+        doctor = self.get_doctor_by_name(appointment["doctor_name"])
+        if doctor is not None:
+            doctor["availability"].append(
+                {
+                    "date": appointment["appointment_time"].date(),
+                    "time": appointment["appointment_time"].time(),
+                }
+            )
+        return True
 
     def add_patient_record(self, info: dict) -> None:
         self._patient_records.append(info)
 
-    def remove_doctor_availability(self, doctor_name: str, appointment_time: dict) -> None:
+    def remove_doctor_availability(
+        self, doctor_name: str, appointment_time: dict
+    ) -> None:
         for doctor in self._doctor_records:
             if doctor["name"] == doctor_name:
                 doctor["availability"] = [

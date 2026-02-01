@@ -1,9 +1,12 @@
+import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Optional
 
 from dotenv import load_dotenv
+from openai import OpenAI
 from fake_database import FakeDatabase
 from pydantic import Field
 
@@ -17,9 +20,16 @@ from livekit.agents import (
     RunContext,
     cli,
 )
-from livekit.agents.beta.workflows import GetDOBTask, GetEmailTask, GetNameTask, TaskGroup
-from livekit.agents.llm import function_tool
+from livekit.agents.beta.workflows import (
+    GetDOBTask,
+    GetEmailTask,
+    GetNameTask,
+    TaskGroup,
+)
 from livekit.plugins import deepgram, openai, silero
+from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.llm import function_tool
+
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -31,7 +41,7 @@ ValidInsurances = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
 @dataclass
 class UserData:
     database: FakeDatabase
-    insurance: str | None = None
+    profile: dict | None
 
 
 @dataclass
@@ -44,6 +54,12 @@ class ScheduleAppointmentResult:
     doctor_name: str
     appointment_time: datetime
     visit_reason: str
+
+
+@dataclass
+class ModifyAppointmentResult:
+    new_appointment: ScheduleAppointmentResult | None
+    old_appointment: dict
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
@@ -74,21 +90,64 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
         self.complete(GetInsuranceResult(insurance=insurance))
 
 
+@function_tool()
+async def update_record(
+    context: RunContext,
+    field: Annotated[
+        str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})
+    ],
+):
+    """Update a specific field in the user's records.
+
+    Args:
+        field (str): The field to update
+    """
+    if field == "name":
+        await context.session.generate_reply(
+            instructions="The user may not change their name, they must create a new record."
+        )
+        return
+    field_map = {
+        "dob": (GetDOBTask, "date_of_birth"),
+        "email": (GetEmailTask, "email"),
+        "insurance": (GetInsuranceTask, "insurance"),
+    }
+
+    task_class, attr = field_map.get(field)
+    result = await task_class()
+    value = getattr(result, attr)
+
+    name = context.session.userdata.profile["name"]
+    updated = context.session.userdata.database.update_patient_record(
+        name, **{attr: value}
+    )
+    if not updated:  # this will only execute in the main HealthcareAgent() flow
+        return (
+            "No profile was found to update, prompt the user to create a new profile."
+        )
+    return f"The user's {field} has been updated."
+
+
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
     def __init__(self):
         super().__init__(
-            instructions="You will now assist the user with selecting a doctor and appointment time."
+            instructions="You will now assist the user with selecting a doctor and appointment time.",
+            tools=[update_record],
         )
         self._selected_doctor: str | None = None
         self._appointment_time: datetime | None = None
 
     async def on_enter(self):
         database = self.session.userdata.database
-        insurance = self.session.userdata.insurance
+        insurance = self.session.userdata.profile["insurance"]
 
-        self._compatible_doctor_records = database.get_compatible_doctors(insurance=insurance)
+        self._compatible_doctor_records = database.get_compatible_doctors(
+            insurance=insurance
+        )
 
-        available_doctors = [doctor["name"] for doctor in self._compatible_doctor_records]
+        available_doctors = [
+            doctor["name"] for doctor in self._compatible_doctor_records
+        ]
         doctor_confirmation_tool = self._build_doctor_selection_tool(
             available_doctors=available_doctors
         )
@@ -124,8 +183,8 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 selected_doctor (str): The doctor the user selects
             """
             self._selected_doctor = selected_doctor
-            doctor_record = next(
-                (d for d in self._compatible_doctor_records if d["name"] == selected_doctor), None
+            doctor_record = self.session.userdata.database.get_doctor_by_name(
+                selected_doctor
             )
 
             available_times = doctor_record["availability"]
@@ -192,12 +251,134 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         return confirm_visit_reason
 
 
+class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
+    def __init__(self, function: str):
+        super().__init__(
+            instructions="You will now assist the user with modifying their appointment.",
+            tools=[update_record],
+        )
+        self._function = function
+        self._database = self.session.userdata.database
+        self._patient_profile = self.session.userdata.profile
+
+        self._selected_appointment: dict | None = None
+
+    async def on_enter(self):
+        name = self._patient_profile["name"]
+        appointments = self._database.get_patient_by_name(name).get("appointments", [])
+        if not appointments:
+            await self.session.generate_reply(
+                instructions="Inform the user that they have no appointments on file."
+            )
+            self.complete(
+                ModifyAppointmentResult(new_appointment=None, old_appointment={})
+            )
+            return
+        else:
+            cancel_appt_tool = self._build_modify_appt_tool(
+                available_appts=appointments
+            )
+            current_tools = self.tools
+            current_tools.append(cancel_appt_tool)
+            await self.update_tools(current_tools)
+            await self.session.generate_reply(
+                instructions=f"The user has these outstanding appointments: {json.dumps(appointments)}, prompt them to choose one to modify."
+            )
+
+    def _build_modify_appt_tool(
+        self, *, available_appts: list[str]
+    ) -> Optional[FunctionTool]:
+        @function_tool()
+        async def confirm_appointment_selection(
+            selected_appointment: Annotated[
+                str,
+                Field(
+                    description="The names of the available appointments to cancel or reschedule",
+                    json_schema_extra={"items": {"enum": available_appts}},
+                ),
+            ],
+        ) -> None:
+            """Call to confirm the user's appointment selection to either cancel or reschedule
+
+            Args:
+                selected_appointment (str): The appointment the user selects for modification
+            """
+            self._selected_appointment = selected_appointment
+            self._database.cancel_appointment(
+                self._patient_profile["name"], selected_appointment
+            )
+
+            if self._function == "cancel":
+                self.complete(
+                    ModifyAppointmentResult(
+                        new_appointment=None, old_appointment=selected_appointment
+                    )
+                )
+            else:
+                result = ScheduleAppointmentTask()
+                self.complete(
+                    ModifyAppointmentResult(
+                        new_appointment=result, old_appointment=selected_appointment
+                    )
+                )
+
+        return confirm_appointment_selection
+
+
+class GetLabResultsTask(AgentTask[None]):
+    def __init__(self, database=None) -> None:
+        super().__init__(
+            instructions="You will be informing users about their latest checkup by parsing through their lab report.",
+            tools=[update_record],
+        )
+        if not os.path.isfile("mock_checkup_report.pdf"):
+            logger.warning(
+                "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
+            )
+            self.complete(None)
+            return
+
+        self._client = OpenAI()
+        self._vector_store = self._client.vector_stores.create(name="lab_reports")
+        with open("mock_checkup_report.pdf", "rb") as f:
+            self._file = self._client.files.create(file=f, purpose="assistants")
+        self._client.vector_stores.files.create(
+            vector_store_id=self._vector_store.id, file_id=self._file.id
+        )
+
+        self._filesearch_tool = openai.FileSearch(
+            vector_store_ids=[self._vector_store.id]
+        )
+
+    async def on_enter(self):
+        current_tools = self.tools
+        current_tools.append(self._filesearch_tool)
+        await self.update_tools(current_tools)
+        await self.session.generate_reply(
+            instructions="You successfully retrieved the user's lab report, welcome any related inquiries they may have."
+        )
+
+    @function_tool()
+    async def conclude_query_session(self):
+        """Call when the user is done asking about their lab results."""
+        self._client.vector_stores.delete(self._vector_store.id)
+        self._client.files.delete(self._file.id)
+        self.complete(None)
+
+
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
-            instructions="You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool. if the user requests to schedule an appointment, call schedule_appointment()",
-            # tools=[EndCallTool(end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.", delete_room=True)]
+            instructions="You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.",
+            tools=[
+                EndCallTool(
+                    end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
+                    delete_room=True,
+                ),
+                update_record,
+            ],
         )
+        self._information_verified: bool = False
         self._database = database
 
     async def on_enter(self):
@@ -205,104 +386,127 @@ class HealthcareAgent(Agent):
             instructions="Greet the user and gather the reason for their call."
         )
 
-    def information_tg_factory(self) -> TaskGroup:
+    async def task_completed_callback(self, event, database: FakeDatabase):
+        if event.task_id == "get_name_task":
+            patient_name = event.result
+            existing_record = database.get_patient_by_name(patient_name)
+            if existing_record:
+                logger.info(f"Found existing patient profile for {patient_name}")
+                self.session.userdata.profile = existing_record
+                self.chat_ctx.add_message(
+                    role="system",
+                    content=f"An existing patient record has been found, ask the user to confirm each detail of their record: {json.dumps(existing_record)}",
+                )
+
+    async def profile_authenticator(self) -> None:
         """Creates a TaskGroup that collects user information"""
-        task_group = TaskGroup(chat_ctx=self.chat_ctx, return_exceptions=False)
+        if not self.session.userdata.profile:
+            task_group = TaskGroup(
+                chat_ctx=self.chat_ctx,
+                return_exceptions=False,
+                on_task_completed=lambda event: self.task_completed_callback(
+                    event, self._database
+                ),
+            )
 
-        task_group.add(
-            lambda: GetNameTask(), id="get_name_task", description="Gathers the user's name"
-        )
-        task_group.add(
-            lambda: GetDOBTask(), id="get_dob_task", description="Gathers the user's date of birth"
-        )
-        task_group.add(
-            lambda: GetEmailTask(), id="get_email_task", description="Gathers the user's email"
-        )
-        task_group.add(
-            lambda: GetInsuranceTask(),
-            id="get_insurance_task",
-            description="Gathers the user's insurance",
-        )
+            task_group.add(
+                lambda: GetNameTask(),
+                id="get_name_task",
+                description="Gathers the user's name",
+            )
+            task_group.add(
+                lambda: GetDOBTask(),
+                id="get_dob_task",
+                description="Gathers the user's date of birth",
+            )
+            task_group.add(
+                lambda: GetEmailTask(),
+                id="get_email_task",
+                description="Gathers the user's email",
+            )
+            task_group.add(
+                lambda: GetInsuranceTask(),
+                id="get_insurance_task",
+                description="Gathers the user's insurance",
+            )
 
-        return task_group
+            results = await task_group
+            self._database.add_patient_record(
+                info={
+                    "name": results["get_name_task"],
+                    "date_of_birth": results["get_dob_task"],
+                    "email": results["get_email_task"],
+                    "insurance": results["get_insurance_task"],
+                }
+            )
+
+    @function_tool()
+    async def create_profile(self):
+        """Call to create a new profile for the user"""
+        await self.profile_authenticator()
 
     @function_tool()
     async def schedule_appointment(self):
         """Call to schedule an appointment for the user."""
-        task_group = self.information_tg_factory()
-
         # Observe how if any information is given early, TaskGroup will fast-forward the respective task. and at any time, user information can be updated
-        task_group.add(
-            lambda: ScheduleAppointmentTask(),
-            id="schedule_appointment_task",
-            description="Selects a doctor and schedules an appointment",
-        )
-        results = (await task_group).task_results
+        await self.profile_authenticator()
+        result = await ScheduleAppointmentTask()
 
-        appointment_results = results["schedule_appointment_task"]
         appointment = {
-            "doctor_name": appointment_results.doctor_name,
-            "appointment_time": appointment_results.appointment_time,
-            "visit_reason": appointment_results.visit_reason,
+            "doctor_name": result.doctor_name,
+            "appointment_time": result.appointment_time,
+            "visit_reason": result.visit_reason,
         }
 
-        db = self.session.userdata.database
-        db.add_patient_record(
-            info={
-                "name": results["get_name_task"],
-                "date_of_birth": results["get_dob_task"],
-                "email": results["get_email_task"],
-                "insurance": results["get_insurance_task"],
-                "appointments": {appointment},
-            }
-        )
-        self._database.remove_doctor_availability(
-            appointment_results.doctor_name,
-            {
-                "date": appointment_results.appointment_time.date(),
-                "time": appointment_results.appointment_time.time(),
-            },
+        self._database.add_appointment(
+            name=self.session.userdata.profile["name"], appointment=appointment
         )
 
         return "The appointment has been made, ask the user if they need assistance with anything else."
 
-    # @function_tool()
-    # async def modify_appointment(self):
-    #     """Call if the user requests to reschedule or cancel an existing appointment"""
-
-    # @function_tool()
-    # async def medication_refill(self):
-    #     """Facilitates medicine refill"""
-
     @function_tool()
-    async def update_record(
+    async def modify_appointment(
         self,
-        field: Annotated[
-            str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})
+        function: Annotated[
+            str,
+            Field(
+                description="Available functions to modify an existing appointment",
+                json_schema_extra={"items": {"enum": ["reschedule", "cancel"]}},
+            ),
         ],
     ):
-        """Update a specific field in the user's records.
+        """Call if the user requests to reschedule or cancel an existing appointment"""
+        await self.profile_authenticator()
 
-        Args:
-            field (str): The field to update
-        """
-        # TODO: if user profile not found
-        if field == "name":
-            await self.session.generate_reply(
-                instructions="The user may not change their name, they must create a new record."
+        result = await ModifyAppointmentTask(function=function)
+        confirmation_message = f"Inform the user that the old appointment ({result.old_appointment}) has been canceled"
+        if result.new_appointment:
+            appointment = {
+                "doctor_name": result.new_appointment.doctor_name,
+                "appointment_time": result.new_appointment.appointment_time,
+                "visit_reason": result.new_appointment.visit_reason,
+            }
+
+            self._database.add_appointment(
+                name=self.session.userdata.profile["name"], appointment=appointment
             )
-        field_to_task = {
-            "name": GetNameTask,
-            "dob": GetDOBTask,
-            "email": GetEmailTask,
-            "insurance": GetInsuranceTask,
-        }
+            confirmation_message += f" and a new appointment ({json.dumps(appointment)}) has been scheduled."
 
-        task_class = field_to_task.get(field)
+        return confirmation_message
 
-        result = await task_class()
-        # TODO change the field in the database
-        return f"The user's {field} has been updated."
+    @function_tool()
+    async def retrieve_lab_results(self):
+        """Call if the user wishes to see their latest lab results"""
+        await self.profile_authenticator()
+
+        await GetLabResultsTask()
+
+    @function_tool()
+    async def retrieve_available_doctors(self):
+        """Call if the user inquires about the available doctors in the network"""
+        await self.session.generate_reply(
+            instructions=f"Inform the user about each doctor record: {self._database.doctor_records}"
+        )
 
 
 server = AgentServer()
@@ -312,7 +516,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     db = FakeDatabase()
     session = AgentSession(
-        userdata=UserData(database=db),
+        userdata=UserData(database=db, profile=None),
         stt=deepgram.STT(),
         llm=openai.responses.LLM(),
         tts=deepgram.TTS(),
