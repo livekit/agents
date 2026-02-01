@@ -336,7 +336,7 @@ class AgentActivity(RecognitionHooks):
         tools_added = list(new_tool_names - old_tool_names) or None
         tools_removed = list(old_tool_names - new_tool_names) or None
 
-        tools = list(set(tools))
+        tools = list({t.id: t for t in tools}.values())
         self._agent._tools = tools
 
         # Record the configuration change
