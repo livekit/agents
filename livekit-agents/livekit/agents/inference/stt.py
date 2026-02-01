@@ -56,7 +56,7 @@ class DeepgramOptions(TypedDict, total=False):
     punctuate: bool  # default: False
     smart_format: bool
     keywords: list[tuple[str, float]]
-    keyterms: list[str]
+    keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
@@ -89,7 +89,7 @@ class FallbackModel(TypedDict, total=False):
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(model="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
+        >>> FallbackModel(model="deepgram/nova-3", extra_kwargs={"keyterm": ["livekit"]})
     """
 
     model: Required[str]
