@@ -20,7 +20,6 @@ from ..llm import (
     ChatContext,
     StopResponse,
     ToolContext,
-    ToolError,
     utils as llm_utils,
 )
 from ..log import logger
