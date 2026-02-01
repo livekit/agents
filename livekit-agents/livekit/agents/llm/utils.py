@@ -574,7 +574,7 @@ async def execute_function_call(
     call_ctx: RunContext[Any] | None = None,
 ) -> FunctionCallResult:
     """Execute a function tool call and return the result."""
-    from .chat_context import FunctionCall
+    from .chat_context import FunctionCall, FunctionCallOutput
 
     fnc_call = FunctionCall(
         call_id=tool_call.call_id,
