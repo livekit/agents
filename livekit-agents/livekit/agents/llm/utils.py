@@ -33,6 +33,9 @@ from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+    from .chat_context import FunctionCall, FunctionCallOutput
+    from .llm import FunctionToolCall
+    from .tool_context import ToolContext
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
@@ -572,7 +575,6 @@ async def execute_function_call(
 ) -> FunctionCallResult:
     """Execute a function tool call and return the result."""
     from .chat_context import FunctionCall
-    from .tool_context import ToolContext
 
     fnc_call = FunctionCall(
         call_id=tool_call.call_id,

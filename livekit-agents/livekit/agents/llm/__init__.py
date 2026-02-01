@@ -1,5 +1,4 @@
 from . import remote_chat_context, utils
-from .utils import execute_function_call, FunctionCallResult
 from .chat_context import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -53,6 +52,7 @@ from .tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
+from .utils import FunctionCallResult, execute_function_call
 
 __all__ = [
     "LLM",
