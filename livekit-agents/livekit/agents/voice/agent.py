@@ -159,11 +159,16 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        invalid = [t for t in tools if not isinstance(t, (llm.Tool, llm.Toolset))]
-        if invalid:
-            kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
-            raise TypeError(f"Invalid tool type(s): {kinds}. Expected Tool or ToolSet.")
+        valid_tools: list[llm.Tool | llm.Toolset] = []
+        for tool in tools:
+            if isinstance(tool, (llm.Tool, llm.Toolset)):
+                valid_tools.append(tool)
+            elif resolved_tool := llm.tool_context._resolve_wrapped_tool(tool):
+                valid_tools.append(resolved_tool)
+            else:
+                raise TypeError(f"Invalid tool type: {type(tool)}. Expected Tool or ToolSet.")
 
+        tools = valid_tools
         if self._activity is None:
             self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
