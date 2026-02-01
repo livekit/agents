@@ -53,7 +53,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ResponsesModel = "gpt-4o-mini",
+        model: str | ResponsesModel = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
