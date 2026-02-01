@@ -1017,7 +1017,9 @@ class AgentActivity(RecognitionHooks):
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
         skip_reply: bool = False
         if self._rt_session is not None:
-            # commit to generate a reply
+            # commit audio buffer and trigger response generation
+            # `skip_reply` prevents duplicate reply from _on_user_turn_completed
+            # but keeps flushing STT transcript into the chat context
             self._rt_session.commit_audio()
             self._session.generate_reply()
             skip_reply = True
@@ -1492,10 +1494,11 @@ class AgentActivity(RecognitionHooks):
                 return
 
             if self._rt_session is not None:
-                if info.skip_reply and info.new_transcript != "":
-                    # only add user message to chat context if reply should be skipped
-                    self._agent._chat_ctx.items.append(user_message)
-                    self._session._conversation_item_added(user_message)
+                if info.skip_reply:
+                    if info.new_transcript != "":
+                        # only add user message to chat context if reply should be skipped
+                        self._agent._chat_ctx.items.append(user_message)
+                        self._session._conversation_item_added(user_message)
                     return
                 self._rt_session.commit_audio()
 

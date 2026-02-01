@@ -32,6 +32,7 @@ _EOU_MAX_HISTORY_TURNS = 6
 @dataclass
 class _EndOfTurnInfo:
     skip_reply: bool
+    """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
 
