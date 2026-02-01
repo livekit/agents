@@ -220,7 +220,7 @@ class ChunkedStream(tts.ChunkedStream):
                 if resp.status != 200:
                     content = await resp.text()
                     raise APIStatusError(
-                        message=f"Camb.ai TTS failed: {content}",
+                        "Camb.ai TTS failed",
                         status_code=resp.status,
                         request_id=resp.headers.get("x-request-id"),
                         body=content,

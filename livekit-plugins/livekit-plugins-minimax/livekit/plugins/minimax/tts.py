@@ -449,7 +449,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
                     )
                     logger.error(error_msg)
-                    raise APIStatusError(error_msg, request_id=current_trace_id)
+                    raise APIStatusError(
+                        error_msg,
+                        request_id=current_trace_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Minimax message type %s", msg.type)
@@ -478,6 +483,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIStatusError(
                         f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
                         request_id=error_trace_id,
+                        status_code=status_code,
                         body=data,
                     )
 

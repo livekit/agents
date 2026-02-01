@@ -446,7 +446,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id},
                     )
                     raise APIStatusError(
-                        "Cartesia connection closed unexpectedly", request_id=request_id
+                        "Cartesia connection closed unexpectedly",
+                        request_id=request_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

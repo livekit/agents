@@ -246,7 +246,12 @@ class LLMStream(llm.LLMStream):
             raise APIConnectionError(retryable=retryable) from e
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
-        raise APIStatusError(event.message, status_code=-1, retryable=False)
+        error_code = -1
+        try:
+            error_code = int(event.code) if event.code else -1
+        except ValueError:
+            pass
+        raise APIStatusError(event.message, status_code=error_code, retryable=False)
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id
