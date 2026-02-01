@@ -414,7 +414,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             "deepgram/nova-3",
             language="en",
             extra_kwargs={
-                "keyterms": [
+                "keyterm": [
                     "Big Mac",
                     "McFlurry",
                     "McCrispy",
