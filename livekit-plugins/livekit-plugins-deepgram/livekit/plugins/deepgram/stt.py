@@ -518,8 +518,9 @@ class SpeechStream(stt.SpeechStream):
 
                     # this will trigger a reconnection, see the _run loop
                     raise APIStatusError(
-                        message=f"deepgram connection closed unexpectedly: "
-                        f"code={ws.close_code}, reason={msg.extra if msg.extra else 'no reason provided'}"
+                        message="deepgram connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
