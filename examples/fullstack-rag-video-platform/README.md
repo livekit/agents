@@ -1,16 +1,28 @@
 # 🚀 Fullstack RAG Video Platform - Masterpiece Edition
 
-A state-of-the-art, production-ready fullstack platform featuring real-time video AI agents with RAG-powered memory, built on LiveKit Agents framework.
+A state-of-the-art, production-ready fullstack platform featuring real-time video AI agents with RAG-powered memory, plus the most advanced open-source web scraping system ever built.
 
 ## ✨ Features
 
 ### 🎯 Core Capabilities
 - **Real-time Video Streaming**: WebRTC-based low-latency video communication
 - **RAG-Powered Memory**: Advanced retrieval-augmented generation with persistent context
+- **BEAST Scraper**: 🦾 **NEW!** Blazingly fast, self-improving web scraper with conversational AI
 - **Multi-Modal AI**: Support for text, audio, and video interactions
 - **Avatar Integration**: 7+ avatar providers (Simli, Tavus, Hedra, etc.)
+- **100% Open Source**: All AI models run locally (Ollama, Whisper, Coqui TTS)
 - **Fast & Efficient**: Optimized vector search with sub-100ms retrieval
 - **Enterprise-Grade**: Production-ready with monitoring, metrics, and scalability
+
+### 🦾 BEAST Scraper (NEW!)
+- **Multi-Engine Scraping**: Playwright, Scrapy, BeautifulSoup, Selenium
+- **Conversational Interface**: Chat or voice control with open-source LLM
+- **Auto-Login**: Automatic login and session management
+- **Self-Improving**: Learns from each scrape and evolves over time
+- **MCP Integration**: Browser automation, file system, database tools
+- **User Memory**: Remembers who you are across sessions
+- **Blazing Fast**: Sub-second scraping with intelligent caching
+- **Pattern Learning**: Genetic algorithms for selector evolution
 
 ### 🎨 Frontend
 - Modern Next.js 14 with App Router
