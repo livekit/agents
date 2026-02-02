@@ -10,6 +10,7 @@ from azure.ai.voicelive.models import (
     Modality,
     OutputAudioFormat,
     ServerVad,
+    TurnDetection,
 )
 from livekit import rtc
 from livekit.agents import llm
@@ -20,7 +21,6 @@ from ..log import logger
 
 # Default configurations for Azure Voice Live
 DEFAULT_TURN_DETECTION = ServerVad(
-    type="server_vad",
     threshold=0.5,
     prefix_padding_ms=300,
     silence_duration_ms=500,
@@ -35,9 +35,16 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
 def to_turn_detection(
-    turn_detection: NotGivenOr[ServerVad | None],
-) -> ServerVad | None:
-    """Convert turn detection configuration to Azure ServerVad format."""
+    turn_detection: NotGivenOr[TurnDetection | None],
+) -> TurnDetection | None:
+    """Convert turn detection configuration to Azure TurnDetection format.
+
+    Accepts any TurnDetection subclass including:
+    - ServerVad: Basic server-side VAD
+    - AzureSemanticVad: Semantic VAD (multilingual)
+    - AzureSemanticVadEn: English-only semantic VAD
+    - AzureSemanticVadMultilingual: Explicit multilingual semantic VAD
+    """
     if not is_given(turn_detection):
         return DEFAULT_TURN_DETECTION
 
@@ -52,14 +59,13 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
     from livekit.agents.llm import utils as llm_utils
 
     # Handle FunctionTool and RawFunctionTool
-    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
+    if isinstance(tool, llm.FunctionTool):
         # Use the build_legacy_openai_schema to get the schema
         schema = llm_utils.build_legacy_openai_schema(tool, internally_tagged=True)
 
         parameters = schema.get("parameters", {})
 
         azure_tool = FunctionTool(
-            type="function",
             name=schema["name"],
             description=schema.get("description", ""),
             parameters=parameters,
@@ -69,6 +75,17 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
         logger.debug(f"[TOOL_CONVERSION] Schema: {schema}")
         logger.debug(f"[TOOL_CONVERSION] Azure tool parameters: {parameters}")
 
+        return azure_tool
+    elif isinstance(tool, llm.RawFunctionTool):
+        # For RawFunctionTool, extract schema from info.raw_schema
+        raw_schema = tool.info.raw_schema
+        azure_tool = FunctionTool(
+            name=tool.info.name,
+            description=raw_schema.get("description", ""),
+            parameters=raw_schema.get("parameters", {}),
+        )
+
+        logger.info(f"[TOOL_CONVERSION] Converted raw tool {tool.info.name}")
         return azure_tool
     else:
         raise ValueError(f"Unsupported tool type: {type(tool)}")
@@ -147,13 +164,13 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> dict[str, Any] | FunctionC
                     encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
                         "utf-8"
                     )
-                    content_list.append(
-                        {
-                            "type": "input_audio",
-                            "audio": encoded_audio,
-                            "transcript": c.transcript,
-                        }
-                    )
+                    audio_item: dict[str, str] = {
+                        "type": "input_audio",
+                        "audio": encoded_audio,
+                    }
+                    if c.transcript is not None:
+                        audio_item["transcript"] = c.transcript
+                    content_list.append(audio_item)
             azure_item.update(
                 {
                     "type": "message",

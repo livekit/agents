@@ -7,18 +7,20 @@ import os
 import time
 import wave
 import weakref
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal, Sequence, cast
 
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
     AzureStandardVoice,
+    FunctionTool,
     InputAudioFormat,
     Modality,
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
     ServerVad,
+    TurnDetection,
 )
 from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
@@ -55,12 +57,12 @@ DEFAULT_VOICE = "en-US-AvaMultilingualNeural"  # Multilingual voice for multi-la
 class _RealtimeOptions:
     endpoint: str
     model: str
-    voice: str
+    voice: str | AzureStandardVoice
     tool_choice: llm.ToolChoice | None
-    turn_detection: ServerVad | None
+    turn_detection: TurnDetection | None
     input_audio_format: InputAudioFormat
     output_audio_format: OutputAudioFormat
-    modalities: list[Modality]
+    modalities: Sequence[Modality | str]
     temperature: float
     max_output_tokens: int
     api_key: str | None
@@ -97,12 +99,8 @@ class _ResponseGeneration:
     _done_fut: asyncio.Future[None]
     _created_timestamp: float
     _first_token_timestamp: float | None = None
-    _audio_data: bytearray = None  # Store audio data for saving to file
+    _audio_data: bytearray = field(default_factory=bytearray)  # Store audio data for saving to file
     _response_id: str = ""  # Response ID for file naming
-
-    def __post_init__(self):
-        if self._audio_data is None:
-            self._audio_data = bytearray()
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -113,7 +111,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: str = "gpt-realtime",
         voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        turn_detection: NotGivenOr[ServerVad | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -130,7 +128,8 @@ class RealtimeModel(llm.RealtimeModel):
             model: Model name (default: "gpt-realtime").
             voice: Voice for audio responses (default: "en-US-AvaNeural").
             modalities: List of modalities to enable (default: ["text", "audio"]).
-            turn_detection: Server-side VAD configuration (default: ServerVad with threshold=0.5).
+            turn_detection: Turn detection configuration. Accepts ServerVad, AzureSemanticVad,
+                AzureSemanticVadEn, or AzureSemanticVadMultilingual (default: ServerVad with threshold=0.5).
             tool_choice: Tool selection policy.
             temperature: Sampling temperature (default: 0.8).
             max_output_tokens: Maximum output tokens (default: 4096).
@@ -152,7 +151,11 @@ class RealtimeModel(llm.RealtimeModel):
             )
             ```
         """
-        modalities_list = modalities if is_given(modalities) else DEFAULT_MODALITIES
+        modalities_list: Sequence[Modality | str] = (
+            [Modality.TEXT if m == "text" else Modality.AUDIO for m in modalities]
+            if is_given(modalities)
+            else DEFAULT_MODALITIES
+        )
         turn_detection_val = to_turn_detection(turn_detection)
 
         logger.info(f"[AZURE_INIT] model: {model}")
@@ -194,11 +197,14 @@ class RealtimeModel(llm.RealtimeModel):
                     "or set use_default_credential=True"
                 )
 
+        tool_choice_val: llm.ToolChoice | None = (
+            cast(llm.ToolChoice, tool_choice) if is_given(tool_choice) else None
+        )
         self._opts = _RealtimeOptions(
             endpoint=endpoint_val,
             model=model,
             voice=voice,
-            tool_choice=tool_choice if is_given(tool_choice) else None,
+            tool_choice=tool_choice_val,
             turn_detection=turn_detection_val,
             input_audio_format=DEFAULT_INPUT_AUDIO_FORMAT,
             output_audio_format=DEFAULT_OUTPUT_AUDIO_FORMAT,
@@ -339,10 +345,13 @@ class RealtimeSession(
     async def _run_connection(self) -> None:
         """Establish connection and process events."""
         # Create credential
+        credential: DefaultAzureCredential | AzureKeyCredential
         if self._realtime_model._opts.use_default_credential:
             credential = DefaultAzureCredential()
         else:
-            credential = AzureKeyCredential(self._realtime_model._opts.api_key)
+            api_key = self._realtime_model._opts.api_key
+            assert api_key is not None, "API key must be set when not using default credential"
+            credential = AzureKeyCredential(api_key)
 
         try:
             async with connect(
@@ -374,15 +383,15 @@ class RealtimeSession(
             self._connection = None
             self._connection_ready.clear()
 
-    async def _configure_session(self, conn) -> None:
+    async def _configure_session(self, conn: Any) -> None:
         """Configure the Azure Voice Live session with initial settings."""
-        tools_list = []
+        tools_list: list[FunctionTool] = []
         if self._tools:
             for tool in self._tools.flatten():
                 tools_list.append(livekit_tool_to_azure_tool(tool))
 
         # Wrap voice name in AzureStandardVoice if it's an Azure voice name
-        voice_config = self._realtime_model._opts.voice
+        voice_config: str | AzureStandardVoice = self._realtime_model._opts.voice
         if isinstance(voice_config, str):
             # Check if it's an Azure voice name (contains hyphen like "en-US-AvaNeural")
             if "-" in voice_config and voice_config not in [
@@ -400,20 +409,20 @@ class RealtimeSession(
                 voice_config = AzureStandardVoice(name=voice_config)
 
         session_config = RequestSession(
-            modalities=self._realtime_model._opts.modalities,
+            modalities=list(self._realtime_model._opts.modalities),
             instructions=self._instructions or "You are a helpful assistant.",
             voice=voice_config,
             input_audio_format=self._realtime_model._opts.input_audio_format,
             output_audio_format=self._realtime_model._opts.output_audio_format,
             turn_detection=self._realtime_model._opts.turn_detection,
-            tools=tools_list if tools_list else None,
+            tools=tools_list if tools_list else None,  # type: ignore[arg-type]
             temperature=self._realtime_model._opts.temperature,
             max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
         )
 
         await conn.session.update(session=session_config)
 
-    async def _handle_event(self, event) -> None:
+    async def _handle_event(self, event: Any) -> None:
         """Handle events from Azure Voice Live."""
         self.emit("azure_server_event_received", event)
 
@@ -453,7 +462,7 @@ class RealtimeSession(
             )
 
         elif event_type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
-            item_id = getattr(event, "item_id", None)
+            item_id = getattr(event, "item_id", None) or ""
             transcript = getattr(event, "transcript", "")
             self.emit(
                 "input_audio_transcription_completed",
@@ -499,7 +508,7 @@ class RealtimeSession(
             logger.error(f"Azure Voice Live error: {error_msg}")
             self._emit_error(APIError(error_msg), recoverable=True)
 
-    async def _handle_response_created(self, event) -> None:
+    async def _handle_response_created(self, event: Any) -> None:
         """Handle response.created event."""
         response_id = getattr(event.response, "id", None)
         self._response_id = response_id
@@ -549,7 +558,7 @@ class RealtimeSession(
         )
         self.emit("generation_created", generation_ev)
 
-    async def _handle_output_item_added(self, event) -> None:
+    async def _handle_output_item_added(self, event: Any) -> None:
         """Handle response.output_item.added event."""
         if not self._current_generation:
             return
@@ -604,7 +613,7 @@ class RealtimeSession(
                 f"Function call started - name: {name}, call_id: {call_id}, waiting for arguments..."
             )
 
-    async def _handle_content_part_added(self, event) -> None:
+    async def _handle_content_part_added(self, event: Any) -> None:
         """Handle response.content_part.added event."""
         if not self._current_generation:
             return
@@ -619,22 +628,23 @@ class RealtimeSession(
         part_type = getattr(part, "type", None)
 
         # Set modalities - use contextlib.suppress to avoid InvalidStateError if already set
+        result_modalities: list[Literal["text", "audio"]]
         if part_type == "audio":
-            modalities = ["audio", "text"]
+            result_modalities = ["audio", "text"]
         elif part_type == "text":
-            modalities = ["text"]
+            result_modalities = ["text"]
         else:
             return
 
         logger.info(
-            f"Setting modalities for item {item_id}: {modalities}, part_type: {part_type}, modalities_done: {msg_gen.modalities.done()}"
+            f"Setting modalities for item {item_id}: {result_modalities}, part_type: {part_type}, modalities_done: {msg_gen.modalities.done()}"
         )
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            msg_gen.modalities.set_result(modalities)
+            msg_gen.modalities.set_result(result_modalities)
             logger.info(f"Modalities set successfully for item {item_id}")
 
-    async def _handle_audio_delta(self, event) -> None:
+    async def _handle_audio_delta(self, event: Any) -> None:
         """Handle response.audio.delta event."""
         if not self._current_generation:
             return  # Skip logging in hot path
@@ -676,7 +686,7 @@ class RealtimeSession(
         except Exception as e:
             logger.error(f"Failed to process audio delta: {e}")
 
-    async def _handle_text_delta(self, event) -> None:
+    async def _handle_text_delta(self, event: Any) -> None:
         """Handle response.audio_transcript.delta or response.text.delta event."""
         if not self._current_generation:
             return
@@ -694,7 +704,7 @@ class RealtimeSession(
         msg_gen.text_ch.send_nowait(delta)
         msg_gen.audio_transcript += delta
 
-    async def _handle_function_call_arguments_delta(self, event) -> None:
+    async def _handle_function_call_arguments_delta(self, event: Any) -> None:
         """Handle response.function_call_arguments.delta event."""
         if not self._current_generation:
             logger.warning("Received function call arguments delta but no current generation")
@@ -722,7 +732,7 @@ class RealtimeSession(
             f"total: {len(fnc_call_gen.arguments)} chars"
         )
 
-    async def _handle_function_call_arguments_done(self, event) -> None:
+    async def _handle_function_call_arguments_done(self, event: Any) -> None:
         """Handle response.function_call_arguments.done event."""
         if not self._current_generation:
             logger.warning("Received function call arguments done but no current generation")
@@ -754,7 +764,7 @@ class RealtimeSession(
         )
         logger.debug(f"Function call arguments: {fnc_call_gen.arguments}")
 
-    async def _handle_response_done(self, event) -> None:
+    async def _handle_response_done(self, event: Any) -> None:
         """Handle response.done event."""
         if not self._current_generation:
             return
@@ -946,7 +956,7 @@ class RealtimeSession(
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Update session options."""
         if is_given(tool_choice):
-            self._realtime_model._opts.tool_choice = tool_choice
+            self._realtime_model._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
 
     def generate_reply(
         self,

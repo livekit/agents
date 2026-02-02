@@ -3,7 +3,7 @@
 Complete Azure AI integration for LiveKit Agents, including Azure Speech Services and Azure Voice Live Realtime API.
 
 **What's included:**
-- **RealtimeModel** - Azure Voice Live for speech-to-speech with GPT-4o
+- **RealtimeModel** - Azure Voice Live for speech-to-speech
 - **STT** - Powered by Azure Speech Services
 - **TTS** - Powered by Azure Speech Services with neural voices
 
@@ -122,7 +122,7 @@ await session.start(room=ctx.room, agent=Agent(instructions="You are helpful."))
 
 ### Azure Voice Live Capabilities
 
-Azure Voice Live provides unified speech-to-speech powered by GPT-4o:
+Azure Voice Live provides unified speech-to-speech:
 
 - **Low-latency conversations** - Realtime bidirectional streaming
 - **Multilingual support** - Works with Azure's multilingual neural voices
