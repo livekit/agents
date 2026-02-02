@@ -15,7 +15,7 @@ You need a running PersonaPlex server on a GPU machine. See https://github.com/N
 Set the server URL as an environment variable:
 
 ```bash
-export PERSONAPLEX_URL="gpu-server:8998"
+export PERSONAPLEX_URL="ws://gpu-server:8998"
 ```
 
 ## Usage
@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
 ```python
 personaplex.RealtimeModel(
-    base_url=None,                  # Server URL (defaults to PERSONAPLEX_URL env var, then localhost:8998)
+    base_url=None,                  # Server URL (defaults to PERSONAPLEX_URL env var, then ws://localhost:8998)
     voice="NATF2",                  # Voice prompt (NATF0-3, NATM0-3, VARF0-4, VARM0-4)
     text_prompt="You are helpful.", # System prompt / persona description
     seed=None,                      # Optional seed for reproducibility
@@ -63,4 +63,4 @@ personaplex.RealtimeModel(
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PERSONAPLEX_URL` | PersonaPlex server address (host:port) | `localhost:8998` |
+| `PERSONAPLEX_URL` | PersonaPlex server address | `ws://localhost:8998` |

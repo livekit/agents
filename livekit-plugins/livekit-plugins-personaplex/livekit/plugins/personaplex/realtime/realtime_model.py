@@ -96,8 +96,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             base_url: WebSocket URL of the PersonaPlex server
-                (e.g. "localhost:8998"). If not set, reads from
-                PERSONAPLEX_URL env var. Defaults to "localhost:8998".
+                (e.g. "ws://localhost:8998"). If not set, reads from
+                PERSONAPLEX_URL env var. Defaults to "ws://localhost:8998".
             voice: Voice prompt to use. One of the 18 available voices
                 (e.g. "NATF2", "NATM0", "VARF1").
             text_prompt: System instruction / persona description for
