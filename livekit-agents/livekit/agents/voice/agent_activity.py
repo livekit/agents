@@ -2151,7 +2151,7 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, text_out.text)
 
         if len(tool_output.output) > 0:
-            self._session._update_agent_state("thinking")
+            self._session._update_agent_state("processing")
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
@@ -2658,7 +2658,7 @@ class AgentActivity(RecognitionHooks):
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         tool_output.first_tool_started_fut.add_done_callback(
-            lambda _: self._session._update_agent_state("thinking")
+            lambda _: self._session._update_agent_state("processing")
         )
 
         self._background_speeches.add(speech_handle)
