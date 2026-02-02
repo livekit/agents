@@ -414,7 +414,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": azure.TTS(),
+            "tts": azure.TTS(speech_region="westus"),
             "proxy-upstream": "westus.tts.speech.microsoft.com:443",
         },
         id="azure",

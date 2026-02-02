@@ -55,7 +55,9 @@ SUPPORTED_OUTPUT_FORMATS = {
 SDK_OUTPUT_FORMATS = {
     8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
     16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+    22050: speechsdk.SpeechSynthesisOutputFormat.Raw22050Hz16BitMonoPcm,
     24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+    44100: speechsdk.SpeechSynthesisOutputFormat.Raw44100Hz16BitMonoPcm,
     48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
 }
 
@@ -179,7 +181,7 @@ class TTS(tts.TTS):
             deployment_id: Custom deployment ID
             speech_auth_token: Authentication token
             http_session: Optional aiohttp session
-            num_prewarm: Number of synthesizers to prewarm on initialization (default: 10)
+            num_prewarm: Number of synthesizers to prewarm on initialization (default: 3)
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -373,7 +375,7 @@ class TTS(tts.TTS):
             return synthesizer
 
         # Run in thread pool (Azure SDK is synchronous)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             return await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_create_and_warmup), timeout=timeout
@@ -682,7 +684,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "expired_count": expired_count,
                         },
                     )
-                    asyncio.create_task(self._create_replacement_synthesizers(needed))
+                    # Store background tasks for proper lifecycle management
+                    task = asyncio.create_task(self._create_replacement_synthesizers(needed))
+                    # Optionally add to a set to prevent GC and allow cleanup
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
 
             logger.info(
                 "synthesizer acquired from pool",
@@ -769,7 +775,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "replacements_needed": needed,
                         },
                     )
-                    asyncio.create_task(self._create_replacement_synthesizers(needed))
+                    # Store background tasks for proper lifecycle management
+                    task = asyncio.create_task(self._create_replacement_synthesizers(needed))
+                    # Optionally add to a set to prevent GC and allow cleanup
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
 
     async def _synthesize_segment(
         self, output_emitter: tts.AudioEmitter, synthesizer: speechsdk.SpeechSynthesizer
@@ -793,14 +803,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         synthesis_complete_event = threading.Event()  # Signal when synthesis truly complete
 
         # Get the event loop before entering the thread
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _run_sdk_synthesis() -> None:
             """Run Azure SDK synthesis in sync mode with streaming callbacks."""
             import threading
 
             thread_id = threading.current_thread().ident
-            logger.debug(f"\033[92mSDK synthesis thread started (thread_id={thread_id})\033[0m")
+            logger.debug(f"SDK synthesis thread started (thread_id={thread_id})")
 
             # Send audio to async queue (thread-safe)
             async def _put_audio(audio_chunk: bytes | None, reason: str | None = None) -> None:
