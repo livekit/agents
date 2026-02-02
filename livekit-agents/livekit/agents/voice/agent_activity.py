@@ -138,6 +138,10 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPTool] = []
+        self._acknowledgment_set = False
+        self._acknowledgment_skipped = False
+        self._acknowledgment_text: str | None = None
+        self._acknowledgment_event = asyncio.Event()
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -768,7 +772,10 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
 
             await self._close_session()
-            await asyncio.gather(*self._interrupt_background_speeches(force=False))
+            await asyncio.gather(*self._interrupt_background_speeches(force=True))
+
+            for task in self._speech_tasks:
+                task.cancel()
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
@@ -1054,6 +1061,70 @@ class AgentActivity(RecognitionHooks):
         speech._mark_scheduled()
         self._wake_up_scheduling_task()
 
+    def wait_for_acknowledgment(self, timeout: float = 4.0) -> None:
+        handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
+        self._session.emit(
+            "speech_created",
+            SpeechCreatedEvent(speech_handle=handle, user_initiated=False, source="acknowledgment"),
+        )
+        self._create_speech_task(
+            self._acknowledgment_speech_task(handle, timeout),
+            speech_handle=handle,
+            name="AgentActivity.acknowledgment",
+        )
+        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_HIGH)
+
+    async def _acknowledgment_speech_task(self, handle: SpeechHandle, timeout: float) -> None:
+        event_wait_task = asyncio.ensure_future(self._acknowledgment_event.wait())
+        try:
+            # Wait for acknowledgment event, but also listen for interruptions
+            await asyncio.wait_for(
+                handle.wait_if_not_interrupted([event_wait_task]),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            self._acknowledgment_skipped = True
+        finally:
+            await utils.aio.cancel_and_wait(event_wait_task)
+
+        if handle.interrupted or self._acknowledgment_skipped or not self._acknowledgment_set:
+            if not handle.interrupted:
+                handle.interrupt(force=True)
+
+            handle._mark_done()
+            return
+
+        # Play the acknowledgment
+        await self._tts_task_impl(
+            speech_handle=handle,
+            text=self._acknowledgment_text or "",
+            audio=None,
+            add_to_chat_ctx=True,
+            model_settings=ModelSettings(),
+        )
+        handle._mark_done()
+
+    def set_acknowledgment(self, text: str) -> None:
+        if self._acknowledgment_skipped:
+            return
+
+        self._acknowledgment_text = text
+        self._acknowledgment_set = True
+        self._acknowledgment_event.set()
+
+    def skip_acknowledgment(self) -> None:
+        if self._acknowledgment_set or self._acknowledgment_skipped:
+            return
+
+        self._acknowledgment_skipped = True
+        self._acknowledgment_event.set()
+
+    def _reset_acknowledgment(self) -> None:
+        self._acknowledgment_set = False
+        self._acknowledgment_skipped = False
+        self._acknowledgment_text = None
+        self._acknowledgment_event.clear()
+
     @utils.log_exceptions(logger=logger)
     async def _scheduling_task(self) -> None:
         last_playout_ts = 0.0
@@ -1190,6 +1261,8 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
+
+        self.skip_acknowledgment()
 
         handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
         self._session.emit(
@@ -1475,6 +1548,8 @@ class AgentActivity(RecognitionHooks):
 
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
+
+        self._reset_acknowledgment()
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
@@ -1919,8 +1994,15 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
 
-        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = text_tee
+        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 3)
+        tts_text_input, tr_input, monitoring_ch = text_tee
+
+        async def _skip_acknowledgment_task() -> None:
+            async for _ in monitoring_ch:
+                self.skip_acknowledgment()
+                break
+
+        tasks.append(asyncio.create_task(_skip_acknowledgment_task()))
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None

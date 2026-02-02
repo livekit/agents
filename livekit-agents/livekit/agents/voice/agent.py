@@ -226,6 +226,31 @@ class Agent:
         """
         pass
 
+    def wait_for_acknowledgment(self, *, timeout: float = 4.0) -> None:
+        """
+        Schedules a high-priority acknowledgment message to be played before the LLM response.
+        This call is non-blocking and will return immediately.
+
+        Args:
+            timeout (float): The maximum time to wait for `set_acknowledgment` before skipping.
+        """
+        self._get_activity_or_raise().wait_for_acknowledgment(timeout)
+
+    def set_acknowledgment(self, text: str) -> None:
+        """
+        Sets the message for a previously scheduled acknowledgment.
+
+        Args:
+            text (str): The text to be synthesized and played.
+        """
+        self._get_activity_or_raise().set_acknowledgment(text)
+
+    def skip_acknowledgment(self) -> None:
+        """
+        Skips the currently waiting acknowledgment message.
+        """
+        self._get_activity_or_raise().skip_acknowledgment()
+
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
     ) -> (
