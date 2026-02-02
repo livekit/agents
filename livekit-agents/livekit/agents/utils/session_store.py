@@ -41,7 +41,7 @@ SCHEMA_SQL = """
         class_type BLOB,
         parent_id TEXT,
         tools_json TEXT,
-        init_kwargs_json TEXT,
+        init_kwargs BLOB,
         extra_state BLOB,
         durable_state BLOB,
         FOREIGN KEY (parent_id) REFERENCES agent(id)
@@ -326,7 +326,7 @@ class SessionStore:
         cursor.execute(
             """
             INSERT INTO agent
-            (id, runtime, class_type, parent_id, tools_json, init_kwargs_json, extra_state, durable_state)
+            (id, runtime, class_type, parent_id, tools_json, init_kwargs, extra_state, durable_state)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -335,7 +335,9 @@ class SessionStore:
                 pickle.dumps(state.cls),
                 parent_agent.id if parent_agent else None,
                 json.dumps(state.tools) if state.tools else None,
-                json.dumps(init_kwargs) if init_kwargs else None,
+                self._serialize_data(init_kwargs, passphrase=None, output_type="bytes")
+                if init_kwargs
+                else None,
                 extra_state_blob,
                 state.durable_state,
             ),
@@ -354,7 +356,7 @@ class SessionStore:
         from ..voice.agent import _AgentState
 
         row = cursor.execute(
-            "SELECT runtime, class_type, parent_id, tools_json, init_kwargs_json, extra_state, durable_state FROM agent WHERE id = ?",
+            "SELECT runtime, class_type, parent_id, tools_json, init_kwargs, extra_state, durable_state FROM agent WHERE id = ?",
             (agent_id,),
         ).fetchone()
 
@@ -366,7 +368,7 @@ class SessionStore:
             class_type_blob,
             parent_id,
             tools_json,
-            init_kwargs_json,
+            init_kwargs_blob,
             extra_state_blob,
             durable_state,
         ) = row
@@ -378,7 +380,7 @@ class SessionStore:
 
         # parse JSON fields
         tools = json.loads(tools_json) if tools_json else []
-        init_kwargs = json.loads(init_kwargs_json) if init_kwargs_json else {}
+        init_kwargs = self._deserialize_data(init_kwargs_blob, False, None) or {}
         extra_state = self._deserialize_data(extra_state_blob, False, None) or {}
 
         # load agent's chat context

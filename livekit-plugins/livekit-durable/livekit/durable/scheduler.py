@@ -250,7 +250,6 @@ class DurableScheduler:
                 if isinstance(ec._c, AgentTask):
 
                     async def _execute() -> Any:
-                        print("executing agent task", ec._c)
                         return await ec._c
 
                     coro = _execute()
@@ -292,13 +291,9 @@ class DurableScheduler:
                     if isinstance(nv._c, AgentTask):
                         # allow pickling the AgentTask before it's resolved
                         task.at_checkpoint.set()
-                        print("setting checkpoint for agent task", nv._c)
 
-                    print("executing effect call", nv)
                     await _execute_step(nv)
                     assert nv._done
-
-                    print("nv", nv)
                 else:
                     exc = DurableInvalidStateError(
                         f"Unsupported awaitable yielded: {nv!r}.\n"
