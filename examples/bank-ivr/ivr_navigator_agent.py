@@ -9,14 +9,15 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    JobProcess,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     RunContext,
     cli,
+    inference,
     metrics,
 )
 from livekit.agents.llm.tool_context import function_tool
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("phone-tree-agent")
 
@@ -75,7 +76,14 @@ class DtmfAgent(Agent):
         context.session.shutdown(drain=True)
 
 
-@server.realtime_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
+def prewarm(proc: JobProcess) -> None:
+    proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
+
+
+@server.rtc_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
 async def dtmf_session(ctx: JobContext) -> None:
     await ctx.connect()
     ctx.log_context_fields = {
@@ -83,10 +91,13 @@ async def dtmf_session(ctx: JobContext) -> None:
     }
 
     session: AgentSession = AgentSession(
-        vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-5"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        vad=ctx.proc.userdata["vad"],
+        llm=inference.LLM("openai/gpt-4.1"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("rime/arcana"),
+        # This flag does two things:
+        # 1. Helps agent avoid getting stuck listening to repeating IVR loops by actively responding when a loop is detected.
+        # 2. Automatically gives the agent the `send_dtmf_events` tool to allow it to dial DTMF digits.
         ivr_detection=True,
         min_endpointing_delay=5,
     )
@@ -114,7 +125,6 @@ async def dtmf_session(ctx: JobContext) -> None:
     await session.start(
         agent=DtmfAgent(user_request=user_request),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

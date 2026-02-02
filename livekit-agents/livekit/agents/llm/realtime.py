@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
+from .tool_context import Tool, ToolChoice, ToolContext
 
 
 @dataclass
@@ -160,7 +160,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
-    async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -> None: ...
+    async def update_tools(self, tools: list[Tool]) -> None: ...
 
     @abstractmethod
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...
@@ -181,6 +181,10 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     # commit the input audio buffer to the server
     @abstractmethod
     def commit_audio(self) -> None: ...
+
+    # commit the user turn to the server
+    @abstractmethod
+    def commit_user_turn(self) -> None: ...
 
     # clear the input audio buffer to the server
     @abstractmethod

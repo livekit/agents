@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
+from typing_extensions import NotRequired
 
 from .. import tokenize, tts, utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
@@ -19,9 +20,15 @@ from ._utils import create_access_token
 
 CartesiaModels = Literal[
     "cartesia",
-    "cartesia/sonic",
+    "cartesia/sonic-3",
     "cartesia/sonic-2",
     "cartesia/sonic-turbo",
+    "cartesia/sonic",
+]
+DeepgramModels = Literal[
+    "deepgram",
+    "deepgram/aura",
+    "deepgram/aura-2",
 ]
 ElevenlabsModels = Literal[
     "elevenlabs",
@@ -33,19 +40,79 @@ ElevenlabsModels = Literal[
 ]
 RimeModels = Literal[
     "rime",
-    "rime/mist",
-    "rime/mistv2",
     "rime/arcana",
+    "rime/mistv2",
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-1.5-max",
+    "inworld/inworld-tts-1.5-mini",
+    "inworld/inworld-tts-1-max",
     "inworld/inworld-tts-1",
 ]
 
+TTSModels = Union[CartesiaModels, DeepgramModels, ElevenlabsModels, RimeModels, InworldModels]
+
+
+def _parse_model_string(model: str) -> tuple[str, str | None]:
+    """Parse a model string into a model and voice
+    Args:
+        model (str): Model string to parse
+    Returns:
+        tuple[str, str | None]: Model and voice (voice is None if not specified)
+    """
+    voice: str | None = None
+    if (idx := model.rfind(":")) != -1:
+        voice = model[idx + 1 :]
+        model = model[:idx]
+    return model, voice
+
+
+class FallbackModel(TypedDict):
+    """A fallback model with optional extra configuration.
+
+    Extra fields are passed through to the provider.
+
+    Example:
+        >>> FallbackModel(model="cartesia/sonic", voice="")
+    """
+
+    model: str
+    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
+
+    voice: str
+    """Voice to use for the model."""
+
+    extra_kwargs: NotRequired[dict[str, Any]]
+    """Extra configuration for the model."""
+
+
+FallbackModelType = Union[FallbackModel, str]
+
+
+def _normalize_fallback(
+    fallback: list[FallbackModelType] | FallbackModelType,
+) -> list[FallbackModel]:
+    def _make_fallback(model: FallbackModelType) -> FallbackModel:
+        if isinstance(model, str):
+            model_name, voice = _parse_model_string(model)
+            return FallbackModel(model=model_name, voice=voice if voice else "")
+        return model
+
+    if isinstance(fallback, list):
+        return [_make_fallback(m) for m in fallback]
+
+    return [_make_fallback(fallback)]
+
 
 class CartesiaOptions(TypedDict, total=False):
-    duration: float  # max duration of audio in seconds
-    speed: Literal["slow", "normal", "fast"]  # default: not specified
+    emotion: str
+    speed: Literal["slow", "normal", "fast"]
+    volume: float
+
+
+class DeepgramOptions(TypedDict, total=False):
+    pass
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -60,8 +127,6 @@ class RimeOptions(TypedDict, total=False):
 class InworldOptions(TypedDict, total=False):
     pass
 
-
-TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
 TTSEncoding = Literal["pcm_s16le"]
 
@@ -81,6 +146,8 @@ class _TTSOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
+    fallback: NotGivenOr[list[FallbackModel]]
+    conn_options: NotGivenOr[APIConnectOptions]
 
 
 class TTS(tts.TTS):
@@ -98,6 +165,27 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: DeepgramModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -115,6 +203,8 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -132,6 +222,8 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[RimeOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -149,6 +241,8 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -166,6 +260,8 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -182,8 +278,15 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | ElevenlabsOptions | RimeOptions | InworldOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | ElevenlabsOptions
+            | RimeOptions
+            | InworldOptions
         ] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference TTS
 
@@ -198,6 +301,9 @@ class TTS(tts.TTS):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
+            fallback (FallbackModelType, optional): Fallback models - either a list of model names,
+                a list of FallbackModel instances.
+            conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         super().__init__(
@@ -232,6 +338,10 @@ class TTS(tts.TTS):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
+
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
@@ -242,6 +352,8 @@ class TTS(tts.TTS):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            fallback=fallback_models,
+            conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -262,11 +374,8 @@ class TTS(tts.TTS):
         Returns:
             TTS: TTS instance
         """
-        voice: NotGivenOr[str] = NOT_GIVEN
-        if (idx := model.rfind(":")) != -1:
-            voice = model[idx + 1 :]
-            model = model[:idx]
-        return cls(model, voice=voice)
+        model, voice = _parse_model_string(model)
+        return cls(model=model, voice=voice if voice else NOT_GIVEN)
 
     @property
     def model(self) -> str:
@@ -288,14 +397,19 @@ class TTS(tts.TTS):
         ws = None
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(f"{base_url}/tts", headers=headers), timeout
+                session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
+                timeout,
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit TTS") from e
 
-        params = {
+        params: dict[str, Any] = {
             "type": "session.create",
             "sample_rate": str(self._opts.sample_rate),
             "encoding": self._opts.encoding,
@@ -308,6 +422,22 @@ class TTS(tts.TTS):
             params["model"] = self._opts.model
         if self._opts.language:
             params["language"] = self._opts.language
+        if self._opts.fallback:
+            models = [
+                {
+                    "model": m.get("model"),
+                    "voice": m.get("voice"),
+                    "extra": m.get("extra_kwargs", {}),
+                }
+                for m in self._opts.fallback
+            ]
+            params["fallback"] = {"models": models}
+
+        if self._opts.conn_options:
+            params["connection"] = {
+                "timeout": self._opts.conn_options.timeout,
+                "retries": self._opts.conn_options.max_retry,
+            }
 
         try:
             await ws.send_str(json.dumps(params))
@@ -335,12 +465,14 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str, optional): Voice.
             model (TTSModels | str, optional): TTS model to use.
             language (str, optional): Language code for the TTS model.
+            extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
         if is_given(model):
             self._opts.model = model
@@ -348,11 +480,13 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if is_given(language):
             self._opts.language = language
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs.update(extra_kwargs)
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        raise NotImplementedError("ChunkedStream is not implemented")
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -401,12 +535,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            base_pkt = {
-                "type": "input_transcript",
-            }
+            base_pkt: dict[str, Any] = {}
+            base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
+                generation_config: dict[str, Any] = {}
+                if self._opts.voice:
+                    generation_config["voice"] = self._opts.voice
+                if self._opts.model:
+                    generation_config["model"] = self._opts.model
+                if self._opts.language:
+                    generation_config["language"] = self._opts.language
+                token_pkt["generation_config"] = generation_config
+                token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
                 input_sent_event.set()

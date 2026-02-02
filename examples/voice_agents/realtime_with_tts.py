@@ -3,10 +3,8 @@ import logging
 from dotenv import load_dotenv
 from google.genai.types import Modality  # noqa: F401
 
-from livekit.agents import AgentServer, JobContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.room_io import RoomOutputOptions
 from livekit.plugins import google, openai  # noqa: F401
 
 logger = logging.getLogger("realtime-with-tts")
@@ -53,9 +51,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=WeatherAgent(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_enabled=True,
-            audio_enabled=True,  # you can also disable audio output to use text modality only
+        room_options=room_io.RoomOptions(
+            text_output=True,
+            audio_output=True,  # you can also disable audio output to use text modality only
         ),
     )
     session.generate_reply(instructions="say hello to the user in English")

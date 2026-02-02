@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.14"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
@@ -29,9 +29,9 @@ dependencies = [
     "typer>=0.15.1",
     "click~=8.1",
     "certifi>=2025.6.15",
-    "livekit>=1.0.12,<2",
+    "livekit==1.0.23",
     "livekit-api>=1.0.7,<2",
-    "livekit-protocol>=1.0.8,<2",
+    "livekit-protocol>=1.1,<2",
     "livekit-blingfire~=1.0",
     "protobuf>=3",
     "pyjwt>=2.0",
@@ -44,13 +44,13 @@ dependencies = [
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",
-    "av>=14.0.0,<16",
+    "av>=14.0.0",
     "numpy>=1.26.0",
     "pydantic>=2.0,<3",
     "nest-asyncio>=1.6.0",
-    "opentelemetry-api>=1.34",
-    "opentelemetry-sdk>=1.34.1",
-    "opentelemetry-exporter-otlp>=1.34.1",
+    "opentelemetry-api~=1.39.0",
+    "opentelemetry-sdk~=1.39.0",
+    "opentelemetry-exporter-otlp~=1.39.0",
     "prometheus-client>=0.22",
     "openai>=1.99.2",
     "aiofiles>=24",
@@ -58,50 +58,57 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.10.0, <2; python_version >= '3.10'"]
-codecs = ["av>=12.0.0", "numpy>=1.26.0"]
+codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
-anam = ["livekit-plugins-anam>=1.3.0.rc1"]
-anthropic = ["livekit-plugins-anthropic>=1.3.0.rc1"]
-assemblyai = ["livekit-plugins-assemblyai>=1.3.0.rc1"]
-aws = ["livekit-plugins-aws>=1.3.0.rc1"]
-azure = ["livekit-plugins-azure>=1.3.0.rc1"]
-baseten = ["livekit-plugins-baseten>=1.3.0.rc1"]
-bey = ["livekit-plugins-bey>=1.3.0.rc1"]
-bithuman = ["livekit-plugins-bithuman>=1.3.0.rc1"]
-cartesia = ["livekit-plugins-cartesia>=1.3.0.rc1"]
-clova = ["livekit-plugins-clova>=1.3.0.rc1"]
-deepgram = ["livekit-plugins-deepgram>=1.3.0.rc1"]
-elevenlabs = ["livekit-plugins-elevenlabs>=1.3.0.rc1"]
-fal = ["livekit-plugins-fal>=1.3.0.rc1"]
+anam = ["livekit-plugins-anam>=1.3.12"]
+anthropic = ["livekit-plugins-anthropic>=1.3.12"]
+assemblyai = ["livekit-plugins-assemblyai>=1.3.12"]
+aws = ["livekit-plugins-aws>=1.3.12"]
+azure = ["livekit-plugins-azure>=1.3.12"]
+baseten = ["livekit-plugins-baseten>=1.3.12"]
+bey = ["livekit-plugins-bey>=1.3.12"]
+bithuman = ["livekit-plugins-bithuman>=1.3.12"]
+camb = ["livekit-plugins-camb>=1.3.12"]
+cartesia = ["livekit-plugins-cartesia>=1.3.12"]
+clova = ["livekit-plugins-clova>=1.3.12"]
+deepgram = ["livekit-plugins-deepgram>=1.3.12"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.3.12"]
+fal = ["livekit-plugins-fal>=1.3.12"]
 fishaudio = ["livekit-plugins-fishaudio>=1.2.17; python_version >= '3.10'"]
-fireworksai = ["livekit-plugins-fireworksai>=1.3.0.rc1"]
-gladia = ["livekit-plugins-gladia>=1.3.0.rc1"]
-google = ["livekit-plugins-google>=1.3.0.rc1"]
-groq = ["livekit-plugins-groq>=1.3.0.rc1"]
-hedra = ["livekit-plugins-hedra>=1.3.0.rc1"]
-hume = ["livekit-plugins-hume>=1.3.0.rc1"]
-inworld = ["livekit-plugins-inworld>=1.3.0.rc1"]
-langchain = ["livekit-plugins-langchain>=1.3.0.rc1"]
-lmnt = ["livekit-plugins-lmnt>=1.3.0.rc1"]
+fireworksai = ["livekit-plugins-fireworksai>=1.3.12"]
+gladia = ["livekit-plugins-gladia>=1.3.12"]
+google = ["livekit-plugins-google>=1.3.12"]
+groq = ["livekit-plugins-groq>=1.3.12"]
+hedra = ["livekit-plugins-hedra>=1.3.12"]
+hume = ["livekit-plugins-hume>=1.3.12"]
+inworld = ["livekit-plugins-inworld>=1.3.12"]
+langchain = ["livekit-plugins-langchain>=1.3.12"]
+lemonslice = ["livekit-plugins-lemonslice>=1.3.12"]
+liveavatar = ["livekit-plugins-liveavatar>=1.3.12"]
+lmnt = ["livekit-plugins-lmnt>=1.3.12"]
 minimax = ["livekit-plugins-minimax-ai>=1.2.15"]
-mistralai = ["livekit-plugins-mistralai>=1.3.0.rc1"]
-neuphonic = ["livekit-plugins-neuphonic>=1.3.0.rc1"]
-nltk = ["livekit-plugins-nltk>=1.3.0.rc1"]
-openai = ["livekit-plugins-openai>=1.3.0.rc1"]
-resemble = ["livekit-plugins-resemble>=1.3.0.rc1"]
-rime = ["livekit-plugins-rime>=1.3.0.rc1"]
-sarvam = ["livekit-plugins-sarvam>=1.3.0.rc1"]
-silero = ["livekit-plugins-silero>=1.3.0.rc1"]
-simli = ["livekit-plugins-simli>=1.3.0.rc1"]
-smallestai = ["livekit-plugins-smallestai>=1.3.0.rc1"]
-soniox = ["livekit-plugins-soniox>=1.3.0.rc1"]
-speechify = ["livekit-plugins-speechify>=1.3.0.rc1"]
-speechmatics = ["livekit-plugins-speechmatics>=1.3.0.rc1"]
-spitch = ["livekit-plugins-spitch>=1.3.0.rc1"]
-tavus = ["livekit-plugins-tavus>=1.3.0.rc1"]
-turn-detector = ["livekit-plugins-turn-detector>=1.3.0.rc1"]
-ultravox = ["livekit-plugins-ultravox>=1.3.0.rc1"]
-upliftai = ["livekit-plugins-upliftai>=1.3.0.rc1"]
+mistralai = ["livekit-plugins-mistralai>=1.3.12"]
+neuphonic = ["livekit-plugins-neuphonic>=1.3.12"]
+nltk = ["livekit-plugins-nltk>=1.3.12"]
+nvidia = ["livekit-plugins-nvidia>=1.3.12"]
+openai = ["livekit-plugins-openai>=1.3.12"]
+resemble = ["livekit-plugins-resemble>=1.3.12"]
+rime = ["livekit-plugins-rime>=1.3.12"]
+sarvam = ["livekit-plugins-sarvam>=1.3.12"]
+silero = ["livekit-plugins-silero>=1.3.12"]
+simli = ["livekit-plugins-simli>=1.3.12"]
+smallestai = ["livekit-plugins-smallestai>=1.3.12"]
+simplismart = ["livekit-plugins-simplismart>=1.3.12"]
+soniox = ["livekit-plugins-soniox>=1.3.12"]
+speechify = ["livekit-plugins-speechify>=1.3.12"]
+speechmatics = ["livekit-plugins-speechmatics>=1.3.12"]
+spitch = ["livekit-plugins-spitch>=1.3.12"]
+tavus = ["livekit-plugins-tavus>=1.3.12"]
+turn-detector = ["livekit-plugins-turn-detector>=1.3.12"]
+ultravox = ["livekit-plugins-ultravox>=1.3.12"]
+upliftai = ["livekit-plugins-upliftai>=1.3.12"]
+gradium = ["livekit-plugins-gradium>=1.3.12"]
+xai = ["livekit-plugins-xai>=1.3.12"]
 
 
 [project.urls]

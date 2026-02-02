@@ -22,8 +22,54 @@ const { state, ... } = useVoiceAssistant();
 ```
 """
 
+ATTRIBUTE_AGENT_NAME = "lk.agent.name"
+"""
+The name of the agent, stored in the agent's attributes.
+This is set when the agent joins a room and can be used to identify the agent type.
+"""
+
+ATTRIBUTE_SIMULATOR = "lk.simulator"
+"""
+Indicates that the participant is a simulator for testing purposes.
+When set to "true", the agent will skip audio input/output processing.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
+TOPIC_CLIENT_EVENTS = "lk.agent.events"
+"""
+Topic for streaming agent events to room participants.
+"""
+
+RPC_GET_SESSION_STATE = "lk.agent.get_session_state"
+"""
+RPC method to get the current session state.
+"""
+
+RPC_GET_CHAT_HISTORY = "lk.agent.get_chat_history"
+"""
+RPC method to get the agent<>user conversation turns.
+"""
+
+RPC_GET_AGENT_INFO = "lk.agent.get_agent_info"
+"""
+RPC method to get information about the current agent.
+"""
+
+RPC_SEND_MESSAGE = "lk.agent.send_message"
+"""
+RPC method to send a message and get the agent's response.
+"""
+
+TOPIC_AGENT_REQUEST = "lk.agent.request"
+"""
+Topic for sending requests to the agent via text streams (no size limit).
+"""
+
+TOPIC_AGENT_RESPONSE = "lk.agent.response"
+"""
+Topic for receiving responses from the agent via text streams (no size limit).
+"""
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
@@ -32,6 +78,10 @@ The key for the timed transcripts in the audio frame userdata.
 
 
 _T = TypeVar("_T")
+
+
+class FlushSentinel:
+    pass
 
 
 class NotGiven:
@@ -85,3 +135,28 @@ class APIConnectOptions:
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
+
+
+class TimedString(str):
+    """A string with optional start and end timestamps for word-level alignment."""
+
+    start_time: NotGivenOr[float]
+    end_time: NotGivenOr[float]
+    confidence: NotGivenOr[float]
+    start_time_offset: NotGivenOr[float]
+    # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+
+    def __new__(
+        cls,
+        text: str,
+        start_time: NotGivenOr[float] = NOT_GIVEN,
+        end_time: NotGivenOr[float] = NOT_GIVEN,
+        confidence: NotGivenOr[float] = NOT_GIVEN,
+        start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+    ) -> "TimedString":
+        obj = super().__new__(cls, text)
+        obj.start_time = start_time
+        obj.end_time = end_time
+        obj.confidence = confidence
+        obj.start_time_offset = start_time_offset
+        return obj

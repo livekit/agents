@@ -11,6 +11,7 @@ import numpy as np
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import TOPIC_TRANSCRIPTION
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -157,6 +158,13 @@ async def main(api_url: str, api_token: str):
     # connect to the room
     room = rtc.Room()
     await room.connect(api_url, api_token)
+
+    def on_transcription_received(reader: rtc.TextStreamReader, participant_identity: str):
+        # ignore transcription from the room
+        pass
+
+    room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_transcription_received)
+
     should_stop = asyncio.Event()
 
     # stop when disconnect from the room or the agent disconnects

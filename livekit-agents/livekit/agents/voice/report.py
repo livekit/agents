@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,16 +11,21 @@ from .events import AgentEvent
 
 @dataclass
 class SessionReport:
+    enable_recording: bool
     job_id: str
     room_id: str
     room: str
     options: AgentSessionOptions
-    audio_recording_path: Path | None
-    audio_recording_started_at: float | None
     events: list[AgentEvent]
     chat_history: ChatContext
-    enable_user_data_training: bool
+    audio_recording_path: Path | None = None
+    audio_recording_started_at: float | None = None
+    """Timestamp when the audio recording started"""
+    duration: float | None = None
+    started_at: float | None = None
+    """Timestamp when the session started"""
     timestamp: float = field(default_factory=time.time)
+    """Timestamp when the session report was created, typically at the end of the session"""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []

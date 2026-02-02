@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("weather-example")
@@ -71,8 +70,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=WeatherAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

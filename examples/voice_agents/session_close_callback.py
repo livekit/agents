@@ -2,8 +2,9 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, llm
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli
+from livekit.agents.beta.tools import EndCallTool
+from livekit.plugins import google, silero  # noqa: F401
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -18,16 +19,22 @@ load_dotenv()
 
 class MyAgent(Agent):
     def __init__(self):
-        super().__init__(instructions="You are a helpful assistant.")
+        super().__init__(
+            instructions="You are a helpful assistant.",
+            stt="assemblyai/universal-streaming",
+            llm="openai/gpt-4.1-mini",
+            tts="cartesia/sonic-3",
+            # llm=google.realtime.RealtimeModel(),
+            tools=[
+                EndCallTool(
+                    end_instructions="thanks the user for calling and tell them goodbye",
+                    delete_room=True,  # this will disconnect all remote participants, including SIP callers
+                )
+            ],
+        )
 
-    @llm.function_tool
-    async def close_session(self):
-        """Called when user want to leave the conversation"""
-
-        logger.info("Closing session from function tool")
-        await self.session.generate_reply(instructions="say goodbye to the user")
-
-        self.session.shutdown()
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="say hello to the user")
 
 
 server = AgentServer()
@@ -36,15 +43,9 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
 
-    # session will be closed automatically when the linked participant disconnects
-    # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
-    # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
     await session.start(agent=MyAgent(), room=ctx.room)
 
     @session.on("close")
@@ -66,13 +67,15 @@ async def entrypoint(ctx: JobContext):
                 if item.is_error:
                     text += " (error)"
 
+            elif item.type == "agent_handoff":
+                text = f"agent_handoff: {item.old_agent_id} -> {item.new_agent_id}"
+
+            else:
+                raise ValueError(f"unknown item type: {item.type}")
+
             print(text)
 
         print("=" * 20)
-
-        # Optionally, you can delete the room when the session is closed
-        # this will stop the worker immediately
-        # ctx.delete_room()
 
 
 if __name__ == "__main__":

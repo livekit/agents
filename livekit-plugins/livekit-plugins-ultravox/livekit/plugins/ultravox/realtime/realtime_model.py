@@ -424,7 +424,7 @@ class RealtimeSession(
         # Update local chat context
         self._chat_ctx = chat_ctx.copy()
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         """Update the available tools."""
         # Get current and new tool names for comparison
         current_tool_names = set(self._tools.function_tools.keys())
@@ -466,7 +466,7 @@ class RealtimeSession(
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frames (not supported by Ultravox)."""
-        pass
+        logger.warning("push_video is not supported by Ultravox.")
 
     def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
         """Send an event to the Ultravox WebSocket."""
@@ -1137,6 +1137,9 @@ class RealtimeSession(
 
     def clear_audio(self) -> None:
         logger.warning("clear audio is not supported by Ultravox.")
+
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by Ultravox.")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Resample audio frame to the required sample rate."""

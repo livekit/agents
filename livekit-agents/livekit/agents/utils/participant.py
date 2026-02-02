@@ -4,6 +4,62 @@ import asyncio
 
 from livekit import rtc
 
+from ..types import ATTRIBUTE_AGENT_NAME
+
+
+async def wait_for_agent(
+    room: rtc.Room,
+    *,
+    agent_name: str | None = None,
+) -> rtc.RemoteParticipant:
+    """
+    Wait for an agent participant to join the room.
+
+    Args:
+        room: The room to wait for the agent in.
+        agent_name: If provided, waits for an agent with matching lk.agent.name attribute.
+                   If None, returns the first agent participant found.
+
+    Returns:
+        The agent participant.
+
+    Raises:
+        RuntimeError: If the room is not connected.
+    """
+    if not room.isconnected():
+        raise RuntimeError("room is not connected")
+
+    fut: asyncio.Future[rtc.RemoteParticipant] = asyncio.Future()
+
+    def matches_agent(p: rtc.RemoteParticipant) -> bool:
+        if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            return False
+        if agent_name is None:
+            return True
+        return p.attributes.get(ATTRIBUTE_AGENT_NAME) == agent_name
+
+    def on_participant_connected(p: rtc.RemoteParticipant) -> None:
+        if matches_agent(p) and not fut.done():
+            fut.set_result(p)
+
+    def on_attributes_changed(changed: list[str], p: rtc.Participant) -> None:
+        if isinstance(p, rtc.RemoteParticipant) and matches_agent(p) and not fut.done():
+            fut.set_result(p)
+
+    room.on("participant_connected", on_participant_connected)
+    room.on("participant_attributes_changed", on_attributes_changed)
+
+    try:
+        # Check existing participants
+        for p in room.remote_participants.values():
+            if matches_agent(p):
+                return p
+
+        return await fut
+    finally:
+        room.off("participant_connected", on_participant_connected)
+        room.off("participant_attributes_changed", on_attributes_changed)
+
 
 async def wait_for_participant(
     room: rtc.Room,

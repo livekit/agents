@@ -12,7 +12,7 @@ from typing import Any
 
 from huggingface_hub import errors
 
-from livekit.agents import llm
+from livekit.agents import Plugin, llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
@@ -20,6 +20,7 @@ from livekit.agents.utils import hw
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
+from .version import __version__
 
 MAX_HISTORY_TOKENS = 128
 MAX_HISTORY_TURNS = 6
@@ -44,9 +45,13 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
 
 
 class _EUORunnerBase(_InferenceRunner):
-    def __init__(self, model_type: EOUModelType):
-        super().__init__()
-        self._model_rev = MODEL_REVISIONS[model_type]
+    @classmethod
+    @abstractmethod
+    def model_type(cls) -> EOUModelType: ...
+
+    @classmethod
+    def model_revision(cls) -> str:
+        return MODEL_REVISIONS[cls.model_type()]
 
     def _normalize_text(self, text: str) -> str:
         if not text:
@@ -101,19 +106,19 @@ class _EUORunnerBase(_InferenceRunner):
         # filter this log since it conflicts with the console CLI (since it directly prints to stdout)
         logger.addFilter(filt)
         try:
-            import onnxruntime as ort
+            import onnxruntime as ort  # type: ignore
             from huggingface_hub import errors
             from transformers import AutoTokenizer  # type: ignore
         finally:
             logger.removeFilter(filt)
 
-
+        revision = self.__class__.model_revision()
         try:
             local_path_onnx = _download_from_hf_hub(
                 HG_MODEL,
                 ONNX_FILENAME,
                 subfolder="onnx",
-                revision=self._model_rev,
+                revision=revision,
                 local_files_only=True,
             )
             sess_options = ort.SessionOptions()
@@ -126,18 +131,21 @@ class _EUORunnerBase(_InferenceRunner):
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
             self._tokenizer = AutoTokenizer.from_pretrained(
-                HG_MODEL, revision=self._model_rev, local_files_only=True, truncation_side="left"
+                HG_MODEL,
+                revision=revision,
+                local_files_only=True,
+                truncation_side="left",
             )
 
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
-                f"Could not find model {HG_MODEL} with revision {self._model_rev}. "
+                f"Could not find model {HG_MODEL} with revision {revision}. "
                 "Make sure you have downloaded the model before running the agent. "
                 "Use `python3 your_agent.py download-files` to download the models."
             )
             raise RuntimeError(
                 "livekit-plugins-turn-detector initialization failed. "
-                f"Could not find model {HG_MODEL} with revision {self._model_rev}."
+                f"Could not find model {HG_MODEL} with revision {revision}."
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -167,6 +175,26 @@ class _EUORunnerBase(_InferenceRunner):
             "input": text,
         }
         return json.dumps(result).encode()
+
+    @classmethod
+    def _download_files(cls) -> None:
+        from transformers import AutoTokenizer
+
+        # ensure the tokenizer is downloaded
+        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())
+        _download_from_hf_hub(
+            HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=cls.model_revision()
+        )
+        _download_from_hf_hub(HG_MODEL, "languages.json", revision=cls.model_revision())
+
+
+class EOUPlugin(Plugin):
+    def __init__(self, runner: type[_EUORunnerBase]) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
+        self._runner_class = runner
+
+    def download_files(self) -> None:
+        self._runner_class._download_files()
 
 
 class EOUModelBase(ABC):

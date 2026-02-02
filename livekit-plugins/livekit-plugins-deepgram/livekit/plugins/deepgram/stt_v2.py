@@ -37,6 +37,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
@@ -96,7 +97,14 @@ class STTv2(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
+            )
+        )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -411,6 +419,13 @@ class SpeechStreamv2(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            ws_headers = {
+                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            }
+            logger.debug(
+                "Established new Deepgram STT WebSocket connection:",
+                extra={"headers": ws_headers},
+            )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e
         return ws
@@ -425,7 +440,7 @@ class SpeechStreamv2(stt.SpeechStream):
         self._event_ch.send_nowait(usage_event)
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
-        alts = _parse_transcription(self._opts.language, data)
+        alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
             event = stt.SpeechEvent(
                 type=event_type,
@@ -490,7 +505,9 @@ class SpeechStreamv2(stt.SpeechStream):
             raise APIStatusError(message=desc, status_code=code)
 
 
-def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
+def _parse_transcription(
+    language: str, data: dict[str, Any], start_time_offset: float
+) -> list[stt.SpeechData]:
     transcript = data.get("transcript")
     words = data.get("words")
     if not words:
@@ -499,10 +516,19 @@ def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.Speech
 
     sd = stt.SpeechData(
         language=language,
-        start_time=data["audio_window_start"] if data["audio_window_start"] else 0,
-        end_time=data["audio_window_end"] if data["audio_window_end"] else 0,
+        start_time=data.get("audio_window_start", 0) + start_time_offset,
+        end_time=data.get("audio_window_end", 0) + start_time_offset,
         confidence=confidence,
         text=transcript or "",
+        words=[
+            TimedString(
+                text=word.get("word", ""),
+                start_time=word.get("start", 0) + start_time_offset,
+                end_time=word.get("end", 0) + start_time_offset,
+                start_time_offset=start_time_offset,
+            )
+            for word in words
+        ],
     )
     return [sd]
 

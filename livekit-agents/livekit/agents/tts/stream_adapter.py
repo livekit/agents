@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any
+from typing import Any, ClassVar
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -76,6 +76,8 @@ class StreamAdapter(TTS):
 
 
 class StreamAdapterWrapper(SynthesizeStream):
+    _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
+
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts: StreamAdapter = tts

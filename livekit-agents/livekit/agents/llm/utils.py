@@ -29,13 +29,7 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import (
-    FunctionTool,
-    RawFunctionTool,
-    get_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -201,8 +195,12 @@ def build_legacy_openai_schema(
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = model.model_json_schema()
+
+    # Ensure 'required' field exists for compatibility with strict APIs like Groq
+    if "required" not in schema:
+        schema["required"] = []
 
     if internally_tagged:
         return {
@@ -227,8 +225,12 @@ def build_strict_openai_schema(
 ) -> dict[str, Any]:
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
+
+    # Ensure 'required' field exists for compatibility with strict APIs
+    if "required" not in schema:
+        schema["required"] = []
 
     return {
         "type": "function",
@@ -324,21 +326,38 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info = Field()
+        field_info: FieldInfo | None = None
+        field_attrs: dict[str, Any] = {}
 
         # Annotated[str, Field(description="...")]
         if get_origin(type_hint) is Annotated:
             annotated_args = get_args(type_hint)
             type_hint = annotated_args[0]
-            field_info = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), field_info
+            annotated_field = next(
+                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
             )
+            if annotated_field and hasattr(annotated_field, "asdict"):
+                # `asdict` is available after pydantic 2.12
+                field_attrs = annotated_field.asdict()["attributes"]
+            elif annotated_field:
+                field_attrs["default"] = annotated_field.default
+                field_attrs["description"] = annotated_field.description
+                field_info = annotated_field
 
-        if default_value is not ... and field_info.default is PydanticUndefined:
-            field_info.default = default_value
+        if (
+            default_value is not ...
+            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
+        ):
+            field_attrs["default"] = default_value
 
-        if field_info.description is None:
-            field_info.description = param_docs.get(param_name, None)
+        if field_attrs.get("description") is None:
+            field_attrs["description"] = param_docs.get(param_name, None)
+
+        if not field_info:
+            field_info = Field(**field_attrs)
+        else:
+            for k, v in field_attrs.items():
+                setattr(field_info, k, v)
 
         fields[param_name] = (type_hint, field_info)
 
@@ -360,7 +379,7 @@ def prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
     args_dict = from_json(json_arguments)
 
-    if is_function_tool(fnc):
+    if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
         # Function arguments with default values are treated as optional
@@ -382,7 +401,7 @@ def prepare_function_arguments(
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
-    elif is_raw_function_tool(fnc):
+    elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
         raw_fields = {

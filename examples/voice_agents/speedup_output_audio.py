@@ -13,9 +13,10 @@ from livekit.agents import (
     JobProcess,
     ModelSettings,
     cli,
+    inference,
     utils,
 )
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 try:
     import librosa
@@ -90,12 +91,14 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
     # warmup the librosa JIT
     librosa.effects.time_stretch(np.random.randn(16000).astype(np.float32), rate=1.2)
+
+
+server.setup_fnc = prewarm
 
 
 @server.rtc_session()
@@ -107,10 +110,9 @@ async def entrypoint(ctx: JobContext):
     }
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=openai.TTS(voice="ash"),
-        # llm=openai.realtime.RealtimeModel(voice="alloy"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("cartesia/sonic-3"),
     )
 
     await session.start(agent=MyAgent(), room=ctx.room)

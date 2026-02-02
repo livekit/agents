@@ -94,7 +94,8 @@ class LogQueueHandler(logging.Handler):
             record.msg = msg
             record.args = None
             record.exc_info = None
-            record.exc_text = None
+            # pass formatted exc_text since stack trace is not pickleable
+            record.exc_text = record.exc_text
             record.stack_info = None
 
             # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json

@@ -18,6 +18,7 @@ import asyncio
 import time
 import weakref
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -44,6 +45,7 @@ class _VADOptions:
     prefix_padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
+    deactivation_threshold: float
     sample_rate: int
 
 
@@ -65,6 +67,8 @@ class VAD(agents.vad.VAD):
         activation_threshold: float = 0.5,
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
+        onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
@@ -101,7 +105,9 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+            onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
         Returns:
@@ -119,13 +125,17 @@ class VAD(agents.vad.VAD):
             )
             prefix_padding_duration = padding_duration
 
-        session = onnx_model.new_inference_session(force_cpu)
+        if is_given(deactivation_threshold) and deactivation_threshold <= 0:
+            raise ValueError("deactivation_threshold must be greater than 0")
+
+        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
+            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
@@ -174,6 +184,7 @@ class VAD(agents.vad.VAD):
         prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
         max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
         activation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the VAD options.
@@ -197,6 +208,8 @@ class VAD(agents.vad.VAD):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+        if is_given(deactivation_threshold):
+            self._opts.deactivation_threshold = deactivation_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -205,6 +218,7 @@ class VAD(agents.vad.VAD):
                 prefix_padding_duration=prefix_padding_duration,
                 max_buffered_speech=max_buffered_speech,
                 activation_threshold=activation_threshold,
+                deactivation_threshold=deactivation_threshold,
             )
 
 
@@ -228,6 +242,7 @@ class VADStream(agents.vad.VADStream):
         prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
         max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
         activation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the VAD options.
@@ -240,6 +255,7 @@ class VADStream(agents.vad.VADStream):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH.
         """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
@@ -253,6 +269,8 @@ class VADStream(agents.vad.VADStream):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+        if is_given(deactivation_threshold):
+            self._opts.deactivation_threshold = deactivation_threshold
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
@@ -451,7 +469,9 @@ class VADStream(agents.vad.VADStream):
                     )
                 )
 
-                if p >= self._opts.activation_threshold:
+                if p >= self._opts.activation_threshold or (
+                    pub_speaking and p > self._opts.deactivation_threshold
+                ):
                     speech_threshold_duration += window_duration
                     silence_threshold_duration = 0.0
 
@@ -485,7 +505,6 @@ class VADStream(agents.vad.VADStream):
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
-                        pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
@@ -494,11 +513,15 @@ class VADStream(agents.vad.VADStream):
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
-                                speech_duration=pub_speech_duration,
+                                speech_duration=max(
+                                    0.0, pub_speech_duration - silence_threshold_duration
+                                ),
                                 frames=[_copy_speech_buffer()],
                                 speaking=False,
                             )
                         )
+
+                        pub_speech_duration = 0.0
 
                         _reset_write_cursor()
 

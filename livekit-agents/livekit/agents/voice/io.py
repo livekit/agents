@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import FlushSentinel, TimedString as TimedString
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?
@@ -22,10 +22,20 @@ STTNode = Callable[
     ],
 ]
 LLMNode = Callable[
-    [llm.ChatContext, list[Union[llm.FunctionTool, llm.RawFunctionTool]], ModelSettings],
+    [
+        llm.ChatContext,
+        list[llm.Tool],
+        ModelSettings,
+    ],
     Union[
-        Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]],
-        Awaitable[Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]]],
+        Optional[
+            Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
+        ],
+        Awaitable[
+            Optional[
+                Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
+            ]
+        ],
     ],
 ]
 TTSNode = Callable[
@@ -35,22 +45,6 @@ TTSNode = Callable[
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
     ],
 ]
-
-
-class TimedString(str):
-    start_time: NotGivenOr[float]
-    end_time: NotGivenOr[float]
-
-    def __new__(
-        cls,
-        text: str,
-        start_time: NotGivenOr[float] = NOT_GIVEN,
-        end_time: NotGivenOr[float] = NOT_GIVEN,
-    ) -> TimedString:
-        obj = super().__new__(cls, text)
-        obj.start_time = start_time
-        obj.end_time = end_time
-        return obj
 
 
 class AudioInput:
@@ -133,11 +127,17 @@ class PlaybackFinishedEvent:
 
 
 @dataclass
+class PlaybackStartedEvent:
+    created_at: float
+    """The timestamp (time.time())when the playback started"""
+
+
+@dataclass
 class AudioOutputCapabilities:
     pause: bool
 
 
-class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
+class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started"]]):
     def __init__(
         self,
         *,
@@ -173,6 +173,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
                     synchronized_transcript=ev.synchronized_transcript,
                 ),
             )
+            self.next_in_chain.on(
+                "playback_started", lambda ev: self.on_playback_started(created_at=ev.created_at)
+            )
 
     @property
     def label(self) -> str:
@@ -181,6 +184,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     @property
     def next_in_chain(self) -> AudioOutput | None:
         return self.__next_in_chain
+
+    def on_playback_started(self, *, created_at: float) -> None:
+        self.emit("playback_started", PlaybackStartedEvent(created_at=created_at))
 
     def on_playback_finished(
         self,
@@ -226,6 +232,10 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
             self.__playback_finished_event.clear()
 
         return self.__last_playback_ev
+
+    def _reset_playback_count(self) -> None:
+        self.__playback_segments_count = 0
+        self.__playback_finished_count = 0
 
     @property
     def sample_rate(self) -> int | None:

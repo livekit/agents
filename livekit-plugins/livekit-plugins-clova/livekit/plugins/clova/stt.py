@@ -61,7 +61,11 @@ class STT(stt.STT):
         ``CLOVA_STT_SECRET_KEY`` and ``CLOVA_STT_INVOKE_URL`` environmental variables, respectively.
         """
 
-        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=False, interim_results=True, aligned_transcript=False
+            )
+        )
         clova_secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = (
             invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")

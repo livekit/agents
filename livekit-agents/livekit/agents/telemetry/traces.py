@@ -2,51 +2,55 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
 import aiohttp
+import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace
+from opentelemetry import context as otel_context, trace, trace as trace_api
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
-    LogData,
     LoggerProvider,
     LoggingHandler,
-    LogRecord,
     LogRecordProcessor,
+    ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import AttributeValue
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
 from ..log import logger
+from . import trace_types
 
 if TYPE_CHECKING:
-    from ..llm import ChatItem
+    from ..llm import ChatContext, ChatItem
+    from ..observability import Tagger
     from ..voice.report import SessionReport
 
 
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
-        self._tracer_provider = trace.get_tracer_provider()
+        self._tracer_provider: trace_api.TracerProvider = trace.get_tracer_provider()
         self._tracer = trace.get_tracer(instrumenting_module_name)
 
-    def set_provider(self, tracer_provider: TracerProvider) -> None:
+    def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
         self._tracer_provider = tracer_provider
         self._tracer = trace.get_tracer(
             self._instrumenting_module_name,
@@ -62,11 +66,11 @@ class _DynamicTracer(Tracer):
             yield span
 
 
-tracer: Tracer = _DynamicTracer("livekit-agents")
+tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
@@ -74,14 +78,19 @@ class _MetadataSpanProcessor(SpanProcessor):
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
-    def emit(self, log_data: LogData) -> None:
-        log_data.log_record.attributes.update(self._metadata)
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(self._metadata)  # type: ignore
+        else:
+            log_data.log_record.attributes = self._metadata
 
-    def on_emit(self, log_data: LogData) -> None:
-        log_data.log_record.attributes.update(self._metadata)
+        if log_data.instrumentation_scope:
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
 
     def shutdown(self) -> None:
         pass
@@ -91,7 +100,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
 
 def set_tracer_provider(
-    tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
@@ -99,22 +108,53 @@ def set_tracer_provider(
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
     """
-    if metadata:
+    if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
     tracer.set_provider(tracer_provider)
 
 
 def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> None:
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
-    )
+    token_ttl = timedelta(hours=6)
+    refresh_margin = timedelta(minutes=5)
 
+    class _AuthRefreshingSession(requests.Session):
+        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
+            super().__init__()
+            self._header_provider = header_provider
+
+        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+            self.headers.update(self._header_provider())
+            return super().request(*args, **kwargs)
+
+    class _AuthHeaderProvider:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._auth_header = ""
+            self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
+            self._refresh()
+
+        def _refresh(self) -> None:
+            access_token = (
+                api.AccessToken()
+                .with_observability_grants(api.ObservabilityGrants(write=True))
+                .with_ttl(token_ttl)
+            )
+            self._auth_header = f"Bearer {access_token.to_jwt()}"
+            self._expires_at = datetime.now(timezone.utc) + token_ttl
+
+        def __call__(self) -> dict[str, str]:
+            now = datetime.now(timezone.utc)
+            if now >= self._expires_at - refresh_margin:
+                with self._lock:
+                    if now >= self._expires_at - refresh_margin:
+                        self._refresh()
+            return {"Authorization": self._auth_header}
+
+    header_provider = _AuthHeaderProvider()
+    session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
-    headers = (("Authorization", f"Bearer {access_token.to_jwt()}"),)
-    metadata = {"room_id": room_id, "job_id": job_id}
+    metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
     resource = Resource.create(
         {
@@ -124,25 +164,40 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    tracer_provider = TracerProvider(resource=resource)
-    set_tracer_provider(tracer_provider)
+    # Check if a tracer provider is not set and set one up
+    # below shows how the ProxyTracerProvider is returned when none have been setup
+    # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+    tracer_provider: trace_api.TracerProvider
+    if isinstance(
+        tracer._tracer_provider, (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider)
+    ):
+        tracer_provider = trace_sdk.TracerProvider(resource=resource)
+        set_tracer_provider(tracer_provider)
+    else:
+        # attach the processor to the existing tracer provider
+        tracer_provider = tracer._tracer_provider
+        if isinstance(tracer_provider, trace_sdk.TracerProvider):
+            tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
 
-    tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
-    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    if isinstance(tracer_provider, trace_sdk.TracerProvider):
+        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    logger_provider = LoggerProvider()
-    set_logger_provider(logger_provider)
+    logger_provider = get_logger_provider()
+    if not isinstance(logger_provider, LoggerProvider):
+        logger_provider = LoggerProvider()
+        set_logger_provider(logger_provider)
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
@@ -150,6 +205,46 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     root = logging.getLogger()
     root.addHandler(handler)
+
+
+def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
+    role_to_event = {
+        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
+        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+    }
+
+    events: list[tuple[str, Attributes]] = []
+    for item in chat_ctx.items:
+        if item.type == "message" and (event_name := role_to_event.get(item.role)):
+            # only support text content for now
+            events.append((event_name, {"content": item.text_content or ""}))
+        elif item.type == "function_call":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            json.dumps(
+                                {
+                                    "function": {"name": item.name, "arguments": item.arguments},
+                                    "id": item.call_id,
+                                    "type": "function",
+                                }
+                            )
+                        ],
+                    },
+                )
+            )
+        elif item.type == "function_call_output":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
+                    {"content": item.output, "name": item.name, "id": item.call_id},
+                )
+            )
+    return events
 
 
 def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
@@ -182,9 +277,13 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
 
         metrics = item.metrics
         if "started_speaking_at" in metrics:
-            msg.metrics.started_speaking_at.FromSeconds(int(metrics["started_speaking_at"]))
+            msg.metrics.started_speaking_at.FromMilliseconds(
+                int(metrics["started_speaking_at"] * 1000)
+            )
         if "stopped_speaking_at" in metrics:
-            msg.metrics.stopped_speaking_at.FromSeconds(int(metrics["stopped_speaking_at"]))
+            msg.metrics.stopped_speaking_at.FromMilliseconds(
+                int(metrics["stopped_speaking_at"] * 1000)
+            )
         if "transcription_delay" in metrics:
             msg.metrics.transcription_delay = metrics["transcription_delay"]
         if "end_of_turn_delay" in metrics:
@@ -197,8 +296,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
             msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
         if "e2e_latency" in metrics:
             msg.metrics.e2e_latency = metrics["e2e_latency"]
-
-        msg.created_at.FromSeconds(int(item.created_at))
+        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call":
         fc = item_pb.function_call
@@ -206,7 +304,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fc.call_id = item.call_id
         fc.arguments = item.arguments
         fc.name = item.name
-        fc.created_at.FromSeconds(int(item.created_at))
+        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call_output":
         fco = item_pb.function_call_output
@@ -215,7 +313,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fco.call_id = item.call_id
         fco.output = item.output
         fco.is_error = item.is_error
-        fco.created_at.FromSeconds(int(item.created_at))
+        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "agent_handoff":
         ah = item_pb.agent_handoff
@@ -223,81 +321,101 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         if item.old_agent_id is not None:
             ah.old_agent_id = item.old_agent_id
         ah.new_agent_id = item.new_agent_id
-        ah.created_at.FromSeconds(int(item.created_at))
+        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    item_dict = MessageToDict(item_pb)
-
-    # patch `arguments` & `output` to make them indexable attributes
-    try:
-        if item.type == "function_call":
-            item_dict["arguments"] = json.loads(item_dict["arguments"])
-        elif item.type == "function_call_output":
-            item_dict["output"] = json.loads(item_dict["output"])
-    except Exception:
-        pass  # ignore
-
-    return item_dict
-
-
-def _to_rfc3339(value: int | float | datetime) -> str:
-    if isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(value, tz=timezone.utc)
-    elif isinstance(value, datetime):
-        dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    else:
-        raise TypeError(f"Unsupported type for RFC3339 conversion: {type(value)!r}")
-
-    dt = dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
-    return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return MessageToDict(item_pb)
 
 
 async def _upload_session_report(
     *,
-    room_id: str,
-    job_id: str,
+    agent_name: str,
     cloud_hostname: str,
     report: SessionReport,
+    tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
-    chat_logger = get_logger_provider().get_logger(
-        name="chat_history",
-        attributes={
-            "room_id": report.room_id,
-            "job_id": report.job_id,
-            "room": report.room,
-            "lk.enable_user_data_training": report.enable_user_data_training,
-        },
-    )
-
-    def _log(body: str, timestamp: int, attributes: dict) -> None:
-        chat_logger.emit(
-            LogRecord(
-                body=body,
-                timestamp=timestamp,
-                attributes=attributes,
-                trace_id=0,
-                span_id=0,
-                trace_flags=0,
-                severity_number=SeverityNumber.UNSPECIFIED,
-                severity_text="unspecified",
-            )
+    def _get_logger(name: str) -> Any:
+        return get_logger_provider().get_logger(
+            name=name,
+            attributes={
+                "room_id": report.room_id,
+                "job_id": report.job_id,
+                "room": report.room,
+            },
         )
 
+    def _log(
+        otel_logger: Any,
+        body: str,
+        timestamp: int,
+        attributes: dict,
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
+        severity_text: str = "unspecified",
+    ) -> None:
+        otel_logger.emit(
+            body=body,
+            timestamp=timestamp,
+            attributes=attributes,
+            severity_number=severity,
+            severity_text=severity_text,
+        )
+
+    chat_logger = _get_logger("chat_history")
+
     _log(
+        chat_logger,
         body="session report",
-        timestamp=int((report.audio_recording_started_at or 0) * 1e9),
+        timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
         attributes={
-            "chat.options": vars(report.options),
-            "chat.report_timestamp": report.timestamp,
+            "session.options": vars(report.options),
+            "session.report_timestamp": report.timestamp,
+            "agent_name": agent_name,
         },
     )
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED
+        severity_text: str = "unspecified"
+
+        if item.type == "function_call_output" and item.is_error:
+            severity = SeverityNumber.ERROR
+            severity_text = "error"
+
         _log(
+            chat_logger,
             body="chat item",
             timestamp=int(item.created_at * 1e9),
             attributes={"chat.item": item_log},
+            severity=severity,
+            severity_text=severity_text,
+        )
+
+    eval_logger = _get_logger("evaluations")
+    if tagger.evaluations:
+        for evaluation in tagger.evaluations:
+            severity = SeverityNumber.UNSPECIFIED
+            severity_text = "unspecified"
+
+            if evaluation.get("verdict") == "fail":
+                severity = SeverityNumber.ERROR
+                severity_text = "error"
+
+            _log(
+                eval_logger,
+                body="evaluation",
+                timestamp=int(report.timestamp * 1e9),
+                attributes={"evaluation": evaluation},
+                severity=severity,
+                severity_text=severity_text,
+            )
+
+    if tagger.outcome_reason:
+        _log(
+            eval_logger,
+            body="outcome",
+            timestamp=int(report.timestamp * 1e9),
+            attributes={"outcome": {"reason": tagger.outcome_reason}},
         )
 
     # emit recording
@@ -309,8 +427,9 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id, enable_user_data_training=report.enable_user_data_training
+        room_id=report.room_id,
     )
+    header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
 
     mp = aiohttp.MultipartWriter("form-data")
@@ -338,7 +457,6 @@ async def _upload_session_report(
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
-            part.headers["Created-At"] = _to_rfc3339(report.audio_recording_started_at)
 
     url = f"https://{cloud_hostname}/observability/recordings/v0"
     headers = {
@@ -346,7 +464,21 @@ async def _upload_session_report(
         "Content-Type": mp.content_type,
     }
 
+    logger.debug("uploading session report to LiveKit Cloud")
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
 
-    logger.info("uploaded")
+    logger.debug("finished uploading")
+
+
+def _shutdown_telemetry() -> None:
+    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
+        logger.debug("shutting down telemetry tracer provider")
+        tracer_provider.force_flush()
+        tracer_provider.shutdown()
+
+    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
+        # force_flush will cause deadlock when new logs from OTLPLogExporter are emitted
+        # logger_provider.force_flush()
+        logger.debug("shutting down telemetry logger provider")
+        logger_provider.shutdown()  # type: ignore

@@ -27,13 +27,13 @@ import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
-from multiprocessing.context import ForkServerContext
-from typing import Any, Callable, Generic, Literal, Optional, TypeVar, Union, overload
+from typing import Any, Callable, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
 from aiohttp import web
+from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -51,7 +51,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
-from .types import NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -80,6 +80,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -103,9 +104,11 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass
@@ -190,7 +193,7 @@ class ServerOptions:
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
     """Maximum number of times to retry connecting to LiveKit."""
-    ws_url: str = "ws://localhost:7880"
+    ws_url: str | None = None
     """URL to connect to the LiveKit server.
 
     By default it uses ``LIVEKIT_URL`` from environment"""
@@ -251,6 +254,11 @@ EventTypes = Literal["worker_started", "worker_registered"]
 
 
 class AgentServer(utils.EventEmitter[EventTypes]):
+    _default_num_idle_processes = ServerEnvOption(
+        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+    )
+    _default_port = ServerEnvOption(dev_default=0, prod_default=8081)
+
     def __init__(
         self,
         *,
@@ -259,9 +267,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_warn_mb: float = 500,
         job_memory_limit_mb: float = 0,
         drain_timeout: int = 1800,
-        num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
-            dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
-        ),
+        num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
@@ -270,30 +276,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         api_key: str | None = None,
         api_secret: str | None = None,
         host: str = "",  # default to all interfaces
-        port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081),
-        http_proxy: str | None = None,
+        port: int | ServerEnvOption[int] = _default_port,
+        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
         multiprocessing_context: Literal["spawn", "forkserver"] = (
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
         ),
+        setup_fnc: Callable[[JobProcess], Any] | None = None,
+        load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
+        prometheus_multiproc_dir: str | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
-
-
-        if not self._ws_url:
-            raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
-
-        if not self._api_key:
-            raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
-
-        if not self._api_secret:
-            raise ValueError(
-                "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
-            )
 
         self._host = host
         self._port = port
@@ -308,10 +306,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
+        self._prometheus_multiproc_dir = prometheus_multiproc_dir
+        self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
-        self._http_proxy = (
-            http_proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None
-        )
+
+        if not is_given(http_proxy):
+            http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
+        self._http_proxy = http_proxy
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -322,13 +324,85 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
 
         # worker cb
-        self._prewarm_fnc: Callable[[JobProcess], Any] | None = None
-        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+        self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
+        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting, self._connection_failed = (
+            True,
+            False,
+            False,
+            False,
+        )
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    if sys.version_info < (3, 10):
+        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
+        def __getstate__(self) -> dict[str, Any]:
+            """Custom pickle support - exclude unpickleable asyncio objects."""
+            state = self.__dict__.copy()
+            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
+            state.pop("_lock", None)
+            return state
+
+        def __setstate__(self, state: dict[str, Any]) -> None:
+            """Restore state and recreate asyncio.Lock."""
+            self.__dict__.update(state)
+            # recreate the lock
+            self._lock = asyncio.Lock()
+
+    @property
+    def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
+        return self._setup_fnc
+
+    @setup_fnc.setter
+    def setup_fnc(self, value: Callable[[JobProcess], Any] | None) -> None:
+        if value is not None and not callable(value):
+            raise TypeError("setup_fnc must be a callable or None")
+        self._setup_fnc = value
+
+    @property
+    def load_fnc(self) -> Callable[[AgentServer], float] | Callable[[], float] | None:
+        return self._load_fnc
+
+    @load_fnc.setter
+    def load_fnc(self, value: Callable[..., float] | None) -> None:
+        if value is not None and not callable(value):
+            raise TypeError("load_fnc must be a callable or None")
+        self._load_fnc = value
+
+    @classmethod
+    def from_server_options(cls, options: ServerOptions) -> AgentServer:
+        server = cls(
+            job_executor_type=options.job_executor_type,
+            load_threshold=options.load_threshold,
+            job_memory_limit_mb=options.job_memory_limit_mb,
+            job_memory_warn_mb=options.job_memory_warn_mb,
+            drain_timeout=options.drain_timeout,
+            num_idle_processes=options.num_idle_processes,
+            shutdown_process_timeout=options.shutdown_process_timeout,
+            initialize_process_timeout=options.initialize_process_timeout,
+            permissions=options.permissions,
+            max_retry=options.max_retry,
+            ws_url=options.ws_url,
+            api_key=options.api_key,
+            api_secret=options.api_secret,
+            host=options.host,
+            port=options.port,
+            http_proxy=options.http_proxy,
+            multiprocessing_context=options.multiprocessing_context,
+            prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            setup_fnc=options.prewarm_fnc,
+            load_fnc=options.load_fnc,
+        )
+        server.rtc_session(
+            options.entrypoint_fnc,
+            agent_name=options.agent_name,
+            type=options.worker_type,
+            on_request=options.request_fnc,
+        )
+        return server
 
     @overload
     def rtc_session(
@@ -337,8 +411,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[[JobContext], Awaitable[None]]: ...
 
     @overload
@@ -347,26 +421,26 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
     ]: ...
 
     def rtc_session(
         self,
-        func: Optional[Callable[[JobContext], Awaitable[None]]] = None,
+        func: Callable[[JobContext], Awaitable[None]] | None = None,
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
-    ) -> Union[
-        Callable[[JobContext], Awaitable[None]],
-        Callable[
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+    ) -> (
+        Callable[[JobContext], Awaitable[None]]
+        | Callable[
             [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
-        ],
-    ]:
+        ]
+    ):
         """
         Decorator or direct registrar for the RTC session entrypoint.
 
@@ -393,42 +467,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if func is not None:
             return decorator(func)
-        return decorator
 
-    @overload
-    def setup(
-        self,
-        func: Callable[[JobProcess], Any],
-    ) -> Callable[[JobProcess], Any]: ...
-
-    @overload
-    def setup(
-        self,
-    ) -> Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]: ...
-
-    def setup(
-        self,
-        func: Optional[Callable[[JobProcess], Any]] = None,
-    ) -> Union[
-        Callable[[JobProcess], Any],
-        Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]],
-    ]:
-        """
-        Decorator or direct registrar for the setup/prewarm function.
-
-        Usage:
-            @server.setup()
-            def setup_process(job_proc: JobProcess): ...
-
-            server.setup(setup_process)
-        """
-
-        def decorator(f: Callable[[JobProcess], Any]) -> Callable[[JobProcess], Any]:
-            self._prewarm_fnc = f
-            return f
-
-        if func is not None:
-            return decorator(func)
         return decorator
 
     @property
@@ -475,8 +514,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
 
-            if self._prewarm_fnc is None:
-                self._prewarm_fnc = _default_setup_fnc
+            if self._setup_fnc is None:
+                self._setup_fnc = _default_setup_fnc
 
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
@@ -519,7 +558,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             self._proc_pool = ipc.proc_pool.ProcPool(
-                initialize_process_fnc=self._prewarm_fnc,
+                initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
@@ -541,10 +580,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server = http_server.HttpServer(
                 self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
             )
+            self._worker_load: float = 0.0
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
                     return web.Response(status=503, text="inference process not running")
+
+                if self._connection_failed:
+                    return web.Response(status=503, text="failed to connect to livekit")
 
                 return web.Response(text="OK")
 
@@ -553,6 +596,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     {
                         "agent_name": self._agent_name,
                         "worker_type": agent.JobType.Name(self._server_type.value),
+                        "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
                         "sdk_version": __version__,
                         "project_type": "python",
@@ -563,22 +607,57 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server.app.add_routes([web.get("/", health_check)])
             self._http_server.app.add_routes([web.get("/worker", worker)])
 
+            self._conn_task: asyncio.Task[None] | None = None
+            self._load_task: asyncio.Task[None] | None = None
+
+            if not self._ws_url:
+                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+
+            if not self._api_key:
+                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+
+            if not self._api_secret:
+                raise ValueError(
+                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                )
+
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
                 self._prometheus_server = telemetry.http_server.HttpServer(
                     self._host, self._prometheus_port, loop=self._loop
                 )
 
-            self._conn_task: asyncio.Task[None] | None = None
-            self._load_task: asyncio.Task[None] | None = None
-            self._worker_load: float = 0.0
+            if self._prometheus_multiproc_dir:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
+            elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+                self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+
+            if self._prometheus_multiproc_dir:
+                os.makedirs(self._prometheus_multiproc_dir, exist_ok=True)
+
+            if self._prometheus_multiproc_dir and os.path.exists(self._prometheus_multiproc_dir):
+                logger.debug(
+                    "cleaning prometheus multiprocess directory",
+                    extra={"path": self._prometheus_multiproc_dir},
+                )
+                for filename in os.listdir(self._prometheus_multiproc_dir):
+                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                    except Exception as e:
+                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+
+            os.environ["LIVEKIT_URL"] = self._ws_url
+            os.environ["LIVEKIT_API_KEY"] = self._api_key
+            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
 
-            if isinstance(self._mp_ctx, ForkServerContext):
+            if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
@@ -596,9 +675,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 t.add_done_callback(self._tasks.discard)
 
             await self._http_server.start()
+            logger.info(
+                f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
+            )
 
             if self._prometheus_server:
                 await self._prometheus_server.start()
+                logger.info(
+                    "Prometheus metrics exposed at http://%s:%s/metrics",
+                    self._prometheus_server.host,
+                    self._prometheus_server.port,
+                )
 
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
@@ -631,6 +718,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._worker_load = await asyncio.get_event_loop().run_in_executor(
                         None, load_fnc
                     )
+
+                    telemetry.metrics._update_worker_load(self._worker_load)
+                    telemetry.metrics._update_child_proc_count()
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
@@ -675,7 +765,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
         job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
-        drain_timeout: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
@@ -738,7 +828,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._update_worker_status()
 
             async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes:
+                for proc in self._proc_pool.processes.copy():
                     if proc.running_job:
                         await proc.join()
 
@@ -749,6 +839,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             else:
                 await _join_jobs()
 
+    @utils.log_exceptions(logger=logger)
     async def simulate_job(
         self,
         room: str,
@@ -756,8 +847,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         fake_job: bool = False,
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
+        token: str | None = None,
     ) -> None:
         async with self._lock:
+            if token is not None:
+                # read identity from token if provided
+                agent_identity = api.TokenVerifier().verify(token, verify_signature=False).identity
+
             if agent_identity is None:
                 if not fake_job:
                     raise ValueError("agent_identity is None but fake_job is False")
@@ -781,18 +877,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
+            token = token or (
+                api.AccessToken(self._api_key, self._api_secret)
+                .with_identity(agent_identity)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
                 job=job,
                 url=self._ws_url,
-                token=(
-                    api.AccessToken(self._api_key, self._api_secret)
-                    .with_identity(agent_identity)
-                    .with_kind("agent")
-                    .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                    .to_jwt()
-                ),
+                token=token,
                 fake_job=fake_job,
             )
 
@@ -800,9 +897,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def aclose(self) -> None:
         async with self._lock:
-            if self._closed:
-                raise RuntimeError("cannot simulate job, the worker is closed")
-
             if self._closed:
                 if self._close_future is not None:
                     await self._close_future
@@ -930,6 +1024,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._max_retry:
+                    self._connection_failed = True
                     raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
                     ) from None
@@ -1040,6 +1135,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         logger.info(
             "registered worker",
             extra={
+                "agent_name": self._agent_name,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,
@@ -1059,13 +1155,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject() -> None:
+        async def _on_reject(terminate: bool) -> None:
             nonlocal answered
             answered = True
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
+            availability_resp.availability.terminate = terminate
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
@@ -1078,6 +1175,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                self._agent_name
+            )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)
@@ -1114,9 +1214,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             extra={
                 "job_id": msg.job.id,
                 "dispatch_id": msg.job.dispatch_id,
-                "room_name": msg.job.room.name,
+                "room": msg.job.room.name,
+                "room_id": msg.job.room.sid,
                 "agent_name": self._agent_name,
                 "resuming": msg.resuming,
+                "enable_recording": msg.job.enable_recording,
             },
         )
 
@@ -1136,13 +1238,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
-                await _on_reject()
+                await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._tasks.add(user_task)
         user_task.add_done_callback(self._tasks.discard)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
+        logger.debug(
+            "received assignment",
+            extra={
+                "agent_name": self._agent_name,
+                "room_id": assignment.job.room.sid,
+                "room": assignment.job.room.name,
+                "job_id": assignment.job.id,
+                "dispatch_id": assignment.job.dispatch_id,
+                "enable_recording": assignment.job.enable_recording,
+            },
+        )
         if assignment.job.id in self._pending_assignments:
             with contextlib.suppress(asyncio.InvalidStateError):
                 fut = self._pending_assignments.pop(assignment.job.id)
@@ -1150,7 +1263,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         else:
             logger.warning(
                 "received assignment for an unknown job",
-                extra={"job": assignment.job, "agent_name": self._agent_name},
+                extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:

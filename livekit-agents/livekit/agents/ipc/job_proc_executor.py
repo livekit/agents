@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import multiprocessing as mp
 import socket
 from collections.abc import Awaitable
@@ -84,6 +85,14 @@ class ProcJobExecutor(SupervisedProc):
         return self._running_job
 
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
+        levels = {}
+        root = logging.getLogger()
+        levels["root"] = root.level
+        children = logging.Logger.manager.loggerDict.values()
+        for child in children:
+            if isinstance(child, logging.Logger):
+                levels[child.name] = child.level
+
         proc_args = ProcStartArgs(
             initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
@@ -91,6 +100,7 @@ class ProcJobExecutor(SupervisedProc):
             log_cch=log_cch,
             mp_cch=cch,
             user_arguments=self._user_args,
+            logger_levels=levels,
         )
 
         return self._mp_ctx.Process(  # type: ignore
@@ -159,5 +169,6 @@ class ProcJobExecutor(SupervisedProc):
 
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
+            extra["room_id"] = self._running_job.job.room.sid
 
         return extra

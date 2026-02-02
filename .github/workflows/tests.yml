@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -17,7 +21,7 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -33,6 +37,9 @@ jobs:
 
       - name: Run tests
 
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
         run: uv run pytest tests/test_agent_session.py
           tests/test_tts_fallback.py
           tests/test_stt_fallback.py
@@ -42,13 +49,14 @@ jobs:
           tests/test_schema_gemini.py
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
+          tests/test_tools.py
 
   evaluation:
     # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -64,7 +72,8 @@ jobs:
 
       - name: Run evals
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
 
         run: uv run pytest tests/test_workflows.py tests/test_evals.py
 
@@ -87,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Google credentials
         if: matrix.plugin == 'google'

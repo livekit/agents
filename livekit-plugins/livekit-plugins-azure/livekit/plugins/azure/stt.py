@@ -58,6 +58,7 @@ class STTOptions:
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
+    true_text_post_processing: bool = False
 
 
 class STT(stt.STT):
@@ -79,6 +80,7 @@ class STT(stt.STT):
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
+        true_text_post_processing: bool = False,
     ):
         """
         Create a new instance of Azure STT.
@@ -97,9 +99,17 @@ class STT(stt.STT):
             explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
+            true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
         """
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="chunk",
+                offline_recognize=False,
+            )
+        )
         if not language or not is_given(language):
             language = ["en-US"]
 
@@ -144,6 +154,7 @@ class STT(stt.STT):
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
+            true_text_post_processing=true_text_post_processing,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -275,7 +286,14 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
-        final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
+        # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
+        final_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=1.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -294,7 +312,13 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
-        interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
+        interim_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=0.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -386,9 +410,18 @@ def _create_speech_recognizer(
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
+    if config.true_text_post_processing:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.SpeechServiceResponse_PostProcessingOption, "TrueText"
+        )
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:
+        # Enable Continuous Language ID for multiple languages
+        # This ensures language detection updates throughout the streaming session
+        speech_config.set_property(
+            speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
+        )
         kwargs["auto_detect_source_language_config"] = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )

@@ -6,11 +6,14 @@ livekit-agents = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-avatario = { workspace = true }
+livekit-plugins-asyncai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-camb = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
@@ -25,6 +28,8 @@ livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
+livekit-plugins-lemonslice = { workspace = true}
+livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
@@ -37,7 +42,9 @@ livekit-plugins-rime = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
 livekit-plugins-smallestai = { workspace = true }
+livekit-plugins-simplismart = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
@@ -46,12 +53,15 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
+livekit-plugins-gradium = { workspace = true }
+livekit-plugins-xai = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/livekit-plugins-browser",
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-durable",
 ]
 
 [dependency-groups]
@@ -64,6 +74,7 @@ dev = [
     "jiwer>=3.1.0",
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
+    "pytest-xdist>=3.8.0",
 ]
 docs = ["pdoc3", "setuptools"]
 
@@ -118,6 +129,10 @@ follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["aws_sdk_transcribe_streaming.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

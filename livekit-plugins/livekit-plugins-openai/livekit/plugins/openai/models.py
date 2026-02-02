@@ -19,6 +19,10 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.2",
+    "gpt-5.2-chat-latest",
+    "gpt-5.1",
+    "gpt-5.1-chat-latest",
     "gpt-5",
     "gpt-5-chat-latest",
     "gpt-5-mini",
@@ -289,6 +293,8 @@ XAIChatModels = Literal[
 
 def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
     return model in [
+        "gpt-5.2",
+        "gpt-5.1",
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",

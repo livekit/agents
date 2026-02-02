@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -30,8 +31,9 @@ from livekit.agents import (
     ToolError,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -400,7 +402,7 @@ server = AgentServer()
 
 async def on_session_end(ctx: JobContext) -> None:
     report = ctx.make_session_report()
-    # report_json = json.dumps(report.to_dict(), indent=2)
+    _ = json.dumps(report.to_dict(), indent=2)
 
 
 @server.rtc_session(on_session_end=on_session_end)
@@ -408,22 +410,24 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
-        stt=deepgram.STT(
-            model="nova-3",
-            keyterms=[
-                "Big Mac",
-                "McFlurry",
-                "McCrispy",
-                "McNuggets",
-                "Meal",
-                "Sundae",
-                "Oreo",
-                "Jalapeno Ranch",
-            ],
-            mip_opt_out=True,
+        stt=inference.STT(
+            "deepgram/nova-3",
+            language="en",
+            extra_kwargs={
+                "keyterms": [
+                    "Big Mac",
+                    "McFlurry",
+                    "McCrispy",
+                    "McNuggets",
+                    "Meal",
+                    "Sundae",
+                    "Oreo",
+                    "Jalapeno Ranch",
+                ],
+            },
         ),
-        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
+        llm=inference.LLM("openai/gpt-4.1"),
+        tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=10,

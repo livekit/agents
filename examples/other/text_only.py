@@ -7,11 +7,10 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RoomInputOptions,
-    RoomOutputOptions,
     cli,
+    inference,
+    room_io,
 )
-from livekit.plugins import openai
 
 logger = logging.getLogger("text-only")
 logger.setLevel(logging.INFO)
@@ -40,14 +39,18 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         # note that no TTS or STT are needed here
     )
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(text_enabled=True, audio_enabled=False),
-        room_output_options=RoomOutputOptions(transcription_enabled=True, audio_enabled=False),
+        room_options=room_io.RoomOptions(
+            text_input=True,
+            text_output=True,
+            audio_input=False,
+            audio_output=False,
+        ),
     )
 
 

@@ -71,6 +71,12 @@ class FakeVADStream(VADStream):
     def _send_vad_event(
         self, type: VADEventType, fake_speech: FakeUserSpeech, curr_time: float
     ) -> None:
+        if curr_time <= fake_speech.end_time:
+            raw_accumulated_speech = curr_time - fake_speech.start_time
+            raw_accumulated_silence = 0.0
+        else:
+            raw_accumulated_speech = 0.0
+            raw_accumulated_silence = curr_time - fake_speech.end_time
         self._event_ch.send_nowait(
             VADEvent(
                 type=type,
@@ -78,5 +84,7 @@ class FakeVADStream(VADStream):
                 timestamp=curr_time,
                 speech_duration=min(curr_time, fake_speech.end_time) - fake_speech.start_time,
                 silence_duration=max(0.0, curr_time - fake_speech.end_time),
+                raw_accumulated_speech=raw_accumulated_speech,
+                raw_accumulated_silence=raw_accumulated_silence,
             )
         )

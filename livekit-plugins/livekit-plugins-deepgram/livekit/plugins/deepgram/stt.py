@@ -40,6 +40,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
@@ -64,6 +65,7 @@ class STTOptions:
     keyterms: list[str]
     profanity_filter: bool
     endpoint_url: str
+    vad_events: bool = True
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -94,6 +96,7 @@ class STT(stt.STT):
         base_url: str = "https://api.deepgram.com/v1/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
+        vad_events: bool = True,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -120,6 +123,8 @@ class STT(stt.STT):
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
+            vad_events: Whether to enable VAD (Voice Activity Detection) events.
+                       When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -131,7 +136,10 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results, diarization=enable_diarization
+                streaming=True,
+                interim_results=interim_results,
+                diarization=enable_diarization,
+                aligned_transcript="word",
             )
         )
 
@@ -161,6 +169,7 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
+            vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
             endpoint_url=base_url,
         )
@@ -198,6 +207,7 @@ class STT(stt.STT):
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
             "numerals": config.numerals,
+            "mip_opt_out": config.mip_opt_out,
         }
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
@@ -272,6 +282,7 @@ class STT(stt.STT):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -305,6 +316,8 @@ class STT(stt.STT):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(vad_events):
+            self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
@@ -326,6 +339,7 @@ class STT(stt.STT):
                 profanity_filter=profanity_filter,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
+                vad_events=vad_events,
                 endpoint_url=endpoint_url,
             )
 
@@ -395,6 +409,7 @@ class SpeechStream(stt.SpeechStream):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -428,6 +443,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(vad_events):
+            self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
@@ -446,7 +463,8 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
 
         @utils.log_exceptions(logger=logger)
@@ -499,7 +517,10 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(message="deepgram connection closed unexpectedly")
+                    raise APIStatusError(
+                        message=f"deepgram connection closed unexpectedly: "
+                        f"code={ws.close_code}, reason={msg.extra if msg.extra else 'no reason provided'}"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -553,7 +574,7 @@ class SpeechStream(stt.SpeechStream):
             "no_delay": self._opts.no_delay,
             "interim_results": self._opts.interim_results,
             "encoding": "linear16",
-            "vad_events": True,
+            "vad_events": self._opts.vad_events,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
             "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
@@ -584,6 +605,13 @@ class SpeechStream(stt.SpeechStream):
                     headers={"Authorization": f"Token {self._api_key}"},
                 ),
                 self._conn_options.timeout,
+            )
+            ws_headers = {
+                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            }
+            logger.debug(
+                "Established new Deepgram STT WebSocket connection:",
+                extra={"headers": ws_headers},
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e
@@ -624,7 +652,10 @@ class SpeechStream(stt.SpeechStream):
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(
-                self._opts.language, data, is_final=is_final_transcript
+                self._opts.language,
+                data,
+                is_final=is_final_transcript,
+                start_time_offset=self.start_time_offset,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -664,7 +695,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def live_transcription_to_speech_data(
-    language: str, data: dict, *, is_final: bool
+    language: str, data: dict, *, is_final: bool, start_time_offset: float
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
@@ -679,11 +710,22 @@ def live_transcription_to_speech_data(
 
         sd = stt.SpeechData(
             language=language,
-            start_time=alt["words"][0]["start"] if alt["words"] else 0,
-            end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+            start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
+            end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + start_time_offset,
+                    end_time=word.get("end", 0) + start_time_offset,
+                    start_time_offset=start_time_offset,
+                )
+                for word in alt["words"]
+            ]
+            if alt["words"]
+            else None,
         )
         if language == "multi" and "languages" in alt:
             sd.language = alt["languages"][0]  # TODO: handle multiple languages
@@ -714,6 +756,14 @@ def prerecorded_transcription_to_speech_event(
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
                 text=alt["transcript"],
+                words=[
+                    TimedString(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0),
+                        end_time=word.get("end", 0),
+                    )
+                    for word in alt["words"]
+                ],
             )
             for alt in dg_alts
         ],
@@ -765,10 +815,8 @@ def _validate_keyterms(
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterms) and (
-        (model.startswith("nova-3") and language == "multi") or not model.startswith("nova-3")
-    ):
+    if is_given(keyterms) and (not model.startswith("nova-3")):
         raise ValueError(
-            "Keyterm Prompting is only available for monolingual transcription using the Nova-3 Model. "
+            "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
         )

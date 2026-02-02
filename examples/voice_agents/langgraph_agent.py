@@ -13,10 +13,10 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
     cli,
+    inference,
 )
-from livekit.plugins import deepgram, langchain, silero
+from livekit.plugins import langchain, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
@@ -35,19 +35,21 @@ load_dotenv()
 server = AgentServer()
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
 
 
 class State(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-# a simple StateGraph with a single GPT-4o node
+# a simple StateGraph with a single LLM node
 def create_graph() -> StateGraph:
     openai_llm = init_chat_model(
-        model="openai:gpt-4o",
+        model="openai:gpt-4.1-mini",
     )
 
     def chatbot_node(state: State):
@@ -71,8 +73,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=deepgram.TTS(),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        tts=inference.TTS("cartesia/sonic-3"),
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )
@@ -80,11 +82,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # to use Krisp background voice cancellation, install livekit-plugins-noise-cancellation
-            # and `from livekit.plugins import noise_cancellation`
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
     await session.generate_reply(instructions="ask the user how they are doing?")
 

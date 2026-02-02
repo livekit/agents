@@ -9,6 +9,11 @@ if current_process().name == "job_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
+
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
+
 import asyncio
 import contextlib
 import socket
@@ -26,8 +31,9 @@ from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
+    DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
     InferenceResponse,
@@ -42,9 +48,10 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
-    user_arguments: Any | None = None
+    logger_levels: dict[str, int]
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -54,7 +61,8 @@ def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+    for name, level in args.logger_levels.items():
+        logging.getLogger(name).setLevel(level)
 
     log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
     log_handler = LogQueueHandler(log_cch)
@@ -72,6 +80,7 @@ def proc_main(args: ProcStartArgs) -> None:
     try:
         client.initialize()
     except Exception:
+        log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
 
     client.run()
@@ -93,18 +102,23 @@ def proc_main(args: ProcStartArgs) -> None:
         if t.daemon:
             continue
 
+        from concurrent.futures.thread import _threads_queues
+
+        if t in _threads_queues:
+            continue
+
         t.join(timeout=0.25)
 
         frames = sys._current_frames()
-        frame = frames.get(t.ident)
+        frame = frames.get(t.ident)  # type: ignore
 
-        logger.warn(
+        logger.warning(
             f"non-daemon thread `{t.name}` may prevent the process from exiting",
             extra={"thread_id": t.native_id, "thread_name": t.name},
         )
 
         if frame is not None:
-            logger.warn("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
+            logger.warning("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
 
     log_handler.close()
 
@@ -117,12 +131,17 @@ class _InfClient(InferenceExecutor):
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         request_id = shortuuid("inference_job_")
         fut = asyncio.Future[InferenceResponse]()
-
-        await self._client.send(
-            InferenceRequest(request_id=request_id, method=method, data=data),
-        )
-
         self._active_requests[request_id] = fut
+
+        try:
+            await self._client.send(
+                InferenceRequest(request_id=request_id, method=method, data=data),
+            )
+        except Exception:
+            if not fut.done():
+                fut.cancel()
+            self._active_requests.pop(request_id, None)
+            raise
 
         inf_resp = await fut
         if inf_resp.error:
@@ -207,6 +226,9 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
+                if isinstance(msg, DumpStackTraceRequest):
+                    _dump_stack_traces_impl()
+
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
         await self._exit_proc_flag.wait()
@@ -247,11 +269,10 @@ class _JobProc:
             inference_executor=self._inf_client,
         )
 
-        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
 
+        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(_exit_proc_cb)
 
     @log_exceptions(logger=logger)

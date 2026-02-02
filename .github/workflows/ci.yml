@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [main, 0.x]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 jobs:
@@ -26,15 +30,25 @@ jobs:
 
       - name: Ruff
         run: uv run ruff check --output-format=github .
+        continue-on-error: true
+        id: ruff-check
 
       - name: Check format
         run: uv run ruff format --check .
+        continue-on-error: true
+        id: ruff-format
+
+      - name: Report ruff errors
+        if: steps.ruff-check.outcome == 'failure' || steps.ruff-format.outcome == 'failure'
+        run: |
+          echo "::error::Ruff checks failed. Please run 'make fix' locally to automatically fix formatting and linting issues."
+          exit 1
 
   type-check:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10"]
+        python-version: ["3.9", "3.13"]
         
     steps:
       - uses: actions/checkout@v4
@@ -60,42 +74,4 @@ jobs:
         run: uv pip install "types-requests<2.31.0.7"
 
       - name: Check Types
-        run: uv run mypy --install-types --non-interactive
-              -p livekit.agents
-              -p livekit.plugins.openai
-              -p livekit.plugins.anthropic
-              -p livekit.plugins.mistralai
-              -p livekit.plugins.assemblyai
-              -p livekit.plugins.aws
-              -p livekit.plugins.azure
-              -p livekit.plugins.bey
-              -p livekit.plugins.bithuman
-              -p livekit.plugins.cartesia
-              -p livekit.plugins.clova
-              -p livekit.plugins.deepgram
-              -p livekit.plugins.elevenlabs
-              -p livekit.plugins.fal
-              -p livekit.plugins.gladia
-              -p livekit.plugins.google
-              -p livekit.plugins.groq
-              -p livekit.plugins.hume
-              -p livekit.plugins.minimal
-              -p livekit.plugins.neuphonic
-              -p livekit.plugins.nltk
-              -p livekit.plugins.resemble
-              -p livekit.plugins.rime
-              -p livekit.plugins.silero
-              -p livekit.plugins.speechify
-              -p livekit.plugins.speechmatics
-              -p livekit.plugins.tavus
-              -p livekit.plugins.turn_detector
-              -p livekit.plugins.hedra
-              -p livekit.plugins.langchain
-              -p livekit.plugins.baseten
-              -p livekit.plugins.sarvam
-              -p livekit.plugins.inworld
-              -p livekit.plugins.simli
-              -p livekit.plugins.anam
-              -p livekit.plugins.ultravox
-              -p livekit.plugins.fireworksai
-              -p livekit.plugins.minimax
+        run: uv run python scripts/check_types.py

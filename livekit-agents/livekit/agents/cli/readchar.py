@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import ClassVar, List
+from typing import Callable, ClassVar
 
 __all__ = ["readchar", "readkey", "key"]
 
@@ -148,7 +148,7 @@ class _WinKey(_BaseKey):
 # base key here mirrors the upstream behaviour: on both Windows and
 # POSIX, pressing CTRL+C should raise KeyboardInterrupt instead of
 # being returned by readkey().
-INTERRUPT_KEYS: List[str] = [_BaseKey.CTRL_C]
+INTERRUPT_KEYS: list[str] = [_BaseKey.CTRL_C]
 
 
 def _posix_readchar() -> str:
@@ -233,7 +233,7 @@ def _win_readchar() -> str:
     """
     import msvcrt
 
-    return msvcrt.getwch()
+    return msvcrt.getwch()  # type: ignore
 
 
 def _win_readkey() -> str:
@@ -261,6 +261,10 @@ def _win_readkey() -> str:
 
     return ch
 
+
+key: type[_PosixKey | _WinKey]
+readchar: Callable[[], str]
+readkey: Callable[[], str]
 
 if sys.platform.startswith(("linux", "darwin", "freebsd", "openbsd")):
     key = _PosixKey
