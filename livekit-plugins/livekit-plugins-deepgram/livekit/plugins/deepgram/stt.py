@@ -406,6 +406,10 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
+        # sanity check for interim-only events
+        self._received_interim_results = False
+        self._received_final_results = False
+
     def update_options(
         self,
         *,
@@ -694,6 +698,7 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=alts,
                     )
                     self._event_ch.send_nowait(final_event)
+                    self._received_final_results = True
                 else:
                     interim_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -701,6 +706,7 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=alts,
                     )
                     self._event_ch.send_nowait(interim_event)
+                    self._received_interim_results = True
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
@@ -708,6 +714,13 @@ class SpeechStream(stt.SpeechStream):
             if is_endpoint and self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                if self._received_interim_results and not self._received_final_results:
+                    logger.debug(
+                        "received only interim results for user speech",
+                        extra={"request_id": self._request_id},
+                    )
+                self._received_interim_results = False
+                self._received_final_results = False
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
