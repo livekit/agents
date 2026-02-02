@@ -104,7 +104,7 @@ async def update_record(
         return
     field_map = {
         "dob": (GetDOBTask, "date_of_birth"),
-        "email": (GetEmailTask, "email"),
+        "email": (GetEmailTask, "email_address"),
         "insurance": (GetInsuranceTask, "insurance"),
     }
 
@@ -247,12 +247,12 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             tools=[update_record],
         )
         self._function = function
-        self._database = self.session.userdata.database
-        self._patient_profile = self.session.userdata.profile
-
         self._selected_appointment: dict | None = None
 
     async def on_enter(self):
+        self._database = self.session.userdata.database
+        self._patient_profile = self.session.userdata.profile
+
         name = self._patient_profile["name"]
         appointments = self._database.get_patient_by_name(name).get("appointments", [])
         if not appointments:
@@ -296,7 +296,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                     )
                 )
             else:
-                result = ScheduleAppointmentTask()
+                result = await ScheduleAppointmentTask()
                 self.complete(
                     ModifyAppointmentResult(
                         new_appointment=result, old_appointment=selected_appointment
@@ -484,8 +484,8 @@ class HealthcareAgent(Agent):
         # current_tools.append(openai.tools.WebSearch())
         # await self.update_tools(current_tools)
         await GetLabResultsTask(filesearch_tool)
-        self._client.vector_stores.delete(self._vector_store.id)
-        self._client.files.delete(self._file.id)
+        client.vector_stores.delete(self._vector_store.id)
+        client.files.delete(self._file.id)
 
     @function_tool()
     async def retrieve_available_doctors(self):
