@@ -188,35 +188,75 @@ class DealMachineLeadsExtractor:
         logger.info("🧭 Navigating to leads tab...")
 
         try:
-            # Try direct URL first
-            await self.page.goto("https://app.dealmachine.com/leads", wait_until="networkidle")
-            await asyncio.sleep(3)
+            # Take screenshot for debugging
+            screenshot_path = self.documents_dir / "debug_after_login.png"
+            await self.page.screenshot(path=str(screenshot_path))
+            logger.info(f"📸 Screenshot saved: {screenshot_path}")
 
-            # Check if we're on leads page
-            current_url = self.page.url
-            if "leads" in current_url.lower():
-                logger.info("✅ On leads page!")
-                return True
+            # Try multiple navigation strategies
+            strategies = [
+                # Strategy 1: Direct URLs
+                ("https://app.dealmachine.com/leads", "Direct leads URL"),
+                ("https://app.dealmachine.com/properties", "Properties URL"),
+                ("https://app.dealmachine.com/lists", "Lists URL"),
+                ("https://app.dealmachine.com/driving", "Driving for dollars URL"),
+            ]
 
-            # Try clicking leads navigation
+            for url, desc in strategies:
+                try:
+                    logger.info(f"Trying: {desc}")
+                    await self.page.goto(url, wait_until="networkidle", timeout=10000)
+                    await asyncio.sleep(2)
+
+                    # Take screenshot of this page
+                    page_screenshot = self.documents_dir / f"page_{desc.replace(' ', '_').lower()}.png"
+                    await self.page.screenshot(path=str(page_screenshot))
+
+                    # Check if we have lead-like content
+                    content = await self.page.content()
+                    if any(keyword in content.lower() for keyword in ['property', 'address', 'lead', 'owner', 'phone']):
+                        logger.info(f"✅ Found leads page using: {desc}")
+                        return True
+                except Exception as e:
+                    logger.debug(f"Failed {desc}: {e}")
+                    continue
+
+            # Strategy 2: Click navigation links
             nav_selectors = [
-                'a[href*="leads"]',
+                'a:has-text("Leads")',
+                'a:has-text("Properties")',
                 'button:has-text("Leads")',
+                'button:has-text("Properties")',
+                'a[href*="leads"]',
+                'a[href*="properties"]',
+                'a[href*="driving"]',
                 'nav a:has-text("Leads")',
-                '[data-testid*="leads"]'
+                '[data-testid*="leads"]',
+                '[data-testid*="properties"]',
+                '.nav-link:has-text("Leads")',
+                '.menu-item:has-text("Leads")',
             ]
 
             for selector in nav_selectors:
                 try:
-                    await self.page.click(selector)
+                    logger.info(f"Trying to click: {selector}")
+                    await self.page.click(selector, timeout=2000)
                     await asyncio.sleep(3)
-                    if "leads" in self.page.url.lower():
+
+                    # Take screenshot
+                    click_screenshot = self.documents_dir / f"after_click_{selector.replace(':', '_')[:30]}.png"
+                    await self.page.screenshot(path=str(click_screenshot))
+
+                    # Check content
+                    content = await self.page.content()
+                    if any(keyword in content.lower() for keyword in ['property', 'address', 'lead', 'owner']):
                         logger.info(f"✅ Navigated using: {selector}")
                         return True
-                except:
+                except Exception as e:
+                    logger.debug(f"Click failed for {selector}: {e}")
                     continue
 
-            logger.warning("⚠️  Could not navigate to leads tab")
+            logger.warning("⚠️  Could not navigate to leads tab, will try to extract from current page")
             return False
 
         except Exception as e:
@@ -240,35 +280,73 @@ class DealMachineLeadsExtractor:
             # Wait for leads to load
             await asyncio.sleep(3)
 
-            # Try to find leads table/list/cards
-            # DealMachine might use different structures
+            # Scroll to load more leads (if lazy loading)
+            logger.info("📜 Scrolling to load all leads...")
+            for _ in range(5):
+                await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(1)
+
+            # Take screenshot of leads page
+            leads_screenshot = self.documents_dir / "leads_page.png"
+            await self.page.screenshot(path=str(leads_screenshot))
+            logger.info(f"📸 Leads page screenshot: {leads_screenshot}")
+
+            # Try to find leads with multiple selector strategies
             table_selectors = [
+                # Table rows
                 'table tbody tr',
-                'div[role="row"]',
-                '.lead-item',
+                'tbody tr',
+                'table tr',
+
+                # List items
+                'ul li[class*="lead"]',
+                'ul li[class*="property"]',
+                '.leads-list > *',
+                '.properties-list > *',
+
+                # Cards
                 '.lead-card',
-                '[data-testid*="lead"]'
+                '.property-card',
+                'div[class*="lead-item"]',
+                'div[class*="property-item"]',
+                'div[class*="ListItem"]',
+                'div[class*="list-item"]',
+
+                # Grid items
+                'div[class*="grid"] > div',
+                'div[role="row"]',
+                '[data-testid*="lead"]',
+                '[data-testid*="property"]',
+                '[data-testid*="list-item"]',
+
+                # Generic containers
+                'div[class*="address"]',
+                'article',
             ]
 
             lead_elements = []
+            used_selector = None
             for selector in table_selectors:
                 try:
                     elements = await self.page.query_selector_all(selector)
-                    if elements and len(elements) > 0:
+                    if elements and len(elements) >= 3:  # At least 3 items to be valid
                         lead_elements = elements
-                        logger.info(f"✓ Found {len(elements)} leads using: {selector}")
+                        used_selector = selector
+                        logger.info(f"✓ Found {len(elements)} potential leads using: {selector}")
                         break
-                except:
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
                     continue
 
             if not lead_elements:
-                logger.warning("⚠️  No lead elements found. Trying alternative extraction...")
-                # Get page content and parse with regex
+                logger.warning("⚠️  No lead elements found. Trying advanced HTML parsing...")
+                # Get page content and parse with regex + BeautifulSoup
                 content = await self.page.content()
-                leads = await self._extract_from_html(content)
+                leads = await self._extract_from_html_advanced(content)
                 return leads[:max_leads]
 
             # Extract data from each lead element
+            logger.info(f"🔍 Extracting data from {len(lead_elements)} elements...")
             for idx, element in enumerate(lead_elements[:max_leads]):
                 if idx % 10 == 0:
                     logger.info(f"Processing lead {idx + 1}/{min(len(lead_elements), max_leads)}...")
@@ -289,11 +367,12 @@ class DealMachineLeadsExtractor:
                     if lead.is_valid():
                         leads.append(lead)
                         self.stats["clean_leads"] += 1
+                        logger.info(f"✅ Valid lead: {lead.name or 'N/A'} - {lead.address or 'N/A'} - {lead.phone}")
                     else:
                         self.stats["invalid_leads"] += 1
-                        logger.debug(f"Invalid lead (missing data): {lead.name or lead.address}")
+                        logger.debug(f"Invalid lead (missing required data): {lead.name or lead.address or lead.phone}")
 
-            logger.info(f"✅ Extracted {len(leads)} clean leads")
+            logger.info(f"✅ Extracted {len(leads)} clean leads from {used_selector}")
             return leads
 
         except Exception as e:
@@ -301,67 +380,32 @@ class DealMachineLeadsExtractor:
             return leads
 
     async def _extract_lead_data(self, element) -> Optional[Lead]:
-        """Extract data from a single lead element"""
+        """Extract data from a single lead element with advanced pattern matching"""
         try:
             # Get all text content
             text_content = await element.text_content()
-
             if not text_content:
                 return None
 
-            # Extract using patterns
+            # Get HTML for more detailed parsing
+            try:
+                html_content = await element.inner_html()
+            except:
+                html_content = ""
+
+            # Initialize lead
             lead = Lead()
 
-            # Phone number pattern
+            # === PHONE EXTRACTION ===
             phone_match = re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text_content)
             if phone_match:
                 lead.phone = self._clean_phone(phone_match.group(0))
 
-            # Email pattern
-            email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text_content)
-            if email_match:
-                lead.email = email_match.group(0)
-
-            # Try to get name from common selectors
-            name_selectors = [
-                '.name', '.owner-name', '[data-field="name"]',
-                'td:nth-child(1)', 'div:nth-child(1)'
-            ]
-
-            for selector in name_selectors:
-                try:
-                    name_elem = await element.query_selector(selector)
-                    if name_elem:
-                        lead.name = (await name_elem.text_content()).strip()
-                        if lead.name:
-                            break
-                except:
-                    continue
-
-            # Try to get address
-            address_selectors = [
-                '.address', '[data-field="address"]',
-                'td:nth-child(2)', 'div:nth-child(2)'
-            ]
-
-            for selector in address_selectors:
-                try:
-                    addr_elem = await element.query_selector(selector)
-                    if addr_elem:
-                        lead.address = (await addr_elem.text_content()).strip()
-                        if lead.address:
-                            break
-                except:
-                    continue
-
-            # Parse address components
-            if lead.address:
-                self._parse_address(lead)
-
-            # Try to get phone from element
+            # Try phone-specific selectors
             phone_selectors = [
-                '.phone', '[data-field="phone"]',
-                'td:nth-child(3)', 'a[href^="tel:"]'
+                '.phone', '[data-field="phone"]', '[class*="phone"]',
+                'a[href^="tel:"]', 'span[class*="phone"]', 'div[class*="phone"]',
+                '[data-testid*="phone"]', 'td:has(a[href^="tel:"])'
             ]
 
             for selector in phone_selectors:
@@ -369,13 +413,125 @@ class DealMachineLeadsExtractor:
                     phone_elem = await element.query_selector(selector)
                     if phone_elem:
                         phone_text = await phone_elem.text_content()
-                        if phone_text:
+                        if phone_text and re.search(r'\d{3}', phone_text):
                             lead.phone = self._clean_phone(phone_text)
                             break
                 except:
                     continue
 
-            return lead if (lead.name or lead.address) else None
+            # === NAME/OWNER EXTRACTION ===
+            name_selectors = [
+                '.name', '.owner-name', '.owner', '[data-field="name"]',
+                '[data-field="owner"]', '[class*="name"]', '[class*="owner"]',
+                'h3', 'h4', '.title', '[data-testid*="name"]',
+                '[data-testid*="owner"]', 'strong', 'b'
+            ]
+
+            for selector in name_selectors:
+                try:
+                    name_elem = await element.query_selector(selector)
+                    if name_elem:
+                        name_text = (await name_elem.text_content()).strip()
+                        # Filter out common non-name texts
+                        if name_text and len(name_text) > 2 and not any(x in name_text.lower() for x in ['property', 'lead', 'phone', 'email', 'address', 'status']):
+                            lead.name = name_text
+                            break
+                except:
+                    continue
+
+            # If no name from selectors, try to extract from text
+            if not lead.name:
+                # Look for capitalized words that might be names
+                name_pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b'
+                name_match = re.search(name_pattern, text_content)
+                if name_match:
+                    potential_name = name_match.group(1)
+                    if 3 < len(potential_name) < 50:
+                        lead.name = potential_name
+
+            # === ADDRESS EXTRACTION ===
+            address_selectors = [
+                '.address', '[data-field="address"]', '[class*="address"]',
+                '[data-testid*="address"]', '.street', '[class*="street"]',
+                'a[href*="maps"]', 'span[class*="address"]'
+            ]
+
+            for selector in address_selectors:
+                try:
+                    addr_elem = await element.query_selector(selector)
+                    if addr_elem:
+                        addr_text = (await addr_elem.text_content()).strip()
+                        if addr_text and len(addr_text) > 5:
+                            lead.address = addr_text
+                            break
+                except:
+                    continue
+
+            # Try to extract address from text using pattern
+            if not lead.address:
+                # Pattern: number + street name
+                address_pattern = r'\b\d+\s+[A-Za-z0-9\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Court|Ct|Circle|Cir|Place|Pl)\b'
+                addr_match = re.search(address_pattern, text_content, re.IGNORECASE)
+                if addr_match:
+                    lead.address = addr_match.group(0).strip()
+
+            # === CITY EXTRACTION ===
+            city_selectors = [
+                '.city', '[data-field="city"]', '[class*="city"]',
+                '[data-testid*="city"]'
+            ]
+
+            for selector in city_selectors:
+                try:
+                    city_elem = await element.query_selector(selector)
+                    if city_elem:
+                        lead.city = (await city_elem.text_content()).strip()
+                        if lead.city:
+                            break
+                except:
+                    continue
+
+            # === STATE EXTRACTION ===
+            state_selectors = [
+                '.state', '[data-field="state"]', '[class*="state"]',
+                '[data-testid*="state"]'
+            ]
+
+            for selector in state_selectors:
+                try:
+                    state_elem = await element.query_selector(selector)
+                    if state_elem:
+                        lead.state = (await state_elem.text_content()).strip()
+                        if lead.state:
+                            break
+                except:
+                    continue
+
+            # Parse address components from address string
+            if lead.address:
+                self._parse_address(lead)
+
+            # Extract state from text (2-letter code)
+            if not lead.state:
+                state_match = re.search(r'\b([A-Z]{2})\b', text_content)
+                if state_match:
+                    potential_state = state_match.group(1)
+                    # Verify it's a real state code
+                    us_states = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
+                    if potential_state in us_states:
+                        lead.state = potential_state
+
+            # === EMAIL EXTRACTION ===
+            email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text_content)
+            if email_match:
+                lead.email = email_match.group(0)
+
+            # === ZIP CODE EXTRACTION ===
+            zip_match = re.search(r'\b\d{5}(?:-\d{4})?\b', text_content)
+            if zip_match:
+                lead.zip_code = zip_match.group(0)
+
+            return lead if (lead.name or lead.address or lead.phone) else None
 
         except Exception as e:
             logger.debug(f"Error extracting lead data: {e}")
@@ -411,6 +567,78 @@ class DealMachineLeadsExtractor:
 
             if lead.is_valid():
                 leads.append(lead)
+
+        return leads
+
+    async def _extract_from_html_advanced(self, html: str) -> List[Lead]:
+        """Advanced HTML parsing using BeautifulSoup to extract structured lead data"""
+        logger.info("🔍 Using advanced HTML parsing with BeautifulSoup...")
+        from bs4 import BeautifulSoup
+        leads = []
+
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # Find all text blocks that might contain lead data
+            # Look for patterns like: Name | Address | Phone grouped together
+            text_blocks = []
+
+            # Strategy 1: Find divs/spans/tds with multiple data points
+            for tag in soup.find_all(['div', 'span', 'td', 'li', 'article']):
+                text = tag.get_text(separator=' | ', strip=True)
+                if len(text) > 20:  # Minimum length for lead data
+                    text_blocks.append(text)
+
+            logger.info(f"Found {len(text_blocks)} text blocks to analyze")
+
+            # Extract lead data from each block
+            for block in text_blocks[:500]:  # Limit processing
+                # Check if block contains phone number (strong indicator of lead data)
+                if not re.search(r'\d{3}[-.\s]?\d{3}[-.\s]?\d{4}', block):
+                    continue
+
+                lead = Lead()
+
+                # Extract phone
+                phone_match = re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', block)
+                if phone_match:
+                    lead.phone = self._clean_phone(phone_match.group(0))
+
+                # Extract address
+                address_pattern = r'\d+\s+[A-Za-z0-9\s,]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Court|Ct|Place|Pl)'
+                addr_match = re.search(address_pattern, block, re.IGNORECASE)
+                if addr_match:
+                    lead.address = addr_match.group(0).strip()
+                    self._parse_address(lead)
+
+                # Extract name (capitalized words at start of block)
+                name_pattern = r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})'
+                name_match = re.search(name_pattern, block)
+                if name_match:
+                    lead.name = name_match.group(1).strip()
+
+                # Extract email
+                email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', block)
+                if email_match:
+                    lead.email = email_match.group(0)
+
+                # Extract city (look for pattern: City, ST ZIP)
+                city_pattern = r'([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5})'
+                city_match = re.search(city_pattern, block)
+                if city_match:
+                    lead.city = city_match.group(1).strip()
+                    lead.state = city_match.group(2)
+                    lead.zip_code = city_match.group(3)
+
+                # Only add if we have minimum required data
+                if lead.is_valid():
+                    leads.append(lead)
+                    logger.info(f"✅ Extracted from HTML: {lead.name or 'N/A'} - {lead.address or 'N/A'} - {lead.phone}")
+
+            logger.info(f"✅ Advanced parsing extracted {len(leads)} leads")
+
+        except Exception as e:
+            logger.error(f"Advanced HTML parsing error: {e}")
 
         return leads
 
