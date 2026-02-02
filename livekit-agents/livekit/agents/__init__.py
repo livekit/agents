@@ -38,6 +38,8 @@ from .job import (
     get_job_context,
 )
 from .llm.chat_context import (
+    AgentConfigUpdate,
+    AgentHandoff,
     ChatContent,
     ChatContext,
     ChatItem,
@@ -159,6 +161,8 @@ __all__ = [
     "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
+    "AgentConfigUpdate",
+    "AgentHandoff",
     "StopResponse",
     "ToolError",
     "RunContext",

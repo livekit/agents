@@ -52,7 +52,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
-from .types import NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -130,6 +130,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -153,7 +154,9 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
         return cls._instance._get_avg()
 
@@ -1284,6 +1287,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                self._agent_name
+            )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)

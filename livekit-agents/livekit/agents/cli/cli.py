@@ -112,12 +112,22 @@ class ConsoleAudioInput(io.AudioInput):
         super().__init__(label="Console")
         self._loop = loop
         self._audio_ch: aio.Chan[rtc.AudioFrame] = aio.Chan()
+        self._attached = True
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._attached:
+            # drop frames if the input is detached
+            return
         self._audio_ch.send_nowait(frame)
 
     async def __anext__(self) -> rtc.AudioFrame:
         return await self._audio_ch.__anext__()
+
+    def on_attached(self) -> None:
+        self._attached = True
+
+    def on_detached(self) -> None:
+        self._attached = False
 
 
 class ConsoleAudioOutput(io.AudioOutput):

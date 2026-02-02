@@ -11,8 +11,8 @@ from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
+    ATTRIBUTE_SIMULATOR,
     NOT_GIVEN,
-    TOPIC_CHAT,
     NotGivenOr,
 )
 from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
@@ -32,8 +32,6 @@ from .types import (
     RoomInputOptions,
     RoomOptions,
     RoomOutputOptions,
-    TextInputCallback,
-    TextInputEvent,
 )
 
 
@@ -52,7 +50,6 @@ class RoomIO:
         self._options = RoomOptions._ensure_options(
             options, room_input_options=input_options, room_output_options=output_options
         )
-        self._text_input_cb: TextInputCallback | None = None
 
         self._agent_session, self._room = agent_session, room
         # self._input_options = input_options
@@ -84,7 +81,6 @@ class RoomIO:
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
-        self._text_stream_handler_registered = False
 
     async def start(self) -> None:
         # -- create inputs --
@@ -95,20 +91,6 @@ class RoomIO:
                 timeout=input_audio_options.pre_connect_audio_timeout,
             )
             self._pre_connect_audio_handler.register()
-
-        input_text_options = self._options.get_text_input_options()
-        if input_text_options:
-            self._text_input_cb = input_text_options.text_input_cb
-            try:
-                self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
-                self._text_stream_handler_registered = True
-            except ValueError:
-                if utils.is_given(self._options.text_input):
-                    logger.warning(
-                        f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
-                    )
-        else:
-            self._text_input_cb = None
 
         input_video_options = self._options.get_video_input_options()
         if input_video_options:
@@ -203,10 +185,6 @@ class RoomIO:
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
-
-        if self._text_stream_handler_registered:
-            self._room.unregister_text_stream_handler(TOPIC_CHAT)
-            self._text_stream_handler_registered = False
 
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
@@ -323,6 +301,24 @@ class RoomIO:
         participant = await self._participant_available_fut
         self.set_participant(participant.identity)
 
+        # check if participant is a simulator - disable audio I/O for faster testing
+        if participant.attributes.get(ATTRIBUTE_SIMULATOR) == "true":
+            logger.info(
+                "simulator participant detected, disabling audio I/O",
+                extra={"participant": participant.identity},
+            )
+            # disable audio input
+            if self._audio_input:
+                await self._audio_input.aclose()
+                self._audio_input = None
+                self._agent_session.input.audio = None
+
+            # disable audio output
+            if self._audio_output:
+                await self._audio_output.aclose()
+                self._audio_output = None
+                self._agent_session.output.audio = None
+
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
@@ -394,33 +390,6 @@ class RoomIO:
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_ch:
             self._user_transcript_ch.send_nowait(ev)
-
-    def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
-        if participant_identity != self._participant_identity:
-            return
-
-        participant = self._room.remote_participants.get(participant_identity)
-        if not participant:
-            logger.warning("participant not found, ignoring text input")
-            return
-
-        async def _read_text(text_input_cb: TextInputCallback) -> None:
-            text = await reader.read_all()
-
-            text_input_result = text_input_cb(
-                self._agent_session,
-                TextInputEvent(text=text, info=reader.info, participant=participant),
-            )
-            if asyncio.iscoroutine(text_input_result):
-                await text_input_result
-
-        if self._text_input_cb is None:
-            logger.error("text input callback is not set, ignoring text input")
-            return
-
-        task = asyncio.create_task(_read_text(self._text_input_cb))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
 
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         @utils.log_exceptions(logger=logger)

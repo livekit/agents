@@ -108,7 +108,10 @@ class MCPServer(ABC):
             tool_result = await self._client.call_tool(name, raw_arguments)
 
             if tool_result.isError:
-                error_str = "\n".join(str(part) for part in tool_result.content)
+                error_str = "\n".join(
+                    part.text if hasattr(part, "text") else str(part)
+                    for part in tool_result.content
+                )
                 raise ToolError(error_str)
 
             # TODO(theomonnom): handle images & binary messages

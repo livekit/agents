@@ -367,6 +367,8 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "Fireworks connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

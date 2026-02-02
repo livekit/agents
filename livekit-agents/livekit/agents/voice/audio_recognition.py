@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+# Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
+_EOU_MAX_HISTORY_TURNS = 6
 
 
 @dataclass
@@ -357,7 +359,9 @@ class AudioRecognition:
 
             self._hooks.on_final_transcript(
                 ev,
-                speaking=self._speaking if self._vad else None,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
             )
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
@@ -373,7 +377,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = ""
             self._final_transcript_received.set()
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 # TODO: this would screw up transcription latency metrics
                 # but we'll live with it for now.
@@ -401,7 +405,12 @@ class AudioRecognition:
                     self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
+            self._hooks.on_interim_transcript(
+                ev,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
+            )
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -425,7 +434,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 self._last_speaking_time = time.time()
 
@@ -440,7 +449,12 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
+            self._hooks.on_interim_transcript(
+                ev,
+                speaking=self._speaking
+                if self._vad or self._turn_detection_mode == "stt"
+                else None,
+            )
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
@@ -449,7 +463,8 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            self._last_speaking_time = time.time()
+            if not self._vad or self._last_speaking_time is None:
+                self._last_speaking_time = time.time()
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
@@ -551,10 +566,18 @@ class AudioRecognition:
                         eou_detection_span.set_attributes(
                             {
                                 trace_types.ATTR_CHAT_CTX: json.dumps(
-                                    chat_ctx.to_dict(
+                                    llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
+                                    .copy(
+                                        exclude_function_call=True,
+                                        exclude_instructions=True,
+                                        exclude_empty_message=True,
+                                        exclude_handoff=True,
+                                    )
+                                    .to_dict(
                                         exclude_audio=True,
                                         exclude_image=True,
-                                        exclude_timestamp=False,
+                                        exclude_timestamp=True,
+                                        exclude_metrics=True,
                                     )
                                 ),
                                 trace_types.ATTR_EOU_PROBABILITY: end_of_turn_probability,

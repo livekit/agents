@@ -77,7 +77,15 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
+        base_url: str = "wss://streaming.assemblyai.com",
     ):
+        """
+        Args:
+            base_url: The AssemblyAI streaming endpoint base URL. Use the EU endpoint
+                (wss://streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
+                wss://streaming.assemblyai.com.
+                See https://www.assemblyai.com/docs/universal-streaming for more details.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -86,6 +94,7 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+        self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
             raise ValueError(
@@ -145,6 +154,7 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
+            base_url=self._base_url,
         )
         self._streams.add(stream)
         return stream
@@ -189,12 +199,14 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
+        self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._reconnect_event = asyncio.Event()
@@ -274,7 +286,9 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
-                    )  # this will trigger a reconnection, see the _run loop
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("unexpected AssemblyAI message type %s", msg.type)
@@ -346,13 +360,12 @@ class SpeechStream(stt.SpeechStream):
             "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
         }
 
-        ws_url = "wss://streaming.assemblyai.com/v3/ws"
         filtered_config = {
             k: ("true" if v else "false") if isinstance(v, bool) else v
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"{ws_url}?{urlencode(filtered_config)}"
+        url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 

@@ -19,7 +19,13 @@ from livekit.agents.metrics.base import Metadata
 from livekit.durable import DurableScheduler
 
 from .. import llm, stt, tts, utils, vad
-from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
+from ..llm.tool_context import (
+    FunctionToolInfo,
+    RawFunctionToolInfo,
+    StopResponse,
+    ToolFlag,
+    get_fnc_tool_names,
+)
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -125,6 +131,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        self._stt_eos_received: bool = False
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -321,6 +328,13 @@ class AgentActivity(RecognitionHooks):
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
+        # Record the configuration change
+        config_update = llm.AgentConfigUpdate(
+            instructions=instructions,
+            agent_id=self._agent.id,
+        )
+        self._agent._chat_ctx.insert(config_update)
+
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
         else:
@@ -329,8 +343,24 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
+        # Compute tool diff before updating
+        old_tool_names = set(get_fnc_tool_names(self._agent._tools))
+        new_tool_names = set(get_fnc_tool_names(tools))
+        tools_added = list(new_tool_names - old_tool_names) or None
+        tools_removed = list(old_tool_names - new_tool_names) or None
+
         tools = list(set(tools))
         self._agent._tools = tools
+
+        # Record the configuration change
+        config_update = llm.AgentConfigUpdate(
+            tools_added=tools_added,
+            tools_removed=tools_removed,
+            agent_id=self._agent.id,
+        )
+        # Store full tool definitions in-memory (not serialized)
+        config_update._tools = llm.ToolContext(tools).flatten()
+        self._agent._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -647,6 +677,15 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
+        # Record initial agent configuration
+        initial_config = llm.AgentConfigUpdate(
+            instructions=self._agent.instructions,
+            tools_added=get_fnc_tool_names(self.tools) or None,
+            agent_id=self._agent.id,
+        )
+        initial_config._tools = llm.ToolContext(self.tools).flatten()
+        self._agent._chat_ctx.insert(initial_config)
+
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
             self._session,
@@ -785,6 +824,11 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
+
+        if self.mcp_servers:
+            await asyncio.gather(
+                *(mcp_server.aclose() for mcp_server in self.mcp_servers), return_exceptions=True
+            )
 
         await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
         self._interrupt_paused_speech_task = None
@@ -1051,6 +1095,9 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
+        if self._rt_session is not None:
+            self._rt_session.commit_user_turn()
+
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
@@ -1292,6 +1339,7 @@ class AgentActivity(RecognitionHooks):
             speech_start_time = speech_start_time - ev.speech_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         self._user_silence_event.clear()
+        self._stt_eos_received = False
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1302,6 +1350,9 @@ class AgentActivity(RecognitionHooks):
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration
+        else:
+            self._stt_eos_received = True
+
         self._session._update_user_state(
             "listening",
             last_speaking_time=speech_end_time,
@@ -1320,7 +1371,16 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        if ev.speech_duration >= self._session.options.min_interruption_duration:
+        active_speech = ev.speech_duration >= self._session.options.min_interruption_duration
+        if active_speech and (
+            self._turn_detection != "stt"
+            or not self._stt_eos_received
+            or ev.raw_accumulated_silence == 0
+        ):
+            # STT may send EOS before VAD EOS, we only interrupt if:
+            # 1. turn detection is not STT; or
+            # 2. STT EOS hasn't been received yet; or
+            # 3. VAD speech is still ongoing
             self._interrupt_by_audio_activity()
 
         if (

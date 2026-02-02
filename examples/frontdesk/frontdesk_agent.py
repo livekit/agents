@@ -25,6 +25,17 @@ from livekit.agents import (
     function_tool,
     inference,
 )
+from livekit.agents.evals import (
+    JudgeGroup,
+    accuracy_judge,
+    coherence_judge,
+    conciseness_judge,
+    handoff_judge,
+    relevancy_judge,
+    safety_judge,
+    task_completion_judge,
+    tool_use_judge,
+)
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -34,6 +45,7 @@ load_dotenv()
 @dataclass
 class Userdata:
     cal: Calendar
+    appointment_booked: bool = False
 
 
 logger = logging.getLogger("front-desk")
@@ -95,6 +107,8 @@ class FrontDeskAgent(Agent):
             # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
+
+        ctx.userdata.appointment_booked = True
 
         local = slot.start_time.astimezone(self.tz)
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
@@ -160,12 +174,33 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    # import json
+    report = ctx.make_session_report()
 
-    # report = ctx.make_session_report()
-    # report_json = json.dumps(report.to_cloud_data(), indent=2)
+    # Skip evaluation for very short conversations
+    chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
+    if len(chat.items) < 3:
+        return
 
-    pass
+    judges = JudgeGroup(
+        llm="openai/gpt-4o-mini",
+        judges=[
+            task_completion_judge(),
+            accuracy_judge(),
+            tool_use_judge(),
+            handoff_judge(),
+            safety_judge(),
+            relevancy_judge(),
+            coherence_judge(),
+            conciseness_judge(),
+        ],
+    )
+
+    await judges.evaluate(report.chat_history)
+
+    if ctx.primary_session.userdata.appointment_booked:
+        ctx.tagger.success()
+    else:
+        ctx.tagger.fail(reason="Appointment was not booked")
 
 
 @server.rtc_session(on_session_end=on_session_end)

@@ -31,6 +31,7 @@ from aws_sdk_bedrock_runtime.models import (
     ValidationException,
 )
 from smithy_aws_core.identity import AWSCredentialsIdentity
+from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
 
 from livekit import rtc
@@ -1493,6 +1494,7 @@ class RealtimeSession(  # noqa: F811
                     ModelNotReadyException,
                     ModelErrorException,
                     ModelStreamErrorException,
+                    InvalidEventBytes,
                 ) as re:
                     logger.warning(
                         f"Retryable error: {re}\nAttempting to recover...", exc_info=True
@@ -2002,6 +2004,9 @@ class RealtimeSession(  # noqa: F811
 
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Nova Sonic's Realtime API")
+
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by Nova Sonic's Realtime API")
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("video is not supported by Nova Sonic's Realtime API")
