@@ -55,11 +55,11 @@ class TurnDetectionMode(str, Enum):
     How the STT engine handles the endpointing of speech. If using LiveKit's built-in endpointing,
     then use `TurnDetectionMode.EXTERNAL`.
 
-    Using LiveKit's own VAD, the default is `TurnDetectionMode.EXTERNAL`.
-
     To use the STT engine's built-in endpointing, then use `TurnDetectionMode.ADAPTIVE` for simple
     voice activity detection or `TurnDetectionMode.SMART_TURN` for more advanced ML-based
     endpointing.
+
+    The default is `FIXED` which will determine the end of speech after a fixed duration of time.
     """
 
     EXTERNAL = "external"
@@ -123,7 +123,7 @@ class STT(stt.STT):
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED,
         speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
         speaker_passive_format: NotGivenOr[str] = NOT_GIVEN,
         focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -163,7 +163,7 @@ class STT(stt.STT):
 
             turn_detection_mode (TurnDetectionMode): Endpoint handling, one of
                 `TurnDetectionMode.EXTERNAL`, `TurnDetectionMode.ADAPTIVE` and
-                `TurnDetectionMode.SMART_TURN`. Defaults to `TurnDetectionMode.EXTERNAL`.
+                `TurnDetectionMode.SMART_TURN`. Defaults to `TurnDetectionMode.FIXED`.
 
             speaker_active_format (str): Formatter for active speaker ID. This formatter is used
                 to format the text output for individual speakers and ensures that the context is
@@ -320,6 +320,10 @@ class STT(stt.STT):
         # Initialize list of streams
         self._streams: list[SpeechStream] = []
 
+        # Show warning for external
+        if self._stt_options.turn_detection_mode == TurnDetectionMode.EXTERNAL:
+            logger.info("STT under external turn detection control.")
+
     @property
     def provider(self) -> str:
         return "Speechmatics"
@@ -367,7 +371,7 @@ class STT(stt.STT):
         # Reference to STT options
         opts = self._stt_options
 
-        # Preset taken from `EXTERNAL`, `ADAPTIVE` or `SMART_TURN`
+        # Preset taken from `FIXED`, `EXTERNAL`, `ADAPTIVE` or `SMART_TURN`
         config = VoiceAgentConfigPreset.load(opts.turn_detection_mode.value)
 
         # Set sample rate and encoding

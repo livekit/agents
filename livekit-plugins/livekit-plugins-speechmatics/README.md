@@ -61,13 +61,13 @@ from livekit.plugins import speechmatics, silero
 
 agent = AgentSession(
     stt=speechmatics.STT(
-        end_of_utterance_silence_trigger=0.35,
+        turn_detection_mode=speechmatics.TurnDetectionMode.EXTERNAL,
         speaker_active_format="[Speaker {speaker_id}] {text}",
         speaker_passive_format="[Speaker {speaker_id} *PASSIVE*] {text}",
     ),
     vad=silero.VAD.load(),
     turn_detection=EnglishModel(),
-    min_endpointing_delay=0.5,
+    min_endpointing_delay=0.3,
     max_endpointing_delay=5.0,
     ...
 )
