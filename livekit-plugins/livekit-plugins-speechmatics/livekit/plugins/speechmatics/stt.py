@@ -800,7 +800,7 @@ class SpeechStream(stt.RecognizeStream):
                     pass
 
         # Close the client
-        if self._client and self._client.is_connected:
+        if self._client and self._client._is_connected:
             await self._client.disconnect()
         self._client = None
 
