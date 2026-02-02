@@ -1179,6 +1179,7 @@ def _sms_text_mode(
     loop: asyncio.AbstractEventLoop,
 ) -> None:
     from ..utils.session_store import SessionStore
+    from ..voice.agent_session import _AgentSessionState
 
     while True:
         try:
@@ -1232,7 +1233,9 @@ def _sms_text_mode(
 
         c.wait_for_io_acquisition()
 
-        def _collect_responses(output_queue: queue.Queue[RunEvent | dict[str, Any]]) -> None:
+        def _collect_responses(
+            output_queue: queue.Queue[RunEvent | _AgentSessionState | None],
+        ) -> None:
             async def _collect() -> None:
                 text_ctx = get_job_context().text_message_context
                 if text_ctx is None:
@@ -1246,19 +1249,19 @@ def _sms_text_mode(
                 session = get_job_context()._primary_agent_session
                 if session is None:
                     logger.warning("no session data available")
-                    output_queue.put(b"", block=False)
+                    output_queue.put(None, block=False)
                 else:
                     output_queue.put(session.get_state(), block=False)
 
             task = asyncio.create_task(_collect())
             task.add_done_callback(_done_callback)
 
-        response_queue = queue.Queue[RunEvent | dict[str, Any]]()
+        response_queue = queue.Queue[RunEvent | _AgentSessionState | None]()
         c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
 
-        new_state: dict[str, Any] | None = None
+        new_state: _AgentSessionState | None = None
         while True:
-            resp: RunEvent | dict[str, Any] = ""
+            resp: RunEvent | _AgentSessionState | None = None
             with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
@@ -1266,13 +1269,14 @@ def _sms_text_mode(
                         break
                     except queue.Empty:
                         pass
-            if isinstance(resp, RunEvent):
-                # c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
-                _print_run_event(c, resp)
+            if resp is None:
+                break
 
-            elif isinstance(resp, dict):
+            if isinstance(resp, _AgentSessionState):
                 new_state = resp
                 break
+
+            _print_run_event(c, resp)
 
         # save the session data
         if new_state:

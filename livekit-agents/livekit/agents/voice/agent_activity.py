@@ -575,12 +575,12 @@ class AgentActivity(RecognitionHooks):
 
         # generate tool reply
         if isinstance(self.llm, llm.LLM):
-            await self._on_pipeline_tool_execution_done(
+            self._on_pipeline_tool_execution_done(
                 tool_outputs=[tool_output],
                 speech_handle=speech_handle,
                 chat_ctx=self._agent._chat_ctx.copy(),
                 tools=self.tools,
-                model_settings=ModelSettings(tool_choice=self._tool_choice),
+                model_settings=ModelSettings(tool_choice=self._tool_choice or NOT_GIVEN),
                 user_metrics=None,
             )
         else:

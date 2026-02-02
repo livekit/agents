@@ -84,11 +84,11 @@ class DiffOps:
     ]  # (previous_item_id, id), the items with the same id but different content
 
 
-def compute_chat_ctx_diff(old_ctx: ChatContext | list[str], new_ctx: ChatContext) -> DiffOps:
+def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
     """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx."""
     # TODO(theomonnom): Make ChatMessage hashable and also add update ops
 
-    old_ids = [m.id for m in old_ctx.items] if isinstance(old_ctx, ChatContext) else old_ctx
+    old_ids = [m.id for m in old_ctx.items]
     new_ids = [m.id for m in new_ctx.items]
 
     lcs_ids = set(_compute_lcs(old_ids, new_ids))

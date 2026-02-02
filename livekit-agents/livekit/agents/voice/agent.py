@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypedDict, TypeVar
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
@@ -31,7 +31,8 @@ class ModelSettings:
     """The tool choice to use when calling the LLM."""
 
 
-class _AgentState(TypedDict, total=True):
+@dataclass
+class _AgentState:
     cls: type[Agent]
     id: str
     init_kwargs: dict[str, Any]
@@ -39,6 +40,7 @@ class _AgentState(TypedDict, total=True):
     chat_ctx: dict[str, Any]  # ChatContext.to_dict()
     parent_agent: _AgentState | None
     durable_state: bytes | None
+    extra_state: dict[str, Any] = field(default_factory=dict)
 
 
 class Agent:
@@ -457,7 +459,7 @@ class Agent:
         tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
         missing_tools: list[str] = []
-        for tool_id in state["tools"]:
+        for tool_id in state.tools:
             if tool_id in tool_by_id:
                 valid_tools.append(tool_by_id[tool_id])
             else:
@@ -469,15 +471,14 @@ class Agent:
         self._tools = valid_tools
 
         # read chat context
-        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
+        self._chat_ctx = llm.ChatContext.from_dict(state.chat_ctx)
 
     @staticmethod
     def _rehydrate(state: _AgentState) -> Agent:
         from .agent_activity import AgentActivity
         from .agent_session import _AgentSessionContextVar
 
-        cls = state["cls"]
-        agent: Agent = cls(**state["init_kwargs"])
+        agent: Agent = state.cls(**state.init_kwargs)
 
         # register the agent to the AgentSession's rehydrated agents collection
         # the pickled reference in tool calls will be resolved from this collection
@@ -492,7 +493,7 @@ class Agent:
             # recreate an AgentActivity and restore the durable functions
             agent_activity = AgentActivity(agent=agent, sess=session)
             # TODO(long): failure handling for durable functions
-            agent_activity._rehydrate(state["durable_state"])
+            agent_activity._rehydrate(state.durable_state)
 
         return agent
 
@@ -1030,14 +1031,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
     def _get_state(self) -> _AgentState:
         state = super()._get_state()
-        state["parent_agent"] = self._old_agent._get_state() if self._old_agent else None
-        state["_started"] = self.__started
+        state.parent_agent = self._old_agent._get_state() if self._old_agent else None
+        state.extra_state["__started"] = self.__started
         return state
 
     def _set_state(self, state: _AgentState) -> None:
         super()._set_state(state)
-        self.__started = state["_started"]
-        if parent_state := state.get("parent_agent"):
+        self.__started = state.extra_state.get("__started", False)
+        if parent_state := state.parent_agent:
             self._old_agent = Agent._rehydrate(parent_state)
 
 

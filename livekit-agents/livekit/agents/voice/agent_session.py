@@ -16,7 +16,6 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    TypedDict,
     TypeVar,
     cast,
     overload,
@@ -103,8 +102,9 @@ Run_T = TypeVar("Run_T")
 _AgentSessionContextVar = contextvars.ContextVar["AgentSession"]("agents_session")
 
 
-class _AgentSessionState(TypedDict, total=True):
-    userdata: Userdata_T
+@dataclass
+class _AgentSessionState:
+    userdata: Any
     tools: list[str]  # tool id
     history: dict[str, Any]
     agent: _AgentState
@@ -884,6 +884,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         history = self._chat_ctx.to_dict(
             exclude_image=False, exclude_function_call=False, exclude_timestamp=False
         )
+        assert self._agent is not None, "AgentSession is not started"
         return _AgentSessionState(
             userdata=self._userdata,
             tools=[tool.id for tool in self.tools],
@@ -901,17 +902,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if isinstance(state, bytes):
             with SessionStore(db_file=state) as store:
-                state_dict = store.export_state()
+                sess_state = store.export_state()
         else:
-            state_dict = state
+            sess_state = state
 
-        self._userdata = state_dict["userdata"]
-        self._chat_ctx = llm.ChatContext.from_dict(state_dict["history"])
+        self._userdata = sess_state.userdata
+        self._chat_ctx = llm.ChatContext.from_dict(sess_state.history)
 
         tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
         missing_tools: list[str] = []
-        for tool_id in state_dict["tools"]:
+        for tool_id in sess_state.tools:
             if tool_id in tool_by_id:
                 valid_tools.append(tool_by_id[tool_id])
             else:
@@ -925,7 +926,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # rehydrate agent recursively and register them to the session
         tk = _AgentSessionContextVar.set(self)
         try:
-            agent = Agent._rehydrate(state_dict["agent"])
+            agent = Agent._rehydrate(sess_state.agent)
         finally:
             _AgentSessionContextVar.reset(tk)
 

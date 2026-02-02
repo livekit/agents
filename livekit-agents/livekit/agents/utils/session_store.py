@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import pickle
 import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import apsw
 
@@ -24,13 +23,9 @@ SCHEMA_SQL = """
         version INTEGER NOT NULL PRIMARY KEY,
         current_agent_id TEXT,
         tools_json TEXT,
+        userdata_blob BLOB,
+        userdata_encrypted BOOLEAN NOT NULL DEFAULT 0,
         FOREIGN KEY (current_agent_id) REFERENCES agent(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS userdata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        is_encrypted BOOLEAN NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS session_history (
@@ -47,7 +42,7 @@ SCHEMA_SQL = """
         parent_id TEXT,
         tools_json TEXT,
         init_kwargs_json TEXT,
-        custom_state_json TEXT,
+        extra_state BLOB,
         durable_state BLOB,
         FOREIGN KEY (parent_id) REFERENCES agent(id)
     );
@@ -118,7 +113,7 @@ class SessionStore:
         return int(result[0]) if result else None
 
     @property
-    def version(self) -> str | None:
+    def version(self) -> int:
         return self._version
 
     @classmethod
@@ -128,36 +123,34 @@ class SessionStore:
         cursor = store._conn.cursor()
 
         # write session metadata (version, current agent, tools)
-        session_tools = state.get("tools", [])
+        userdata_blob = (
+            store._serialize_data(state.userdata, passphrase=None, output_type="bytes")
+            if state.userdata
+            else None
+        )
+        userdata_encrypted = False
         cursor.execute(
-            "INSERT INTO session (version, current_agent_id, tools_json) VALUES (?, ?, ?)",
+            "INSERT INTO session (version, current_agent_id, tools_json, userdata_blob, userdata_encrypted) VALUES (?, ?, ?, ?, ?)",
             (
                 version,
-                state["agent"]["id"] if state.get("agent") else None,
-                json.dumps(session_tools) if session_tools else None,
+                state.agent.id,
+                json.dumps(state.tools) if state.tools else None,
+                userdata_blob,
+                userdata_encrypted,
             ),
         )
 
-        # write userdata
-        user_data = state.get("userdata") or {}
-        for key, value in user_data.items():
-            value_text = store._serialize_data(value, passphrase=None)
-            cursor.execute(
-                "INSERT INTO userdata (key, value, is_encrypted) VALUES (?, ?, ?)",
-                (key, value_text, False),
-            )
-
         # write session history
-        session_history = state.get("history", {"items": []})
+        session_history = state.history or {"items": []}
         for item in session_history["items"]:
-            item_text = store._serialize_data(item, passphrase=None)
+            item_text = store._serialize_data(item, passphrase=None, output_type="text")
             cursor.execute(
                 "INSERT INTO session_history (item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?)",
                 (item["id"], item_text, False, item["created_at"]),
             )
 
         # write agent state recursively
-        store._write_agent_state(cursor, state["agent"])
+        store._write_agent_state(cursor, state.agent)
 
         # update version
         store._version = version
@@ -170,22 +163,16 @@ class SessionStore:
         cursor = self._conn.cursor()
 
         meta = cursor.execute(
-            "SELECT version, current_agent_id, tools_json FROM session"
+            "SELECT version, current_agent_id, tools_json, userdata_blob, userdata_encrypted FROM session"
         ).fetchone()
         if not meta:
             raise ValueError("session not initialized")
 
-        _, current_agent_id, tools_json = meta
+        _, current_agent_id, tools_json, userdata_blob, userdata_encrypted = meta
 
         # load tools from session
         tools = json.loads(tools_json) if tools_json else []
-
-        # load userdata
-        userdata = {}
-        for key, value_text, is_encrypted in cursor.execute(
-            "SELECT key, value, is_encrypted FROM userdata"
-        ):
-            userdata[key] = self._deserialize_data(value_text, bool(is_encrypted), None)
+        userdata = self._deserialize_data(userdata_blob, userdata_encrypted, None)
 
         # load session history
         history_items = []
@@ -198,7 +185,9 @@ class SessionStore:
         history = {"items": history_items}
 
         # load agent state (current agent)
-        agent = self._load_agent(cursor, current_agent_id) if current_agent_id else {}
+        agent = self._load_agent(cursor, current_agent_id)
+        if agent is None:
+            raise ValueError(f"Agent with id {current_agent_id} not found")
 
         return _AgentSessionState(
             userdata=userdata,
@@ -244,7 +233,7 @@ class SessionStore:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\\_%' ESCAPE '\\'"
             ).fetchall()
             for (table_name,) in tables:
-                session.diff("main", table_name)
+                session.diff("main", str(table_name))
 
             changeset = session.changeset()
 
@@ -318,55 +307,46 @@ class SessionStore:
             ("schema_version", str(SCHEMA_VERSION)),
         )
 
-    def _write_agent_state(self, cursor: apsw.Cursor, agent_state: _AgentState) -> None:
+    def _write_agent_state(self, cursor: apsw.Cursor, state: _AgentState) -> None:
         """Recursively write agent state and parents to DB."""
-        from ..voice.agent import _AgentState
-
         # write parent first (if exists)
-        parent_agent = agent_state.get("parent_agent")
+        parent_agent = state.parent_agent
         if parent_agent:
             self._write_agent_state(cursor, parent_agent)
 
-        # write current agent
-        agent_id = agent_state["id"]
-        agent_type = agent_state["cls"]
-        agent_tools = agent_state.get("tools", [])
-        init_kwargs = agent_state.get("init_kwargs", {})
-        chat_ctx_dict = agent_state.get("chat_ctx", {})
-        durable_state = agent_state.get("durable_state", None)
-
         # filter out NOT_GIVEN values
-        init_kwargs = {k: v for k, v in init_kwargs.items() if is_given(v)}
-
-        # extract custom fields
-        standard_keys = set(_AgentState.__required_keys__) | set(_AgentState.__optional_keys__)
-        custom_state = {k: v for k, v in agent_state.items() if k not in standard_keys}
+        init_kwargs: dict[str, Any] = {k: v for k, v in state.init_kwargs.items() if is_given(v)}
+        extra_state_blob = (
+            self._serialize_data(state.extra_state, passphrase=None, output_type="bytes")
+            if state.extra_state
+            else None
+        )
 
         # write agent metadata
         cursor.execute(
             """
             INSERT INTO agent
-            (id, runtime, class_type, parent_id, tools_json, init_kwargs_json, custom_state_json, durable_state)
+            (id, runtime, class_type, parent_id, tools_json, init_kwargs_json, extra_state, durable_state)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                agent_id,
+                state.id,
                 "python",
-                pickle.dumps(agent_type),
-                parent_agent["id"] if parent_agent else None,
-                json.dumps(agent_tools) if agent_tools else None,
+                pickle.dumps(state.cls),
+                parent_agent.id if parent_agent else None,
+                json.dumps(state.tools) if state.tools else None,
                 json.dumps(init_kwargs) if init_kwargs else None,
-                json.dumps(custom_state) if custom_state else None,
-                durable_state,
+                extra_state_blob,
+                state.durable_state,
             ),
         )
 
         # write agent chat context
-        for item in chat_ctx_dict["items"]:
-            item_text = self._serialize_data(item, passphrase=None)
+        for item in state.chat_ctx["items"]:
+            item_text = self._serialize_data(item, passphrase=None, output_type="bytes")
             cursor.execute(
                 "INSERT INTO agent_chat_ctx (agent_id, item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?, ?)",
-                (agent_id, item["id"], item_text, False, item["created_at"]),
+                (state.id, item["id"], item_text, False, item["created_at"]),
             )
 
     def _load_agent(self, cursor: apsw.Cursor, agent_id: str) -> _AgentState | None:
@@ -374,7 +354,7 @@ class SessionStore:
         from ..voice.agent import _AgentState
 
         row = cursor.execute(
-            "SELECT runtime, class_type, parent_id, tools_json, init_kwargs_json, custom_state_json, durable_state FROM agent WHERE id = ?",
+            "SELECT runtime, class_type, parent_id, tools_json, init_kwargs_json, extra_state, durable_state FROM agent WHERE id = ?",
             (agent_id,),
         ).fetchone()
 
@@ -387,19 +367,19 @@ class SessionStore:
             parent_id,
             tools_json,
             init_kwargs_json,
-            custom_state_json,
+            extra_state_blob,
             durable_state,
         ) = row
 
         # unpickle agent class (Python runtime only for now)
         if runtime != "python":
             raise ValueError(f"Unsupported agent runtime: {runtime}")
-        agent_class = pickle.loads(class_type_blob) if class_type_blob else None
+        agent_class = pickle.loads(class_type_blob)
 
         # parse JSON fields
         tools = json.loads(tools_json) if tools_json else []
         init_kwargs = json.loads(init_kwargs_json) if init_kwargs_json else {}
-        custom_state = json.loads(custom_state_json) if custom_state_json else {}
+        extra_state = self._deserialize_data(extra_state_blob, False, None) or {}
 
         # load agent's chat context
         chat_items = []
@@ -420,40 +400,46 @@ class SessionStore:
             tools=tools,
             chat_ctx=chat_ctx,
             durable_state=durable_state,
+            parent_agent=None,
+            extra_state=extra_state,
         )
-        agent_state.update(custom_state)
 
         # load parent agent
         if parent_id:
-            agent_state["parent_agent"] = self._load_agent(cursor, parent_id)
+            agent_state.parent_agent = self._load_agent(cursor, parent_id)
 
         return agent_state
 
     # Helper methods (internal)
 
-    def _serialize_data(self, data: Any, passphrase: str | None) -> str:
+    def _serialize_data(
+        self, data: Any, passphrase: str | None, output_type: Literal["text", "bytes"] = "text"
+    ) -> str | bytes:
         # TODO: Implement encryption when passphrase is provided
-        try:
+        if output_type == "text":
             return json.dumps(data)
-        except (TypeError, ValueError):
-            pickled = pickle.dumps(data)
-            return base64.b64encode(pickled).decode("ascii")
+        elif output_type == "bytes":
+            return pickle.dumps(data)
+        else:
+            raise ValueError(f"Invalid output_type: {output_type}")
 
     def _deserialize_data(
-        self, data_text: str | None, is_encrypted: bool, passphrase: str | None
+        self, data: str | bytes | None, is_encrypted: bool, passphrase: str | None
     ) -> Any:
-        if data_text is None:
+        if data is None:
             return None
 
         # TODO: Implement decryption when is_encrypted=True
         if is_encrypted:
             raise NotImplementedError("Encryption not yet implemented")
 
-        try:
-            return json.loads(data_text)
-        except (json.JSONDecodeError, ValueError):
-            pickled = base64.b64decode(data_text)
-            return pickle.loads(pickled)
+        # Use data type to determine deserialization method
+        if isinstance(data, bytes):
+            return pickle.loads(data)
+        elif isinstance(data, str):
+            return json.loads(data)
+        else:
+            raise TypeError(f"Expected str or bytes, got {type(data)}")
 
     def close(self) -> None:
         """Close the database connection."""
