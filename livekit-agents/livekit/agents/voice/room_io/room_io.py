@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Any
 
 from livekit import api, rtc
 
-from ... import DEFAULT_API_CONNECT_OPTIONS, utils
+from ... import utils
 from ...job import get_job_context
 from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     TOPIC_CHAT,
     NotGivenOr,
@@ -78,7 +79,7 @@ class RoomIO:
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[Any] | asyncio.Future[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
