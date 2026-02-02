@@ -615,10 +615,7 @@ class SpeechStream(stt.RecognizeStream):
         ]
 
         # Start all tasks
-        done, _ = await asyncio.wait(
-            [asyncio.gather(*self._tasks)],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
 
         # Complete all tasks
         for task in done:
