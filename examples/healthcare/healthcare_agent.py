@@ -94,15 +94,13 @@ async def update_record(
     context: RunContext,
     field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})],
 ):
-    """Update a specific field in the user's records.
+    """Call when the user requests to modify information in their existing patient record.
 
     Args:
         field (str): The field to update
     """
     if field == "name":
-        await context.session.generate_reply(
-            instructions="The user may not change their name, they must create a new record."
-        )
+        await context.session.generate_reply(instructions="The user may not change their name.")
         return
     field_map = {
         "dob": (GetDOBTask, "date_of_birth"),
@@ -117,7 +115,7 @@ async def update_record(
     name = context.session.userdata.profile["name"]
     updated = context.session.userdata.database.update_patient_record(name, **{attr: value})
     if not updated:  # this will only execute in the main HealthcareAgent() flow
-        return "No profile was found to update, prompt the user to create a new profile."
+        return "No profile was found to update"
     return f"The user's {field} has been updated."
 
 
@@ -200,7 +198,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             appointment_time: Annotated[
                 str,
                 Field(
-                    description="The available appointment times",
+                    description="The available appointment times in ISO format",
                     json_schema_extra={"items": {"enum": iso_times}},
                 ),
             ],
@@ -208,7 +206,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             """Call to confirm the user's selected appointment time.
 
             Args:
-                appointment_time (str): The user's appointment time selection
+                appointment_time (str): The user's appointment time selection in ISO format
             """
             self._appointment_time = appointment_time
 
@@ -350,30 +348,32 @@ class HealthcareAgent(Agent):
             instructions="Greet the user and gather the reason for their call."
         )
 
-    async def task_completed_callback(self, event, database: FakeDatabase):
+    async def task_completed_callback(self, event, task_group):
         if event.task_id == "get_name_task":
-            patient_name = event.result
-            existing_record = database.get_patient_by_name(patient_name)
+            patient_name = event.result.first_name + " " + event.result.last_name
+            existing_record = self._database.get_patient_by_name(patient_name)
             if existing_record:
                 logger.info(f"Found existing patient profile for {patient_name}")
                 self.session.userdata.profile = existing_record
-                # this does not add to TaskGroup's shared context :(
-                # self.chat_ctx.add_message(
-                #     role="system",
-                #     content=f"An existing patient record has been found, ask the user to confirm each detail of their record: {json.dumps(existing_record)}",
-                # )
+                chat_ctx = task_group.chat_ctx.copy()
+                chat_ctx.add_message(
+                    role="system",
+                    content=f"Alert the user that an existing patient record has been found. Here is the patient's record: {str(existing_record)}",
+                )
+                await task_group.update_chat_ctx(chat_ctx)
 
     async def profile_authenticator(self) -> None:
         """Creates a TaskGroup that collects user information"""
+        logger.info("Authenticating user information")
         if not self.session.userdata.profile:
             task_group = TaskGroup(
                 chat_ctx=self.chat_ctx,
                 return_exceptions=False,
-                on_task_completed=lambda event: self.task_completed_callback(event, self._database),
+                on_task_completed=lambda event: self.task_completed_callback(event, task_group),
             )
 
             task_group.add(
-                lambda: GetNameTask(),
+                lambda: GetNameTask(last_name=True),
                 id="get_name_task",
                 description="Gathers the user's name",
             )
@@ -394,12 +394,8 @@ class HealthcareAgent(Agent):
             )
 
             results = await task_group
-            patient_name = (
-                results.task_results["get_name_task"].first_name
-                + " "
-                + results.task_results["get_name_task"].last_name
-            )
-            # TODO update fields below dynamically with callbacks
+
+            patient_name = f"{results.task_results['get_name_task'].first_name} {results.task_results['get_name_task'].last_name}"
             profile = {
                 "name": patient_name,
                 "date_of_birth": results.task_results["get_dob_task"].date_of_birth,
@@ -409,15 +405,14 @@ class HealthcareAgent(Agent):
             self.session.userdata.profile = profile
             self._database.add_patient_record(info=profile)
 
-    @function_tool()
-    async def create_profile(self):
-        """Call to create a new profile for the user"""
-        await self.profile_authenticator()
+    # @function_tool()
+    # async def create_profile(self):
+    #     """Call to create a new profile for the user if the user requests"""
+    #     await self.profile_authenticator()
 
     @function_tool()
     async def schedule_appointment(self):
-        """Call to schedule an appointment for the user."""
-        # Observe how if any information is given early, TaskGroup will fast-forward the respective task. and at any time, user information can be updated
+        """Call to schedule an appointment for the user. Do not ask for any information in advance."""
         await self.profile_authenticator()
         result = await ScheduleAppointmentTask()
 
@@ -471,6 +466,7 @@ class HealthcareAgent(Agent):
     async def retrieve_lab_results(self):
         """Call if the user wishes to see their latest lab results"""
         await self.profile_authenticator()
+
         if not os.path.isfile("mock_checkup_report.pdf"):
             logger.warning(
                 "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
@@ -484,9 +480,10 @@ class HealthcareAgent(Agent):
         client.vector_stores.files.create(vector_store_id=vector_store.id, file_id=file.id)
 
         filesearch_tool = openai.tools.FileSearch(vector_store_ids=[vector_store.id])
-        await GetLabResultsTask(
-            filesearch_tool
-        )  # ideally we don't need this and just update tools here
+        # current_tools = self.tools
+        # current_tools.append(openai.tools.WebSearch())
+        # await self.update_tools(current_tools)
+        await GetLabResultsTask(filesearch_tool)
         self._client.vector_stores.delete(self._vector_store.id)
         self._client.files.delete(self._file.id)
 
@@ -507,7 +504,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=UserData(database=db, profile=None),
         stt=deepgram.STT(),
-        llm=openai.responses.LLM(),
+        llm=openai.responses.LLM(model="gpt-4.1"),
         tts=deepgram.TTS(),
         vad=silero.VAD.load(),
     )
