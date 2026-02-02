@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIError
+from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
@@ -292,6 +292,10 @@ class ChunkedStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
@@ -471,6 +475,10 @@ class SynthesizeStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)

@@ -59,8 +59,9 @@ async def list_voices(
             if resp.status != 200:
                 content = await resp.text()
                 raise APIStatusError(
-                    f"Failed to list voices: {content}",
+                    "Failed to list Camb.ai voices",
                     status_code=resp.status,
+                    body=content,
                 )
 
             voice_list = await resp.json()

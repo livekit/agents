@@ -290,7 +290,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws:
                         return
-                    raise APIStatusError("Baseten connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Baseten connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
