@@ -266,6 +266,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def commit_audio(self) -> None:
         pass  # Full-duplex, continuous streaming
 
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by PersonaPlex.")
+
     def clear_audio(self) -> None:
         pass  # No server-side audio buffer
 
