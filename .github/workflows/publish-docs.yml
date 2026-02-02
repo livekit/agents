@@ -37,14 +37,7 @@ jobs:
 
       - name: S3 Upload
         run: |
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          # If branch is not 0.x, upload to /v1
-          if [[ $BRANCH != "0.x" ]]; then
-            aws s3 cp docs/ s3://livekit-docs/python/v1 --recursive
-          # Else, upload to root, preserving the v1 directory
-          else
-            aws s3 sync docs/ s3://livekit-docs/python --exclude "v1/*" --delete
-          fi
+          aws s3 sync docs/ s3://livekit-docs/python
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
