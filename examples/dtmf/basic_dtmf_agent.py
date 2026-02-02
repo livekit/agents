@@ -137,7 +137,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         vad=silero.VAD.load(),
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         tts=inference.TTS("inworld/inworld-tts-1"),
         turn_detection=MultilingualModel(),
     )

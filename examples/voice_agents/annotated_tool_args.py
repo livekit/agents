@@ -93,7 +93,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     agent = AgentSession(
         vad=silero.VAD.load(),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("rime/arcana"),
     )

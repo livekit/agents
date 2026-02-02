@@ -113,8 +113,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
-        stt="assemblyai/universal-streaming",
-        tts="cartesia",
+        stt="deepgram/flux-general:en",
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
     )
 
     @session.on("metrics_collected")

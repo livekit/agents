@@ -41,7 +41,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
         vad=silero.VAD.load(),

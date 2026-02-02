@@ -111,7 +111,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         tts=inference.TTS("cartesia/sonic-3"),
     )
 

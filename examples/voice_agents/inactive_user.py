@@ -26,7 +26,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         tts=inference.TTS("cartesia/sonic-3"),
         user_away_timeout=12.5,
     )

@@ -30,7 +30,7 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful assistant.",
-            stt=inference.STT("deepgram/nova-3"),
+            stt=inference.STT("deepgram/flux-general"),
             llm=inference.LLM("google/gemini-2.5-flash"),
             tts=inference.TTS("cartesia/sonic-3"),
         )

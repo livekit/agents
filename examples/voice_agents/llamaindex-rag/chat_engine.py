@@ -55,7 +55,7 @@ class ChatEngineAgent(Agent):
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
             vad=silero.VAD.load(),
-            stt=inference.STT("deepgram/nova-3"),
+            stt=inference.STT("deepgram/flux-general"),
             llm=DummyLLM(),  # use a dummy LLM to enable the pipeline reply
             tts=inference.TTS("cartesia/sonic-3"),
         )

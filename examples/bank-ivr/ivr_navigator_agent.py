@@ -93,7 +93,7 @@ async def dtmf_session(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
         llm=inference.LLM("openai/gpt-4.1"),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         tts=inference.TTS("rime/arcana"),
         # This flag does two things:
         # 1. Helps agent avoid getting stuck listening to repeating IVR loops by actively responding when a loop is detected.

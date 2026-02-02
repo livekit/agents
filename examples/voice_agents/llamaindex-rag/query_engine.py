@@ -60,7 +60,7 @@ async def entrypoint(ctx: JobContext):
             "responses, and avoiding usage of unpronouncable punctuation."
         ),
         vad=silero.VAD.load(),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
         tools=[query_info],

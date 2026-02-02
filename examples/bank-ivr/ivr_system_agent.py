@@ -639,7 +639,7 @@ async def bank_ivr_session(ctx: JobContext) -> None:
     session: AgentSession[SessionState] = AgentSession(
         vad=ctx.proc.userdata["vad"],
         llm=inference.LLM("openai/gpt-4.1"),
-        stt=inference.STT("deepgram/nova-3"),
+        stt=inference.STT("deepgram/flux-general"),
         tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
         userdata=state,

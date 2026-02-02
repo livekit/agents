@@ -10,7 +10,7 @@ Most examples use **LiveKit Inference** by default for STT, LLM, and TTS models.
 from livekit.agents import inference
 
 session = AgentSession(
-    stt=inference.STT("deepgram/nova-3"),
+    stt=inference.STT("deepgram/flux-general"),
     llm=inference.LLM("openai/gpt-4.1-mini"),
     tts=inference.TTS("cartesia/sonic-3"),
 )
