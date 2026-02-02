@@ -551,6 +551,7 @@ class SpeechStream(stt.RecognizeStream):
         self._config: VoiceAgentConfig = config
         self._client: VoiceAgentClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._speech_duration: float = 0
 
         self._tasks: list[asyncio.Task] = []
 
@@ -645,6 +646,7 @@ class SpeechStream(stt.RecognizeStream):
                 # Send audio frames
                 if self._client:
                     for frame in frames:
+                        self._speech_duration += frame.duration
                         await self._client.send_audio(frame.data.tobytes())
 
         except asyncio.CancelledError:
@@ -720,6 +722,15 @@ class SpeechStream(stt.RecognizeStream):
         logger.debug("EndOfTurn received")
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
+        if self._speech_duration > 0.0:
+            usage_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                alternatives=[],
+                recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+            )
+            self._event_ch.send_nowait(usage_event)
+            self._speech_duration = 0
+
     def _handle_speakers_result(self, message: dict[str, Any]) -> None:
         """Handle SpeakersResult events."""
         logger.debug("SpeakersResult received")
@@ -760,8 +771,9 @@ class SpeechStream(stt.RecognizeStream):
                 language=segment.get("language", opts.language),
                 text=text,
                 speaker_id=segment.get("speaker_id", "UU"),
-                start_time=segment.get("metadata", {}).get("start_time", 0),
-                end_time=segment.get("metadata", {}).get("end_time", 0),
+                start_time=segment.get("metadata", {}).get("start_time", 0)
+                + self.start_time_offset,
+                end_time=segment.get("metadata", {}).get("end_time", 0) + self.start_time_offset,
                 confidence=1.0,
             )
 
