@@ -91,9 +91,7 @@ class STTOptions:
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
 
     # Custom dictionary
-    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(
-        default_factory=list
-    )
+    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
 
     # -------------------
     # Advanced features
@@ -298,9 +296,7 @@ class STT(stt.STT):
         )
 
         # Set API key
-        self._api_key: str = (
-            api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
-        )
+        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
 
         # Set base URL
         self._base_url: str = (
@@ -365,9 +361,7 @@ class STT(stt.STT):
         # Return the stream
         return stream
 
-    def _prepare_config(
-        self, language: NotGivenOr[str] = NOT_GIVEN
-    ) -> VoiceAgentConfig:
+    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> VoiceAgentConfig:
         """Prepare VoiceAgentConfig from STTOptions."""
 
         # Reference to STT options
@@ -442,7 +436,6 @@ class STT(stt.STT):
         """
         # Do this for each stream
         for stream in self._streams:
-
             # Check if diarization is enabled
             if not stream._config.enable_diarization:
                 raise ValueError("Diarization is not enabled")
@@ -473,7 +466,6 @@ class STT(stt.STT):
 
         # Iterate over the streams
         for stream in self._streams:
-
             # Do not finalize if being handled by a client
             if not stream._client or not stream._client._is_connected:
                 continue
@@ -502,7 +494,6 @@ class STT(stt.STT):
 
         # Iterate over all streams
         for idx, stream in enumerate(self._streams):
-
             # Fail if not connected
             if stream._client is None:
                 logger.warning(f"Not connected in stream {idx}")
@@ -519,9 +510,7 @@ class STT(stt.STT):
             stream._speaker_result_event.clear()
 
             # Send message to client
-            await stream._client.send_message(
-                {"message": ClientMessageType.GET_SPEAKERS.value}
-            )
+            await stream._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
 
             # Wait the result (5 second timeout)
             try:
@@ -725,16 +714,12 @@ class SpeechStream(stt.RecognizeStream):
     def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-        )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-        )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     def _handle_speakers_result(self, message: dict[str, Any]) -> None:
         """Handle SpeakersResult events."""
