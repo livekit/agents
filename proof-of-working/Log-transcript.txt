@@ -1,0 +1,136 @@
+2025-12-04 16:43:48,850 INFO  livekit      livekit_ffi::server:139:livekit_ffi::server - initializing ffi server v0.12.40
+2025-12-04 16:43:49,249 INFO  livekit.agents starting worker
+2025-12-04 16:43:49,249 INFO  livekit.agents starting inference executor
+2025-12-04 16:43:49,273 INFO  livekit.agents initializing process
+2025-12-04 16:43:53,941 INFO  livekit.agents process initialized
+2025-12-04 16:43:53,948 INFO  livekit.agents HTTP server listening on :63063
+2025-12-04 16:43:53,966 INFO  livekit.agents initializing job runner
+2025-12-04 16:43:53,969 INFO  basic-agent  [PREWARM] loading VAD model
+2025-12-04 16:43:54,138 INFO  basic-agent  [PREWARM] VAD model loaded
+2025-12-04 16:43:54,140 INFO  livekit.agents job runner initialized
+2025-12-04 16:43:54,185 INFO  basic-agent  [ENTRYPOINT] starting AgentSession for room=mock_room
+2025-12-04 16:43:54,669 INFO  basic-agent  [AGENT] on_enter -> generating initial reply
+2025-12-04 16:43:55,159 INFO  basic-agent  [STATE] agent_state changed: initializing -> listening | user_state=listening
+2025-12-04 16:43:55,166 WARNING livekit.agents resume_false_interruption is enabled but audio output does not support pause, it will be ignored
+2025-12-04 16:43:55,175 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:43:56,488 INFO  basic-agent  [TOOL] Looking up weather for New York
+2025-12-04 16:43:56,497 INFO  livekit.agents LLM metrics
+2025-12-04 16:43:57,870 INFO  livekit.agents LLM metrics
+2025-12-04 16:43:59,578 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:00,676 INFO  livekit.agents STT metrics
+2025-12-04 16:44:00,846 INFO  livekit.agents TTS metrics
+2025-12-04 16:44:03,698 INFO  livekit.agents STT metrics
+2025-12-04 16:44:04,538 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:44:06,648 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=listening
+2025-12-04 16:44:07,104 INFO  livekit.agents STT metrics
+2025-12-04 16:44:07,346 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=listening
+2025-12-04 16:44:07,386 INFO  livekit.agents STT metrics
+2025-12-04 16:44:07,386 INFO  basic-agent  [STT] FINAL text='Yeah.' | agent_state=listening | user_state=listening
+2025-12-04 16:44:07,395 INFO  basic-agent  [LOGIC] words=['yeah'] | is_soft=True | has_hard=False | agent_state=listening
+2025-12-04 16:44:07,396 INFO  basic-agent  [LOGIC] SOFT input while agent NOT speaking -> normal user turn (agent will respond)
+2025-12-04 16:44:08,888 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:09,836 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:09,849 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:09,849 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:11,146 INFO  livekit.agents TTS metrics
+2025-12-04 16:44:12,376 INFO  livekit.agents STT metrics
+2025-12-04 16:44:15,043 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:44:15,418 INFO  livekit.agents STT metrics
+2025-12-04 16:44:16,336 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=listening
+2025-12-04 16:44:16,988 INFO  basic-agent  [STT] PARTIAL text='There are no' | agent_state=listening | user_state=speaking
+2025-12-04 16:44:17,741 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=listening
+2025-12-04 16:44:17,990 INFO  basic-agent  [STT] PARTIAL text='Tell me about volcanoes.' | agent_state=listening | user_state=listening
+2025-12-04 16:44:17,998 INFO  livekit.agents STT metrics
+2025-12-04 16:44:18,006 INFO  basic-agent  [STT] FINAL text='Tell me about volcanoes.' | agent_state=listening | user_state=listening
+2025-12-04 16:44:18,008 INFO  basic-agent  [LOGIC] words=['tell', 'me', 'about', 'volcanoes'] | is_soft=False | has_hard=False | agent_state=listening
+2025-12-04 16:44:18,010 INFO  basic-agent  [LOGIC] NORMAL input while agent NOT speaking -> normal user turn
+2025-12-04 16:44:18,098 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:18,098 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:19,746 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:20,470 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:23,006 INFO  livekit.agents STT metrics
+2025-12-04 16:44:23,935 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:24,586 INFO  livekit.agents STT metrics
+2025-12-04 16:44:24,590 INFO  basic-agent  [STT] FINAL text='Okay.' | agent_state=speaking | user_state=speaking
+2025-12-04 16:44:24,595 INFO  basic-agent  [LOGIC] words=['okay'] | is_soft=True | has_hard=False | agent_state=speaking
+2025-12-04 16:44:24,598 INFO  basic-agent  [LOGIC] SOFT backchannel while speaking -> IGNORE COMPLETELY (no interrupt, no new turn)
+2025-12-04 16:44:24,645 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=speaking
+2025-12-04 16:44:24,726 WARNING livekit.agents skipping reply to user input, current speech generation cannot be interrupted
+2025-12-04 16:44:25,338 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:26,138 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=speaking
+2025-12-04 16:44:26,188 INFO  livekit.agents STT metrics
+2025-12-04 16:44:26,188 INFO  basic-agent  [STT] FINAL text='Yeah.' | agent_state=speaking | user_state=listening
+2025-12-04 16:44:26,196 INFO  basic-agent  [LOGIC] words=['yeah'] | is_soft=True | has_hard=False | agent_state=speaking
+2025-12-04 16:44:26,197 INFO  basic-agent  [LOGIC] SOFT backchannel while speaking -> IGNORE COMPLETELY (no interrupt, no new turn)
+2025-12-04 16:44:26,268 WARNING livekit.agents skipping reply to user input, current speech generation cannot be interrupted
+2025-12-04 16:44:26,636 INFO  livekit.agents TTS metrics
+2025-12-04 16:44:27,246 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:27,926 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=speaking
+2025-12-04 16:44:28,097 INFO  livekit.agents STT metrics
+2025-12-04 16:44:28,097 INFO  basic-agent  [STT] FINAL text='Right.' | agent_state=speaking | user_state=listening
+2025-12-04 16:44:28,107 INFO  basic-agent  [LOGIC] words=['right'] | is_soft=True | has_hard=False | agent_state=speaking
+2025-12-04 16:44:28,107 INFO  basic-agent  [LOGIC] SOFT backchannel while speaking -> IGNORE COMPLETELY (no interrupt, no new turn)
+2025-12-04 16:44:28,186 WARNING livekit.agents skipping reply to user input, current speech generation cannot be interrupted
+2025-12-04 16:44:29,848 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:30,496 INFO  livekit.agents STT metrics
+2025-12-04 16:44:30,501 INFO  basic-agent  [STT] FINAL text='Stop.' | agent_state=speaking | user_state=speaking
+2025-12-04 16:44:30,503 INFO  basic-agent  [LOGIC] words=['stop'] | is_soft=False | has_hard=True | agent_state=speaking
+2025-12-04 16:44:30,506 INFO  basic-agent  [LOGIC] HARD interrupt while speaking -> calling session.interrupt(force=True)
+2025-12-04 16:44:30,515 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=speaking
+2025-12-04 16:44:30,539 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=listening
+2025-12-04 16:44:30,686 WARNING livekit.agents preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`
+2025-12-04 16:44:30,690 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:30,701 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:31,716 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:33,675 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:33,679 INFO  livekit.agents TTS metrics
+2025-12-04 16:44:35,478 INFO  livekit.agents STT metrics
+2025-12-04 16:44:36,346 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:44:38,046 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=listening
+2025-12-04 16:44:38,676 INFO  basic-agent  [STT] PARTIAL text='Daniel' | agent_state=listening | user_state=speaking
+2025-12-04 16:44:39,236 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=listening
+2025-12-04 16:44:39,476 INFO  livekit.agents STT metrics
+2025-12-04 16:44:39,492 INFO  basic-agent  [STT] FINAL text='Ten more trucks.' | agent_state=listening | user_state=listening
+2025-12-04 16:44:39,496 INFO  basic-agent  [LOGIC] words=['ten', 'more', 'trucks'] | is_soft=False | has_hard=False | agent_state=listening
+2025-12-04 16:44:39,496 INFO  basic-agent  [LOGIC] NORMAL input while agent NOT speaking -> normal user turn
+2025-12-04 16:44:39,646 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:39,646 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:40,662 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:41,836 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:44,494 INFO  livekit.agents STT metrics
+2025-12-04 16:44:47,337 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:47,492 INFO  livekit.agents STT metrics
+2025-12-04 16:44:48,446 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=speaking
+2025-12-04 16:44:48,486 INFO  basic-agent  [STT] PARTIAL text='Tell me about rocks.' | agent_state=speaking | user_state=listening
+2025-12-04 16:44:48,796 INFO  livekit.agents STT metrics
+2025-12-04 16:44:48,803 INFO  basic-agent  [STT] FINAL text='Tell me about rocks.' | agent_state=speaking | user_state=listening
+2025-12-04 16:44:48,806 INFO  basic-agent  [LOGIC] words=['tell', 'me', 'about', 'rocks'] | is_soft=False | has_hard=False | agent_state=speaking
+2025-12-04 16:44:48,806 INFO  basic-agent  [LOGIC] NON-SOFT utterance while speaking -> treating as interrupt (session.interrupt(force=True))
+2025-12-04 16:44:48,820 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:44:48,936 WARNING livekit.agents preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`
+2025-12-04 16:44:48,936 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:48,950 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:50,238 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:51,024 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:53,776 INFO  livekit.agents STT metrics
+2025-12-04 16:44:54,816 INFO  livekit.agents TTS metrics
+2025-12-04 16:44:55,647 INFO  basic-agent  [STATE] user_state changed: listening -> speaking | agent_state=speaking
+2025-12-04 16:44:56,887 INFO  basic-agent  [STT] PARTIAL text='Okay. Right. But wait.' | agent_state=speaking | user_state=speaking
+2025-12-04 16:44:56,946 INFO  basic-agent  [STATE] user_state changed: speaking -> listening | agent_state=speaking
+2025-12-04 16:44:57,093 INFO  livekit.agents STT metrics
+2025-12-04 16:44:57,096 INFO  basic-agent  [STT] FINAL text='Okay. Right. But wait.' | agent_state=speaking | user_state=listening
+2025-12-04 16:44:57,096 INFO  basic-agent  [LOGIC] words=['okay', 'right', 'but', 'wait'] | is_soft=False | has_hard=True | agent_state=speaking
+2025-12-04 16:44:57,096 INFO  basic-agent  [LOGIC] HARD interrupt while speaking -> calling session.interrupt(force=True)
+2025-12-04 16:44:57,113 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:44:57,192 WARNING livekit.agents preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`
+2025-12-04 16:44:57,194 INFO  livekit.agents EOU metrics
+2025-12-04 16:44:57,203 INFO  basic-agent  [STATE] agent_state changed: listening -> thinking | user_state=listening
+2025-12-04 16:44:58,697 INFO  livekit.agents LLM metrics
+2025-12-04 16:44:59,296 INFO  basic-agent  [STATE] agent_state changed: thinking -> speaking | user_state=listening
+2025-12-04 16:44:59,876 INFO  livekit.agents TTS metrics
+2025-12-04 16:45:02,092 INFO  livekit.agents STT metrics
+2025-12-04 16:45:02,846 INFO  basic-agent  [STATE] agent_state changed: speaking -> listening | user_state=listening
+2025-12-04 16:45:05,086 INFO  livekit.agents STT metrics
+2025-12-04 16:45:08,216 INFO  livekit.agents shutting down worker
+2025-12-04 16:45:08,235 INFO  basic-agent  [METRICS] Usage: UsageSummary(llm_prompt_tokens=2032, llm_prompt_cached_tokens=0, llm_input_audio_tokens=0, llm_input_cached_audio_tokens=0, llm_input_text_tokens=0, llm_input_cached_text_tokens=0, llm_input_image_tokens=0, llm_input_cached_image_tokens=0, llm_completion_tokens=235, llm_output_audio_tokens=0, llm_output_image_tokens=0, llm_output_text_tokens=0, tts_characters_count=838, tts_audio_duration=52.919999999999945, stt_audio_duration=69.74999999999991)
+2025-12-04 16:45:08,248 INFO  livekit.agents process exiting
