@@ -239,7 +239,13 @@ class _SegmentSynchronizerImpl:
             return
 
         if self._paused_wall_time is not None:
-            self._paused_duration += time.time() - self._paused_wall_time
+            if self._start_wall_time is not None:
+                # use max() to handle the case where pause() was called before the first audio
+                # frame was pushed (i.e., before _start_wall_time was set). This can happen when
+                # a new impl is created while the synchronizer is already paused.
+                self._paused_duration += time.time() - max(
+                    self._start_wall_time, self._paused_wall_time
+                )
             self._paused_wall_time = None
         self._output_enabled_ev.set()
 
@@ -422,6 +428,9 @@ class TranscriptSynchronizer:
         self._enabled = True
         self._closed = False
 
+        # track pause state at the synchronizer level to apply to new impls after rotation
+        self._paused = False
+
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask: asyncio.Task[None] | None = None
@@ -469,12 +478,23 @@ class TranscriptSynchronizer:
 
     async def _rotate_segment_task(self, old_task: asyncio.Task[None] | None) -> None:
         if old_task:
-            await old_task
+            with contextlib.suppress(Exception):
+                await old_task
 
-        await self._impl.aclose()
+        try:
+            await self._impl.aclose()
+        except Exception:
+            logger.exception("failed to close segment synchronizer impl during rotation")
+
+        # always create a new impl even if aclose() failed, to avoid leaving
+        # self._impl pointing to a closed impl which causes the agent to get stuck
         self._impl = _SegmentSynchronizerImpl(
             options=self._opts, next_in_chain=self._text_output._next_in_chain
         )
+
+        # apply the current pause state to the new impl
+        if self._paused:
+            self._impl.pause()
 
     def rotate_segment(self) -> None:
         if self._closed:
@@ -588,11 +608,17 @@ class _SyncedAudioOutput(io.AudioOutput):
 
     def pause(self) -> None:
         super().pause()
-        self._synchronizer._impl.pause()
+        # track pause state at synchronizer level so it persists across segment rotations
+        self._synchronizer._paused = True
+        if not self._synchronizer._impl.closed:
+            self._synchronizer._impl.pause()
 
     def resume(self) -> None:
         super().resume()
-        self._synchronizer._impl.resume()
+        # track pause state at synchronizer level so it persists across segment rotations
+        self._synchronizer._paused = False
+        if not self._synchronizer._impl.closed:
+            self._synchronizer._impl.resume()
 
 
 class _SyncedTextOutput(io.TextOutput):
