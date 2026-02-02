@@ -624,7 +624,6 @@ class SpeechStream(stt.RecognizeStream):
         # Disconnect the client
         finally:
             await utils.aio.gracefully_cancel(*self._tasks)
-            await self._client.disconnect()
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
