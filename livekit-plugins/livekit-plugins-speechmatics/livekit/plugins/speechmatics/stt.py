@@ -332,7 +332,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._stt_options.operating_point
+        return self._prepare_config().operating_point.value
 
     async def _recognize_impl(
         self,
@@ -416,7 +416,7 @@ class STT(stt.STT):
                 setattr(config, param, value)
 
         # Handle partials
-        if not opts.include_partials:
+        if opts.include_partials is False:
             config.include_partials = False
 
         # Return the config
@@ -484,7 +484,9 @@ class STT(stt.STT):
             ):
                 stream._client.finalize()
 
-    async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
+    async def get_speaker_ids(
+        self,
+    ) -> list[SpeakerIdentifier] | list[list[SpeakerIdentifier]]:
         """Get the list of speakers from the current STT session.
 
         If diarization is enabled, then this will use the GET_SPEAKERS message
@@ -536,6 +538,8 @@ class STT(stt.STT):
             results.append(stream._speaker_result or [])
 
         # Return the list of speakers
+        if len(results) == 1:
+            return results[0]
         return results
 
 
@@ -805,4 +809,5 @@ class SpeechStream(stt.RecognizeStream):
             self._client = None
 
         # Remove from active streams
-        self._stt._streams.remove(self)
+        if self in self._stt._streams:
+            self._stt._streams.remove(self)
