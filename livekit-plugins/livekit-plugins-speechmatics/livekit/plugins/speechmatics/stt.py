@@ -328,7 +328,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._prepare_config().operating_point.value
+        return str(self._prepare_config().operating_point.value)
 
     async def _recognize_impl(
         self,
@@ -602,7 +602,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Add message handlers
         for event in messages:
-            self._client.on(event, add_message)  # type: ignore[arg-type]
+            self._client.on(event, add_message)
 
         # Connect to the service
         await self._client.connect()
@@ -614,15 +614,16 @@ class SpeechStream(stt.RecognizeStream):
             asyncio.create_task(self._process_audio()),
         ]
 
-        # Start all tasks
-        done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Wait for tasks to complete
+        try:
+            done, pending = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
 
-        # Complete all tasks
-        for task in done:
-            task.result()
-
-        # Close the connection
-        await self._client.disconnect()
+        # Disconnect the client
+        finally:
+            await utils.aio.gracefully_cancel(*self._tasks)
+            await self._client.disconnect()
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
@@ -642,8 +643,9 @@ class SpeechStream(stt.RecognizeStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 # Send audio frames
-                for frame in frames:
-                    await self._client.send_audio(frame.data.tobytes())
+                if self._client:
+                    for frame in frames:
+                        await self._client.send_audio(frame.data.tobytes())
 
         except asyncio.CancelledError:
             pass
