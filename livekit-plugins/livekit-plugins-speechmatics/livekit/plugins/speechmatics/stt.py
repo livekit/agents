@@ -262,7 +262,9 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                diarization=is_given(enable_diarization) and enable_diarization,
+                diarization=enable_diarization,
+                aligned_transcript="chunk",
+                offline_recognize=False,
             ),
         )
 
