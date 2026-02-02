@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+# Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
+_EOU_MAX_HISTORY_TURNS = 6
 
 
 @dataclass
@@ -564,10 +566,18 @@ class AudioRecognition:
                         eou_detection_span.set_attributes(
                             {
                                 trace_types.ATTR_CHAT_CTX: json.dumps(
-                                    chat_ctx.to_dict(
+                                    llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
+                                    .copy(
+                                        exclude_function_call=True,
+                                        exclude_instructions=True,
+                                        exclude_empty_message=True,
+                                        exclude_handoff=True,
+                                    )
+                                    .to_dict(
                                         exclude_audio=True,
                                         exclude_image=True,
-                                        exclude_timestamp=False,
+                                        exclude_timestamp=True,
+                                        exclude_metrics=True,
                                     )
                                 ),
                                 trace_types.ATTR_EOU_PROBABILITY: end_of_turn_probability,

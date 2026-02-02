@@ -384,7 +384,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="ElevenLabs STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)

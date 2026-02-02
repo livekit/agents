@@ -41,6 +41,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
+from .client_events import ClientEventsHandler
 from .events import (
     AgentEvent,
     AgentState,
@@ -334,6 +335,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._client_events_handler: ClientEventsHandler | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -524,6 +526,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._recorded_events = []
             self._room_io = None
             self._recorder_io = None
+            self._client_events_handler = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -575,6 +578,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
+
+                # Initialize the client events handler for exposing session state to clients
+                self._client_events_handler = ClientEventsHandler(
+                    session=self,
+                    room_io=self._room_io,
+                )
+
+                # Register text input handler if configured
+                text_input_opts = room_options.get_text_input_options()
+                if text_input_opts:
+                    self._client_events_handler.register_text_input(text_input_opts.text_input_cb)
+
+                # Note: client_events_handler.start() is called after room connection below
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -641,6 +657,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
+
+            # Start client events handler after room is connected (requires local_participant)
+            if self._client_events_handler is not None:
+                await self._client_events_handler.start()
 
             # important: no await should be done after this!
 
@@ -825,6 +845,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            # close client events handler before room io
+            if self._client_events_handler:
+                await self._client_events_handler.aclose()
+                self._client_events_handler = None
 
             # close room io after close event is emitted
             if self._room_io:
