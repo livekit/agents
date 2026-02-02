@@ -399,8 +399,6 @@ class TTS(tts.TTS):
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            if model not in ["bulbul:v2", "bulbul:v3-beta"]:
-                raise ValueError(f"Unsupported model: {model}")
             self._opts.model = model
 
         if speaker is not None:
