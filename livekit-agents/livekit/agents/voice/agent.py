@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypedDict, TypeVar
 
 from livekit import rtc
 
@@ -26,15 +25,20 @@ if TYPE_CHECKING:
     from .io import TimedString
 
 
-# context variable for passing passphrase during pickle/unpickle
-# set by AgentSession before serialization/deserialization
-_state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
-
-
 @dataclass
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
+
+
+class _AgentState(TypedDict, total=True):
+    cls: type[Agent]
+    id: str
+    init_kwargs: dict[str, Any]
+    tools: list[str]  # tool id
+    chat_ctx: dict[str, Any]  # ChatContext.to_dict()
+    parent_agent: _AgentState | None
+    durable_state: bytes | None
 
 
 class Agent:
@@ -115,6 +119,7 @@ class Agent:
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
+        # TODO: fix configure actually not applied after rehydration
         restart_required = False
         if is_given(turn_detection):
             self._turn_detection = turn_detection  # type: ignore
@@ -419,8 +424,7 @@ class Agent:
 
         return self._activity
 
-    def _get_state(self) -> dict[str, Any]:
-        tool_ctx = llm.ToolContext(self.tools)
+    def _get_state(self) -> _AgentState:
         chat_ctx: dict[str, Any] = self.chat_ctx.to_dict(
             exclude_image=False, exclude_function_call=False, exclude_timestamp=False
         )
@@ -438,42 +442,42 @@ class Agent:
             except Exception:
                 logger.exception("error checkpointing durable functions")
 
-        print(f"durable_state, agent: {self._id}", durable_state[:10] if durable_state else None)
-        return {
-            "cls": type(self),
-            "id": self._id,
-            "init_kwargs": init_kwargs,
-            "tools": list(tool_ctx.function_tools.keys()),
-            "chat_ctx": chat_ctx,
-            "parent_agent": None,
-            "durable_state": durable_state,
-        }
+        return _AgentState(
+            cls=type(self),
+            id=self._id,
+            init_kwargs=init_kwargs,
+            tools=[tool.id for tool in self.tools],
+            chat_ctx=chat_ctx,
+            parent_agent=None,
+            durable_state=durable_state,
+        )
 
-    def _set_state(self, state: dict[str, Any]) -> None:
-        tool_ctx = llm.ToolContext(self.tools)
+    def _set_state(self, state: _AgentState) -> None:
+        # read tools
+        tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
-        for name in state["tools"]:
-            # TODO: support provider tools
-            if name in tool_ctx.function_tools:
-                valid_tools.append(tool_ctx.function_tools[name])
+        missing_tools: list[str] = []
+        for tool_id in state["tools"]:
+            if tool_id in tool_by_id:
+                valid_tools.append(tool_by_id[tool_id])
             else:
-                logger.warning("tool not found when unpickling", extra={"missing_tool": name})
-
-        # TODO: serialize the ongoing speech tasks?
+                missing_tools.append(tool_id)
+        if missing_tools:
+            logger.warning(
+                "tools not found when unpickling", extra={"missing_tools": missing_tools}
+            )
         self._tools = valid_tools
-        if "chat_ctx" in state:
-            self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
 
-        # skip on_enter when rehydrating
-        self._rehydrated = True
+        # read chat context
+        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
 
     @staticmethod
-    def _from_state(state: dict[str, Any]) -> Agent:
-        from .agent_session import _AgentSessionContextVar
+    def _rehydrate(state: _AgentState) -> Agent:
         from .agent_activity import AgentActivity
+        from .agent_session import _AgentSessionContextVar
 
         cls = state["cls"]
-        agent: Agent = cls(**state.get("init_kwargs", {}))
+        agent: Agent = cls(**state["init_kwargs"])
 
         # register the agent to the AgentSession's rehydrated agents collection
         # the pickled reference in tool calls will be resolved from this collection
@@ -482,16 +486,18 @@ class Agent:
             session._register_rehydrated_agent(agent)
 
         agent._set_state(state)
+        agent._rehydrated = True
 
         if session:
             # recreate an AgentActivity and restore the durable functions
             agent_activity = AgentActivity(agent=agent, sess=session)
-            agent_activity._rehydrate(state.get("durable_state", None))
+            # TODO(long): failure handling for durable functions
+            agent_activity._rehydrate(state["durable_state"])
 
         return agent
 
     @staticmethod
-    def _lookup_agent(cls: type[Agent], agent_id: str) -> Agent:
+    def _lookup_rehydrated_agent(cls: type[Agent], agent_id: str) -> Agent:
         from .agent_session import _AgentSessionContextVar
 
         session = _AgentSessionContextVar.get()
@@ -507,12 +513,12 @@ class Agent:
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         # NOTE: we don't pickle/unpickle agents directly,
-        # instead, we save the agent state collected by `Agent.get_state()` in the AgentSession's state.
-        # When rehydrating the session, the agent will be recreated via `Agent._from_state()`
+        # instead, we save the agent state collected by `Agent._get_state()` in the AgentSession's state.
+        # When rehydrating the session, the agent will be recreated via `Agent._rehydrate()`
         # and registered in `AgentSession` for future lookup. This is to ensure the agents pickled
         # in durable functions are referring to the same agent instance as in AgentSession.
 
-        return (self._lookup_agent, (self.__class__, self._id))
+        return (self._lookup_rehydrated_agent, (self.__class__, self._id))
 
     def is_rehydrated(self) -> bool:
         return self._rehydrated
@@ -848,10 +854,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
-        # self.__awaited: bool = False
         self._old_agent: Agent | None = None
-        # self._update_agent_task: asyncio.Task[None] | None = None
-        self._awaiting_task: asyncio.Task[None] | None = None
+        self._update_agent_task: asyncio.Task[None] | None = None
+        # the parent task that calls `await AgentTask()`
+        self._caller_task: asyncio.Task[None] | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -876,26 +882,32 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         logger.info(f"{self.__class__.__name__} completed with result: {result}")
 
-        if self._awaiting_task and (run_state := self.session._global_run_state):
-            run_state._watch_handle(self._awaiting_task)
-            logger.info(f"watching awaiting task: {self._awaiting_task.get_name()}")
+        run_state = self.session._global_run_state
 
-        # if not self.__inline_mode:
-        #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
-
-        # # workaround before durable functions are implemented
-        # # the AgentTask is rehydrated without being awaited, switch to the old agent when it's done
-        # if not self.__awaited and self._old_agent:
-        #     self._update_agent_task = asyncio.create_task(
-        #         self.__switch_to_old_agent(
-        #             old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
-        #         )
-        #     )
+        if self._caller_task and run_state:
+            # when complete, watch the caller task
+            run_state._watch_handle(self._caller_task)
+            logger.info(f"watching awaiting task: {self._caller_task.get_name()}")
+        elif self._caller_task is None and self._old_agent:
+            # backup switch to the old agent when the AgentTask is rehydrated without being awaited
+            self._update_agent_task = asyncio.create_task(
+                self.__switch_to_old_agent(
+                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+                )
+            )
+            if run_state:
+                run_state._watch_handle(self._update_agent_task)
+                logger.info(f"watching update agent task: {self._update_agent_task.get_name()}")
 
     async def __await_impl(self) -> TaskResult_T:
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
-        self._awaiting_task = asyncio.current_task()
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} must be executed inside an async context"
+            )
+        self._caller_task = current_task
         speech_handle = _SpeechHandleContextVar.get(None)
 
         # TODO: make it re-entrant
@@ -904,28 +916,20 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
             else:
                 try:
-                    print(f"awaiting {self.__class__.__name__}")
                     return await asyncio.shield(self.__fut)
 
                 finally:
-                    print(f"switching to old agent: {self._old_agent._id}")
                     await self.__switch_to_old_agent(
                         old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
                     )
 
         self.__started = True
 
-        current_task = asyncio.current_task()
-        if current_task is None:
-            raise RuntimeError(
-                f"{self.__class__.__name__} must be executed inside an async context"
-            )
-
         task_info = _get_activity_task_info(current_task)
         if not task_info or not task_info.inline_task:
             raise RuntimeError(
                 f"{self.__class__.__name__} should only be awaited inside tool_functions "
-                f"or the on_enter/on_exit methods of an Agent, current task: {current_task.get_name()}"
+                f"or the on_enter/on_exit methods of an Agent, caller task: {current_task.get_name()}"
             )
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
@@ -1007,7 +1011,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         else:
             if speech_handle and run_state and not run_state.done():
                 run_state._watch_handle(speech_handle)
-                logger.info(f"watching speech handle: {speech_handle._id}")
 
             merged_chat_ctx = old_agent.chat_ctx.merge(
                 self.chat_ctx, exclude_function_call=True, exclude_instructions=True
@@ -1023,20 +1026,19 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
-        # self.__awaited = True
         return self.__await_impl().__await__()
 
-    def _get_state(self) -> dict[str, Any]:
+    def _get_state(self) -> _AgentState:
         state = super()._get_state()
         state["parent_agent"] = self._old_agent._get_state() if self._old_agent else None
         state["_started"] = self.__started
         return state
 
-    def _set_state(self, state: dict[str, Any]) -> None:
+    def _set_state(self, state: _AgentState) -> None:
         super()._set_state(state)
         self.__started = state["_started"]
-        if parent_state := state.get("parent_agent", None):
-            self._old_agent = Agent._from_state(parent_state)
+        if parent_state := state.get("parent_agent"):
+            self._old_agent = Agent._rehydrate(parent_state)
 
 
 @dataclass
@@ -1069,3 +1071,9 @@ def _set_activity_task_info(
 
 def _get_activity_task_info(task: asyncio.Task[Any]) -> _ActivityTaskInfo | None:
     return getattr(task, "__livekit_agents_activity_task", None)
+
+
+def _pass_through_activity_task_info(task: asyncio.Task[Any]) -> None:
+    current_task = asyncio.current_task()
+    if current_task and (info := _get_activity_task_info(current_task)):
+        setattr(task, "__livekit_agents_activity_task", info)

@@ -1276,22 +1276,18 @@ def _sms_text_mode(
 
         # save the session data
         if new_state:
-            chnageset_dir = pathlib.Path(sess_data_file).with_suffix(".changesets")
-            chnageset_dir.mkdir(parents=True, exist_ok=True)
-            with SessionStore.from_session_state(new_state) as store:
-                # compute the changeset
-                if os.path.exists(sess_data_file):
-                    with SessionStore(db_file=sess_data_file) as old_store:
-                        delta = old_store.compute_delta(store)
+            with SessionStore(db_file=sess_data_file) as old_store:
+                delta = old_store.update_state(new_state)
 
-                    name = f"{delta.base_version[:8]}-{delta.new_version[:8]}.changeset"
-                    with open(chnageset_dir / name, "wb") as wf:
-                        wf.write(delta.dumps())
+            changeset_dir = pathlib.Path(sess_data_file).with_suffix(".changesets")
+            changeset_dir.mkdir(parents=True, exist_ok=True)
+            with open(changeset_dir / f"v{delta.version}.changeset", "wb") as wf:
+                wf.write(delta.changeset)
 
-                with open(sess_data_file, "wb") as wf:
-                    wf.write(store.export_database())
-
-            logger.debug("session data saved", extra={"session_data_file": sess_data_file})
+            logger.debug(
+                "session data saved",
+                extra={"session_data_file": sess_data_file, "version": delta.version},
+            )
 
         # release the console for next run
         c.release_io()

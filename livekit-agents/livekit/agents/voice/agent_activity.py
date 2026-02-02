@@ -10,7 +10,6 @@ from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from numpy import isin
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
@@ -66,6 +65,7 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    make_tool_output,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -73,7 +73,6 @@ from .generation import (
     perform_tts_inference,
     remove_instructions,
     update_instructions,
-    make_tool_output,
 )
 from .speech_handle import SpeechHandle
 
@@ -511,11 +510,10 @@ class AgentActivity(RecognitionHooks):
                     finally:
                         _OnEnterContextVar.reset(tk)
 
-                if not self._agent._rehydrated:
-                    self._on_enter_task = task = self._create_speech_task(
-                        _traceable_on_enter(), name="AgentTask_on_enter"
-                    )
-                    _set_activity_task_info(task, inline_task=True)
+                self._on_enter_task = task = self._create_speech_task(
+                    _traceable_on_enter(), name="AgentTask_on_enter"
+                )
+                _set_activity_task_info(task, inline_task=True)
             finally:
                 start_span.end()
 
@@ -536,19 +534,27 @@ class AgentActivity(RecognitionHooks):
                 self.durable_scheduler.execute(task)
                 continue
 
+            # recreate the speech handle with the original number of steps
             speech_handle = SpeechHandle(
                 speech_id=utils.shortuuid("durable_speech_"),
-                allow_interruptions=self.allow_interruptions,
+                allow_interruptions=task.metadata.get(
+                    "allow_interruptions", self.allow_interruptions
+                ),
             )
             speech_handle._num_steps = num_steps
+            for _ in range(num_steps):
+                speech_handle._authorize_generation()
+                speech_handle._mark_generation_done()
+            speech_handle._clear_authorization()
+
             speech_task = self._create_speech_task(
-                self._replay_durable_function(task, speech_handle),
+                self._resume_durable_function(task, speech_handle),
                 speech_handle=speech_handle,
                 name="AgentTask_replay_durable_function",
             )
             self._drain_blocked_tasks.append(speech_task)
 
-    async def _replay_durable_function(
+    async def _resume_durable_function(
         self, task: DurableTask, speech_handle: SpeechHandle
     ) -> None:
         from .agent import ModelSettings

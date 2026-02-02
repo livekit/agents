@@ -16,6 +16,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    TypedDict,
     TypeVar,
     cast,
     overload,
@@ -40,7 +41,7 @@ from ..types import (
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent
+from .agent import Agent, _AgentState
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
@@ -100,6 +101,13 @@ Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
 _AgentSessionContextVar = contextvars.ContextVar["AgentSession"]("agents_session")
+
+
+class _AgentSessionState(TypedDict, total=True):
+    userdata: Userdata_T
+    tools: list[str]  # tool id
+    history: dict[str, Any]
+    agent: _AgentState
 
 
 @runtime_checkable
@@ -253,8 +261,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
-            state_passphrase (str, optional): The passphrase to encrypt/decrypt the chat context when
-                serializing/rehydrating the session.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -660,7 +666,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._update_activity(
                         self._agent,
                         wait_on_enter=False,
-                        new_activity="start" if not self._agent._rehydrated else "resume",
+                        # rehydrated agents have an activity
+                        new_activity="start" if not self._agent._activity else "resume",
                     )
                 )
             )
@@ -873,19 +880,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
-    def get_state(self) -> dict[str, Any]:
-        tool_ctx = llm.ToolContext(self.tools)
-        history: dict[str, Any] = self._chat_ctx.to_dict(
+    def get_state(self) -> _AgentSessionState:
+        history = self._chat_ctx.to_dict(
             exclude_image=False, exclude_function_call=False, exclude_timestamp=False
         )
-        return {
-            "userdata": self._userdata,
-            "tools": list(tool_ctx.function_tools.keys()),
-            "history": history,
-            "agent": self._agent._get_state(),
-        }
+        return _AgentSessionState(
+            userdata=self._userdata,
+            tools=[tool.id for tool in self.tools],
+            history=history,
+            agent=self._agent._get_state(),
+        )
 
-    async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
+    async def rehydrate(self, state: _AgentSessionState | bytes) -> None:
         """Restore session state from bytes."""
         from ..utils.session_store import SessionStore
 
@@ -895,27 +901,31 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if isinstance(state, bytes):
             with SessionStore(db_file=state) as store:
-                state = store.export_session_state()
+                state_dict = store.export_state()
+        else:
+            state_dict = state
 
-        tool_ctx = llm.ToolContext(self.tools)
+        self._userdata = state_dict["userdata"]
+        self._chat_ctx = llm.ChatContext.from_dict(state_dict["history"])
+
+        tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
-        for name in state["tools"]:
-            # TODO: support provider tools
-            if name in tool_ctx.function_tools:
-                valid_tools.append(tool_ctx.function_tools[name])
+        missing_tools: list[str] = []
+        for tool_id in state_dict["tools"]:
+            if tool_id in tool_by_id:
+                valid_tools.append(tool_by_id[tool_id])
             else:
-                logger.warning("tool not found when unpickling", extra={"missing_tool": name})
-
+                missing_tools.append(tool_id)
+        if missing_tools:
+            logger.warning(
+                "tools not found when unpickling", extra={"missing_tools": missing_tools}
+            )
         self._tools = valid_tools
-        self._userdata = state["userdata"]
 
-        # decrypt and unpickle chat history
-        history = state["history"]
-        self._chat_ctx = llm.ChatContext.from_dict(history)
-
+        # rehydrate agent recursively and register them to the session
         tk = _AgentSessionContextVar.set(self)
         try:
-            agent = Agent._from_state(state["agent"])
+            agent = Agent._rehydrate(state_dict["agent"])
         finally:
             _AgentSessionContextVar.reset(tk)
 
@@ -1113,9 +1123,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            is_handoff = agent is not self._agent or not agent.is_rehydrated()
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
-            is_handoff = self._activity is not None or not agent.is_rehydrated()
 
             if new_activity == "start":
                 previous_agent = self._activity.agent if self._activity else None
@@ -1168,8 +1178,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.resume()
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
-        if wait_on_enter and self._activity._on_enter_task:
-            await asyncio.shield(self._activity._on_enter_task)
+        if wait_on_enter:
+            if self._activity._on_enter_task:
+                await asyncio.shield(self._activity._on_enter_task)
+            elif new_activity == "start":
+                raise RuntimeError("on_enter task is not created when starting a new agent")
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

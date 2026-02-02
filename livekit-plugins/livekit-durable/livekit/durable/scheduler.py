@@ -8,7 +8,7 @@ import reprlib
 from collections.abc import Awaitable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from livekit.agents.voice.agent import AgentTask
 
@@ -115,7 +115,7 @@ class EffectCall(Generic[TaskResult_T]):
         self._c_result = state["c_result"]
         self._c_exc = state["c_exc"]
         self._c = state["c"]
-        self._c_ctx = contextvars.copy_context()  # TODO: restore the context?
+        self._c_ctx = contextvars.copy_context()
 
     def __repr__(self) -> str:
         if not self._done:
@@ -133,17 +133,24 @@ class DurableInvalidStateError(RuntimeError):
 
 @dataclass
 class DurableTask:
-    generator: DurableGenerator
+    generator: DurableGenerator | bytes
     fnc_name: str
     next_value: EffectCall | None = None
     metadata: dict[str, Any] | None = None
     at_checkpoint: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
+        # pickle the generator separately, so we can unpickle it after the SpeechHandle is recreated
+        g = (
+            pickle.dumps(self.generator)
+            if not isinstance(self.generator, bytes)
+            else self.generator
+        )
+
         # exclude the at_checkpoint event from the pickled state
         return (
             self.__class__,
-            (self.generator, self.fnc_name, self.next_value, self.metadata),
+            (g, self.fnc_name, self.next_value, self.metadata),
         )
 
 
@@ -162,12 +169,14 @@ class DurableScheduler:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> asyncio.Task[Any]:
-        from livekit.agents.voice.agent import _get_activity_task_info
+        from livekit.agents.voice.agent import _pass_through_activity_task_info
 
         if isinstance(fnc, DurableTask):
             task = fnc
             if metadata is not None:
                 task.metadata = metadata
+            if isinstance(task.generator, bytes):
+                task.generator = pickle.loads(task.generator)
         else:
             try:
                 if isinstance(fnc, functools.partial):
@@ -182,10 +191,7 @@ class DurableScheduler:
         exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
         exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task))
-        # pass through __livekit_agents_activity_task
-        current_task = asyncio.current_task()
-        if agent_activity_task_info := _get_activity_task_info(current_task):
-            setattr(exe_task, "__livekit_agents_activity_task", agent_activity_task_info)
+        _pass_through_activity_task_info(exe_task)
 
         return exe_task
 
@@ -232,7 +238,7 @@ class DurableScheduler:
 
     async def _execute(self, task: DurableTask) -> Any:
         from livekit.agents import AgentTask
-        from livekit.agents.voice.agent import _get_activity_task_info
+        from livekit.agents.voice.agent import _pass_through_activity_task_info
 
         __tracebackhide__ = True
 
@@ -252,10 +258,7 @@ class DurableScheduler:
                     coro = ec._c
 
                 exe_task = ec._c_ctx.run(self._loop.create_task, coro)
-
-                current_task = asyncio.current_task()
-                if agent_activity_task_info := _get_activity_task_info(current_task):
-                    setattr(exe_task, "__livekit_agents_activity_task", agent_activity_task_info)
+                _pass_through_activity_task_info(exe_task)
 
                 val = await exe_task
                 ec._set_result(val)
@@ -266,6 +269,7 @@ class DurableScheduler:
                 ec._set_exception(e)
 
         g = task.generator
+        assert not isinstance(g, bytes)
         nv: EffectCall | Any = task.next_value
         while True:
             try:
