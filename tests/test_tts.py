@@ -328,6 +328,12 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
+
+    # Skip Azure - uses WebSocket SDK which doesn't work with toxiproxy timeouts
+    if "azure" in tts_v.label.lower():
+        await tts_v.aclose()  # Clean up before skipping to prevent leaked tasks
+        pytest.skip("Azure TTS uses WebSocket SDK, timeout tests not applicable")
+
     proxy_upstream = tts_info["proxy-upstream"]
     proxy_name = f"{tts_v.label}-proxy"
     p = toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)
@@ -405,6 +411,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.cartesia.ai:443",
         },
         id="cartesia",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": azure.TTS(),
+            "proxy-upstream": "westus.tts.speech.microsoft.com:443",
+        },
+        id="azure",
     ),
     pytest.param(
         lambda: {
@@ -662,6 +675,12 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
+
+    # Skip Azure - uses WebSocket SDK which doesn't work with toxiproxy timeouts
+    if "azure" in tts_v.label.lower():
+        await tts_v.aclose()  # Clean up before skipping to prevent leaked tasks
+        pytest.skip("Azure TTS uses WebSocket SDK, timeout tests not applicable")
+
     proxy_upstream = tts_info["proxy-upstream"]
     proxy_name = f"{tts_v.label}-proxy"
     p = toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)

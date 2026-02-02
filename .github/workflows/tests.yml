@@ -85,6 +85,7 @@ jobs:
       matrix:
         plugin:
           [
+            azure,
             cartesia,
             deepgram,
             elevenlabs,
