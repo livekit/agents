@@ -572,6 +572,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._save_audio = int(os.getenv("AZURE_TTS_SAVE_AUDIO", 0)) > 0
         self._audio_data: list[bytes] = []
         self._text_data: list[str] = []  # Store text chunks
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def _create_replacement_synthesizers(self, target_count: int) -> None:
         """Create replacement synthesizers in the background to maintain pool health.
@@ -684,9 +685,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "expired_count": expired_count,
                         },
                     )
-                    # Store background tasks for proper lifecycle management
                     task = asyncio.create_task(self._create_replacement_synthesizers(needed))
-                    # Optionally add to a set to prevent GC and allow cleanup
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
 
@@ -775,9 +774,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "replacements_needed": needed,
                         },
                     )
-                    # Store background tasks for proper lifecycle management
                     task = asyncio.create_task(self._create_replacement_synthesizers(needed))
-                    # Optionally add to a set to prevent GC and allow cleanup
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
 
