@@ -1,4 +1,5 @@
 from .address import GetAddressResult, GetAddressTask
+from .credit_card import GetCreditCardResult, GetCreditCardTask
 from .dob import GetDOBResult, GetDOBTask
 from .dtmf_inputs import GetDtmfResult, GetDtmfTask
 from .email_address import GetEmailResult, GetEmailTask
@@ -15,6 +16,8 @@ __all__ = [
     "GetDOBResult",
     "GetDOBTask",
     "GetDtmfResult",
+    "GetCreditCardResult",
+    "GetCreditCardTask",
     "GetNameTask",
     "GetNameResult",
     "TaskGroup",
