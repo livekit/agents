@@ -46,9 +46,9 @@ class ProviderTool(Tool):
         return self._id
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ProviderTool):
+        if type(self) is not type(other):
             return False
-        return self.id == other.id
+        return self.__dict__ == other.__dict__
 
     def __hash__(self) -> int:
         return hash(self.id)
