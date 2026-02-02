@@ -601,18 +601,6 @@ class SpeechStream(stt.RecognizeStream):
             messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
             messages.append(AgentServerMessageType.DIAGNOSTICS)
 
-        # =======================
-
-        # Debug all
-        # def _debug_evt(message: dict[str, Any]) -> None:
-        #     logger.warning(f"{message=}")
-
-        # for event in AgentServerMessageType:
-        #     if event not in [AgentServerMessageType.AUDIO_ADDED]:
-        #         self._client.on(event, _debug_evt)
-
-        # =======================
-
         # Add message handlers
         for event in messages:
             self._client.on(event, add_message)  # type: ignore[arg-type]
