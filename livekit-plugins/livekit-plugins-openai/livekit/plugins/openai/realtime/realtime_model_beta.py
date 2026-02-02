@@ -18,12 +18,6 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -1029,12 +1023,12 @@ class RealtimeSessionBeta(
 
         return events
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         async with self._update_fnc_ctx_lock:
             # beta API doesn't support ProviderTools
-            filtered_tools = [t for t in tools if not isinstance(t, llm.ProviderTool)]
+            filtered_tools = [
+                t for t in tools if isinstance(t, (llm.FunctionTool, llm.RawFunctionTool))
+            ]
             ev = self._create_tools_update_event(filtered_tools)
             self.send_event(ev)
 
@@ -1043,13 +1037,12 @@ class RealtimeSessionBeta(
             retained_tools = [
                 tool
                 for tool in tools
-                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
-                or (
-                    is_raw_function_tool(tool)
-                    and get_raw_function_info(tool).name in retained_tool_names
+                if (
+                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    and tool.info.name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)  # type: ignore
+            self._tools = llm.ToolContext(retained_tools)
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
@@ -1058,11 +1051,10 @@ class RealtimeSessionBeta(
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
-            if is_function_tool(tool):
+            if isinstance(tool, llm.FunctionTool):
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            elif is_raw_function_tool(tool):
-                tool_info = get_raw_function_info(tool)
-                tool_desc = tool_info.raw_schema
+            elif isinstance(tool, llm.RawFunctionTool):
+                tool_desc = tool.info.raw_schema
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
             else:
@@ -1127,6 +1119,23 @@ class RealtimeSessionBeta(
     def clear_audio(self) -> None:
         self.send_event(InputAudioBufferClearEvent(type="input_audio_buffer.clear"))
         self._pushed_duration_s = 0
+
+    def commit_user_turn(self) -> None:
+        if self._realtime_model._opts.turn_detection is not None and (
+            self._realtime_model._opts.turn_detection.interrupt_response
+            or self._realtime_model._opts.turn_detection.create_response
+        ):
+            logger.warning(
+                "commit_user_turn is triggered when auto response is enabled. Model behavior may be unexpected."
+            )
+
+        self.commit_audio()
+        self.send_event(
+            ResponseCreateEvent(
+                type="response.create",
+                response=Response(),
+            )
+        )
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
@@ -1476,7 +1485,7 @@ class RealtimeSessionBeta(
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            tokens_per_second=usage.get("output_tokens", 0) / duration,
+            tokens_per_second=usage.get("output_tokens", 0) / duration if duration > 0 else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),

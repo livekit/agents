@@ -20,12 +20,7 @@ from ..llm import (
     ChatContext,
     StopResponse,
     ToolContext,
-    ToolError,
     utils as llm_utils,
-)
-from ..llm.tool_context import (
-    is_function_tool,
-    is_raw_function_tool,
 )
 from ..log import logger
 from ..telemetry import trace_types, tracer
@@ -97,16 +92,24 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = tool_ctx.all_tools
+    tools = tool_ctx.flatten()
 
-    current_span.set_attribute(
-        trace_types.ATTR_CHAT_CTX,
-        json.dumps(
-            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
-        ),
-    )
-    current_span.set_attribute(
-        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+    current_span.set_attributes(
+        {
+            trace_types.ATTR_CHAT_CTX: json.dumps(
+                chat_ctx.to_dict(
+                    exclude_audio=True,
+                    exclude_image=True,
+                    exclude_timestamp=True,
+                    exclude_metrics=True,
+                )
+            ),
+            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+            trace_types.ATTR_PROVIDER_TOOLS: [
+                type(tool).__name__ for tool in tool_ctx.provider_tools
+            ],
+            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
+        }
     )
 
     llm_node = node(chat_ctx, tools, model_settings)
@@ -337,7 +340,8 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None]
+    first_frame_fut: asyncio.Future[float]
+    """Future that will be set with the timestamp of the first frame's capture"""
 
 
 def perform_audio_forwarding(
@@ -357,8 +361,15 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
     try:
+        audio_output.on("playback_started", _on_playback_started)
         audio_output.resume()
+
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -380,16 +391,16 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
-
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
 
     finally:
+        audio_output.off("playback_started", _on_playback_started)
+
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.cancel()
+
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
@@ -478,7 +489,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
@@ -659,26 +670,6 @@ async def _execute_tools_task(
             )
 
 
-def _is_valid_function_output(value: Any) -> bool:
-    VALID_TYPES = (str, int, float, bool, complex, type(None))
-
-    if isinstance(value, VALID_TYPES):
-        return True
-    elif (
-        isinstance(value, list)
-        or isinstance(value, set)
-        or isinstance(value, frozenset)
-        or isinstance(value, tuple)
-    ):
-        return all(_is_valid_function_output(item) for item in value)
-    elif isinstance(value, dict):
-        return all(
-            isinstance(key, VALID_TYPES) and _is_valid_function_output(val)
-            for key, val in value.items()
-        )
-    return False
-
-
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
@@ -694,43 +685,17 @@ def make_tool_output(
 ) -> ToolExecutionOutput:
     from .agent import Agent
 
-    # support returning Exception instead of raising them (for devex purposes inside evals)
     if isinstance(output, BaseException):
         exception = output
         output = None
 
-    if isinstance(exception, ToolError):
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=exception.message,
-                is_error=True,
-            ),
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
-
-    if isinstance(exception, StopResponse):
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=None,
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
-
     if exception is not None:
+        base_result = llm_utils.make_function_call_output(
+            fnc_call=fnc_call, output=None, exception=exception
+        )
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
-            fnc_call_out=llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
-                is_error=True,
-            ),
+            fnc_call_out=base_result.fnc_call_out,
             agent_task=None,
             raw_output=output,
             raw_exception=exception,
@@ -749,12 +714,8 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={
-                    "call_id": fnc_call.call_id,
-                    "output": output,
-                },
+                extra={"call_id": fnc_call.call_id, "output": output},
             )
-
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
                 fnc_call_out=None,
@@ -778,32 +739,13 @@ def make_tool_output(
         task = fnc_out
         fnc_out = None
 
-    if not _is_valid_function_output(fnc_out):
-        logger.error(
-            f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={
-                "call_id": fnc_call.call_id,
-                "output": output,
-            },
-        )
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=None,
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
+    base_result = llm_utils.make_function_call_output(
+        fnc_call=fnc_call, output=fnc_out, exception=None
+    )
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
-        fnc_call_out=(
-            llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=str(fnc_out or ""),  # take the string representation of the output
-                is_error=False,
-            )
-        ),
+        fnc_call_out=base_result.fnc_call_out,
         reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,

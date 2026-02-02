@@ -43,6 +43,75 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 
+# Known VertexAI models for the Live API
+# See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
+KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        "gemini-live-2.5-flash-preview-native-audio",
+    }
+)
+
+# Known Gemini API models for the Live API
+# See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
+KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-2.5-flash-native-audio-preview-09-2025",
+        "gemini-2.0-flash-exp",
+    }
+)
+
+
+def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
+    """
+    Validate that the model name matches the API being used.
+
+    Raises ValueError if a known model is used with the wrong API configuration.
+
+    Args:
+        model: The model name being used
+        use_vertexai: Whether VertexAI is enabled
+    """
+    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a Gemini API model, but vertexai=True. "
+            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
+            f"or set vertexai=False."
+        )
+
+    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a VertexAI model, but vertexai=False. "
+            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
+            f"or set vertexai=True."
+        )
+
+
+def _get_1008_error_hint(error_message: str) -> str | None:
+    """
+    Generate a hint for WebSocket 1008 policy violation errors.
+
+    This provides a generic hint when the connection fails with a 1008 error,
+    which often indicates the model name doesn't match the API being used.
+
+    Args:
+        error_message: The error message from the WebSocket exception
+
+    Returns:
+        A helpful hint string, or None if not a 1008 error
+    """
+    if "1008" not in error_message and "policy violation" not in error_message.lower():
+        return None
+
+    return (
+        "\n\nHint: A 1008 policy violation error often indicates that the model name "
+        "doesn't match the API being used. VertexAI models typically start with "
+        "'gemini-live-', while Gemini API models start with 'gemini-2.' or similar. "
+        "Please verify your model name matches your API configuration."
+    )
+
 
 @dataclass
 class InputTranscription:
@@ -164,7 +233,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001" or "gemini-2.0-flash-exp" (vertexai).
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.5-flash-native-audio-preview-12-2025" or "gemini-live-2.5-flash-native-audio" (vertexai).
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -253,6 +322,9 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
+
+        # Validate model/API compatibility for known models
+        _validate_model_api_match(model, use_vertexai)
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -362,7 +434,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         api_version = self._opts.api_version
-        if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
+        if (
+            not api_version
+            and (self._opts.enable_affective_dialog or self._opts.proactivity)
+            and not self._opts.vertexai
+        ):
             api_version = "v1alpha"
 
         http_options = self._opts.http_options or types.HttpOptions(
@@ -467,6 +543,20 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # Check for system/developer messages that will be dropped
+        system_msg_count = sum(
+            1
+            for item in chat_ctx.items
+            if item.type == "message" and item.role in ["system", "developer"]
+        )
+        if system_msg_count > 0:
+            logger.warning(
+                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                f"message(s) from chat context. Gemini Realtime only supports 'user' and "
+                f"'model' roles. Use update_instructions() to set system-level context instead."
+            )
+
         chat_ctx = chat_ctx.copy(
             exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
         )
@@ -506,9 +596,7 @@ class RealtimeSession(llm.RealtimeSession):
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
         if self._tools == tool_ctx:
             return
@@ -679,6 +767,22 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     async with self._session_lock:
                         self._active_session = session
+
+                        # Check for system/developer messages in initial chat context
+                        system_msg_count = sum(
+                            1
+                            for item in self._chat_ctx.items
+                            if item.type == "message" and item.role in ["system", "developer"]
+                        )
+                        if system_msg_count > 0:
+                            logger.warning(
+                                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                                f"message(s) from initial chat context during session initialization. "
+                                f"Gemini Realtime only supports 'user' and 'model' roles. Use "
+                                f"update_instructions() to set system-level context instead."
+                            )
+
                         turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True,
                             exclude_handoff=True,
@@ -721,19 +825,29 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+                # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
+                hint = _get_1008_error_hint(str(e))
+                if hint:
+                    logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
+                else:
+                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+
                 if not self._msg_ch.closed:
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
                     if not session or max_retries == 0:
                         self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(message="Failed to connect to Gemini Live") from e
+                        error_msg = "Failed to connect to Gemini Live"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
 
                     if self._num_retries == max_retries:
                         self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(
-                            message=f"Failed to connect to Gemini Live after {max_retries} attempts"
-                        ) from e
+                        error_msg = f"Failed to connect to Gemini Live after {max_retries} attempts"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
 
                     retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
@@ -874,7 +988,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(self._tools)
+        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(
@@ -1193,10 +1307,13 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close.set()
 
     def commit_audio(self) -> None:
-        pass
+        logger.warning("commit_audio is not supported by Gemini Realtime API.")
 
     def clear_audio(self) -> None:
-        pass
+        logger.warning("clear_audio is not supported by Gemini Realtime API.")
+
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by Gemini Realtime API.")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:

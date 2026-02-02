@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
@@ -29,7 +29,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, ProviderTool, RawFunctionTool, ToolChoice
+from .tool_context import Tool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -54,6 +54,12 @@ class FunctionToolCall(BaseModel):
     call_id: str
     extra: dict[str, Any] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
+
+
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
 
 
 class ChoiceDelta(BaseModel):
@@ -124,7 +130,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -157,7 +163,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -202,6 +208,10 @@ class LLMStream(ABC):
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
 
                 if self._conn_options.max_retry == 0 or not e.retryable:
@@ -336,7 +346,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
+    def tools(self) -> list[Tool]:
         return self._tools
 
     async def aclose(self) -> None:
@@ -384,3 +394,39 @@ class LLMStream(ABC):
                         yield chunk.delta.content
 
         return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                if result.fnc_call_out:
+                    ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+        )

@@ -106,7 +106,7 @@ class TTS(tts.TTS):
         """
         Create a new instance of Cartesia TTS.
 
-        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
+        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the Cartesia API.
 
         Args:
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
@@ -446,7 +446,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id},
                     )
                     raise APIStatusError(
-                        "Cartesia connection closed unexpectedly", request_id=request_id
+                        "Cartesia connection closed unexpectedly",
+                        request_id=request_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

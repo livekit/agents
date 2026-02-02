@@ -11,10 +11,11 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     cli,
+    inference,
     mcp,
     metrics,
 )
-from livekit.plugins import cartesia, deepgram, groq, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv(dotenv_path=".env.local")
@@ -28,9 +29,9 @@ class Assistant(Agent):
             "You can help users with Zapier automations and workflows through the MCP server connection. "  # noqa: E501
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "  # noqa: E501
             "You were created as a demo to showcase the capabilities of LiveKit's agents framework with MCP integration.",  # noqa: E501
-            stt=deepgram.STT(),
-            llm=groq.LLM(),
-            tts=cartesia.TTS(),
+            stt=inference.STT("deepgram/nova-3"),
+            llm=inference.LLM("google/gemini-2.5-flash"),
+            tts=inference.TTS("rime/arcana"),
             # use LiveKit's transformer-based turn detector
             turn_detection=MultilingualModel(),
         )

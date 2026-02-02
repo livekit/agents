@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["livekit-agents>=1.3.12", "speechmatics-voice[smart]>=0.2.8"]
+dependencies = ["livekit-agents>=1.3.12", "speechmatics-rt>=0.5.0"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Union, cast
 
@@ -25,14 +24,7 @@ from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
-from ..llm.tool_context import (
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -42,18 +34,24 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 OpenAIModels = Literal[
-    "openai/gpt-5",
-    "openai/gpt-5-mini",
-    "openai/gpt-5-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
     "openai/gpt-4.1",
     "openai/gpt-4.1-mini",
     "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.1",
+    "openai/gpt-5.1-chat-latest",
+    "openai/gpt-5.2",
+    "openai/gpt-5.2-chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
+    "google/gemini-3-pro",
+    "google/gemini-3-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
@@ -61,13 +59,14 @@ GoogleModels = Literal[
     "google/gemini-2.0-flash-lite",
 ]
 
-QwenModels = Literal["qwen/qwen3-235b-a22b-instruct"]
-
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
 
-DeepSeekModels = Literal["deepseek-ai/deepseek-v3"]
+DeepSeekModels = Literal[
+    "deepseek-ai/deepseek-v3",
+    "deepseek-ai/deepseek-v3.2",
+]
 
-LLMModels = Union[OpenAIModels, GoogleModels, QwenModels, KimiModels, DeepSeekModels]
+LLMModels = Union[OpenAIModels, GoogleModels, KimiModels, DeepSeekModels]
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -190,7 +189,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -247,26 +246,27 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM | llm.LLM,
+        llm_v: LLM | llm.LLM,
         *,
         model: LLMModels | str,
         provider: str | None = None,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
-        self._llm = llm
+        self._llm = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         # current function call that we're waiting for full completion (args are streamed)
@@ -281,17 +281,16 @@ class LLMStream(llm.LLMStream):
 
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = (
-                to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
-                if self._tools
-                else openai.NOT_GIVEN
+            tool_schemas = cast(
+                list[ChatCompletionToolParam],
+                self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),
             )
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(
                     "chat.completions.create",
                     extra={
-                        "fnc_ctx": fnc_ctx,
+                        "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
                         "chat_ctx": chat_ctx,
                     },
@@ -306,7 +305,7 @@ class LLMStream(llm.LLMStream):
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
-                tools=fnc_ctx,
+                tools=tool_schemas or openai.NOT_GIVEN,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
@@ -435,29 +434,3 @@ class LLMStream(llm.LLMStream):
                 extra=delta_extra,
             ),
         )
-
-
-def to_fnc_ctx(
-    fnc_ctx: Sequence[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
-    *,
-    strict: bool = True,
-) -> list[ChatCompletionToolParam]:
-    tools: list[ChatCompletionToolParam] = []
-    for fnc in fnc_ctx:
-        if is_raw_function_tool(fnc):
-            info = get_raw_function_info(fnc)
-            tools.append(
-                {
-                    "type": "function",
-                    "function": info.raw_schema,  # type: ignore
-                }
-            )
-        elif is_function_tool(fnc):
-            schema = (
-                llm.utils.build_strict_openai_schema(fnc)
-                if strict
-                else llm.utils.build_legacy_openai_schema(fnc)
-            )
-            tools.append(schema)  # type: ignore
-
-    return tools

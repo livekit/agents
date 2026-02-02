@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import aiohttp
 
@@ -39,6 +39,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
+from .languages import iso639_3_to_1
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -57,8 +58,13 @@ class VADOptions(TypedDict, total=False):
     """Minimum silence duration in milliseconds. Default to 2500"""
 
 
+# https://elevenlabs.io/docs/overview/models#models-overview
+ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
+
+
 @dataclass
 class STTOptions:
+    model_id: ElevenLabsSTTModels | str
     api_key: str
     base_url: str
     language_code: str | None
@@ -76,11 +82,12 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         tag_audio_events: bool = True,
-        use_realtime: bool = False,
+        use_realtime: NotGivenOr[bool] = NOT_GIVEN,  # Deprecated
         sample_rate: STTRealtimeSampleRates = 16000,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
+        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -91,11 +98,32 @@ class STT(stt.STT):
             language_code (NotGivenOr[str]): Language code for the STT model. Optional.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription.
                 Only supported for Scribe v1 model. Default is True.
-            use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is False.
+            use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
+                Note that this flag is deprecated in favour of explicitly specifying the model id.
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-        """  # noqa: E501
+            model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
+                be selected based on parameters provided.
+        """
+
+        if is_given(use_realtime):
+            if is_given(model_id):
+                logger.warning(
+                    "both `use_realtime` and `model_id` parameters are provided. `use_realtime` will be ignored."
+                )
+            else:
+                logger.warning(
+                    "`use_realtime` parameter is deprecated. "
+                    "Specify a realtime model_id to enable streaming. "
+                    "Defaulting model_id to one based on use_realtime parameter. "
+                )
+                model_id = "scribe_v2_realtime" if use_realtime else "scribe_v1"
+        model_id = model_id if is_given(model_id) else "scribe_v1"
+        use_realtime = model_id == "scribe_v2_realtime"
+
+        if not use_realtime and is_given(server_vad):
+            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
         super().__init__(
             capabilities=STTCapabilities(
@@ -105,15 +133,13 @@ class STT(stt.STT):
             )
         )
 
-        if not use_realtime and is_given(server_vad):
-            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
-
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
             raise ValueError(
                 "ElevenLabs API key is required, either as argument or "
                 "set ELEVEN_API_KEY environmental variable"
             )
+
         self._opts = STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
@@ -122,13 +148,14 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             server_vad=server_vad,
             include_timestamps=include_timestamps,
+            model_id=model_id,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def model(self) -> str:
-        return "Scribe"
+        return self._opts.model_id
 
     @property
     def provider(self) -> str:
@@ -153,7 +180,7 @@ class STT(stt.STT):
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
-        form.add_field("model_id", "scribe_v1")
+        form.add_field("model_id", self._opts.model_id)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
         if self._opts.language_code:
             form.add_field("language_code", self._opts.language_code)
@@ -194,8 +221,9 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
+        normalized_language = iso639_3_to_1(language_code) or language_code
         return self._transcription_to_speech_event(
-            language_code=language_code,
+            language_code=normalized_language,
             text=extracted_text,
             start_time=start_time,
             end_time=end_time,
@@ -356,7 +384,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="ElevenLabs STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
@@ -407,7 +439,7 @@ class SpeechStream(stt.SpeechStream):
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
         commit_strategy = "manual" if self._opts.server_vad is None else "vad"
         params = [
-            "model_id=scribe_v2_realtime",
+            f"model_id={self._opts.model_id}",
             f"encoding=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
         ]
@@ -457,9 +489,10 @@ class SpeechStream(stt.SpeechStream):
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
 
+        normalized_language = iso639_3_to_1(self._language) or self._language or "en"
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
-            language=self._language or "en",
+            language=normalized_language,
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,

@@ -17,10 +17,10 @@
 See https://docs.livekit.io/agents/integrations/stt/fal/ for more information.
 """
 
-from .stt import WizperSTT
+from .stt import WizperSTT, WizperSTT as STT
 from .version import __version__
 
-__all__ = ["WizperSTT", "__version__"]
+__all__ = ["WizperSTT", "__version__", "STT"]
 
 
 from livekit.agents import Plugin

@@ -51,7 +51,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
-from .types import NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -80,6 +80,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -103,9 +104,11 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass
@@ -324,7 +327,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting, self._connection_failed = (
+            True,
+            False,
+            False,
+            False,
+        )
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -577,6 +585,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
                     return web.Response(status=503, text="inference process not running")
+
+                if self._connection_failed:
+                    return web.Response(status=503, text="failed to connect to livekit")
 
                 return web.Response(text="OK")
 
@@ -887,9 +898,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     async def aclose(self) -> None:
         async with self._lock:
             if self._closed:
-                raise RuntimeError("cannot simulate job, the worker is closed")
-
-            if self._closed:
                 if self._close_future is not None:
                     await self._close_future
                 return
@@ -1016,6 +1024,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._max_retry:
+                    self._connection_failed = True
                     raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
                     ) from None
@@ -1166,6 +1175,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                self._agent_name
+            )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)

@@ -77,6 +77,7 @@ class STTOptions:
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
+    profanity_filter: bool
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
     @property
@@ -123,11 +124,12 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         spoken_punctuation: bool = False,
-        enable_word_time_offsets: bool = True,
+        enable_word_time_offsets: NotGivenOr[bool] = NOT_GIVEN,
         enable_word_confidence: bool = False,
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
@@ -148,11 +150,12 @@ class STT(stt.STT):
             interim_results(bool): whether to return interim results (default: True)
             punctuate(bool): whether to punctuate the audio (default: True)
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
-            enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
+            enable_word_time_offsets(bool): whether to enable word time offsets (default: None)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
             (default: 0.65)
@@ -163,6 +166,18 @@ class STT(stt.STT):
         """
         if not is_given(use_streaming):
             use_streaming = True
+
+        if model == "chirp_3":
+            if is_given(enable_word_time_offsets) and enable_word_time_offsets:
+                logger.warning(
+                    "Chirp 3 does not support word timestamps, setting 'enable_word_time_offsets' to False."
+                )
+            enable_word_time_offsets = False
+        elif is_given(enable_word_time_offsets):
+            enable_word_time_offsets = enable_word_time_offsets
+        else:
+            enable_word_time_offsets = True
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=use_streaming,
@@ -198,6 +213,7 @@ class STT(stt.STT):
             enable_word_confidence=enable_word_confidence,
             enable_voice_activity_events=enable_voice_activity_events,
             model=model,
+            profanity_filter=profanity_filter,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
@@ -286,6 +302,7 @@ class STT(stt.STT):
                     enable_spoken_punctuation=config.spoken_punctuation,
                     enable_word_time_offsets=config.enable_word_time_offsets,
                     enable_word_confidence=config.enable_word_confidence,
+                    profanity_filter=config.profanity_filter,
                 ),
                 model=config.model,
                 language_codes=config.languages,
@@ -301,6 +318,7 @@ class STT(stt.STT):
             enable_word_confidence=config.enable_word_confidence,
             enable_automatic_punctuation=config.punctuate,
             enable_spoken_punctuation=config.spoken_punctuation,
+            profanity_filter=config.profanity_filter,
             model=config.model,
         )
 
@@ -376,6 +394,7 @@ class STT(stt.STT):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -392,6 +411,8 @@ class STT(stt.STT):
             self._config.punctuate = punctuate
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
+        if is_given(profanity_filter):
+            self._config.profanity_filter = profanity_filter
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -412,6 +433,7 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 punctuate=punctuate,
                 spoken_punctuation=spoken_punctuation,
+                profanity_filter=profanity_filter,
                 model=model,
                 keywords=keywords,
             )
@@ -447,6 +469,7 @@ class SpeechStream(stt.SpeechStream):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -463,6 +486,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.punctuate = punctuate
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
+        if is_given(profanity_filter):
+            self._config.profanity_filter = profanity_filter
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -494,6 +519,7 @@ class SpeechStream(stt.SpeechStream):
                         enable_word_time_offsets=self._config.enable_word_time_offsets,
                         enable_spoken_punctuation=self._config.spoken_punctuation,
                         enable_word_confidence=self._config.enable_word_confidence,
+                        profanity_filter=self._config.profanity_filter,
                     ),
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
@@ -514,6 +540,7 @@ class SpeechStream(stt.SpeechStream):
                 enable_word_confidence=self._config.enable_word_confidence,
                 enable_automatic_punctuation=self._config.punctuate,
                 enable_spoken_punctuation=self._config.spoken_punctuation,
+                profanity_filter=self._config.profanity_filter,
                 model=self._config.model,
             ),
             interim_results=self._config.interim_results,
@@ -590,10 +617,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     has_started = True
 
-                if resp.speech_event_type == (
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-                    if self._config.version == 2
-                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                if (
+                    resp.speech_event_type
+                    == (
+                        cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                        if self._config.version == 2
+                        else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                    )
+                    and resp.results
                 ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(

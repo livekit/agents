@@ -92,7 +92,10 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=False, aligned_transcript="word"
+                streaming=True,
+                interim_results=False,
+                aligned_transcript="word",
+                offline_recognize=False,
             )
         )
 

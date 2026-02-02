@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import base64
 import concurrent.futures
@@ -32,6 +31,7 @@ from aws_sdk_bedrock_runtime.models import (
     ValidationException,
 )
 from smithy_aws_core.identity import AWSCredentialsIdentity
+from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
 
 from livekit import rtc
@@ -799,16 +799,15 @@ class RealtimeSession(  # noqa: F811
         if self.tools.function_tools:
             tools = []
             for name, f in self.tools.function_tools.items():
-                if llm.tool_context.is_function_tool(f):
-                    description = llm.tool_context.get_function_info(f).description
+                if isinstance(f, llm.FunctionTool):
+                    description = f.info.description
                     input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
                         "parameters"
                     ]
-                elif llm.tool_context.is_raw_function_tool(f):
-                    description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
-                        "description"
-                    )
-                    raw_schema = llm.tool_context.get_raw_function_info(f).raw_schema
+                elif isinstance(f, llm.RawFunctionTool):
+                    info = f.info
+                    description = info.raw_schema.get("description")
+                    raw_schema = info.raw_schema
                     # Safely access parameters with fallback
                     input_schema = raw_schema.get(
                         "parameters",
@@ -1495,6 +1494,7 @@ class RealtimeSession(  # noqa: F811
                     ModelNotReadyException,
                     ModelErrorException,
                     ModelStreamErrorException,
+                    InvalidEventBytes,
                 ) as re:
                     logger.warning(
                         f"Retryable error: {re}\nAttempting to recover...", exc_info=True
@@ -1717,9 +1717,7 @@ class RealtimeSession(  # noqa: F811
             return None
 
     # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)  # noqa: E501
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         """Replace the active tool set with tools and notify Sonic if necessary."""
         logger.debug(f"Updating tools: {tools}")
         self._tools = llm.ToolContext(tools)
@@ -1798,12 +1796,12 @@ class RealtimeSession(  # noqa: F811
                                 tool_result = json.dumps(tool_result)
                             else:
                                 try:
-                                    json.loads(tool_result)
+                                    tool_result = json.loads(tool_result)
                                 except json.JSONDecodeError:
                                     try:
-                                        tool_result = json.dumps(ast.literal_eval(tool_result))
+                                        tool_result = json.dumps({"tool_result": tool_result})
                                     except Exception:
-                                        pass
+                                        logger.exception("Failed to parse tool result")
 
                             logger.debug(f"Sending tool result: {tool_result}")
                             await self._send_tool_events(tool_use_id, tool_result)
@@ -2006,6 +2004,9 @@ class RealtimeSession(  # noqa: F811
 
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Nova Sonic's Realtime API")
+
+    def commit_user_turn(self) -> None:
+        logger.warning("commit_user_turn is not supported by Nova Sonic's Realtime API")
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("video is not supported by Nova Sonic's Realtime API")

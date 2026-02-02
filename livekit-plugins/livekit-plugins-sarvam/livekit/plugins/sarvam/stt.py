@@ -270,7 +270,7 @@ class STT(stt.STT):
         if opts_model:
             form_data.add_field("model", str(opts_model))
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         headers = {"api-subscription-key": self._api_key}
 
@@ -290,8 +290,9 @@ class STT(stt.STT):
                     error_text = await res.text()
                     self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam API Error: {error_text}",
+                        message="Sarvam API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
@@ -400,7 +401,7 @@ class STT(stt.STT):
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         stream = SpeechStream(
             stt=self,

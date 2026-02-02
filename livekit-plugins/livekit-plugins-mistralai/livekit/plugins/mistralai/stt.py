@@ -40,14 +40,14 @@ from .models import STTModels
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str
+    language: str | None
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: str = "en",
+        language: str | None = "en",
         model: STTModels | str = "voxtral-mini-latest",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
@@ -56,7 +56,7 @@ class STT(stt.STT):
         Create a new instance of MistralAI STT.
 
         Args:
-            language: The language code to use for transcription (e.g., "en" for English).
+            language: The language code to use for transcription (e.g., "en" for English). Segment timestamps will only be available if set to None.
             model: The MistralAI model to use for transcription, default is voxtral-mini-latest.
             api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
@@ -66,7 +66,6 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=False,
                 interim_results=False,
-                # timestamp granularity doesn't seem to work
                 aligned_transcript=False,
             )
         )
@@ -75,9 +74,10 @@ class STT(stt.STT):
             model=model,
         )
 
-        self._client = client or Mistral(
-            api_key=api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY"),
-        )
+        mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
+        if not mistral_api_key:
+            raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
+        self._client = client or Mistral(api_key=mistral_api_key)
 
     @property
     def model(self) -> str:
@@ -123,8 +123,7 @@ class STT(stt.STT):
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
-                # for some reason, it doesn't return any segments even if we ask for them
-                timestamp_granularities=["segment"],
+                timestamp_granularities=None if self._opts.language else ["segment"],
             )
 
             return stt.SpeechEvent(
@@ -132,7 +131,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=self._opts.language,
+                        language=self._opts.language if self._opts.language else "",
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
