@@ -345,7 +345,7 @@ class SessionStore:
 
         # write agent chat context
         for item in state.chat_ctx["items"]:
-            item_text = self._serialize_data(item, passphrase=None, output_type="bytes")
+            item_text = self._serialize_data(item, passphrase=None, output_type="text")
             cursor.execute(
                 "INSERT INTO agent_chat_ctx (agent_id, item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?, ?)",
                 (state.id, item["id"], item_text, False, item["created_at"]),

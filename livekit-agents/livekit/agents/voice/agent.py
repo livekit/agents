@@ -427,6 +427,7 @@ class Agent:
         return self._activity
 
     def _get_state(self) -> _AgentState:
+        # TODO: exclude_config_update=True
         chat_ctx: dict[str, Any] = self.chat_ctx.to_dict(
             exclude_image=False, exclude_function_call=False, exclude_timestamp=False
         )
