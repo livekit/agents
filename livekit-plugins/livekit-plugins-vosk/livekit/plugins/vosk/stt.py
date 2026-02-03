@@ -16,504 +16,371 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import queue
 import threading
+import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any, cast
 
-import numpy as np
-
+import vosk  # type: ignore[import-untyped]
 from livekit import rtc
-from livekit.agents import stt
-from livekit.agents.types import (
+from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
+    APIConnectionError,
     APIConnectOptions,
-    NotGivenOr,
-    TimedString,
+    stt,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
-from .models import validate_model_path
+from .utils import resample_audio
 
-if TYPE_CHECKING:
-    import vosk  # type: ignore
-
-# Global cache for loaded models
-_model_cache: dict[str, vosk.Model] = {}
-_spk_model_cache: dict[str, vosk.SpkModel] = {}
-_cache_lock = threading.Lock()
-
-
-def _get_model(path: str) -> vosk.Model:
-    import vosk
-
-    # Suppress verbose Vosk logs
-    vosk.SetLogLevel(-1)
-
-    with _cache_lock:
-        if path not in _model_cache:
-            logger.info(f"Loading Vosk model: {path}")
-            _model_cache[path] = vosk.Model(path)
-        return _model_cache[path]
-
-
-def _get_spk_model(path: str) -> vosk.SpkModel:
-    import vosk
-
-    with _cache_lock:
-        if path not in _spk_model_cache:
-            logger.info(f"Loading Vosk speaker model: {path}")
-            _spk_model_cache[path] = vosk.SpkModel(path)
-        return _spk_model_cache[path]
+_DEFAULT_SAMPLE_RATE = 16000
 
 
 @dataclass
-class STTOptions:
+class _STTOptions:
     model_path: str
-    sample_rate: int = 16000
-    language: str = "en"
-    enable_words: bool = True
-    max_alternatives: int = 0
-    speaker_model_path: str | None = None
+    sample_rate: int
+    language: str
+    log_level: int | None
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        model_path: str,
+        model_path: str | None = None,
+        sample_rate: int = _DEFAULT_SAMPLE_RATE,
         language: str = "en",
-        sample_rate: int = 16000,
-        enable_words: bool = True,
-        max_alternatives: int = 0,
-        speaker_model_path: str | None = None,
-    ):
-        """
-        Create a new instance of Vosk STT.
-
-        Args:
-            model_path: Path to the Vosk model directory. Download models from
-                https://alphacephei.com/vosk/models
-            language: Language code for metadata (e.g., "en", "es", "fr")
-            sample_rate: Audio sample rate in Hz. Vosk typically uses 16000.
-            enable_words: Whether to include word-level timestamps in results
-            max_alternatives: Number of alternative transcriptions to return (0 = disabled)
-            speaker_model_path: Optional path to speaker identification model for diarization
-        """
-        # Validate model path exists
-        self._model_path = validate_model_path(model_path)
-        self._speaker_model_path = (
-            validate_model_path(speaker_model_path) if speaker_model_path else None
-        )
-
+        log_level: int | None = -1,
+    ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                diarization=bool(speaker_model_path),
-                aligned_transcript="word" if enable_words else False,
+                diarization=False,
+                aligned_transcript="word",
                 offline_recognize=True,
             )
         )
 
-        self._opts = STTOptions(
-            model_path=str(self._model_path),
+        resolved_model_path = model_path or os.getenv("VOSK_MODEL_PATH")
+        if not resolved_model_path:
+            raise ValueError("Vosk model path is required. Set model_path or VOSK_MODEL_PATH.")
+        if not os.path.isdir(resolved_model_path):
+            raise ValueError(f"Vosk model path does not exist: {resolved_model_path}")
+
+        self._opts = _STTOptions(
+            model_path=resolved_model_path,
             sample_rate=sample_rate,
             language=language,
-            enable_words=enable_words,
-            max_alternatives=max_alternatives,
-            speaker_model_path=str(self._speaker_model_path) if self._speaker_model_path else None,
+            log_level=log_level,
         )
 
-        self._label = f"vosk-{language}"
+        if self._opts.log_level is not None:
+            vosk.SetLogLevel(self._opts.log_level)
 
-    def prewarm(self) -> None:
-        """
-        Preload models into memory to reduce latency for the first request.
-        """
-        try:
-            _get_model(self._opts.model_path)
-            if self._opts.speaker_model_path:
-                _get_spk_model(self._opts.speaker_model_path)
-            logger.info("Vosk models prewarmed")
-        except Exception as e:
-            logger.error(f"Failed to prewarm Vosk models: {e}")
+        logger.info("Loading Vosk model from %s", resolved_model_path)
+        self._model = vosk.Model(resolved_model_path)
 
     @property
     def model(self) -> str:
-        return self._label
+        return os.path.basename(self._opts.model_path)
 
     @property
     def provider(self) -> str:
-        return "vosk"
+        return "Vosk"
 
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        """
-        Perform batch recognition on an audio buffer.
-        """
+        del conn_options
+        lang = language if is_given(language) else self._opts.language
         try:
-            import vosk  # noqa: F401
-        except ImportError as e:
-            raise ImportError("Vosk is not installed. Install it with: pip install vosk") from e
-
-        loop = asyncio.get_event_loop()
-
-        # Create recognizer in thread pool
-        def _create_recognizer() -> vosk.KaldiRecognizer:
-            # Use cached models
-            model = _get_model(self._opts.model_path)
-
-            if self._opts.speaker_model_path:
-                spk_model = _get_spk_model(self._opts.speaker_model_path)
-                recognizer = vosk.KaldiRecognizer(model, self._opts.sample_rate, spk_model)
-            else:
-                recognizer = vosk.KaldiRecognizer(model, self._opts.sample_rate)
-
-            recognizer.SetWords(self._opts.enable_words)
-            if self._opts.max_alternatives > 0:
-                recognizer.SetMaxAlternatives(self._opts.max_alternatives)
-
-            return recognizer
-
-        recognizer = await loop.run_in_executor(None, _create_recognizer)
-
-        # Convert audio buffer to PCM16
-        pcm16_data = _convert_audio_buffer_to_pcm16(buffer, self._opts.sample_rate)
-
-        # Process audio in thread pool
-        def _process_audio() -> str:
-            recognizer.AcceptWaveform(pcm16_data)
-            return str(recognizer.FinalResult())
-
-        result_json = await loop.run_in_executor(None, _process_audio)
-
-        # Parse result
-        return _parse_vosk_result(
-            result_json,
-            is_final=True,
-            language=self._opts.language,
-            start_time_offset=0.0,
-        )
+            return await asyncio.to_thread(self._recognize_sync, buffer, lang)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise APIConnectionError("Vosk recognition failed") from e
 
     def stream(
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechStream:
-        return SpeechStream(
-            stt=self,
-            opts=self._opts,
-            conn_options=conn_options,
-        )
+    ) -> stt.RecognizeStream:
+        lang = language if is_given(language) else self._opts.language
+        return SpeechStream(stt=self, conn_options=conn_options, language=lang)
 
+    def _recognize_sync(self, buffer: AudioBuffer, language: str) -> stt.SpeechEvent:
+        frames = resample_audio(buffer, self._opts.sample_rate)
+        if not frames:
+            return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT)
 
-class SpeechStream(stt.RecognizeStream):
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        opts: STTOptions,
-        conn_options: APIConnectOptions,
-    ):
-        super().__init__(
-            stt=stt,
-            conn_options=conn_options,
-            sample_rate=opts.sample_rate,
-        )
-        self._opts = opts
-        self._recognizer: vosk.KaldiRecognizer | None = None
-        self._resampler: rtc.AudioResampler | None = None
+        recognizer = self._create_recognizer()
+        segments: list[tuple[dict[str, Any], float]] = []
+        segment_start = 0.0
+        elapsed = 0.0
+        for frame in frames:
+            pcm = frame.data.tobytes()
+            if pcm:
+                elapsed += frame.duration
+                if recognizer.AcceptWaveform(pcm):
+                    segments.append((json.loads(recognizer.Result()), segment_start))
+                    segment_start = elapsed
 
-    async def _run(self) -> None:
-        try:
-            import vosk  # noqa: F401
-        except ImportError as e:
-            raise ImportError("Vosk is not installed. Install it with: pip install vosk") from e
-
-        loop = asyncio.get_event_loop()
-
-        # Create recognizer in thread pool
-        def _create_recognizer() -> vosk.KaldiRecognizer:
-            # Use cached models
-            model = _get_model(self._opts.model_path)
-
-            if self._opts.speaker_model_path:
-                spk_model = _get_spk_model(self._opts.speaker_model_path)
-                recognizer = vosk.KaldiRecognizer(model, self._opts.sample_rate, spk_model)
-            else:
-                recognizer = vosk.KaldiRecognizer(model, self._opts.sample_rate)
-
-            recognizer.SetWords(self._opts.enable_words)
-            if self._opts.max_alternatives > 0:
-                recognizer.SetMaxAlternatives(self._opts.max_alternatives)
-
-            return recognizer
-
-        self._recognizer = await loop.run_in_executor(None, _create_recognizer)
-        logger.info("Vosk recognizer initialized", extra={"model": self._opts.model_path})
-
-        # Main processing loop
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
-                # Finalize current segment
-                def _finalize() -> str:
-                    try:
-                        if self._recognizer:
-                            return self._recognizer.FinalResult() or ""
-                        return ""
-                    except Exception:
-                        logger.exception("Vosk FinalResult failed")
-                        return ""
-
-                result_json = await loop.run_in_executor(None, _finalize)
-
-                if result_json:
-                    event = _parse_vosk_result(
-                        result_json,
-                        is_final=True,
-                        language=self._opts.language,
-                        start_time_offset=self.start_time_offset,
-                    )
-
-                    if event.alternatives and event.alternatives[0].text:
-                        self._event_ch.send_nowait(event)
-
-                # Reset recognizer for next segment (reuse same instance)
-                def _reset() -> vosk.KaldiRecognizer | None:
-                    if self._recognizer and hasattr(self._recognizer, "Reset"):
-                        self._recognizer.Reset()
-                        return None
-                    else:
-                        # Fallback if Reset not available (older versions)
-                        logger.warning("Vosk recognizer does not support Reset(), recreating")
-                        return _create_recognizer()
-
-                # If result of _reset is a recognizer, update it
-                res = await loop.run_in_executor(None, _reset)
-                if res:
-                    self._recognizer = res
-
-                continue
-
-            # Process audio frame
-            frame: rtc.AudioFrame = data
-
-            # Resample if needed
-            if frame.sample_rate != self._opts.sample_rate:
-                if not self._resampler or self._resampler.input_rate != frame.sample_rate:  # type: ignore
-                    self._resampler = rtc.AudioResampler(
-                        frame.sample_rate,
-                        self._opts.sample_rate,
-                        quality=rtc.AudioResamplerQuality.HIGH,
-                    )
-                    # Helper attribute to track input rate
-                    self._resampler.input_rate = frame.sample_rate  # type: ignore
-
-                resampled_frames = self._resampler.push(frame)
-                for resampled_frame in resampled_frames:
-                    pcm16_data = _convert_frame_to_pcm16(resampled_frame)
-
-                    # Process in thread pool
-                    def _accept_waveform_resampled(data: bytes) -> tuple[bool, str]:
-                        try:
-                            if self._recognizer:
-                                is_final = self._recognizer.AcceptWaveform(data)
-                                if is_final:
-                                    return True, self._recognizer.Result() or ""
-                                else:
-                                    return False, self._recognizer.PartialResult() or ""
-                            return False, "{}"
-                        except Exception as e:
-                            logger.error(f"Vosk processing error: {e}")
-                            return False, "{}"
-
-                    is_final, result_json = await loop.run_in_executor(
-                        None, _accept_waveform_resampled, pcm16_data
-                    )
-
-                    if not result_json or result_json == "{}":
-                        continue
-
-                    event = _parse_vosk_result(
-                        result_json,
-                        is_final=is_final,
-                        language=self._opts.language,
-                        start_time_offset=self.start_time_offset,
-                    )
-                    if event.alternatives and event.alternatives[0].text:
-                        self._event_ch.send_nowait(event)
-                continue
-
-            # Convert frame to PCM16
-            pcm16_data = _convert_frame_to_pcm16(frame)
-
-            # Process in thread pool
-            def _accept_waveform(data: bytes) -> tuple[bool, str]:
-                try:
-                    if self._recognizer:
-                        is_final = self._recognizer.AcceptWaveform(data)
-                        if is_final:
-                            return True, str(self._recognizer.Result() or "")
-                        else:
-                            return False, str(self._recognizer.PartialResult() or "")
-                    return False, "{}"
-                except Exception as e:
-                    logger.error(f"Vosk processing error: {e}")
-                    return False, "{}"
-
-            is_final, result_json = await loop.run_in_executor(None, _accept_waveform, pcm16_data)
-
-            if not result_json or result_json == "{}":
-                continue
-
-            # Parse and emit event
-            event = _parse_vosk_result(
-                result_json,
-                is_final=is_final,
-                language=self._opts.language,
-                start_time_offset=self.start_time_offset,
-            )
-
-            if event.alternatives and event.alternatives[0].text:
-                self._event_ch.send_nowait(event)
-
-
-def _convert_frame_to_pcm16(frame: rtc.AudioFrame) -> bytes:
-    """
-    Convert AudioFrame to PCM16 format for Vosk.
-
-    Vosk expects:
-    - Format: PCM16 (16-bit signed integer)
-    - Channels: Mono (1 channel)
-    """
-    # AudioFrame data is int16
-    samples = np.frombuffer(frame.data, dtype=np.int16)
-
-    # Reshape if multi-channel
-    if frame.num_channels > 1:
-        samples = samples.reshape(-1, frame.num_channels)
-        # Convert to mono by averaging channels
-        # Use float32 for averaging to avoid overflow/precision loss
-        samples = samples.astype(np.float32).mean(axis=1).astype(np.int16)
-
-    return samples.tobytes()
-
-
-def _convert_audio_buffer_to_pcm16(buffer: AudioBuffer, target_sample_rate: int) -> bytes:
-    """
-    Convert AudioBuffer to PCM16 format for Vosk.
-    """
-    # Merge all frames in the buffer
-    merged_frame = buffer.merge()  # type: ignore
-
-    # Resample if needed
-    if merged_frame.sample_rate != target_sample_rate:
-        resampler = rtc.AudioResampler(
-            merged_frame.sample_rate,
-            target_sample_rate,
-            quality=rtc.AudioResamplerQuality.HIGH,
-        )
-        frames = resampler.push(merged_frame)
-        if frames:
-            merged_frame = frames[0]
-
-    return _convert_frame_to_pcm16(merged_frame)
-
-
-def _parse_vosk_result(
-    result_json: str,
-    is_final: bool,
-    language: str,
-    start_time_offset: float,
-) -> stt.SpeechEvent:
-    """
-    Parse Vosk JSON result into SpeechEvent.
-
-    Vosk partial result format:
-    {
-        "partial": "hello world"
-    }
-
-    Vosk final result format:
-    {
-        "text": "hello world",
-        "result": [
-            {"conf": 1.0, "end": 0.5, "start": 0.0, "word": "hello"},
-            {"conf": 0.98, "end": 1.2, "start": 0.5, "word": "world"}
-        ]
-    }
-
-    With speaker diarization:
-    {
-        "text": "hello world",
-        "spk": [0.1, 0.2, ...],  // Speaker vector
-        "result": [...]
-    }
-    """
-    result = json.loads(result_json)
-
-    if is_final:
-        text = result.get("text", "")
-        words = []
-
-        if "result" in result and result["result"]:
-            for word_data in result["result"]:
-                words.append(
-                    TimedString(
-                        text=word_data["word"],
-                        start_time=word_data["start"] + start_time_offset,
-                        end_time=word_data["end"] + start_time_offset,
-                        confidence=word_data.get("conf", 1.0),
-                    )
-                )
-
-        # Calculate overall confidence (average of word confidences)
-        confidence = 1.0
-        if words:
-            confidence = sum(float(w.confidence) for w in words) / len(words)  # type: ignore
-
-        # Calculate start and end times
-        start_time = float(words[0].start_time) if words else float(start_time_offset)  # type: ignore
-        end_time = float(words[-1].end_time) if words else float(start_time_offset)  # type: ignore
-
-        alternatives = [
-            stt.SpeechData(
-                language=language,
-                text=text,
-                start_time=start_time,
-                end_time=end_time,
-                confidence=confidence,
-                words=words if words else None,
-            )
-        ]
+        segments.append((json.loads(recognizer.FinalResult()), segment_start))
+        speech_data = self._merge_results(segments, language)
+        if speech_data is None:
+            return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT)
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=alternatives,
+            alternatives=[speech_data],
         )
-    else:
-        # Interim result
-        text = result.get("partial", "")
 
-        alternatives = [
-            stt.SpeechData(
-                language=language,
-                text=text,
-                start_time=start_time_offset,
-                end_time=start_time_offset,
-                confidence=0.0,  # Partial results don't have confidence
+    def _create_recognizer(self) -> vosk.KaldiRecognizer:
+        recognizer = vosk.KaldiRecognizer(self._model, self._opts.sample_rate)
+        recognizer.SetWords(True)
+        return recognizer
+
+    def _result_to_speech_data(
+        self,
+        result: dict[str, Any],
+        language: str,
+        *,
+        start_time_offset: float,
+    ) -> stt.SpeechData | None:
+        text = (result.get("text") or "").strip()
+        if not text:
+            return None
+        words, confidence = self._parse_words(result.get("result") or [], start_time_offset)
+        start_time = cast(float, words[0].start_time) if words else 0.0
+        end_time = cast(float, words[-1].end_time) if words else 0.0
+
+        return stt.SpeechData(
+            language=language,
+            text=text,
+            start_time=start_time,
+            end_time=end_time,
+            confidence=confidence,
+            words=words if words else None,
+        )
+
+    def _merge_results(
+        self,
+        segments: list[tuple[dict[str, Any], float]],
+        language: str,
+    ) -> stt.SpeechData | None:
+        texts: list[str] = []
+        words: list[TimedString] = []
+        conf_sum = 0.0
+        conf_count = 0
+
+        for result, offset in segments:
+            text = (result.get("text") or "").strip()
+            if text:
+                texts.append(text)
+
+            parsed_words, parsed_conf = self._parse_words(result.get("result") or [], offset)
+            words.extend(parsed_words)
+            if parsed_words:
+                conf_sum += parsed_conf * len(parsed_words)
+                conf_count += len(parsed_words)
+
+        full_text = " ".join(texts).strip()
+        if not full_text:
+            return None
+
+        start_time = cast(float, words[0].start_time) if words else 0.0
+        end_time = cast(float, words[-1].end_time) if words else 0.0
+        confidence = conf_sum / conf_count if conf_count else 0.0
+
+        return stt.SpeechData(
+            language=language,
+            text=full_text,
+            start_time=start_time,
+            end_time=end_time,
+            confidence=confidence,
+            words=words if words else None,
+        )
+
+    def _parse_words(
+        self,
+        word_entries: list[dict[str, Any]],
+        start_time_offset: float,
+    ) -> tuple[list[TimedString], float]:
+        words: list[TimedString] = []
+        conf_sum = 0.0
+        conf_count = 0
+
+        for word in word_entries:
+            start = float(word.get("start", 0.0)) + start_time_offset
+            end = float(word.get("end", 0.0)) + start_time_offset
+            words.append(
+                TimedString(
+                    text=str(word.get("word", "")),
+                    start_time=start,
+                    end_time=end,
+                )
             )
-        ]
+            if "conf" in word:
+                conf_sum += float(word["conf"])
+                conf_count += 1
 
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-            alternatives=alternatives,
+        confidence = conf_sum / conf_count if conf_count else 0.0
+        return words, confidence
+
+    async def aclose(self) -> None:
+        return None
+
+
+_THREAD_FLUSH = object()
+_THREAD_STOP = object()
+
+
+class SpeechStream(stt.SpeechStream):
+    def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: str) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
+        self._vosk_stt = stt
+        self._language = language
+        self._audio_queue: queue.Queue[object] = queue.Queue()
+        self._recognition_thread: threading.Thread | None = None
+        self._speaking = False
+        self._last_partial = ""
+        self._request_id = ""
+        self._segment_index = 0
+
+        self._event_loop = asyncio.get_running_loop()
+        self._done_fut: asyncio.Future[None] = self._event_loop.create_future()
+
+    async def _run(self) -> None:
+        self._recognition_thread = threading.Thread(
+            target=self._recognition_worker,
+            name="vosk-recognition",
+            daemon=True,
         )
+        self._recognition_thread.start()
+
+        try:
+            await self._collect_audio()
+        finally:
+            self._audio_queue.put(_THREAD_STOP)
+            await self._done_fut
+
+    async def _collect_audio(self) -> None:
+        async for data in self._input_ch:
+            if isinstance(data, rtc.AudioFrame):
+                pcm = data.data.tobytes()
+                if pcm:
+                    self._audio_queue.put(pcm)
+            elif isinstance(data, self._FlushSentinel):
+                self._audio_queue.put(_THREAD_FLUSH)
+
+    def _recognition_worker(self) -> None:
+        try:
+            recognizer = self._vosk_stt._create_recognizer()
+            while True:
+                item = self._audio_queue.get()
+                if item is _THREAD_STOP:
+                    self._finalize_segment(recognizer)
+                    break
+                if item is _THREAD_FLUSH:
+                    self._finalize_segment(recognizer)
+                    recognizer = self._vosk_stt._create_recognizer()
+                    continue
+                if not isinstance(item, (bytes, bytearray, memoryview)):
+                    continue
+
+                if recognizer.AcceptWaveform(item):
+                    result = json.loads(recognizer.Result())
+                    self._emit_final(result)
+                else:
+                    partial = json.loads(recognizer.PartialResult())
+                    self._emit_partial(partial)
+        except Exception as e:
+            logger.exception("Vosk recognition worker failed")
+            if not self._done_fut.done():
+                exc = APIConnectionError("Vosk streaming failed")
+                exc.__cause__ = e
+                self._event_loop.call_soon_threadsafe(self._done_fut.set_exception, exc)
+        else:
+            if not self._done_fut.done():
+                self._event_loop.call_soon_threadsafe(self._done_fut.set_result, None)
+
+    def _finalize_segment(self, recognizer: vosk.KaldiRecognizer) -> None:
+        result = json.loads(recognizer.FinalResult())
+        self._emit_final(result)
+
+        if self._speaking:
+            self._event_loop.call_soon_threadsafe(
+                self._event_ch.send_nowait,
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+            )
+            self._speaking = False
+            self._last_partial = ""
+
+    def _ensure_speaking(self) -> None:
+        if self._speaking:
+            return
+        self._speaking = True
+        self._segment_index += 1
+        self._request_id = f"vosk-{uuid.uuid4().hex}-{self._segment_index}"
+        self._event_loop.call_soon_threadsafe(
+            self._event_ch.send_nowait,
+            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
+        )
+
+    def _emit_partial(self, data: dict[str, Any]) -> None:
+        text = (data.get("partial") or "").strip()
+        if not text or text == self._last_partial:
+            return
+
+        self._last_partial = text
+        self._ensure_speaking()
+
+        speech_data = stt.SpeechData(language=self._language, text=text)
+        self._event_loop.call_soon_threadsafe(
+            self._event_ch.send_nowait,
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                request_id=self._request_id,
+                alternatives=[speech_data],
+            ),
+        )
+
+    def _emit_final(self, data: dict[str, Any]) -> None:
+        speech_data = self._vosk_stt._result_to_speech_data(
+            data,
+            self._language,
+            start_time_offset=self.start_time_offset,
+        )
+        if speech_data is None:
+            return
+
+        self._ensure_speaking()
+        self._last_partial = ""
+
+        self._event_loop.call_soon_threadsafe(
+            self._event_ch.send_nowait,
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=self._request_id,
+                alternatives=[speech_data],
+            ),
+        )
+
+        if self._speaking:
+            self._event_loop.call_soon_threadsafe(
+                self._event_ch.send_nowait,
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+            )
+            self._speaking = False
