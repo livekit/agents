@@ -36,6 +36,7 @@ from speechmatics.voice import (
     AdditionalVocabEntry,
     AgentServerMessageType,
     AudioEncoding,
+    EndOfUtteranceMode,
     OperatingPoint,
     SpeakerFocusConfig,
     SpeakerFocusMode,
@@ -616,6 +617,7 @@ class SpeechStream(stt.RecognizeStream):
         finally:
             audio_task.cancel()
             await self._client.disconnect()
+            message_task.cancel()
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
@@ -801,56 +803,36 @@ class SpeechStream(stt.RecognizeStream):
 
 
 def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
-    """Warn about deprecated kwargs and migrate values where possible.
+    """Warn about deprecated kwargs and migrate values where possible."""
 
-    Each entry is either ``None`` (removed, no replacement) or a tuple of
-    ``(new_field_name, expected_type)``.  Enum types are coerced by attempting
-    construction from the value; plain types are checked with ``isinstance``.
+    # Removed — no replacement
+    for name in (
+        "chunk_size",
+        "transcription_config",
+        "audio_settings",
+        "http_session",
+    ):
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used")
 
-    ValueError is raised if the value is incompatible with the expected type.
-    """
+    # Partials
+    if "enable_partials" in kwargs and bool(kwargs["enable_partials"]):
+        logger.warning("`enable_partials` is deprecated, migrated to `include_partials`")
+        opts.include_partials = kwargs["enable_partials"]
 
-    # old name -> (new field, expected type) or None if removed entirely
-    _deprecated: dict[str, tuple[str, type] | None] = {
-        "enable_partials": ("include_partials", bool),
-        "diarization_sensitivity": ("speaker_sensitivity", (int, float)),  # type: ignore[dict-item]
-        "end_of_utterance_mode": ("turn_detection_mode", TurnDetectionMode),
-        "chunk_size": None,
-        "transcription_config": None,
-        "audio_settings": None,
-        "http_session": None,
-    }
+    # Diarization
+    if "diarization_sensitivity" in kwargs and isinstance(
+        kwargs["diarization_sensitivity"], (int, float)
+    ):
+        logger.warning("`diarization_sensitivity` is deprecated, migrated to `speaker_sensitivity`")
+        opts.speaker_sensitivity = kwargs["diarization_sensitivity"]
 
-    # Check for all deprecated args in kwargs
-    for old, spec in _deprecated.items():
-        # Skip if the arg has not been provided
-        if old not in kwargs:
-            continue
-
-        # Removed entirely — no replacement
-        if spec is None:
-            logger.warning(f"`{old}` is deprecated and no longer used")
-            continue
-
-        # Get the new field and expected type
-        new, expected_type = spec
-        value = kwargs[old]
-
-        # Enum: try to coerce the value into a valid member
-        if isinstance(expected_type, type) and issubclass(expected_type, Enum):
-            try:
-                value = expected_type(value)
-            except ValueError:
-                raise ValueError(
-                    f"`{old}` is deprecated and has incompatible value and type, use `{new}` instead"
-                ) from None
-
-        # Plain type: isinstance guard
-        elif not isinstance(value, expected_type):
-            raise ValueError(
-                f"`{old}` is deprecated and has incompatible type, use `{new}` instead"
-            )
-
-        # Value is compatible — migrate
-        logger.warning(f"`{old}` is deprecated, migrated to `{new}`")
-        setattr(opts, new, value)
+    # Turn detection — "none" is not a valid TurnDetectionMode, map to FIXED
+    if "end_of_utterance_mode" in kwargs and isinstance(
+        kwargs["end_of_utterance_mode"], (str, EndOfUtteranceMode)
+    ):
+        value = kwargs["end_of_utterance_mode"]
+        opts.turn_detection_mode = (
+            TurnDetectionMode.FIXED if value == "none" else TurnDetectionMode(value)
+        )
+        logger.warning("`end_of_utterance_mode` is deprecated, migrated to `turn_detection_mode`")
