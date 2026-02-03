@@ -1354,11 +1354,14 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription is not None)
-            or (sc.input_transcription and sc.input_transcription is not None)
-            or (sc.generation_complete is not None)
-            or (sc.turn_complete is not None)
+            or (sc.output_transcription and sc.output_transcription and sc.output_transcription.text)
+            or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
+            # or (sc.generation_complete is not None)
+            # or (sc.turn_complete is not None)
         ):
+            # Some Gemini models send a `generation_complete` event after tool calls, but others do not.
+            # We mark the generation as done after a tool call and need to ignore any empty transcriptions or generation_complete events.
+            # This prevents new empty generations from starting and interrupting tool execution.
             return True
 
         return False
