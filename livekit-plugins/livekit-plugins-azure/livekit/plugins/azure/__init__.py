@@ -17,11 +17,12 @@ Support for Azure AI including Azure Speech. For Azure OpenAI, see the [OpenAI p
 See https://docs.livekit.io/agents/integrations/azure/ for more information.
 """
 
+from . import responses
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "TTS", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "responses", "__version__"]
 
 from livekit.agents import Plugin
 

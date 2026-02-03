@@ -22,7 +22,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import QueueAudioOutput
+from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -43,6 +43,7 @@ class AvatarSession:
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
+        is_sandbox: NotGivenOr[bool] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -62,6 +63,7 @@ class AvatarSession:
                 api_key=resolved_api_key,
                 conn_options=conn_options,
             )
+        self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
@@ -123,6 +125,7 @@ class AvatarSession:
             livekit_token=livekit_token,
             room=self._room,
             avatar_id=self._avatar_id,
+            is_sandbox=self._is_sandbox,
         )
         self._session_id = session_config_data["data"]["session_id"]
         self._session_token = session_config_data["data"]["session_token"]
@@ -216,6 +219,14 @@ class AvatarSession:
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
+                elif isinstance(audio_frame, AudioSegmentEnd):
+                    if self._audio_playing:
+                        self._audio_playing = False
+                        self._audio_buffer.notify_playback_finished(
+                            playback_position=self._playback_position,
+                            interrupted=False,
+                        )
+                        self._playback_position = 0.0
 
         async def _keep_alive_task() -> None:
             try:

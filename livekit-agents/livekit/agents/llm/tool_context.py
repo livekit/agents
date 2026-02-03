@@ -21,29 +21,53 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import Any, Callable, Generic, Literal, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, overload
 
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeGuard
 
+from ..log import logger
 from . import _provider_format
 
+if TYPE_CHECKING:
+    from ..voice.events import RunContext
 
-class Tool(ABC):  # noqa: B024
-    pass
+
+class Tool(ABC):
+    @property
+    @abstractmethod
+    def id(self) -> str: ...
 
 
 class ProviderTool(Tool):
-    """Tool that provided by the LLM provider."""
+    def __init__(self, *, id: str) -> None:
+        self._id = id
 
-    pass
+    @property
+    def id(self) -> str:
+        return self._id
 
 
 class Toolset(ABC):
+    @dataclass
+    class ToolCalledEvent:
+        ctx: RunContext
+        arguments: dict[str, Any]
+
+    @dataclass
+    class ToolCompletedEvent:
+        ctx: RunContext
+        output: Any | Exception | None
+
+    def __init__(self, *, id: str) -> None:
+        self._id = id
+
+    @property
+    def id(self) -> str:
+        return self._id
+
     @property
     @abstractmethod
-    def tools(self) -> list[Tool]:
-        """Tools exposed by the toolset."""
-        pass
+    def tools(self) -> list[Tool]: ...
 
 
 # Used by ToolChoice
@@ -133,10 +157,14 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     """Base class for function tool wrappers with descriptor support."""
 
     def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
+        functools.update_wrapper(self, func)
         self._func = func
         self._info: _InfoT = info
         self._instance = instance
-        functools.update_wrapper(self, func)
+
+    @property
+    def id(self) -> str:
+        return self._info.name
 
     @property
     def info(self) -> _InfoT:
@@ -163,13 +191,21 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
 class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool"""
 
-    pass
+    def __init__(
+        self, func: Callable[_P, _R], info: FunctionToolInfo, instance: Any = None
+    ) -> None:
+        super().__init__(func, info, instance)
+        setattr(self, "__livekit_tool_info", self._info)
 
 
 class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
-    pass
+    def __init__(
+        self, func: Callable[_P, _R], info: RawFunctionToolInfo, instance: Any = None
+    ) -> None:
+        super().__init__(func, info, instance)
+        setattr(self, "__livekit_raw_tool_info", self._info)
 
 
 @overload
@@ -235,7 +271,11 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
+        info = RawFunctionToolInfo(
+            name=raw_schema["name"],
+            raw_schema={**raw_schema},
+            flags=flags,
+        )
         return RawFunctionTool(func, info)
 
     def deco_func(func: Callable[_P, _R]) -> FunctionTool[_P, _R]:
@@ -272,11 +312,53 @@ def get_raw_function_info(f: RawFunctionTool) -> RawFunctionToolInfo:
     return f.info
 
 
+def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
+    """Convert a wrapped tool to a FunctionTool or RawFunctionTool with a warning."""
+    if not callable(tool):
+        return None
+
+    if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        return tool
+
+    resolved_tool: FunctionTool | RawFunctionTool | None = None
+    if (
+        hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
+        and isinstance(tool.__wrapped__, (FunctionTool, RawFunctionTool))
+    ):
+        wrapped = tool.__wrapped__
+        resolved_tool = wrapped.__class__(tool, wrapped.info)  # type: ignore
+
+    elif (info := getattr(tool, "__livekit_tool_info", None)) and isinstance(
+        info, FunctionToolInfo
+    ):
+        resolved_tool = FunctionTool(tool, info)
+
+    elif (info := getattr(tool, "__livekit_raw_tool_info", None)) and isinstance(
+        info, RawFunctionToolInfo
+    ):
+        resolved_tool = RawFunctionTool(tool, info)
+
+    if resolved_tool:
+        tool_name = resolved_tool.info.name
+        logger.warning(
+            f"function tool {tool_name} is wrapped, this may cause unexpected behavior and not be supported in future versions, "
+            "please wrap the original function before converting to a function tool.",
+            extra={
+                "function_tool": tool_name,
+            },
+        )
+
+    return resolved_tool
+
+
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
     methods: list[FunctionTool | RawFunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
         if isinstance(member, (FunctionTool, RawFunctionTool)):
             methods.append(member)
+        elif normalized_tool := _resolve_wrapped_tool(member):
+            methods.append(normalized_tool)
+
     return methods
 
 
@@ -369,6 +451,15 @@ class ToolContext:
                 for t in tool.tools:
                     add_tool(t)
                 self._tool_sets.append(tool)
+
+            elif normalized_tool := _resolve_wrapped_tool(tool):
+                add_tool(normalized_tool)
+
+            elif callable(tool):
+                raise ValueError(
+                    "Expected an instance of FunctionTool or RawFunctionTool, got a callable object. "
+                    "If it's a wrapped tool, please consider wrapping the original function before converting to a function tool."
+                )
 
             else:
                 raise ValueError(f"unknown tool type: {type(tool)}")
