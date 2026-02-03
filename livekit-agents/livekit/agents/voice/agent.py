@@ -757,7 +757,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         session = old_activity.session
 
         old_allow_interruptions = True
-        if speech_handle and speech_handle._generations:
+        if speech_handle:
+            if speech_handle.interrupted:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
+                )
+
             # lock the speech handle to prevent interruptions until the task is complete
             # there should be no await before this line to avoid race conditions
             old_allow_interruptions = speech_handle.allow_interruptions
