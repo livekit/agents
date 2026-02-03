@@ -587,10 +587,9 @@ class SpeechStream(stt.RecognizeStream):
             messages.append(AgentServerMessageType.SPEAKERS_RESULT)
 
         # Optional debug messages to log
-        if True:
-            messages.append(AgentServerMessageType.END_OF_UTTERANCE)
-            messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
-            messages.append(AgentServerMessageType.DIAGNOSTICS)
+        # messages.append(AgentServerMessageType.END_OF_UTTERANCE)
+        # messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
+        # messages.append(AgentServerMessageType.DIAGNOSTICS)
 
         # Add message handlers
         for event in messages:
