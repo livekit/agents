@@ -88,7 +88,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     @function_tool()
     async def update_address(
         self, street_address: str, unit_number: str, locality: str, country: str, ctx: RunContext
-    ) -> str:
+    ) -> str | None:  # type: ignore[return]
         """Update the address provided by the user.
 
         Args:

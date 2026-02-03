@@ -87,7 +87,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self.session.generate_reply(instructions="Ask the user to provide an email address.")
 
     @function_tool
-    async def update_email_address(self, email: str, ctx: RunContext) -> str:
+    async def update_email_address(self, email: str, ctx: RunContext) -> str | None:  # type: ignore[return]
         """Update the email address provided by the user.
 
         Args:
