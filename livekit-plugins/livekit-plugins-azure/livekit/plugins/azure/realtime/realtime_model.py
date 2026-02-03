@@ -1028,7 +1028,9 @@ class RealtimeSession(
             # TODO: Azure SDK doesn't support metadata in response.create yet
             # For now, just call response.create without metadata
             # When Azure SDK adds metadata support, add: metadata={"client_event_id": event_id}
-            await self._connection.response.create()
+            await self._connection.response.create(
+                additional_instructions=instructions if is_given(instructions) else None,
+            )
 
             logger.info(f"[GENERATE_REPLY] Sent response.create with event_id: {event_id}")
             # The generation_created event will be emitted in _handle_response_created
