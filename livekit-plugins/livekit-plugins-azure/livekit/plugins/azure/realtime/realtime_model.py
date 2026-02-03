@@ -7,8 +7,9 @@ import os
 import time
 import wave
 import weakref
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Sequence, cast
+from typing import Any, Literal, cast
 
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
@@ -19,7 +20,6 @@ from azure.ai.voicelive.models import (
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
-    ServerVad,
     TurnDetection,
 )
 from azure.core.credentials import AzureKeyCredential
@@ -278,6 +278,7 @@ class RealtimeSession(
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
+        self._input_resampler: rtc.AudioResampler | None = None
         self._pushed_duration_s: float = 0
 
         # Metrics
@@ -917,12 +918,12 @@ class RealtimeSession(
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push audio frame to Azure Voice Live."""
         if not self._connection:
-            if not hasattr(self, "_logged_no_connection"):
+            if not getattr(self, "_logged_no_connection", False):
                 logger.warning("[PUSH_AUDIO] No connection, dropping audio")
                 self._logged_no_connection = True
             return
         elif not self._connection_ready.is_set():
-            if not hasattr(self, "_logged_not_ready"):
+            if not getattr(self, "_logged_not_ready", False):
                 logger.warning("[PUSH_AUDIO] Connection not ready, dropping audio")
                 self._logged_not_ready = True
             return
@@ -931,10 +932,34 @@ class RealtimeSession(
             self._logged_no_connection = False
             self._logged_not_ready = False
 
-        # Resample if needed - push() returns list of AudioFrame objects
-        for audio_frame in self._bstream.push(frame.data):
-            audio_b64 = base64.b64encode(audio_frame.data).decode("utf-8")
-            asyncio.create_task(self._push_audio_async(audio_b64))
+        # Resample audio to target sample rate and channel count if needed
+        for resampled_frame in self._resample_audio(frame):
+            # Push resampled audio through byte stream for chunking
+            for audio_frame in self._bstream.push(resampled_frame.data):
+                audio_b64 = base64.b64encode(audio_frame.data).decode("utf-8")
+                asyncio.create_task(self._push_audio_async(audio_b64))
+
+    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
+        """Resample audio to target sample rate and channel count if needed."""
+        if self._input_resampler:
+            if frame.sample_rate != self._input_resampler._input_rate:
+                # input audio changed to a different sample rate
+                self._input_resampler = None
+
+        if self._input_resampler is None and (
+            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
+        ):
+            self._input_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+            )
+
+        if self._input_resampler:
+            # TODO(long): flush the resampler when the input source is changed
+            yield from self._input_resampler.push(frame)
+        else:
+            yield frame
 
     async def _push_audio_async(self, audio_b64: str) -> None:
         """Async helper to push audio to connection."""
