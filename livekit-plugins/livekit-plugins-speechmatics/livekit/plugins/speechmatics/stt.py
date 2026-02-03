@@ -118,141 +118,129 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED,
+        operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
+        domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
-        domain: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED,
+        include_partials: NotGivenOr[bool] = NOT_GIVEN,
+        enable_diarization: bool = True,
+        max_delay: NotGivenOr[float] = NOT_GIVEN,
+        end_of_utterance_silence_trigger: NotGivenOr[float] = NOT_GIVEN,
+        end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
+        additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
+        punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
+        speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
+        max_speakers: NotGivenOr[int] = NOT_GIVEN,
         speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
         speaker_passive_format: NotGivenOr[str] = NOT_GIVEN,
+        prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
         focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
         ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
         focus_mode: SpeakerFocusMode = SpeakerFocusMode.RETAIN,
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
-        additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
-        operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
-        max_delay: NotGivenOr[float] = NOT_GIVEN,
-        end_of_utterance_silence_trigger: NotGivenOr[float] = NOT_GIVEN,
-        end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
-        punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
-        include_partials: NotGivenOr[bool] = NOT_GIVEN,
-        enable_diarization: bool = True,
-        speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
-        max_speakers: NotGivenOr[int] = NOT_GIVEN,
-        prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
         **kwargs: Any,
     ):
-        """
-        Create a new instance of Speechmatics STT using the Voice SDK.
+        """Create a new instance of Speechmatics STT using the Voice SDK.
 
         Args:
-            api_key (str): Speechmatics API key. Can be set via `api_key` argument
-                or `SPEECHMATICS_API_KEY` environment variable
+            api_key: Speechmatics API key. Can be set via `api_key` argument
+                or `SPEECHMATICS_API_KEY` environment variable.
 
-            base_url (str): Custom base URL for the API. Can be set via `base_url`
+            base_url: Custom base URL for the API. Can be set via `base_url`
                 argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
 
-            language (str): Language code for the STT model. Defaults to `en`. Optional.
+            turn_detection_mode: Controls how the STT engine detects end of speech
+                turns. Use `EXTERNAL` when LiveKit's built-in endpointing is handling
+                turn detection. Use `ADAPTIVE` for simple VAD or `SMART_TURN` for
+                ML-based endpointing. Defaults to `TurnDetectionMode.FIXED`.
 
-            output_locale (str): Output locale for the STT model, e.g. `en-GB`. Optional.
+            operating_point: Operating point for transcription accuracy vs. latency
+                tradeoff. Overrides preset if provided. Optional.
 
-            domain (str): Domain to use. Optional.
+            domain: Domain to use. Optional.
 
-            turn_detection_mode (TurnDetectionMode): Endpoint handling, one of
-                `TurnDetectionMode.EXTERNAL`, `TurnDetectionMode.ADAPTIVE` and
-                `TurnDetectionMode.SMART_TURN`. Defaults to `TurnDetectionMode.FIXED`.
+            language: Language code for the STT model. Defaults to `en`.
 
-            speaker_active_format (str): Formatter for active speaker ID. This formatter is used
-                to format the text output for individual speakers and ensures that the context is
-                clear for language models further down the pipeline. The attributes `text` and
-                `speaker_id` are available. Example: `@{speaker_id}: {text}`.
-                Defaults to transcription output.
+            output_locale: Output locale for the STT model, e.g. `en-GB`. Optional.
 
-            speaker_passive_format (str): Formatter for passive speaker ID. As with the
-                speaker_active_format, the attributes `text` and `speaker_id` are available.
-                Example: `@{speaker_id} [background]: {text}`.
-                Defaults to transcription output.
+            include_partials: Include partial segment fragments (words) in the output
+                of AddPartialSegment messages. Partial fragments from the STT will
+                always be used for speaker activity detection. This setting is used
+                only for the formatted text output of individual segments. Optional.
 
-            focus_speakers (list[str]): List of speaker IDs to focus on. When enabled, only these
-                speakers are emitted as `FINAL_TRANSCRIPT` events and other speakers are considered
-                passive. Words from other speakers are still processed, but only emitted when a
-                focussed speaker has also said new words. A list of labels (e.g. `S1`, `S2`) or
-                identifiers of known speakers (e.g. `speaker_1`, `speaker_2`) can be used.
-                Defaults to [].
-
-            ignore_speakers (list[str]): List of speaker IDs to ignore. When enabled, these speakers
-                are excluded from the transcription and their words are not processed. Their speech
-                will not trigger any VAD or end of utterance detection. By default, any speaker
-                with a label starting and ending with double underscores will be excluded (e.g.
-                `__ASSISTANT__`).
-                Defaults to [].
-
-            focus_mode (SpeakerFocusMode): Speaker focus mode for diarization. When set to
-                `SpeakerFocusMode.RETAIN`, the STT engine will retain words spoken by other speakers
-                (not listed in `ignore_speakers`) and process them as passive speaker frames. When set to
-                `SpeakerFocusMode.IGNORE`, the STT engine will ignore words spoken by other speakers
-                and they will not be processed. Defaults to `SpeakerFocusMode.RETAIN`.
-
-            known_speakers (list[SpeakerIdentifier]): List of known speaker labels and identifiers.
-                If you supply a list of labels and identifiers for speakers, then the STT engine will
-                use them to attribute any spoken words to that speaker. This is useful when you want to
-                attribute words to a specific speaker, such as the assistant or a specific user.
-                Defaults to [].
-
-            additional_vocab (list[AdditionalVocabEntry]): List of additional vocabulary entries.
-                If you supply a list of additional vocabulary entries, this will increase the
-                weight of the words in the vocabulary and help the STT engine to better transcribe
-                the words. Defaults to [].
-
-            operating_point (OperatingPoint): Operating point for transcription accuracy
-                vs. latency tradeoff. Overrides preset if provided. Optional.
-
-            max_delay (float): Maximum delay in seconds for transcription. This forces the
-                STT engine to speed up the processing of transcribed words and reduces the
-                interval between partial and final results. Lower values can have an impact on
-                accuracy. Overrides preset if provided. Optional.
-
-            end_of_utterance_silence_trigger (float): Maximum delay in seconds for end of
-                utterance trigger. The delay is used to wait for any further transcribed
-                words before emitting the `FINAL_TRANSCRIPT` events.
-                Overrides preset if provided. Optional.
-
-            end_of_utterance_max_delay (float): Maximum delay in seconds for end of utterance
-                delay. Must be greater than end_of_utterance_silence_trigger.
-                Overrides preset if provided. Optional.
-
-            punctuation_overrides (dict): Punctuation overrides. This allows you to override
-                the punctuation in the STT engine. Overrides preset if provided. Optional.
-
-            include_partials (bool): Include partial segment fragments (words) in the output of
-                AddPartialSegment messages. Partial fragments from the STT will always be used for
-                speaker activity detection. This setting is used only for the formatted text output
-                of individual segments. Defaults to True.
-
-            enable_diarization (bool): Enable speaker diarization. When enabled, the STT
+            enable_diarization: Enable speaker diarization. When enabled, the STT
                 engine will determine and attribute words to unique speakers.
                 Overrides preset if provided. Defaults to True.
 
-            speaker_sensitivity (float): Diarization sensitivity. A higher value increases
-                the sensitivity of diarization and helps when two or more speakers have similar voices.
+            max_delay: Maximum delay in seconds for transcription. This forces the
+                STT engine to speed up the processing of transcribed words and reduces
+                the interval between partial and final results. Lower values can have
+                an impact on accuracy. Overrides preset if provided. Optional.
+
+            end_of_utterance_silence_trigger: Silence duration in seconds that
+                triggers end of utterance. The delay is used to wait for any further
+                transcribed words before emitting the `FINAL_TRANSCRIPT` events.
                 Overrides preset if provided. Optional.
 
-            max_speakers (int): Maximum number of speakers to detect during diarization. When set,
-                the STT engine will limit the number of unique speakers identified in the transcription.
+            end_of_utterance_max_delay: Maximum delay in seconds for end of utterance.
+                Must be greater than `end_of_utterance_silence_trigger`.
                 Overrides preset if provided. Optional.
 
-            prefer_current_speaker (bool): Prefer current speaker ID. When set to true, groups of
-                words close together are given extra weight to be identified as the same speaker.
-                Overrides preset if provided. Optional.
+            additional_vocab: List of additional vocabulary entries to increase the
+                weight of specific words in the transcription model. Defaults to [].
 
-            sample_rate (int): Sample rate for the audio. Optional. Defaults to 16000.
-
-            audio_encoding (AudioEncoding): Audio encoding for the audio. Optional.
-                Defaults to `AudioEncoding.PCM_S16LE`.
-
-            kwargs (Any): Additional keyword arguments used to validate deprecated parameters.
+            punctuation_overrides: Punctuation overrides. Allows overriding the
+                punctuation behaviour in the STT engine. Overrides preset if provided.
                 Optional.
+
+            speaker_sensitivity: Diarization sensitivity. A higher value increases the
+                sensitivity of diarization and helps when two or more speakers have
+                similar voices. Overrides preset if provided. Optional.
+
+            max_speakers: Maximum number of speakers to detect during diarization.
+                When set, the STT engine will limit the number of unique speakers
+                identified. Overrides preset if provided. Optional.
+
+            speaker_active_format: Formatter for active speaker output. The attributes
+                `text` and `speaker_id` are available. Example: `@{speaker_id}: {text}`.
+                Defaults to transcription output.
+
+            speaker_passive_format: Formatter for passive speaker output. The attributes
+                `text` and `speaker_id` are available. Example:
+                `@{speaker_id} [background]: {text}`. Defaults to transcription output.
+
+            prefer_current_speaker: When True, groups of words close together are given
+                extra weight to be identified as the same speaker. Overrides preset if
+                provided. Optional.
+
+            focus_speakers: List of speaker IDs to focus on. Only these speakers are
+                emitted as `FINAL_TRANSCRIPT` events; others are treated as passive.
+                Words from passive speakers are still processed but only emitted when a
+                focused speaker has also said new words. Defaults to [].
+
+            ignore_speakers: List of speaker IDs to ignore. These speakers are excluded
+                from transcription and their speech will not trigger VAD or end of
+                utterance detection. By default, any speaker with a label wrapped in
+                double underscores (e.g. `__ASSISTANT__`) is excluded. Defaults to [].
+
+            focus_mode: Controls what happens to words from non-focused speakers. When
+                `RETAIN`, non-ignored speakers are processed as passive frames. When
+                `IGNORE`, their words are discarded entirely. Defaults to
+                `SpeakerFocusMode.RETAIN`.
+
+            known_speakers: List of known speaker labels and identifiers. When supplied,
+                the STT engine uses them to attribute words to specific speakers across
+                sessions. Defaults to [].
+
+            sample_rate: Audio sample rate in Hz. Defaults to 16000.
+
+            audio_encoding: Audio encoding format. Defaults to `AudioEncoding.PCM_S16LE`.
+
+            **kwargs: Catches deprecated parameters. A warning is logged for any
+                recognised deprecated name.
         """
 
         # Set default values for optional parameters
@@ -294,6 +282,9 @@ class STT(stt.STT):
             max_speakers=_set(max_speakers),
             prefer_current_speaker=_set(prefer_current_speaker),
         )
+
+        # Migrate / warn about any deprecated kwargs
+        _check_deprecated_args(kwargs, self._stt_options)
 
         # Set API key
         self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
@@ -807,3 +798,52 @@ class SpeechStream(stt.RecognizeStream):
         # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+
+
+def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
+    """Warn about deprecated kwargs and migrate values where possible.
+
+    Each entry is either ``None`` (removed, no replacement) or a tuple of
+    ``(new_field_name, expected_type)``.  Enum types are coerced by attempting
+    construction from the value; plain types are checked with ``isinstance``.
+    """
+
+    # old name -> (new field, expected type) or None if removed entirely
+    _deprecated: dict[str, tuple[str, type] | None] = {
+        "enable_partials": ("include_partials", bool),
+        "diarization_sensitivity": ("speaker_sensitivity", (int, float)),  # type: ignore[dict-item]
+        "end_of_utterance_mode": ("turn_detection_mode", TurnDetectionMode),
+        "chunk_size": None,
+        "transcription_config": None,
+        "audio_settings": None,
+        "http_session": None,
+    }
+
+    for old, spec in _deprecated.items():
+        if old not in kwargs:
+            continue
+
+        # Removed entirely — no replacement
+        if spec is None:
+            logger.warning(f"`{old}` is deprecated and no longer used")
+            continue
+
+        new, expected_type = spec
+        value = kwargs[old]
+
+        # Enum: try to coerce the value into a valid member
+        if isinstance(expected_type, type) and issubclass(expected_type, Enum):
+            try:
+                value = expected_type(value)
+            except ValueError:
+                logger.warning(f"`{old}` is deprecated, use `{new}` instead")
+                continue
+
+        # Plain type: isinstance guard
+        elif not isinstance(value, expected_type):
+            logger.warning(f"`{old}` is deprecated, use `{new}` instead")
+            continue
+
+        # Value is compatible — migrate
+        logger.warning(f"`{old}` is deprecated, migrated to `{new}`")
+        setattr(opts, new, value)
