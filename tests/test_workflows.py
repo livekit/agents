@@ -7,9 +7,6 @@ from livekit.agents import AgentSession, beta, inference, llm
 from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.run_result import RunResult
 from livekit.rtc import Room
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 def _llm_model() -> llm.LLM:
