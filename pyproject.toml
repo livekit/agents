@@ -39,6 +39,7 @@ livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
+livekit-plugins-rtzr = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }

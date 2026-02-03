@@ -958,6 +958,18 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._old_agent = old_activity.agent
         session = old_activity.session
 
+        old_allow_interruptions = True
+        if speech_handle:
+            if speech_handle.interrupted:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
+                )
+
+            # lock the speech handle to prevent interruptions until the task is complete
+            # there should be no await before this line to avoid race conditions
+            old_allow_interruptions = speech_handle.allow_interruptions
+            speech_handle.allow_interruptions = False
+
         blocked_tasks = [current_task]
         if (
             old_activity._on_enter_task
@@ -995,6 +1007,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             await self.__switch_to_old_agent(
                 old_agent=self._old_agent, session=session, speech_handle=speech_handle
             )
+            if speech_handle:
+                speech_handle.allow_interruptions = old_allow_interruptions
 
     async def __switch_to_old_agent(
         self, *, old_agent: Agent, session: AgentSession, speech_handle: SpeechHandle | None
