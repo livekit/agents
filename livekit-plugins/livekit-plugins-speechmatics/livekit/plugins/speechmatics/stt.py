@@ -600,11 +600,12 @@ class SpeechStream(stt.RecognizeStream):
         await self._client.connect()
         logger.debug("Connected to Speechmatics STT service")
 
+        # Audio and messaging tasks
+        audio_task = asyncio.create_task(self._process_audio())
+        message_task = asyncio.create_task(self._process_messages())
+
         # Tasks
-        self._tasks = [
-            asyncio.create_task(self._process_messages()),
-            asyncio.create_task(self._process_audio()),
-        ]
+        self._tasks = [audio_task, message_task]
 
         # Wait for tasks to complete
         try:
@@ -614,7 +615,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Disconnect the client
         finally:
-            await utils.aio.gracefully_cancel(*self._tasks)
+            audio_task.cancel()
             await self._client.disconnect()
 
     async def _process_audio(self) -> None:
@@ -806,6 +807,8 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
     Each entry is either ``None`` (removed, no replacement) or a tuple of
     ``(new_field_name, expected_type)``.  Enum types are coerced by attempting
     construction from the value; plain types are checked with ``isinstance``.
+
+    ValueError is raised if the value is incompatible with the expected type.
     """
 
     # old name -> (new field, expected type) or None if removed entirely
@@ -819,7 +822,9 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
         "http_session": None,
     }
 
+    # Check for all deprecated args in kwargs
     for old, spec in _deprecated.items():
+        # Skip if the arg has not been provided
         if old not in kwargs:
             continue
 
@@ -828,6 +833,7 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
             logger.warning(f"`{old}` is deprecated and no longer used")
             continue
 
+        # Get the new field and expected type
         new, expected_type = spec
         value = kwargs[old]
 
@@ -836,13 +842,15 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
             try:
                 value = expected_type(value)
             except ValueError:
-                logger.warning(f"`{old}` is deprecated, use `{new}` instead")
-                continue
+                raise ValueError(
+                    f"`{old}` is deprecated and has incompatible value and type, use `{new}` instead"
+                ) from None
 
         # Plain type: isinstance guard
         elif not isinstance(value, expected_type):
-            logger.warning(f"`{old}` is deprecated, use `{new}` instead")
-            continue
+            raise ValueError(
+                f"`{old}` is deprecated and has incompatible type, use `{new}` instead"
+            )
 
         # Value is compatible — migrate
         logger.warning(f"`{old}` is deprecated, migrated to `{new}`")
