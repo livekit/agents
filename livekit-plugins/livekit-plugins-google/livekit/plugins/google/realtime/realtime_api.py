@@ -1354,7 +1354,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription and sc.output_transcription.text)
+            or (
+                sc.output_transcription and sc.output_transcription and sc.output_transcription.text
+            )
             or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
             # or (sc.generation_complete is not None)
             # or (sc.turn_complete is not None)
