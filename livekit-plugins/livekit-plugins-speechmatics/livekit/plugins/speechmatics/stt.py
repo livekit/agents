@@ -384,15 +384,16 @@ class STT(stt.STT):
 
         # Override preset parameters if provided
         advanced_params = [
-            "operating_point",
-            "max_delay",
-            "end_of_utterance_silence_trigger",
-            "end_of_utterance_max_delay",
-            "punctuation_overrides",
             "enable_diarization",
-            "speaker_sensitivity",
+            "end_of_utterance_max_delay",
+            "end_of_utterance_silence_trigger",
+            "include_partials",
+            "max_delay",
             "max_speakers",
+            "operating_point",
             "prefer_current_speaker",
+            "punctuation_overrides",
+            "speaker_sensitivity",
         ]
 
         # Override preset parameters if provided
@@ -400,10 +401,6 @@ class STT(stt.STT):
             value = getattr(opts, param)
             if value is not None:
                 setattr(config, param, value)
-
-        # Handle partials
-        if opts.include_partials is False:
-            config.include_partials = False
 
         # Return the config
         return config
