@@ -1,3 +1,4 @@
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +7,9 @@ from livekit.agents import AgentSession, beta, inference, llm
 from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.run_result import RunResult
 from livekit.rtc import Room
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def _llm_model() -> llm.LLM:
@@ -13,12 +17,23 @@ def _llm_model() -> llm.LLM:
 
 
 @pytest.mark.asyncio
-async def test_collect_email() -> None:
+@pytest.mark.parametrize("input_mode", ["text", "audio"])
+async def test_collect_email(input_mode: Literal["text", "audio"]) -> None:
     async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         await sess.start(beta.workflows.GetEmailTask())
 
-        await sess.run(user_input="My email address is theo at livekit dot io?")
-        result = await sess.run(user_input="Yes", output_type=beta.workflows.GetEmailResult)
+        result = await sess.run(
+            user_input="My email address is theo at livekit dot io?", input_mode=input_mode
+        )
+
+        if input_mode == "text":
+            assert isinstance(result.final_output, beta.workflows.GetEmailResult)
+        else:
+            # confirmation is required for audio input
+            result = await sess.run(
+                user_input="Yes", output_type=beta.workflows.GetEmailResult, input_mode=input_mode
+            )
+
         assert result.final_output.email_address == "theo@livekit.io"
 
     async with _llm_model() as llm, AgentSession(llm=llm) as sess:
