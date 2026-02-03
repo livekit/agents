@@ -975,6 +975,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
+                input_mode="text",
             )
             if run_state:
                 run_state._watch_handle(handle)

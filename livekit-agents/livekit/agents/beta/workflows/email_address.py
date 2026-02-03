@@ -82,7 +82,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self.session.generate_reply(instructions="Ask the user to provide an email address.")
 
     @function_tool
-    async def update_email_address(self, email: str, ctx: RunContext) -> str:
+    async def update_email_address(self, email: str, ctx: RunContext) -> str | None:
         """Update the email address provided by the user.
 
         Args:
@@ -97,6 +97,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self._current_email = email
         separated_email = " ".join(email)
 
+        if ctx.speech_handle.input_mode == "text":
+            if not self.done():
+                self.complete(GetEmailResult(email_address=self._current_email))
+            return None  # no need to continue the conversation
+
         return (
             f"The email has been updated to {email}\n"
             f"Repeat the email character by character: {separated_email} if needed\n"
@@ -108,7 +113,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         """Validates/confirms the email address provided by the user."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._email_update_speech_handle:
+        if (
+            ctx.speech_handle == self._email_update_speech_handle
+            and ctx.speech_handle.input_mode == "audio"
+        ):
             raise ToolError("error: the user must confirm the email address explicitly")
 
         if not self._current_email.strip():

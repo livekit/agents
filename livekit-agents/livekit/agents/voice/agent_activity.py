@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -866,6 +866,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
+        input_mode: Literal["text", "audio"] = "audio",
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -911,6 +912,7 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions,
+            input_mode=input_mode,
         )
         self._session.emit(
             "speech_created",
@@ -1195,7 +1197,9 @@ class AgentActivity(RecognitionHooks):
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
-        handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
+        handle = SpeechHandle.create(
+            allow_interruptions=self.allow_interruptions, input_mode="audio"
+        )
         self._session.emit(
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=False, source="generate_reply"),
@@ -1402,6 +1406,7 @@ class AgentActivity(RecognitionHooks):
             user_message=user_message,
             chat_ctx=chat_ctx,
             schedule_speech=False,
+            input_mode="audio",
         )
 
         self._preemptive_generation = _PreemptiveGeneration(
@@ -1602,6 +1607,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
+                input_mode="audio",
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():

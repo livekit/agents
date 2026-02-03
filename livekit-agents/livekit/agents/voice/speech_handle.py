@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Generator, Sequence
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from opentelemetry import context as otel_context
 
@@ -21,9 +21,12 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, *, speech_id: str, allow_interruptions: bool) -> None:
+    def __init__(
+        self, *, speech_id: str, allow_interruptions: bool, input_mode: Literal["text", "audio"]
+    ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._input_mode = input_mode
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -51,10 +54,13 @@ class SpeechHandle:
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(allow_interruptions: bool = True) -> SpeechHandle:
+    def create(
+        allow_interruptions: bool = True, input_mode: Literal["text", "audio"] = "audio"
+    ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
+            input_mode=input_mode,
         )
 
     @property
@@ -64,6 +70,10 @@ class SpeechHandle:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def input_mode(self) -> Literal["text", "audio"]:
+        return self._input_mode
 
     @property
     def _generation_id(self) -> str:
