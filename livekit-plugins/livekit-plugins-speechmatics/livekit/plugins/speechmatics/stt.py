@@ -594,7 +594,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Add message handlers
         for event in messages:
-            self._client.on(event, add_message)
+            self._client.on(event, add_message)  # type: ignore[arg-type]
 
         # Connect to the service
         await self._client.connect()
