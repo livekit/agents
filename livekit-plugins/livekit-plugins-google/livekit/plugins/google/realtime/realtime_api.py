@@ -1312,9 +1312,6 @@ class RealtimeSession(llm.RealtimeSession):
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Gemini Realtime API.")
 
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Gemini Realtime API.")
-
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
@@ -1354,11 +1351,16 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription is not None)
-            or (sc.input_transcription and sc.input_transcription is not None)
-            or (sc.generation_complete is not None)
-            or (sc.turn_complete is not None)
+            or (
+                sc.output_transcription and sc.output_transcription and sc.output_transcription.text
+            )
+            or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
+            # or (sc.generation_complete is not None)
+            # or (sc.turn_complete is not None)
         ):
+            # Some Gemini models send a `generation_complete` event after tool calls, but others do not.
+            # We mark the generation as done after a tool call and need to ignore any empty transcriptions or generation_complete events.
+            # This prevents new empty generations from starting and interrupting tool execution.
             return True
 
         return False
