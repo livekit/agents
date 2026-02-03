@@ -2572,34 +2572,32 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
 
-            if msg_gen:
-                forwarded_text = text_out.text if text_out else ""
-                if audio_output is not None:
-                    audio_output.clear_buffer()
+            if msg_gen and audio_output is not None:
+                audio_output.clear_buffer()
 
-                    playback_ev = await audio_output.wait_for_playout()
-                    playback_position = playback_ev.playback_position
-                    if (
-                        audio_out is not None
-                        and audio_out.first_frame_fut.done()
-                        and not audio_out.first_frame_fut.cancelled()
-                    ):
-                        # playback_ev is valid only if the first frame was already played
-                        if playback_ev.synchronized_transcript is not None:
-                            forwarded_text = playback_ev.synchronized_transcript
-                    else:
-                        forwarded_text = ""
-                        playback_position = 0
+                playback_ev = await audio_output.wait_for_playout()
+                playback_position = playback_ev.playback_position
+                if (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                ):
+                    # playback_ev is valid only if the first frame was already played
+                    if playback_ev.synchronized_transcript is not None:
+                        forwarded_text = playback_ev.synchronized_transcript
+                else:
+                    forwarded_text = ""
+                    playback_position = 0
 
-                    # truncate server-side message (if supported)
-                    if self.llm.capabilities.message_truncation:
-                        msg_modalities = await msg_gen.modalities
-                        self._rt_session.truncate(
-                            message_id=msg_gen.message_id,
-                            modalities=msg_modalities,
-                            audio_end_ms=int(playback_position * 1000),
-                            audio_transcript=forwarded_text,
-                        )
+                # truncate server-side message (if supported)
+                if self.llm.capabilities.message_truncation:
+                    msg_modalities = await msg_gen.modalities
+                    self._rt_session.truncate(
+                        message_id=msg_gen.message_id,
+                        modalities=msg_modalities,
+                        audio_end_ms=int(playback_position * 1000),
+                        audio_transcript=forwarded_text,
+                    )
 
         elif read_transcript_from_tts and text_out and not text_out.text:
             logger.warning(
