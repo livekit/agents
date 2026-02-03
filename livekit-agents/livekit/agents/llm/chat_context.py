@@ -210,8 +210,23 @@ class AgentHandoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class AgentConfigUpdate(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["agent_config_update"] = Field(default="agent_config_update")
+
+    instructions: str | None = None
+    tools_added: list[str] | None = None
+    tools_removed: list[str] | None = None
+
+    created_at: float = Field(default_factory=time.time)
+
+    _tools: list[Tool] = PrivateAttr(default_factory=list)
+    """Full tool definitions (in-memory only, not serialized)."""
+
+
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff], Field(discriminator="type")
+    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
+    Field(discriminator="type"),
 ]
 
 
@@ -406,6 +421,7 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
+        exclude_metrics: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -424,9 +440,11 @@ class ChatContext:
 
             items.append(item)
 
-        exclude_fields = set()
+        exclude_fields: set[str] = set()
         if exclude_timestamp:
             exclude_fields.add("created_at")
+        if exclude_metrics:
+            exclude_fields.add("metrics")
 
         return {
             "items": [

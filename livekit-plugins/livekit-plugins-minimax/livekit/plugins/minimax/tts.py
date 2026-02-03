@@ -89,6 +89,49 @@ TTSEmotion = Literal[
     "happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral", "fluent"
 ]
 
+TTSLanguageBoost = Literal[
+    "auto",
+    "Chinese",
+    "Chinese,Yue",
+    "English",
+    "Arabic",
+    "Russian",
+    "Spanish",
+    "French",
+    "Portuguese",
+    "German",
+    "Turkish",
+    "Dutch",
+    "Ukrainian",
+    "Vietnamese",
+    "Indonesian",
+    "Japanese",
+    "Italian",
+    "Korean",
+    "Thai",
+    "Polish",
+    "Romanian",
+    "Greek",
+    "Czech",
+    "Finnish",
+    "Hindi",
+    "Bulgarian",
+    "Danish",
+    "Hebrew",
+    "Malay",
+    "Persian",
+    "Slovak",
+    "Swedish",
+    "Croatian",
+    "Filipino",
+    "Hungarian",
+    "Norwegian",
+    "Slovenian",
+    "Catalan",
+    "Nynorsk",
+    "Tamil",
+    "Afrikaans",
+]
 
 TTSAudioFormat = Literal["pcm", "mp3", "flac", "wav"]
 TTSSampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100]
@@ -113,6 +156,7 @@ class _TTSOptions:
     pitch: int  # [-12, 12]
     text_normalization: bool
     pronunciation_dict: dict[str, list[str]] | None
+    language_boost: TTSLanguageBoost | None
     # voice_modify
     intensity: int | None
     timbre: int | None
@@ -134,6 +178,7 @@ class TTS(tts.TTS):
         pronunciation_dict: dict[str, list[str]] | None = None,
         intensity: int | None = None,
         timbre: int | None = None,
+        language_boost: TTSLanguageBoost | None = None,
         sample_rate: TTSSampleRate = 24000,
         bitrate: TTSBitRate = 128000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -160,6 +205,7 @@ class TTS(tts.TTS):
             audio_format (TTSAudioFormat, optional): The audio format to use. Defaults to "mp3".
             pronunciation_dict (dict[str, list[str]] | None, optional): Defines pronunciation rules for specific characters or symbols.
             intensity (int | None, optional): Corresponds to the "Strong/Softer" slider on the official page. Range [-100, 100].
+            language_boost (TTSLanguageBoost | None, optional): Controls whether recognition for specific minority languages and dialects is enhanced. Defaults to None.
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
@@ -222,6 +268,7 @@ class TTS(tts.TTS):
             vol=vol,
             text_normalization=text_normalization,
             timbre=timbre,
+            language_boost=language_boost,
             pronunciation_dict=pronunciation_dict,
             intensity=intensity,
             audio_format=audio_format,
@@ -252,6 +299,7 @@ class TTS(tts.TTS):
         pronunciation_dict: NotGivenOr[dict[str, list[str]]] = NOT_GIVEN,
         intensity: NotGivenOr[int] = NOT_GIVEN,
         timbre: NotGivenOr[int] = NOT_GIVEN,
+        language_boost: NotGivenOr[TTSLanguageBoost | None] = NOT_GIVEN,
     ) -> None:
         """Update the TTS configuration options."""
         if utils.is_given(model):
@@ -286,6 +334,9 @@ class TTS(tts.TTS):
 
         if utils.is_given(timbre):
             self._opts.timbre = timbre
+
+        if utils.is_given(language_boost):
+            self._opts.language_boost = cast(Optional[TTSLanguageBoost], language_boost)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -398,7 +449,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
                     )
                     logger.error(error_msg)
-                    raise APIStatusError(error_msg, request_id=current_trace_id)
+                    raise APIStatusError(
+                        error_msg,
+                        request_id=current_trace_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Minimax message type %s", msg.type)
@@ -427,6 +483,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIStatusError(
                         f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
                         request_id=error_trace_id,
+                        status_code=status_code,
                         body=data,
                     )
 
@@ -643,6 +700,9 @@ def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
 
     if opts.emotion is not None:
         config["voice_setting"]["emotion"] = opts.emotion
+
+    if opts.language_boost is not None:
+        config["language_boost"] = opts.language_boost
 
     if opts.pronunciation_dict:
         config["pronunciation_dict"] = opts.pronunciation_dict

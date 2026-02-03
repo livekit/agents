@@ -33,6 +33,9 @@ from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+    from .chat_context import FunctionCall, FunctionCallOutput
+    from .llm import FunctionToolCall
+    from .tool_context import ToolContext
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
@@ -198,6 +201,10 @@ def build_legacy_openai_schema(
     info = function_tool.info
     schema = model.model_json_schema()
 
+    # Ensure 'required' field exists for compatibility with strict APIs like Groq
+    if "required" not in schema:
+        schema["required"] = []
+
     if internally_tagged:
         return {
             "name": info.name,
@@ -223,6 +230,10 @@ def build_strict_openai_schema(
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
+
+    # Ensure 'required' field exists for compatibility with strict APIs
+    if "required" not in schema:
+        schema["required"] = []
 
     return {
         "type": "function",
@@ -453,3 +464,155 @@ def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str |
             content = content[idx + len(THINK_TAG_START) :]
 
     return content
+
+
+def _is_valid_function_output(value: Any) -> bool:
+    VALID_TYPES = (str, int, float, bool, complex, type(None))
+
+    if isinstance(value, VALID_TYPES):
+        return True
+    elif (
+        isinstance(value, list)
+        or isinstance(value, set)
+        or isinstance(value, frozenset)
+        or isinstance(value, tuple)
+    ):
+        return all(_is_valid_function_output(item) for item in value)
+    elif isinstance(value, dict):
+        return all(
+            isinstance(key, VALID_TYPES) and _is_valid_function_output(val)
+            for key, val in value.items()
+        )
+    return False
+
+
+@dataclass
+class FunctionCallResult:
+    fnc_call: FunctionCall
+    fnc_call_out: FunctionCallOutput | None
+    raw_output: Any
+    raw_exception: BaseException | None
+
+
+def make_function_call_output(
+    *,
+    fnc_call: FunctionCall,
+    output: Any,
+    exception: BaseException | None,
+) -> FunctionCallResult:
+    """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
+    from .chat_context import FunctionCallOutput
+    from .tool_context import StopResponse, ToolError
+
+    if isinstance(output, BaseException):
+        exception = output
+        output = None
+
+    if isinstance(exception, ToolError):
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=exception.message,
+                is_error=True,
+            ),
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if isinstance(exception, StopResponse):
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if exception is not None:
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="An internal error occurred",
+                is_error=True,
+            ),
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if not _is_valid_function_output(output):
+        logger.error(
+            f"AI function `{fnc_call.name}` returned an invalid output",
+            extra={"call_id": fnc_call.call_id, "output": output},
+        )
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=None,
+            raw_output=output,
+            raw_exception=None,
+        )
+
+    return FunctionCallResult(
+        fnc_call=fnc_call,
+        fnc_call_out=FunctionCallOutput(
+            name=fnc_call.name,
+            call_id=fnc_call.call_id,
+            output=str(output or ""),
+            is_error=False,
+        ),
+        raw_output=output,
+        raw_exception=None,
+    )
+
+
+async def execute_function_call(
+    tool_call: FunctionToolCall,
+    tool_ctx: ToolContext,
+    *,
+    call_ctx: RunContext[Any] | None = None,
+) -> FunctionCallResult:
+    """Execute a function tool call and return the result."""
+    from .chat_context import FunctionCall, FunctionCallOutput
+
+    fnc_call = FunctionCall(
+        call_id=tool_call.call_id,
+        name=tool_call.name,
+        arguments=tool_call.arguments or "{}",
+        extra=tool_call.extra or {},
+    )
+
+    function_tool = tool_ctx.function_tools.get(tool_call.name)
+    if function_tool is None:
+        logger.warning(f"unknown AI function `{tool_call.name}`")
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=tool_call.name,
+                call_id=tool_call.call_id,
+                output=f"Unknown function: {tool_call.name}",
+                is_error=True,
+            ),
+            raw_output=None,
+            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+        )
+
+    try:
+        fnc_args, fnc_kwargs = prepare_function_arguments(
+            fnc=function_tool,
+            json_arguments=tool_call.arguments or "{}",
+            call_ctx=call_ctx,
+        )
+        result = function_tool(*fnc_args, **fnc_kwargs)
+        if asyncio.iscoroutine(result):
+            result = await result
+
+        return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
+
+    except Exception as e:
+        logger.exception(
+            f"exception executing AI function `{tool_call.name}`",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)

@@ -34,18 +34,24 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 OpenAIModels = Literal[
-    "openai/gpt-5",
-    "openai/gpt-5-mini",
-    "openai/gpt-5-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
     "openai/gpt-4.1",
     "openai/gpt-4.1-mini",
     "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.1",
+    "openai/gpt-5.1-chat-latest",
+    "openai/gpt-5.2",
+    "openai/gpt-5.2-chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
+    "google/gemini-3-pro",
+    "google/gemini-3-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
@@ -53,13 +59,14 @@ GoogleModels = Literal[
     "google/gemini-2.0-flash-lite",
 ]
 
-QwenModels = Literal["qwen/qwen3-235b-a22b-instruct"]
-
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
 
-DeepSeekModels = Literal["deepseek-ai/deepseek-v3"]
+DeepSeekModels = Literal[
+    "deepseek-ai/deepseek-v3",
+    "deepseek-ai/deepseek-v3.2",
+]
 
-LLMModels = Union[OpenAIModels, GoogleModels, QwenModels, KimiModels, DeepSeekModels]
+LLMModels = Union[OpenAIModels, GoogleModels, KimiModels, DeepSeekModels]
 
 
 class ChatCompletionOptions(TypedDict, total=False):
