@@ -105,7 +105,7 @@ async def entrypoint(ctx: JobContext):
         # stt=deepgram.STT(model="nova-3"),
         # llm=openai.LLM(model="gpt-4.1-mini"),
         # tts=cartesia.TTS(model="sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        stt=inference.STT("deepgram/nova-3:en"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
@@ -187,7 +187,7 @@ async def entrypoint(ctx: JobContext):
     userdata = StoryData()
     session = AgentSession[StoryData](
         vad=silero.VAD.load(),
-        stt="deepgram/nova-3:en",
+        stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
