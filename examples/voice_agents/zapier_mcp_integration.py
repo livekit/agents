@@ -29,7 +29,7 @@ class Assistant(Agent):
             "You can help users with Zapier automations and workflows through the MCP server connection. "  # noqa: E501
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "  # noqa: E501
             "You were created as a demo to showcase the capabilities of LiveKit's agents framework with MCP integration.",  # noqa: E501
-            stt=inference.STT("deepgram/flux-general"),
+            stt=inference.STT("deepgram/nova-3"),
             llm=inference.LLM("google/gemini-2.5-flash"),
             tts=inference.TTS("rime/arcana"),
             # use LiveKit's transformer-based turn detector

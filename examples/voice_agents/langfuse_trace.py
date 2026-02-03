@@ -85,7 +85,7 @@ class Kelly(Agent):
             ),
             stt=FallbackSTTAdapter(
                 stt=[
-                    inference.STT("deepgram/flux-general"),
+                    inference.STT("deepgram/nova-3"),
                     inference.STT("cartesia/ink-whisper"),
                 ]
             ),

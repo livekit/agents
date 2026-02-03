@@ -56,7 +56,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         llm=inference.LLM("google/gemini-2.5-flash"),
-        stt=inference.STT("deepgram/flux-general"),
+        stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),
     )
 

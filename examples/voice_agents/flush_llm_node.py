@@ -113,7 +113,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
-        stt="deepgram/flux-general:en",
+        stt="deepgram/nova-3:en",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
     )
 

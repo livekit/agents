@@ -33,7 +33,7 @@ class Transcriber(Agent):
     def __init__(self, *, participant_identity: str):
         super().__init__(
             instructions="not-needed",
-            stt=inference.STT("deepgram/flux-general"),
+            stt=inference.STT("deepgram/nova-3"),
         )
         self.participant_identity = participant_identity
 

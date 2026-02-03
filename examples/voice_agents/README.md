@@ -10,7 +10,7 @@ Most pipeline examples use **LiveKit Inference** by default, which provides a un
 from livekit.agents import inference
 
 session = AgentSession(
-    stt=inference.STT("deepgram/flux-general"),
+    stt=inference.STT("deepgram/nova-3"),
     llm=inference.LLM("openai/gpt-4.1-mini"),
     tts=inference.TTS("cartesia/sonic-3"),
 )
