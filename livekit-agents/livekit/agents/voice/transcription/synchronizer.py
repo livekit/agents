@@ -235,8 +235,7 @@ class _SegmentSynchronizerImpl:
 
     def resume(self) -> None:
         if self.closed:
-            # logger.warning("_SegmentSynchronizerImpl.resume called after close")
-            # it's fine to call resume after previous segment is done
+            logger.warning("_SegmentSynchronizerImpl.resume called after close")
             return
 
         if self._paused_wall_time is not None:

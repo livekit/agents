@@ -756,12 +756,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
 
-        old_tool_cancelable = True
+        old_allow_interruptions = True
         if speech_handle and speech_handle._generations:
-            # the speech is still interruptable, but the tool call cannot be cancelled anymore
+            # lock the speech handle to prevent interruptions until the task is complete
             # there should be no await before this line to avoid race conditions
-            old_tool_cancelable = speech_handle.tool_cancelable
-            speech_handle.tool_cancelable = False
+            old_allow_interruptions = speech_handle.allow_interruptions
+            speech_handle.allow_interruptions = False
 
         blocked_tasks = [current_task]
         if (
@@ -798,7 +798,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         finally:
             if speech_handle:
-                speech_handle.tool_cancelable = old_tool_cancelable
+                speech_handle.allow_interruptions = old_allow_interruptions
 
             # run_state could have changed after self.__fut
             run_state = session._global_run_state

@@ -124,6 +124,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
+
         self._stt_eos_received: bool = False
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
@@ -2095,6 +2096,7 @@ class AgentActivity(RecognitionHooks):
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
                 audio_output.clear_buffer()
+
                 playback_ev = await audio_output.wait_for_playout()
                 if (
                     audio_out is not None
@@ -2135,18 +2137,11 @@ class AgentActivity(RecognitionHooks):
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
-        if speech_handle.interrupted and speech_handle.tool_cancelable:
+        if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
             return
-        elif speech_handle.interrupted and len(tool_output.output) > 0:
-            logger.debug(
-                "tool execution retained after speech was interrupted",
-                extra={
-                    "speech_id": speech_handle.id,
-                    "functions": [out.fnc_call.name for out in tool_output.output],
-                },
-            )
 
+        # wait for the tool execution to complete
         self._background_speeches.add(speech_handle)
         try:
             await exe_task
@@ -2203,10 +2198,6 @@ class AgentActivity(RecognitionHooks):
             tool_messages = new_calls + new_fnc_outputs
             if fnc_executed_ev._reply_required:
                 chat_ctx.items.extend(tool_messages)
-
-                if speech_handle.interrupted:
-                    # reset interrupted flag before creating a new speech task
-                    speech_handle._interrupt_fut = asyncio.Future[None]()
 
                 tool_response_task = self._create_speech_task(
                     self._pipeline_reply_task(
@@ -2626,23 +2617,15 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-        speech_handle._mark_generation_done()
-
-        if speech_handle.interrupted and speech_handle.tool_cancelable:
-            await utils.aio.cancel_and_wait(exe_task)
-            return
-        elif speech_handle.interrupted and len(tool_output.output) > 0:
-            logger.debug(
-                "tool execution retained after speech was interrupted",
-                extra={
-                    "speech_id": speech_handle.id,
-                    "functions": [out.fnc_call.name for out in tool_output.output],
-                },
-            )
-
         for tee in tees:
             await tee.aclose()
+        speech_handle._mark_generation_done()
 
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(exe_task)
+            return
+
+        # wait for the tool execution to complete
         tool_output.first_tool_started_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
         )
@@ -2728,10 +2711,6 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.interrupt()
 
-                if speech_handle.interrupted:
-                    # reset interrupted flag before creating a new speech task
-                    speech_handle._interrupt_fut = asyncio.Future[None]()
-
                 self._create_speech_task(
                     self._realtime_reply_task(
                         speech_handle=speech_handle,
@@ -2815,7 +2794,8 @@ class AgentActivity(RecognitionHooks):
             and self._paused_speech.allow_interruptions
         ):
             self._paused_speech.interrupt()
-            await self._paused_speech._wait_for_generation()  # ensure the speech is done
+            # ensure the generation is done
+            await self._paused_speech._wait_for_generation()
         self._paused_speech = None
 
         if self._session.options.resume_false_interruption and self._session.output.audio:

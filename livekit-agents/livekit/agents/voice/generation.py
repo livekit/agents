@@ -629,7 +629,7 @@ async def _execute_tools_task(
 
                 task = asyncio.create_task(
                     _traceable_fnc_tool(function_callable, fnc_call),
-                    name=fnc_call.name,  # task name is used for logging when the task is cancelled
+                    name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
                     task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
