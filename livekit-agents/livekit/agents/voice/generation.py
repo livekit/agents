@@ -627,7 +627,10 @@ async def _execute_tools_task(
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
-                task = asyncio.create_task(_traceable_fnc_tool(function_callable, fnc_call))
+                task = asyncio.create_task(
+                    _traceable_fnc_tool(function_callable, fnc_call),
+                    name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
+                )
                 _set_activity_task_info(
                     task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
                 )
