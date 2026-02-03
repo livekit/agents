@@ -612,9 +612,22 @@ class SpeechStream(stt.RecognizeStream):
 
         # Disconnect the client
         finally:
+            # Cancel audio first — stops sending audio to the STT engine
             audio_task.cancel()
+            try:
+                await audio_task
+            except asyncio.CancelledError:
+                pass
+
+            # Disconnect flushes final messages from the STT engine
             await self._client.disconnect()
+
+            # Cancel message task after disconnect — final messages have been processed
             message_task.cancel()
+            try:
+                await message_task
+            except asyncio.CancelledError:
+                pass
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
