@@ -89,26 +89,29 @@ class STT(stt.STT):
         resolved_language = language if is_given(language) else self._opts.language
 
         stream = self.stream(language=language, conn_options=conn_options)
-        frames = buffer if isinstance(buffer, list) else [buffer]
-        for frame in frames:
-            stream.push_frame(frame)
-        stream.end_input()
+        try:
+            frames = buffer if isinstance(buffer, list) else [buffer]
+            for frame in frames:
+                stream.push_frame(frame)
+            stream.end_input()
 
-        final_text = ""
-        async for event in stream:
-            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                if event.alternatives:
-                    final_text += event.alternatives[0].text
+            final_text = ""
+            async for event in stream:
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    if event.alternatives:
+                        final_text += event.alternatives[0].text
 
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[
-                stt.SpeechData(
-                    language=resolved_language,
-                    text=final_text,
-                )
-            ],
-        )
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(
+                        language=resolved_language,
+                        text=final_text,
+                    )
+                ],
+            )
+        finally:
+            await stream.aclose()
 
     def stream(
         self,
