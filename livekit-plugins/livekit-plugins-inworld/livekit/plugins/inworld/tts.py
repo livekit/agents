@@ -439,8 +439,8 @@ class _InworldConnection:
                             ctx.emitter.start_segment(segment_id=context_id)
                             ctx.segment_started = True
 
+                        # Adjust timestamps for cumulative offset
                         if timestamp_info := audio_chunk.get("timestampInfo"):
-                            # Log raw timestamps from server before applying offset
                             if word_align := timestamp_info.get("wordAlignment"):
                                 raw_words = word_align.get("words", [])
                                 raw_starts = word_align.get("wordStartTimeSeconds", [])
@@ -465,7 +465,6 @@ class _InworldConnection:
                                 if utils.is_given(last_ts.end_time):
                                     ctx.generation_end_time = last_ts.end_time
 
-                                # Log adjusted timestamps
                                 logger.debug(
                                     "Adjusted timestamps (with cumulative offset)",
                                     extra={
@@ -487,8 +486,10 @@ class _InworldConnection:
                     continue
 
                 if "flushCompleted" in result:
-                    # Update cumulative time offset for next generation to maintain
-                    # monotonically increasing timestamps within the agent turn
+                    # Signals the end of a generation, subsequent timestampes from the server
+                    # will reset offset to 0. We need to update the cumulative time to the
+                    # generation end time to maintain monotonically increasing timestamps
+                    # within the agent turn.
                     logger.debug(
                         "flushCompleted - updating cumulative time",
                         extra={
@@ -1137,8 +1138,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
-                # To be removed once auto_mode is released
-                connection.flush_context(context_id)
+            connection.flush_context(context_id)
             connection.close_context(context_id)
 
         tasks = [
@@ -1174,9 +1174,7 @@ def _parse_timestamp_info(
     Args:
         timestamp_info: The timestamp info from the API response.
         cumulative_time: Offset to add to all timestamps for monotonic ordering
-            across multiple generations within a single context. When auto_mode
-            is enabled or flush_context() is called, the server resets timestamps
-            to 0 after each generation.
+            across multiple generations within a single context.
     """
     timed_strings: list[TimedString] = []
 
