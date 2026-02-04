@@ -386,3 +386,38 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+def assert_hashable(x: object) -> None:
+    hash(x)
+
+
+class TestProviderToolHashability:
+    def test_openai_tools_are_hashable(self):
+        from livekit.plugins.openai.tools import CodeInterpreter, FileSearch, WebSearch
+
+        assert_hashable(WebSearch())
+        assert_hashable(FileSearch(vector_store_ids=["vector_store_1"]))
+        assert_hashable(CodeInterpreter())
+
+    def test_google_tools_are_hashable(self):
+        from livekit.plugins.google.tools import (
+            FileSearch,
+            GoogleMaps,
+            GoogleSearch,
+            ToolCodeExecution,
+            URLContext,
+        )
+
+        assert_hashable(GoogleSearch())
+        assert_hashable(GoogleMaps())
+        assert_hashable(URLContext())
+        assert_hashable(FileSearch(file_search_store_names=["file_store_1"]))
+        assert_hashable(ToolCodeExecution())
+
+    def test_xai_tools_are_hashable(self):
+        from livekit.plugins.xai.tools import FileSearch, WebSearch, XSearch
+
+        assert_hashable(WebSearch())
+        assert_hashable(XSearch())
+        assert_hashable(FileSearch(vector_store_ids=["vector_store_1"]))
