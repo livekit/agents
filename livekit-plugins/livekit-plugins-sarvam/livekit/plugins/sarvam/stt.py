@@ -129,7 +129,7 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     """
     if model.startswith("saaras:v2.5"):
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
-    else:  # saarika models
+    else:
         return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
