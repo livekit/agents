@@ -37,7 +37,7 @@ jobs:
 
       - name: S3 Upload
         run: |
-          aws s3 sync docs/ s3://livekit-docs/python
+          aws s3 sync --delete docs/ s3://livekit-docs/python
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
