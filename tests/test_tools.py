@@ -397,8 +397,23 @@ class TestProviderToolHashability:
         from livekit.plugins.openai.tools import CodeInterpreter, FileSearch, WebSearch
 
         assert_hashable(WebSearch())
+        assert_hashable(
+            WebSearch(
+                search_context_size="high",
+                user_location={"type": "approximate", "city": "San Francisco", "country": "US"},
+            )
+        )
         assert_hashable(FileSearch(vector_store_ids=["vector_store_1"]))
+        assert_hashable(
+            FileSearch(
+                vector_store_ids=["vector_store_1", "vector_store_2"],
+                max_num_results=10,
+                ranking_options={"ranker": "auto", "score_threshold": 0.5},
+            )
+        )
         assert_hashable(CodeInterpreter())
+        assert_hashable(CodeInterpreter(container="container_id"))
+        assert_hashable(CodeInterpreter(container={"type": "auto"}))
 
     def test_google_tools_are_hashable(self):
         from livekit.plugins.google.tools import (
@@ -410,9 +425,22 @@ class TestProviderToolHashability:
         )
 
         assert_hashable(GoogleSearch())
+        assert_hashable(
+            GoogleSearch(
+                exclude_domains=["example.com", "test.com"],
+            )
+        )
         assert_hashable(GoogleMaps())
+        assert_hashable(GoogleMaps(enable_widget=True))
         assert_hashable(URLContext())
         assert_hashable(FileSearch(file_search_store_names=["file_store_1"]))
+        assert_hashable(
+            FileSearch(
+                file_search_store_names=["file_store_1", "file_store_2"],
+                top_k=5,
+                metadata_filter="category = 'docs'",
+            )
+        )
         assert_hashable(ToolCodeExecution())
 
     def test_xai_tools_are_hashable(self):
@@ -420,4 +448,11 @@ class TestProviderToolHashability:
 
         assert_hashable(WebSearch())
         assert_hashable(XSearch())
+        assert_hashable(XSearch(allowed_x_handles=["@user1", "@user2"]))
         assert_hashable(FileSearch(vector_store_ids=["vector_store_1"]))
+        assert_hashable(
+            FileSearch(
+                vector_store_ids=["vector_store_1", "vector_store_2"],
+                max_num_results=10,
+            )
+        )
