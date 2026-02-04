@@ -10,6 +10,7 @@ from livekit.agents import (
     JobContext,
     MetricsCollectedEvent,
     cli,
+    inference,
     metrics,
 )
 from livekit.agents.beta.workflows.dtmf_inputs import (
@@ -18,7 +19,7 @@ from livekit.agents.beta.workflows.dtmf_inputs import (
 from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
 from livekit.agents.worker import AgentServer
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("dtmf-agent")
@@ -70,6 +71,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     extra_instructions=(
                         "Let the caller know they can choose one of three Horizon Wireless services: "
@@ -108,6 +110,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     ask_for_confirmation=True,
                     extra_instructions=(
@@ -135,9 +138,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4.1-mini"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("inworld/inworld-tts-1"),
         turn_detection=MultilingualModel(),
     )
 

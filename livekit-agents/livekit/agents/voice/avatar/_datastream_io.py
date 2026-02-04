@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Callable, Union
@@ -134,6 +135,10 @@ class DataStreamAudioOutput(AudioOutput):
                 },
             )
             self._pushed_duration = 0.0
+            # Not ideal since frame isn't actually playing yet
+            # potentially we need another RPC for this
+            self.on_playback_started(created_at=time.time())
+
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 

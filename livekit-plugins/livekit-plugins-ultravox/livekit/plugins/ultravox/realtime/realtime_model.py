@@ -466,7 +466,7 @@ class RealtimeSession(
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frames (not supported by Ultravox)."""
-        pass
+        logger.warning("push_video is not supported by Ultravox.")
 
     def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
         """Send an event to the Ultravox WebSocket."""

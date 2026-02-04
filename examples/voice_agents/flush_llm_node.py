@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     FlushSentinel,
     JobContext,
     MetricsCollectedEvent,
     ModelSettings,
-    WorkerOptions,
     cli,
     function_tool,
     llm,
@@ -105,12 +105,16 @@ class FastResponseAgent(Agent):
         logger.info("LLM node completed")
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
-        stt="assemblyai/universal-streaming",
-        tts="elevenlabs",
+        stt="deepgram/nova-3:en",
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
     )
 
     @session.on("metrics_collected")
@@ -121,4 +125,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

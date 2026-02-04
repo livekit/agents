@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
@@ -54,6 +54,12 @@ class FunctionToolCall(BaseModel):
     call_id: str
     extra: dict[str, Any] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
+
+
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
 
 
 class ChoiceDelta(BaseModel):
@@ -202,6 +208,10 @@ class LLMStream(ABC):
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
 
                 if self._conn_options.max_retry == 0 or not e.retryable:
@@ -384,3 +394,39 @@ class LLMStream(ABC):
                         yield chunk.delta.content
 
         return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                if result.fnc_call_out:
+                    ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+        )

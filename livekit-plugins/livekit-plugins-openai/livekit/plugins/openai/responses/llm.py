@@ -20,6 +20,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from openai.types import Reasoning
 from openai.types.responses import (
     ResponseCompletedEvent,
     ResponseCreatedEvent,
@@ -33,6 +34,8 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
+from ..models import _supports_reasoning_effort
+
 
 @dataclass
 class _LLMOptions:
@@ -42,6 +45,7 @@ class _LLMOptions:
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     store: NotGivenOr[bool]
+    reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
 
 
@@ -49,13 +53,14 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ResponsesModel = "gpt-4o-mini",
+        model: str | ResponsesModel = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -68,6 +73,13 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+
+        if not is_given(reasoning) and _supports_reasoning_effort(model):
+            if model in ["gpt-5.1", "gpt-5.2"]:
+                reasoning = Reasoning(effort="none")
+            else:
+                reasoning = Reasoning(effort="minimal")
+
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -76,6 +88,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             store=store,
             metadata=metadata,
+            reasoning=reasoning,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
@@ -118,6 +131,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
+
+        if is_given(self._opts.reasoning):
+            extra["reasoning"] = self._opts.reasoning
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
@@ -230,7 +246,12 @@ class LLMStream(llm.LLMStream):
             raise APIConnectionError(retryable=retryable) from e
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
-        raise APIStatusError(event.message, status_code=-1, retryable=False)
+        error_code = -1
+        try:
+            error_code = int(event.code) if event.code else -1
+        except ValueError:
+            pass
+        raise APIStatusError(event.message, status_code=error_code, retryable=False)
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id

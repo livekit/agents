@@ -80,19 +80,20 @@ class STT(stt.STT):
                     stt.SpeechData(
                         text=resp.text or "",
                         language=config.language or "",
-                        start_time=resp.segments[0].start
-                        if resp.segments and resp.segments[0]
-                        else 0,
-                        end_time=resp.segments[-1].end
-                        if resp.segments and resp.segments[-1]
-                        else 0,
+                        start_time=float(resp.segments[0].start)
+                        if resp.segments and resp.segments[0] and resp.segments[0].start
+                        else 0.0,
+                        end_time=float(resp.segments[-1].end)
+                        if resp.segments and resp.segments[-1] and resp.segments[-1].end
+                        else 0.0,
                         words=[
                             TimedString(
-                                text=segment.text,
-                                start_time=segment.start,
-                                end_time=segment.end,
+                                text=str(segment.text) if segment.text else "",
+                                start_time=float(segment.start) if segment.start else 0.0,
+                                end_time=float(segment.end) if segment.end else 0.0,
                             )
                             for segment in resp.segments
+                            if segment is not None
                         ]
                         if resp.segments
                         else None,

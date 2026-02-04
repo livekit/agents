@@ -3,8 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from livekit.agents import AgentSession, beta, llm
-from livekit.plugins import openai
+from livekit.agents import AgentSession, beta, inference, llm
 
 from .calendar_api import AvailableSlot, FakeCalendar
 from .frontdesk_agent import FrontDeskAgent, Userdata
@@ -13,7 +12,9 @@ TIMEZONE = "UTC"
 
 
 def _llm_model() -> llm.LLM:
-    return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
+    return inference.LLM(
+        model="openai/gpt-4.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+    )
 
 
 @pytest.mark.asyncio
@@ -123,5 +124,8 @@ async def test_no_availability() -> None:
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="must say that there is no availability")
+            .judge(
+                llm,
+                intent="must say that there is no availability, especially in the requested time range. optionally, it can offer to look at other times",
+            )
         )

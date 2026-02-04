@@ -20,9 +20,15 @@ from ._utils import create_access_token
 
 CartesiaModels = Literal[
     "cartesia",
-    "cartesia/sonic",
+    "cartesia/sonic-3",
     "cartesia/sonic-2",
     "cartesia/sonic-turbo",
+    "cartesia/sonic",
+]
+DeepgramModels = Literal[
+    "deepgram",
+    "deepgram/aura",
+    "deepgram/aura-2",
 ]
 ElevenlabsModels = Literal[
     "elevenlabs",
@@ -34,16 +40,18 @@ ElevenlabsModels = Literal[
 ]
 RimeModels = Literal[
     "rime",
-    "rime/mist",
-    "rime/mistv2",
     "rime/arcana",
+    "rime/mistv2",
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-1.5-max",
+    "inworld/inworld-tts-1.5-mini",
+    "inworld/inworld-tts-1-max",
     "inworld/inworld-tts-1",
 ]
 
-TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
+TTSModels = Union[CartesiaModels, DeepgramModels, ElevenlabsModels, RimeModels, InworldModels]
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -98,8 +106,13 @@ def _normalize_fallback(
 
 
 class CartesiaOptions(TypedDict, total=False):
-    duration: float  # max duration of audio in seconds
-    speed: Literal["slow", "normal", "fast"]  # default: not specified
+    emotion: str
+    speed: Literal["slow", "normal", "fast"]
+    volume: float
+
+
+class DeepgramOptions(TypedDict, total=False):
+    pass
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -152,6 +165,25 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: DeepgramModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -246,7 +278,12 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | ElevenlabsOptions | RimeOptions | InworldOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | ElevenlabsOptions
+            | RimeOptions
+            | InworldOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -449,7 +486,7 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        raise NotImplementedError("ChunkedStream is not implemented")
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

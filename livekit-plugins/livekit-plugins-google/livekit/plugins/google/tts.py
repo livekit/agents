@@ -318,7 +318,7 @@ class ChunkedStream(tts.ChunkedStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1) from e
+            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -427,7 +427,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1) from e
+            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
         finally:
             await input_gen.aclose()
 

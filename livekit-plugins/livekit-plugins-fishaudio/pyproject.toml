@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.3.10",
+    "livekit-agents[codecs]>=1.3.12",
     "fish-audio-sdk; python_version >= '3.10'",
 ]
 

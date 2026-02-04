@@ -26,11 +26,12 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     cli,
+    inference,
     metrics,
 )
 from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfTask
 from livekit.agents.llm.tool_context import ToolError
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -79,7 +80,10 @@ async def collect_digits(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
                 chat_ctx=agent.chat_ctx.copy(
-                    exclude_instructions=True, exclude_function_call=True, exclude_handoff=True
+                    exclude_instructions=True,
+                    exclude_function_call=True,
+                    exclude_handoff=True,
+                    exclude_config_update=True,
                 ),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "
@@ -637,9 +641,9 @@ async def bank_ivr_session(ctx: JobContext) -> None:
 
     session: AgentSession[SessionState] = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-4.1"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=cartesia.TTS(),
+        llm=inference.LLM("openai/gpt-4.1"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
         userdata=state,
     )

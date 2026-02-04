@@ -101,17 +101,23 @@ class DummyAgent(Agent):
 
 
 class DummyProviderTool(ProviderTool):
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self, id: str):
+        super().__init__(id=id)
 
 
 class MockToolset1(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_1")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_1, mock_tool_2]
 
 
 class MockToolset2(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_2")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_2, DummyProviderTool("provider1")]

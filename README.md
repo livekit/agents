@@ -59,7 +59,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 - Agent: An LLM-based application with defined instructions.
 - AgentSession: A container for agents that manages interactions with end users.
 - entrypoint: The starting point for an interactive session, similar to a request handler in a web server.
-- Worker: The main process that coordinates job scheduling and launches agents for user sessions.
+- AgentServer: The main process that coordinates job scheduling and launches agents for user sessions.
 
 ## Usage
 
@@ -70,14 +70,16 @@ Documentation on the framework and how to use it can be found [here](https://doc
 ```python
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
-    WorkerOptions,
     cli,
     function_tool,
+    inference,
 )
 from livekit.plugins import silero
+
 
 @function_tool
 async def lookup_weather(
@@ -89,19 +91,28 @@ async def lookup_weather(
     return {"weather": "sunny", "temperature": 70}
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        # any combination of STT, LLM, TTS, or realtime API can be used
+        # this example shows LiveKit Inference, a unified API to access different models via LiveKit Cloud
+        # to use model provider keys directly, replace with the following:
+        # from livekit.plugins import deepgram, openai, cartesia
+        # stt=deepgram.STT(model="nova-3"),
+        # llm=openai.LLM(model="gpt-4.1-mini"),
+        # tts=cartesia.TTS(model="sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+    )
 
     agent = Agent(
         instructions="You are a friendly voice assistant built by LiveKit.",
         tools=[lookup_weather],
-    )
-    session = AgentSession(
-        vad=silero.VAD.load(),
-        # any combination of STT, LLM, TTS, or realtime API can be used
-        stt="assemblyai/universal-streaming:en",
-        llm="openai/gpt-4.1-mini",
-        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
     )
 
     await session.start(agent=agent, room=ctx.room)
@@ -109,14 +120,14 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
 ```
 
 You'll need the following environment variables for this example:
 
-- DEEPGRAM_API_KEY
-- OPENAI_API_KEY
-- ELEVEN_API_KEY
+- LIVEKIT_URL
+- LIVEKIT_API_KEY
+- LIVEKIT_API_SECRET
 
 ### Multi-agent handoff
 
@@ -171,15 +182,14 @@ class StoryAgent(Agent):
         self.session.generate_reply()
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     userdata = StoryData()
     session = AgentSession[StoryData](
         vad=silero.VAD.load(),
         stt="deepgram/nova-3",
-        llm="openai/gpt-4o",
-        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+        llm="openai/gpt-4.1-mini",
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
     )
 

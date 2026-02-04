@@ -270,9 +270,9 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            buffered_text = []
+            buffered_text: list[str] = []
             speaking = False
-            remaining_vad_steps = False
+            remaining_vad_steps: int | None = None
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
@@ -288,7 +288,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws:
                         return
-                    raise APIStatusError("Gradium connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Gradium connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Gradium message type: %s", msg.type)
@@ -381,7 +385,7 @@ class SpeechStream(stt.SpeechStream):
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
-                tasks_group: asyncio.Future[None] = asyncio.gather(*tasks)
+                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
                         [tasks_group, wait_reconnect_task],

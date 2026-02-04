@@ -504,8 +504,9 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}",
+                        message="Sarvam TTS API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()

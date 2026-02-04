@@ -577,6 +577,7 @@ class RealtimeSessionBeta(
                 exclude_instructions=True,
                 exclude_empty_message=True,
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -1169,6 +1170,7 @@ class RealtimeSessionBeta(
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
@@ -1468,7 +1470,7 @@ class RealtimeSessionBeta(
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            tokens_per_second=usage.get("output_tokens", 0) / duration,
+            tokens_per_second=usage.get("output_tokens", 0) / duration if duration > 0 else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),

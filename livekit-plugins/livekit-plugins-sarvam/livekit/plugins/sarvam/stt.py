@@ -318,8 +318,9 @@ class STT(stt.STT):
                     error_text = await res.text()
                     self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam API Error: {error_text}",
+                        message="Sarvam API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
