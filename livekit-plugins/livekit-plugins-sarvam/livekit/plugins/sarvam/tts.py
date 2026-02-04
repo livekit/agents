@@ -392,8 +392,8 @@ class TTS(tts.TTS):
         pitch: float | None = None,
         pace: float | None = None,
         loudness: float | None = None,
-        enable_preprocessing: bool | None = False,
-        send_completion_event: bool | None = True,
+        enable_preprocessing: bool | None = None,
+        send_completion_event: bool | None = None,
     ) -> None:
         """Update TTS options with validation."""
         if model is not None:
