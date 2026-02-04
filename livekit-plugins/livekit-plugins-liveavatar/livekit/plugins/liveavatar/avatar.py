@@ -174,16 +174,22 @@ class AvatarSession:
                     interrupted=True,
                 )
                 self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
-                self._playback_position = 0.0
-                self._avatar_speaking = False
 
-        # Capture both values at call time to avoid race conditions
+        # Capture values and reset state synchronously to prevent race conditions
+        # with _on_server_event which also checks _avatar_speaking
+        avatar_speaking = self._avatar_speaking
+        playback_position = self._playback_position
+
+        if avatar_speaking:
+            self._avatar_speaking = False
+            self._playback_position = 0.0
+        self._audio_streaming = False
+
         clear_buffer_task = asyncio.create_task(
-            _handle_clear_buffer(self._avatar_speaking, self._playback_position)
+            _handle_clear_buffer(avatar_speaking, playback_position)
         )
         self._tasks.add(clear_buffer_task)
         clear_buffer_task.add_done_callback(self._tasks.discard)
-        self._audio_streaming = False
 
     def _on_server_event(self, event: dict) -> None:
         """Process incoming server events from LiveAvatar."""
