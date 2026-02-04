@@ -427,9 +427,12 @@ class Agent:
         return self._activity
 
     def _get_state(self) -> _AgentState:
-        # TODO: exclude_config_update=True
         chat_ctx: dict[str, Any] = self.chat_ctx.to_dict(
-            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+            exclude_image=True,
+            exclude_audio=True,
+            exclude_function_call=False,
+            exclude_timestamp=False,
+            exclude_config_update=True,
         )
 
         init_kwargs: dict[str, Any] = {}
@@ -912,18 +915,17 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._caller_task = current_task
         speech_handle = _SpeechHandleContextVar.get(None)
 
-        # TODO: make it re-entrant
         if self.__started:
             if not self.is_rehydrated() or self._old_agent is None:
                 raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
-            else:
-                try:
-                    return await asyncio.shield(self.__fut)
 
-                finally:
-                    await self.__switch_to_old_agent(
-                        old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
-                    )
+            # allow re-entrant if it's rehydrated
+            try:
+                return await asyncio.shield(self.__fut)
+            finally:
+                await self.__switch_to_old_agent(
+                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+                )
 
         self.__started = True
 

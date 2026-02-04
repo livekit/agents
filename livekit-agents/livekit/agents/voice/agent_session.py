@@ -882,7 +882,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def get_state(self) -> _AgentSessionState:
         history = self._chat_ctx.to_dict(
-            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+            exclude_image=True,
+            exclude_audio=True,
+            exclude_function_call=False,
+            exclude_timestamp=False,
+            exclude_config_update=True,
         )
         assert self._agent is not None, "AgentSession is not started"
         return _AgentSessionState(
