@@ -71,6 +71,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     extra_instructions=(
                         "Let the caller know they can choose one of three Horizon Wireless services: "
@@ -109,6 +110,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     ask_for_confirmation=True,
                     extra_instructions=(

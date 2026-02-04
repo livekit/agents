@@ -558,7 +558,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
         chat_ctx = chat_ctx.copy(
-            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
         )
         async with self._session_lock:
             if not self._active_session:
@@ -788,6 +791,7 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_handoff=True,
                             exclude_instructions=True,
                             exclude_empty_message=True,
+                            exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]

@@ -80,7 +80,10 @@ async def collect_digits(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
                 chat_ctx=agent.chat_ctx.copy(
-                    exclude_instructions=True, exclude_function_call=True, exclude_handoff=True
+                    exclude_instructions=True,
+                    exclude_function_call=True,
+                    exclude_handoff=True,
+                    exclude_config_update=True,
                 ),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "

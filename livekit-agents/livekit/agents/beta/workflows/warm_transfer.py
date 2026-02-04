@@ -135,6 +135,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 exclude_instructions=True,
                 exclude_function_call=True,
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             for msg in context_copy.items:
                 if msg.type != "message":
