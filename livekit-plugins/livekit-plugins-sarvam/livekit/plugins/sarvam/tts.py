@@ -220,7 +220,7 @@ class SarvamTTSOptions:
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
     api_key: str  # Sarvam.ai API key
     text: str | None = None  # Will be provided by the stream adapter
-    speaker: SarvamTTSSpeakers | str = "anushka"  # Default speaker compatible with v2
+    speaker: SarvamTTSSpeakers | str | None = None
     pitch: float = 0.0
     pace: float = 1.0
     loudness: float = 1.0
@@ -260,7 +260,7 @@ class TTS(tts.TTS):
         *,
         target_language_code: SarvamTTSLanguages | str,
         model: SarvamTTSModels | str = "bulbul:v2",
-        speaker: SarvamTTSSpeakers | str = "anushka",
+        speaker: SarvamTTSSpeakers | str | None = None,
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
         pitch: float = 0.0,
@@ -290,8 +290,8 @@ class TTS(tts.TTS):
             raise ValueError("Target language code is required and cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
-        if not speaker or not speaker.strip():
-            raise ValueError("Speaker is required and cannot be empty")
+        if speaker is None:
+            speaker = "shubh" if model == "bulbul:v3-beta" else "anushka"
 
         # Validate parameter ranges
         if not -20.0 <= pitch <= 20.0:
