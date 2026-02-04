@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import os
 import uuid
 from collections.abc import Iterator
@@ -68,11 +69,14 @@ class AvatarSession:
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._tasks: set[asyncio.Task[Any]] = set()
-        self._main_atask: asyncio.Task | None
+        self._main_atask: asyncio.Task | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
         self._msg_ch = utils.aio.Chan[dict]()
-        self._audio_playing = False
+
+        # State tracking: separate "streaming to avatar" from "avatar is speaking"
+        self._audio_streaming = False  # True while sending audio frames to avatar
+        self._avatar_speaking = False  # True while avatar is actually speaking (from server events)
         self._playback_position = 0.0
 
     async def start(
@@ -141,10 +145,11 @@ class AvatarSession:
 
         @self._agent_session.on("agent_state_changed")
         def on_agent_state_changed(ev: Any) -> None:
-            if ev.old_state == "speaking" and ev.new_state == "listening":
-                self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
+            # Send listening state changes for avatar animations
+            # Note: agent.speak_end is now sent on AudioSegmentEnd, not here
+            if ev.new_state == "listening" and ev.old_state != "listening":
                 self.send_event({"type": "agent.start_listening", "event_id": str(uuid.uuid4())})
-            if ev.new_state == "idle":
+            elif ev.new_state == "idle":
                 self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
         @self._agent_session.on("close")
@@ -159,20 +164,48 @@ class AvatarSession:
         self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
 
     def _on_clear_buffer(self) -> None:
+        """Handle buffer clear (interruption) using actual avatar speaking state."""
+
         @utils.log_exceptions(logger=logger)
-        async def _handle_clear_buffer(audio_playing: bool) -> None:
-            if audio_playing:
+        async def _handle_clear_buffer(avatar_speaking: bool) -> None:
+            if avatar_speaking:
                 self._audio_buffer.notify_playback_finished(
                     playback_position=self._playback_position,
                     interrupted=True,
                 )
                 self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
                 self._playback_position = 0.0
+                self._avatar_speaking = False
 
-        clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
+        # Use _avatar_speaking (from server events) not _audio_streaming (local state)
+        clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._avatar_speaking))
         self._tasks.add(clear_buffer_task)
         clear_buffer_task.add_done_callback(self._tasks.discard)
-        self._audio_playing = False
+        self._audio_streaming = False
+
+    def _on_server_event(self, event: dict) -> None:
+        """Process incoming server events from LiveAvatar."""
+        event_type = event.get("type")
+
+        if event_type == "agent.speak_started":
+            self._avatar_speaking = True
+            logger.debug(f"Avatar started speaking (event_id: {event.get('event_id')})")
+
+        elif event_type == "agent.speak_ended":
+            if self._avatar_speaking:
+                self._avatar_speaking = False
+                self._audio_buffer.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=False,
+                )
+                logger.debug(
+                    f"Avatar finished speaking (event_id: {event.get('event_id')}, "
+                    f"position: {self._playback_position:.3f}s)"
+                )
+                self._playback_position = 0.0
+
+        elif event_type == "session.state_updated":
+            logger.debug(f"Session state: {event.get('state')}")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._audio_resampler:
@@ -205,8 +238,8 @@ class AvatarSession:
         async def _forward_audio() -> None:
             async for audio_frame in self._audio_buffer:
                 if isinstance(audio_frame, rtc.AudioFrame):
-                    if not self._audio_playing:
-                        self._audio_playing = True
+                    if not self._audio_streaming:
+                        self._audio_streaming = True
                     for resampled_frame in self._resample_audio(audio_frame):
                         data = resampled_frame.data.tobytes()
                         encoded_audio = base64.b64encode(data).decode("utf-8")
@@ -219,14 +252,14 @@ class AvatarSession:
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
+
                 elif isinstance(audio_frame, AudioSegmentEnd):
-                    if self._audio_playing:
-                        self._audio_playing = False
-                        self._audio_buffer.notify_playback_finished(
-                            playback_position=self._playback_position,
-                            interrupted=False,
-                        )
-                        self._playback_position = 0.0
+                    if self._audio_streaming:
+                        self._audio_streaming = False
+                        # Signal end of audio stream to avatar
+                        self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
+                        # Note: Do NOT call notify_playback_finished here
+                        # Wait for agent.speak_ended server event instead
 
         async def _keep_alive_task() -> None:
             try:
@@ -259,7 +292,13 @@ class AvatarSession:
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
-                if msg.type in (
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        event = json.loads(msg.data)
+                        self._on_server_event(event)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse server event: {msg.data}")
+                elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
