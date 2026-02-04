@@ -167,18 +167,20 @@ class AvatarSession:
         """Handle buffer clear (interruption) using actual avatar speaking state."""
 
         @utils.log_exceptions(logger=logger)
-        async def _handle_clear_buffer(avatar_speaking: bool) -> None:
+        async def _handle_clear_buffer(avatar_speaking: bool, playback_position: float) -> None:
             if avatar_speaking:
                 self._audio_buffer.notify_playback_finished(
-                    playback_position=self._playback_position,
+                    playback_position=playback_position,
                     interrupted=True,
                 )
                 self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
                 self._playback_position = 0.0
                 self._avatar_speaking = False
 
-        # Use _avatar_speaking (from server events) not _audio_streaming (local state)
-        clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._avatar_speaking))
+        # Capture both values at call time to avoid race conditions
+        clear_buffer_task = asyncio.create_task(
+            _handle_clear_buffer(self._avatar_speaking, self._playback_position)
+        )
         self._tasks.add(clear_buffer_task)
         clear_buffer_task.add_done_callback(self._tasks.discard)
         self._audio_streaming = False
