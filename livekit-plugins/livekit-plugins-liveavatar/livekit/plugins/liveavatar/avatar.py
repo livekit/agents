@@ -623,16 +623,8 @@ class AvatarSession:
                     logger.warning("WebSocket receive timeout - connection may be dead")
                     raise APIConnectionError("LiveAvatar WebSocket receive timeout") from None
 
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        event = json.loads(msg.data)
-                        await self._on_server_event(event)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse server event: {msg.data}")
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    self._close_event.set()
-                    raise APIConnectionError(f"WebSocket error: {ws_conn.exception()}")
-                elif msg.type in (
+                # Handle connection close/error first (early exit pattern)
+                if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
@@ -641,6 +633,19 @@ class AvatarSession:
                         return
                     self._close_event.set()
                     raise APIConnectionError(message="LiveAvatar connection closed unexpectedly.")
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    self._close_event.set()
+                    raise APIConnectionError(f"WebSocket error: {ws_conn.exception()}")
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+
+                try:
+                    event = json.loads(msg.data)
+                    await self._on_server_event(event)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse server event: {msg.data}")
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
