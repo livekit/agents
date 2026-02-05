@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
+    from httpx import Auth
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
@@ -190,10 +191,12 @@ class MCPServerHTTP(MCPServer):
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
+        auth: Auth | None = None,
     ) -> None:
         super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
         self.url = url
         self.headers = headers
+        self.auth = auth
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
         self._allowed_tools = set(allowed_tools) if allowed_tools else None
@@ -239,6 +242,7 @@ class MCPServerHTTP(MCPServer):
                 headers=self.headers,
                 timeout=timedelta(seconds=self._timeout),
                 sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
+                auth=self.auth,
             )
         else:
             return sse_client(  # type: ignore[no-any-return]
@@ -246,6 +250,7 @@ class MCPServerHTTP(MCPServer):
                 headers=self.headers,
                 timeout=self._timeout,
                 sse_read_timeout=self._sse_read_timeout,
+                auth=self.auth,
             )
 
     async def list_tools(self) -> list[MCPTool]:
