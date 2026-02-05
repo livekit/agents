@@ -798,7 +798,10 @@ class RealtimeSession(
             reconnecting = True
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {"User-Agent": "LiveKit Agents"}
+        headers = {
+            "User-Agent": "LiveKit Agents",
+            "OpenAI-Beta": "realtime=v1",
+        }
         if self._realtime_model._opts.is_azure:
             if self._realtime_model._opts.entra_token:
                 headers["Authorization"] = f"Bearer {self._realtime_model._opts.entra_token}"
@@ -844,6 +847,26 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
+                    # Fix session.update parameters for API compatibility
+                    if msg.get("type") == "session.update" and "session" in msg:
+                        # Remove unsupported fields from session object
+                        msg["session"].pop("type", None)
+                        msg["session"].pop("audio", None)
+                        msg["session"].pop("max_output_tokens", None)
+                        # Fix modalities: output_text -> text, output_audio -> audio
+                        if "output_modalities" in msg["session"]:
+                            msg["session"]["modalities"] = [
+                                m.replace("output_", "") for m in msg["session"].pop("output_modalities")
+                            ]
+
+                    # Fix conversation.item.create parameters for API compatibility
+                    if msg.get("type") == "conversation.item.create" and "item" in msg:
+                        item = msg["item"]
+                        if "content" in item and isinstance(item["content"], list):
+                            for content_item in item["content"]:
+                                if isinstance(content_item, dict) and content_item.get("type") == "output_text":
+                                    content_item["type"] = "text"
+
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
@@ -874,7 +897,11 @@ class RealtimeSession(
                     # this will trigger a reconnection
                     raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    event = json.loads(msg.data)
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    event = json.loads(msg.data.decode("utf-8"))
+                else:
                     continue
 
                 event = json.loads(msg.data)
@@ -911,6 +938,15 @@ class RealtimeSession(
                         )
                     elif event["type"] == "conversation.item.added":
                         self._handle_conversion_item_added(ConversationItemAdded.construct(**event))
+                    elif event["type"] == "conversation.item.created":
+                        self._handle_conversion_item_added(
+                            ConversationItemAdded.construct(
+                                type="conversation.item.added",
+                                event_id=event.get("event_id"),
+                                previous_item_id=event.get("previous_item_id"),
+                                item=event.get("item"),
+                            )
+                        )
                     elif event["type"] == "conversation.item.deleted":
                         self._handle_conversion_item_deleted(
                             ConversationItemDeletedEvent.construct(**event)
@@ -928,17 +964,17 @@ class RealtimeSession(
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
-                    elif event["type"] == "response.output_text.delta":
+                    elif event["type"] in ("response.output_text.delta", "response.text.delta"):
                         self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
-                    elif event["type"] == "response.output_text.done":
+                    elif event["type"] in ("response.output_text.done", "response.text.done"):
                         self._handle_response_text_done(ResponseTextDoneEvent.construct(**event))
-                    elif event["type"] == "response.output_audio_transcript.delta":
+                    elif event["type"] in ("response.output_audio_transcript.delta", "response.audio_transcript.delta"):
                         self._handle_response_audio_transcript_delta(event)
-                    elif event["type"] == "response.output_audio.delta":
-                        self._handle_response_audio_delta(
-                            ResponseAudioDeltaEvent.construct(**event)
-                        )
-                    elif event["type"] == "response.output_audio.done":
+                    elif event["type"] in ("response.output_audio.delta", "response.audio.delta"):
+                        self._handle_response_audio_delta(ResponseAudioDeltaEvent.construct(**event))
+                    elif event["type"] in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
+                        self._handle_response_audio_transcript_done(ResponseAudioTranscriptDoneEvent.construct(**event))
+                    elif event["type"] in ("response.output_audio.done", "response.audio.done"):
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
                         self._handle_response_output_item_done(
@@ -1579,14 +1615,17 @@ class RealtimeSession(
             item_generation.modalities.set_result(["audio", "text"])
 
         data = base64.b64decode(event.delta)
-        item_generation.audio_ch.send_nowait(
-            rtc.AudioFrame(
-                data=data,
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=len(data) // 2,
+        try:
+            item_generation.audio_ch.send_nowait(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    samples_per_channel=len(data) // 2,
+                )
             )
-        )
+        except utils.aio.ChanClosed:
+            pass
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1739,10 +1778,11 @@ class RealtimeSession(
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
             return
+        if event.error.code == "input_audio_buffer_commit_empty":
+            return
 
-        logger.error(
-            "OpenAI Realtime API returned an error",
-            extra={"error": event.error},
+        logger.warning(
+            f"OpenAI Realtime API error: {event.error.message} (code={event.error.code})"
         )
         self._emit_error(
             APIError(
