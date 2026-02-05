@@ -75,6 +75,7 @@ class AvatarSession:
         self._msg_ch = utils.aio.Chan[dict]()
         self._audio_playing = False
         self._avatar_speaking = False
+        self._avatar_interrupted = False
         self._playback_position = 0.0
 
     async def start(
@@ -273,13 +274,16 @@ class AvatarSession:
                             message="LiveAvatar connection closed unexpectedly."
                         )
                 event = json.loads(msg.data)
+                if event["type"] == "agent.speak_interrupted":
+                    self._avatar_interrupted = True
                 if event["type"] == "agent.speak_ended":
                     self._avatar_speaking = False
-                    self._audio_buffer.notify_playback_finished(
-                        playback_position=self._playback_position,
-                        interrupted=False,
-                    )
-                    self._playback_position = 0.0
+                    if not self._avatar_interrupted:
+                        self._audio_buffer.notify_playback_finished(
+                            playback_position=self._playback_position,
+                            interrupted=False,
+                        )
+                        self._playback_position = 0.0
                 if event["type"] == "agent.speak_started":
                     self._avatar_speaking = True
 
