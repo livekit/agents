@@ -904,8 +904,6 @@ class RealtimeSession(
                 else:
                     continue
 
-                event = json.loads(msg.data)
-
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
                 self.emit("openai_server_event_received", event)
@@ -973,7 +971,9 @@ class RealtimeSession(
                     elif event["type"] in ("response.output_audio.delta", "response.audio.delta"):
                         self._handle_response_audio_delta(ResponseAudioDeltaEvent.construct(**event))
                     elif event["type"] in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
-                        self._handle_response_audio_transcript_done(ResponseAudioTranscriptDoneEvent.construct(**event))
+                        self._handle_response_output_audio_transcript_done(
+                            ResponseOutputAudioTranscriptDoneEvent.construct(**event)
+                        )
                     elif event["type"] in ("response.output_audio.done", "response.audio.done"):
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
