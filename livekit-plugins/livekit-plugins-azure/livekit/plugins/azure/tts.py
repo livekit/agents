@@ -297,6 +297,7 @@ class TTS(tts.TTS):
         def _sync_create_and_warmup() -> speechsdk.SpeechSynthesizer:
             import threading
             import time
+            
             logger.info("opts for synthesizer creation", extra=vars(self._opts))
             # Build WebSocket v2 endpoint
             if self._opts.speech_endpoint:
