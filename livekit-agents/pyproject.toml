@@ -111,7 +111,7 @@ ultravox = ["livekit-plugins-ultravox>=1.3.12"]
 upliftai = ["livekit-plugins-upliftai>=1.3.12"]
 gradium = ["livekit-plugins-gradium>=1.3.12"]
 xai = ["livekit-plugins-xai>=1.3.12"]
-
+vosk = ["livekit-plugins-vosk>=1.3.12"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

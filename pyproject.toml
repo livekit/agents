@@ -56,6 +56,7 @@ livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
+livekit-plugins-vosk = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
