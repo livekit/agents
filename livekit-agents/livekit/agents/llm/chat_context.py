@@ -558,17 +558,15 @@ class ChatContext:
         keep_last_turns: int = 2,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
-        for item in self.items:
-            if item.type != "message":
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
-            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
                 continue
 
-            text = (item.text_content or "").strip()
+            text = (msg.text_content or "").strip()
             if text:
-                to_summarize.append(item)
+                to_summarize.append(msg)
         if not to_summarize:
             return self
 

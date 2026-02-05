@@ -266,18 +266,15 @@ class EOUModelBase(ABC):
         timeout: float | None = 3,
     ) -> float:
         messages: list[dict[str, Any]] = []
-        for item in chat_ctx.items:
-            if item.type != "message":
+        for msg in chat_ctx.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
 
-            if item.role not in ("user", "assistant"):
-                continue
-
-            text_content = item.text_content
+            text_content = msg.text_content
             if text_content:
                 messages.append(
                     {
-                        "role": item.role,
+                        "role": msg.role,
                         "content": text_content,
                     }
                 )
