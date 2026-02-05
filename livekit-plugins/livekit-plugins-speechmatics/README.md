@@ -56,7 +56,7 @@ Usage:
 
 ```python
 from livekit.agents import AgentSession
-from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import speechmatics, silero
 
 agent = AgentSession(
