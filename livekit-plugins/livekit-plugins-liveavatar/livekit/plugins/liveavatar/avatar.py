@@ -284,8 +284,10 @@ class AvatarSession:
                             interrupted=False,
                         )
                         self._playback_position = 0.0
+                        self._audio_playing = False
                 if event["type"] == "agent.speak_started":
                     self._avatar_speaking = True
+                    self._avatar_interrupted = False
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
