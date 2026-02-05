@@ -66,7 +66,7 @@ agent = AgentSession(
         speaker_passive_format="[Speaker {speaker_id} *PASSIVE*] {text}",
     ),
     vad=silero.VAD.load(),
-    turn_detection=EnglishModel(),
+    turn_detection=MultilingualModel(),
     min_endpointing_delay=0.3,
     max_endpointing_delay=5.0,
     ...
