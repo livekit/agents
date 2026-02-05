@@ -420,6 +420,14 @@ class TTS(tts.TTS):
         """
         import asyncio
 
+        # Check if there's a running event loop - asyncio.create_task requires one
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running event loop - skip prewarming, pool will create on-demand
+            logger.debug("no running event loop, skipping prewarm (will create on-demand)")
+            return
+
         async def _prewarm_multiple() -> None:
             """Create and warm up multiple synthesizers sequentially with jittered expiry times."""
             import random
