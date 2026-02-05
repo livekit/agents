@@ -169,6 +169,64 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "sophia",
         ],
     },
+    "bulbul:v3": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
 }
 
 
@@ -226,7 +284,7 @@ class SarvamTTSOptions:
     loudness: float = 1.0
     speech_sample_rate: int = 22050  # Default 22050 Hz
     enable_preprocessing: bool = False
-    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2 as it has more recent speakers
+    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
@@ -291,7 +349,11 @@ class TTS(tts.TTS):
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
         if speaker is None:
-            speaker = "shubh" if model == "bulbul:v3-beta" else "anushka"
+            # speaker = "shubh" 
+            if model == "bulbul:v3-beta" or model == "bulbul:v3":
+                speaker = "shubh"
+            else:
+                speaker = "anushka"
 
         # Validate parameter ranges
         if not -20.0 <= pitch <= 20.0:
@@ -482,7 +544,7 @@ class ChunkedStream(tts.ChunkedStream):
             "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
         }
-        # Only include pitch and loudness for v2 model (not supported in v3-beta)
+        # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
@@ -762,7 +824,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 return True
 
-            logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
+            #logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)
@@ -774,7 +836,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             else:
                 logger.debug(f"Unknown message type: {msg_type}", extra=self._build_log_context())
                 return True
-
+        
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
@@ -788,6 +850,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
+
+        logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
