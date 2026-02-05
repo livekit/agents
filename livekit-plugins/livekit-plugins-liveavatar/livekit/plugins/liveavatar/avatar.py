@@ -275,6 +275,11 @@ class AvatarSession:
                 event = json.loads(msg.data)
                 if event["type"] == "agent.speak_ended":
                     self._avatar_speaking = False
+                    self._audio_buffer.notify_playback_finished(
+                        playback_position=self._playback_position,
+                        interrupted=False,
+                    )
+                    self._playback_position = 0.0
                 if event["type"] == "agent.speak_started":
                     self._avatar_speaking = True
 
