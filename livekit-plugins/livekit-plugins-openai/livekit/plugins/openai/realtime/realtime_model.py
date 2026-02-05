@@ -746,6 +746,16 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
+                    if ev.get("type") == "session.update" and "session" in ev:
+                        ev["session"].pop("type", None)
+                        ev["session"].pop("audio", None)
+                        ev["session"].pop("max_output_tokens", None)
+                        if "output_modalities" in ev["session"]:
+                            ev["session"]["modalities"] = [
+                                m.replace("output_", "")
+                                for m in ev["session"].pop("output_modalities")
+                            ]
+
                     self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
             except Exception as e:
@@ -856,7 +866,8 @@ class RealtimeSession(
                         # Fix modalities: output_text -> text, output_audio -> audio
                         if "output_modalities" in msg["session"]:
                             msg["session"]["modalities"] = [
-                                m.replace("output_", "") for m in msg["session"].pop("output_modalities")
+                                m.replace("output_", "")
+                                for m in msg["session"].pop("output_modalities")
                             ]
 
                     # Fix conversation.item.create parameters for API compatibility
@@ -864,7 +875,10 @@ class RealtimeSession(
                         item = msg["item"]
                         if "content" in item and isinstance(item["content"], list):
                             for content_item in item["content"]:
-                                if isinstance(content_item, dict) and content_item.get("type") == "output_text":
+                                if (
+                                    isinstance(content_item, dict)
+                                    and content_item.get("type") == "output_text"
+                                ):
                                     content_item["type"] = "text"
 
                     self.emit("openai_client_event_queued", msg)
@@ -911,7 +925,10 @@ class RealtimeSession(
                 try:
                     if lk_oai_debug:
                         event_copy = event.copy()
-                        if event_copy["type"] == "response.output_audio.delta":
+                        if event_copy["type"] in (
+                            "response.output_audio.delta",
+                            "response.audio.delta",
+                        ):
                             event_copy = {**event_copy, "delta": "..."}
 
                         logger.debug(f"<<< {event_copy}")
@@ -966,10 +983,15 @@ class RealtimeSession(
                         self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
                     elif event["type"] in ("response.output_text.done", "response.text.done"):
                         self._handle_response_text_done(ResponseTextDoneEvent.construct(**event))
-                    elif event["type"] in ("response.output_audio_transcript.delta", "response.audio_transcript.delta"):
+                    elif event["type"] in (
+                        "response.output_audio_transcript.delta",
+                        "response.audio_transcript.delta",
+                    ):
                         self._handle_response_audio_transcript_delta(event)
                     elif event["type"] in ("response.output_audio.delta", "response.audio.delta"):
-                        self._handle_response_audio_delta(ResponseAudioDeltaEvent.construct(**event))
+                        self._handle_response_audio_delta(
+                            ResponseAudioDeltaEvent.construct(**event)
+                        )
                     elif event["type"] in ("response.output_audio.done", "response.audio.done"):
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
@@ -983,7 +1005,7 @@ class RealtimeSession(
                     elif lk_oai_debug:
                         logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
                 except Exception:
-                    if event["type"] == "response.output_audio.delta":
+                    if event["type"] in ("response.output_audio.delta", "response.audio.delta"):
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"event": event})
 
