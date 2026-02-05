@@ -58,13 +58,6 @@ class AudioConfig(NamedTuple):
     probability: float = 1.0
 
 
-# The queue size is set to 400ms, which determines how much audio Rust will buffer.
-# We intentionally keep this small within BackgroundAudio because calling
-# AudioSource.clear_queue() would abruptly cut off ambient sounds.
-# Instead, we remove the sound from the mixer, and it will get removed 400ms later.
-_AUDIO_SOURCE_BUFFER_MS = 400
-
-
 class BackgroundAudioPlayer:
     def __init__(
         self,
@@ -74,6 +67,8 @@ class BackgroundAudioPlayer:
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
         stream_timeout_ms: int = 200,
+        audio_source_buffer_ms: int = 400,
+        disable_ambient_sound_while_thinking: bool = False,
     ) -> None:
         """
         Initializes the BackgroundAudio component with optional ambient and thinking sounds.
@@ -96,13 +91,21 @@ class BackgroundAudioPlayer:
             thinking_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of AudioConfig objects (with volume and probability settings).
+            audio_source_buffer_ms (int, optional):
+                The buffer size for the audio source in milliseconds. This determines how much audio is buffered.
+                The queue size is set to 400ms, which determines how much audio Rust will buffer.
+                We intentionally keep this small within BackgroundAudio because calling
+                AudioSource.clear_queue() would abruptly cut off ambient sounds.
+                Instead, we remove the sound from the mixer, and it will get removed 400ms later.
+
+
 
         """  # noqa: E501
 
         self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
-
-        self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
+        self._disable_ambient_sound_while_thinking = disable_ambient_sound_while_thinking
+        self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=audio_source_buffer_ms)
         self._audio_mixer = rtc.AudioMixer(
             48000, 1, blocksize=4800, capacity=1, stream_timeout_ms=stream_timeout_ms
         )
@@ -269,7 +272,10 @@ class BackgroundAudioPlayer:
 
             if self._ambient_sound:
                 normalized = self._normalize_sound_source(
-                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
+                    cast(
+                        Union[AudioSource, AudioConfig, list[AudioConfig]],
+                        self._ambient_sound,
+                    )
                 )
                 if normalized:
                     sound_source, volume = normalized
@@ -316,17 +322,18 @@ class BackgroundAudioPlayer:
         self._republish_task = asyncio.create_task(self._republish_track_task())
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
+        if self._disable_ambient_sound_while_thinking:
+            if ev.old_state == "thinking" and self._ambient_sound:
+                self._ambient_handle = self.play(self._ambient_sound, loop=True)
         if not self._thinking_sound:
             return
 
         if ev.new_state == "thinking":
             if self._thinking_handle and not self._thinking_handle.done():
                 return
-
-            assert self._thinking_sound is not None
-            self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
-            )
+            if self._disable_ambient_sound_while_thinking and self._ambient_handle:
+                self._ambient_handle.stop()
+            self._thinking_handle = self.play(self._thinking_sound)
 
         elif self._thinking_handle:
             self._thinking_handle.stop()
