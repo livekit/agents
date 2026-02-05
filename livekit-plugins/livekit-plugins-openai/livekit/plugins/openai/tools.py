@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 from livekit.agents import ProviderTool
@@ -11,7 +11,7 @@ class OpenAITool(ProviderTool, ABC):
     def to_dict(self) -> dict[str, Any]: ...
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class WebSearch(OpenAITool):
     """Enable web search tool to access up-to-date information from the internet"""
 
@@ -20,7 +20,7 @@ class WebSearch(OpenAITool):
     user_location: Optional[responses.web_search_tool.UserLocation] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "openai_web_search")
+        super().__init__(id="openai_web_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -35,18 +35,17 @@ class WebSearch(OpenAITool):
         return result
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class FileSearch(OpenAITool):
     """Enable file search tool to search uploaded document collections"""
 
-    vector_store_ids: list[str] | tuple[str, ...] = ()
+    vector_store_ids: list[str] = field(default_factory=list)
     filters: Optional[responses.file_search_tool.Filters] = None
     max_num_results: Optional[int] = None
     ranking_options: Optional[responses.file_search_tool.RankingOptions] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "openai_file_search")
-        object.__setattr__(self, "vector_store_ids", tuple(self.vector_store_ids))
+        super().__init__(id="openai_file_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -65,14 +64,14 @@ class FileSearch(OpenAITool):
         return result
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class CodeInterpreter(OpenAITool):
     """Enable the code interpreter tool to write and execute Python code in a sandboxed environment"""
 
     container: Optional[str | dict[str, Any]] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "openai_code_interpreter")
+        super().__init__(id="openai_code_interpreter")
 
     def to_dict(self) -> dict[str, Any]:
         result = {"type": "code_interpreter", "container": self.container}

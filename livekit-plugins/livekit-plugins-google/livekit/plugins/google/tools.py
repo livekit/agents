@@ -11,16 +11,14 @@ class GeminiTool(llm.ProviderTool, ABC):
     def to_tool_config(self) -> types.Tool: ...
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class GoogleSearch(GeminiTool):
-    exclude_domains: Optional[list[str] | tuple[str, ...]] = None
+    exclude_domains: Optional[list[str]] = None
     blocking_confidence: Optional[types.PhishBlockThreshold] = None
     time_range_filter: Optional[types.Interval] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "gemini_google_search")
-        if self.exclude_domains is not None:
-            object.__setattr__(self, "exclude_domains", tuple(self.exclude_domains))
+        super().__init__(id="gemini_google_search")
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
@@ -32,13 +30,13 @@ class GoogleSearch(GeminiTool):
         )
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class GoogleMaps(GeminiTool):
     auth_config: Optional[types.AuthConfig] = None
     enable_widget: Optional[bool] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "gemini_google_maps")
+        super().__init__(id="gemini_google_maps")
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
@@ -49,10 +47,9 @@ class GoogleMaps(GeminiTool):
         )
 
 
-@dataclass(frozen=True)
 class URLContext(GeminiTool):
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "gemini_url_context")
+    def __init__(self) -> None:
+        super().__init__(id="gemini_url_context")
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
@@ -60,15 +57,14 @@ class URLContext(GeminiTool):
         )
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class FileSearch(GeminiTool):
-    file_search_store_names: list[str] | tuple[str, ...]
+    file_search_store_names: list[str]
     top_k: Optional[int] = None
     metadata_filter: Optional[str] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "gemini_file_search")
-        object.__setattr__(self, "file_search_store_names", tuple(self.file_search_store_names))
+        super().__init__(id="gemini_file_search")
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
@@ -80,10 +76,9 @@ class FileSearch(GeminiTool):
         )
 
 
-@dataclass(frozen=True)
 class ToolCodeExecution(GeminiTool):
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_id", "gemini_code_execution")
+    def __init__(self) -> None:
+        super().__init__(id="gemini_code_execution")
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(

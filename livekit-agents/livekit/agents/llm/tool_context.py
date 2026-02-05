@@ -45,6 +45,14 @@ class ProviderTool(Tool):
     def id(self) -> str:
         return self._id
 
+    def __eq__(self, other: object) -> bool:
+        if type(self) is not type(other):
+            return False
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
 
 class Toolset(ABC):
     @dataclass
