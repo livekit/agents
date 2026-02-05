@@ -18,7 +18,7 @@ from livekit.agents import (
 from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.io import TimedString
-from spitch import NOT_GIVEN as SDK_NOT_GIVEN, AsyncSpitch
+from spitch import AsyncSpitch
 
 
 @dataclass
@@ -71,7 +71,7 @@ class STT(stt.STT):
                 language=config.language,  # type: ignore
                 content=data,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
-                timestamp=True if "mansa" in model else SDK_NOT_GIVEN,
+                timestamp="word" if "mansa" in model else "none",
             )
 
             return stt.SpeechEvent(
