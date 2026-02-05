@@ -308,7 +308,7 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_json_schema"] = to_response_format(response_format)  # type: ignore
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
