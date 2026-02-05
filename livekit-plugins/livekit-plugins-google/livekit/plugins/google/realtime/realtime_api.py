@@ -545,9 +545,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
-            1
-            for item in chat_ctx.items
-            if item.type == "message" and item.role in ["system", "developer"]
+            1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
         )
         if system_msg_count > 0:
             logger.warning(
@@ -774,8 +772,8 @@ class RealtimeSession(llm.RealtimeSession):
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
                             1
-                            for item in self._chat_ctx.items
-                            if item.type == "message" and item.role in ["system", "developer"]
+                            for msg in self._chat_ctx.messages()
+                            if msg.role in ("system", "developer")
                         )
                         if system_msg_count > 0:
                             logger.warning(

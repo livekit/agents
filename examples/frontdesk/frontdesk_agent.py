@@ -177,8 +177,8 @@ async def on_session_end(ctx: JobContext) -> None:
     report = ctx.make_session_report()
 
     # Skip evaluation for very short conversations
-    chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
-    if len(chat.items) < 3:
+    messages = [m for m in report.chat_history.messages() if m.role in ("user", "assistant")]
+    if len(messages) < 3:
         return
 
     judges = JudgeGroup(

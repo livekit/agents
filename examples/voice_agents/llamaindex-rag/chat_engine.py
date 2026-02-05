@@ -75,8 +75,7 @@ class ChatEngineAgent(Agent):
 
         llama_chat_messages = [
             ChatMessage(content=msg.text_content, role=MessageRole(msg.role))
-            for msg in chat_ctx.items
-            if isinstance(msg, llm.ChatMessage)
+            for msg in chat_ctx.messages()
         ]
 
         stream = await self.chat_engine.astream_chat(user_query, chat_history=llama_chat_messages)
