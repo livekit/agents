@@ -307,19 +307,19 @@ class AvatarSession:
             await self._audio_buffer.aclose()
             await ws_conn.close()
 
-        def _handle_agent_speak_interrupted(self, event: dict) -> None:
-            self._avatar_interrupted = True
+    def _handle_agent_speak_interrupted(self, event: dict) -> None:
+        self._avatar_interrupted = True
 
-        def _handle_agent_speak_ended(self, event: dict) -> None:
-            self._avatar_speaking = False
-            if not self._avatar_interrupted:
-                self._audio_buffer.notify_playback_finished(
-                    playback_position=self._playback_position,
-                    interrupted=False,
-                )
-                self._playback_position = 0.0
-                self._audio_playing = False
+    def _handle_agent_speak_ended(self, event: dict) -> None:
+        self._avatar_speaking = False
+        if not self._avatar_interrupted:
+            self._audio_buffer.notify_playback_finished(
+                playback_position=self._playback_position,
+                interrupted=False,
+            )
+            self._playback_position = 0.0
+            self._audio_playing = False
 
-        def _handle_agent_speak_started(self, event: dict) -> None:
-            self._avatar_speaking = True
-            self._avatar_interrupted = False
+    def _handle_agent_speak_started(self, event: dict) -> None:
+        self._avatar_speaking = True
+        self._avatar_interrupted = False
