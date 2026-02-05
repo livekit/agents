@@ -20,7 +20,7 @@ from ..utils import is_given, log_exceptions
 from ..utils.aio import cancel_and_wait
 from ..utils.audio import audio_frames_from_file
 from .agent_session import AgentSession
-from .events import AgentStateChangedEvent
+from .events import AgentStateChangedEvent, FunctionToolsExecutedEvent, FunctionToolsExecutingEvent
 
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
@@ -73,18 +73,21 @@ class BackgroundAudioPlayer:
         thinking_sound: NotGivenOr[
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
+        tool_calling_sound: NotGivenOr[
+            AudioSource | AudioConfig | list[AudioConfig] | None
+        ] = NOT_GIVEN,
         stream_timeout_ms: int = 200,
     ) -> None:
         """
-        Initializes the BackgroundAudio component with optional ambient and thinking sounds.
+        Initializes the BackgroundAudio component with optional ambient, thinking, and tool calling sounds.
 
         This component creates and publishes a continuous audio track to a LiveKit room while managing
-        the playback of ambient and agent “thinking” sounds. It supports three types of audio sources:
+        the playback of ambient and agent "thinking" sounds. It supports three types of audio sources:
         - A BuiltinAudioClip enum value, which will use a pre-defined sound from the package resources
         - A file path (string) pointing to an audio file, which can be looped.
         - An AsyncIterator that yields rtc.AudioFrame
 
-        When a list (or AudioConfig) is supplied, the component considers each sound’s volume and probability:
+        When a list (or AudioConfig) is supplied, the component considers each sound's volume and probability:
         - The probability value determines the chance that a particular sound is selected for playback.
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
 
@@ -94,13 +97,21 @@ class BackgroundAudioPlayer:
                 For AsyncIterator sources, ensure the iterator is infinite or looped.
 
             thinking_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
-                The sound to be played when the associated agent enters a “thinking” state. This can be a single
-                sound source or a list of AudioConfig objects (with volume and probability settings).
+                The sound to be played when the associated agent enters a "thinking" state (LLM processing).
+                This can be a single sound source or a list of AudioConfig objects (with volume and
+                probability settings). If tool_calling_sound is also provided, this sound will be stopped
+                when a tool starts executing.
+
+            tool_calling_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
+                The sound to be played when a function tool starts executing. This allows for a different
+                sound during tool execution vs regular LLM thinking. When tool execution completes, the
+                sound will stop. If not provided, thinking_sound will continue playing during tool execution.
 
         """  # noqa: E501
 
         self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
+        self._tool_calling_sound = tool_calling_sound if is_given(tool_calling_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
         self._audio_mixer = rtc.AudioMixer(
@@ -116,6 +127,7 @@ class BackgroundAudioPlayer:
 
         self._ambient_handle: PlayHandle | None = None
         self._thinking_handle: PlayHandle | None = None
+        self._tool_calling_handle: PlayHandle | None = None
 
     def _select_sound_from_list(self, sounds: list[AudioConfig]) -> AudioConfig | None:
         """
@@ -266,6 +278,11 @@ class BackgroundAudioPlayer:
 
             if self._agent_session:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
+                if self._tool_calling_sound:
+                    self._agent_session.on(
+                        "function_tools_executing", self._function_tools_executing
+                    )
+                    self._agent_session.on("function_tools_executed", self._function_tools_executed)
 
             if self._ambient_sound:
                 normalized = self._normalize_sound_source(
@@ -301,6 +318,13 @@ class BackgroundAudioPlayer:
 
             if self._agent_session:
                 self._agent_session.off("agent_state_changed", self._agent_state_changed)
+                if self._tool_calling_sound:
+                    self._agent_session.off(
+                        "function_tools_executing", self._function_tools_executing
+                    )
+                    self._agent_session.off(
+                        "function_tools_executed", self._function_tools_executed
+                    )
 
             self._room.off("reconnected", self._on_reconnected)
 
@@ -330,6 +354,29 @@ class BackgroundAudioPlayer:
 
         elif self._thinking_handle:
             self._thinking_handle.stop()
+
+    def _function_tools_executing(self, ev: FunctionToolsExecutingEvent) -> None:
+        """Handle tool execution start - switch from thinking sound to tool calling sound."""
+        if not self._tool_calling_sound:
+            return
+
+        # Stop thinking sound if playing
+        if self._thinking_handle and not self._thinking_handle.done():
+            self._thinking_handle.stop()
+
+        # Start tool calling sound if not already playing (loop until execution completes)
+        if self._tool_calling_handle and not self._tool_calling_handle.done():
+            return
+
+        self._tool_calling_handle = self.play(
+            cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._tool_calling_sound),
+            loop=True,
+        )
+
+    def _function_tools_executed(self, ev: FunctionToolsExecutedEvent) -> None:
+        """Handle tool execution completion - stop tool calling sound."""
+        if self._tool_calling_handle and not self._tool_calling_handle.done():
+            self._tool_calling_handle.stop()
 
     @log_exceptions(logger=logger)
     async def _play_task(
