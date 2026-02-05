@@ -275,19 +275,11 @@ class AvatarSession:
                         )
                 event = json.loads(msg.data)
                 if event["type"] == "agent.speak_interrupted":
-                    self._avatar_interrupted = True
+                    self._handle_agent_speak_interrupted(event)
                 if event["type"] == "agent.speak_ended":
-                    self._avatar_speaking = False
-                    if not self._avatar_interrupted:
-                        self._audio_buffer.notify_playback_finished(
-                            playback_position=self._playback_position,
-                            interrupted=False,
-                        )
-                        self._playback_position = 0.0
-                        self._audio_playing = False
+                    self._handle_agent_speak_ended(event)
                 if event["type"] == "agent.speak_started":
-                    self._avatar_speaking = True
-                    self._avatar_interrupted = False
+                    self._handle_agent_speak_started(event)
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
@@ -314,3 +306,20 @@ class AvatarSession:
 
             await self._audio_buffer.aclose()
             await ws_conn.close()
+
+        def _handle_agent_speak_interrupted(self, event: dict) -> None:
+            self._avatar_interrupted = True
+
+        def _handle_agent_speak_ended(self, event: dict) -> None:
+            self._avatar_speaking = False
+            if not self._avatar_interrupted:
+                self._audio_buffer.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=False,
+                )
+                self._playback_position = 0.0
+                self._audio_playing = False
+
+        def _handle_agent_speak_started(self, event: dict) -> None:
+            self._avatar_speaking = True
+            self._avatar_interrupted = False
