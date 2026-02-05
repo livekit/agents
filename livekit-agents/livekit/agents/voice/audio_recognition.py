@@ -17,6 +17,7 @@ from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
+from ..utils.audio import AudioFrameBuffer
 from . import io
 from ._utils import _set_participant_attributes
 from .agent import ModelSettings
@@ -64,7 +65,11 @@ class _TurnDetector(Protocol):
     async def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        timeout: float | None = None,
+        audio: rtc.AudioFrame | None = None,
     ) -> float: ...
 
 
@@ -147,6 +152,9 @@ class AudioRecognition:
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
+        # multimodal turn detection
+        self._audio_frame_buffer = AudioFrameBuffer(max_duration=5.0)
+
     def update_options(
         self,
         *,
@@ -191,6 +199,8 @@ class AudioRecognition:
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
+
+        self._audio_frame_buffer.push(frame)
 
     async def aclose(self) -> None:
         self._closing.set()
@@ -248,6 +258,7 @@ class AudioRecognition:
         stt = self._stt
         self.update_stt(None)
         self.update_stt(stt)
+        self._audio_frame_buffer.reset()
 
     def commit_user_turn(
         self,
@@ -553,7 +564,7 @@ class AudioRecognition:
                         unlikely_threshold: float | None = None
                         try:
                             end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                chat_ctx
+                                chat_ctx, audio=self._audio_frame_buffer.snapshot()
                             )
                             unlikely_threshold = await turn_detector.unlikely_threshold(
                                 self._last_language

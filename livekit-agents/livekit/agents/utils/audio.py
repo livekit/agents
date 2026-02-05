@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+from collections import deque
 from collections.abc import AsyncGenerator
 from typing import Union
 
@@ -193,3 +194,41 @@ async def audio_frames_from_file(
     finally:
         await cancel_and_wait(reader_task)
         await decoder.aclose()
+
+
+class AudioFrameBuffer:
+    def __init__(self, max_duration: float = 5.0):
+        """
+        Initialize an AudioFrameBuffer instance.
+
+        Args:
+            max_duration (float): The maximum duration of the audio frame buffer in seconds.
+        """
+        self._curr_duration = 0.0
+        self._frames: deque[rtc.AudioFrame] = deque([])
+        self._max_duration = max_duration
+        self._sample_rate: int | None = None
+        self._num_channels: int | None = None
+
+    def push(self, frame: rtc.AudioFrame) -> None:
+        if self._sample_rate is None or self._num_channels is None:
+            self._sample_rate = frame.sample_rate
+            self._num_channels = frame.num_channels
+        elif self._sample_rate != frame.sample_rate or self._num_channels != frame.num_channels:
+            raise ValueError("Sample rate and number of channels must be the same for all frames")
+
+        self._frames.append(frame)
+        self._curr_duration += frame.duration
+        while self._curr_duration > self._max_duration and self._frames:
+            removed = self._frames.popleft()
+            self._curr_duration -= removed.duration
+
+    def snapshot(self) -> rtc.AudioFrame | None:
+        frames = list(self._frames)
+        return combine_frames(frames) if frames else None
+
+    def reset(self) -> None:
+        self._frames.clear()
+        self._curr_duration = 0.0
+        self._sample_rate = None
+        self._num_channels = None

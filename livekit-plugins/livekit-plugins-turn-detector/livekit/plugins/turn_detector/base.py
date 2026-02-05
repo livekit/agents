@@ -12,6 +12,7 @@ from typing import Any
 
 from huggingface_hub import errors
 
+from livekit import rtc
 from livekit.agents import Plugin, llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
@@ -264,6 +265,7 @@ class EOUModelBase(ABC):
         chat_ctx: llm.ChatContext,
         *,
         timeout: float | None = 3,
+        audio: rtc.AudioFrame | None = None,
     ) -> float:
         messages: list[dict[str, Any]] = []
         for item in chat_ctx.items:
