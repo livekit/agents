@@ -1352,6 +1352,13 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_timer.cancel()
                 self._false_interruption_timer = None
 
+            if (
+                self._audio_recognition
+                and not self._audio_recognition._endpointing._interrupting
+                and self._session.agent_state == "speaking"
+            ):
+                self._audio_recognition._endpointing.on_utterance_started(interruption=True)
+
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
                 self._session.output.audio.pause()
                 self._session._update_agent_state("listening")
@@ -1387,6 +1394,13 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
+        if self._audio_recognition:
+            self._audio_recognition._endpointing.on_utterance_started(
+                adjustment=-ev.speech_duration if ev else 0.0,
+                interruption=self._session.agent_state == "speaking"
+                and not self._audio_recognition._endpointing.is_interrupting,
+            )
+
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:
@@ -1403,6 +1417,10 @@ class AgentActivity(RecognitionHooks):
             "listening",
             last_speaking_time=speech_end_time,
         )
+        if self._audio_recognition:
+            self._audio_recognition._endpointing.on_utterance_ended(
+                adjustment=-ev.silence_duration if ev else 0.0
+            )
         self._user_silence_event.set()
 
         if (
@@ -1885,6 +1903,10 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled and self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech()
                 self._interruption_by_audio_activity_enabled = False
+            if self._audio_recognition:
+                self._audio_recognition._endpointing.on_agent_speech_started(
+                    adjustment=started_speaking_at - time.time(),
+                )
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2187,6 +2209,11 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled and self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech()
                 self._interruption_by_audio_activity_enabled = False
+
+            if self._audio_recognition:
+                self._audio_recognition._endpointing.on_agent_speech_started(
+                    adjustment=started_speaking_at - time.time(),
+                )
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2547,6 +2574,10 @@ class AgentActivity(RecognitionHooks):
                 start_time=started_speaking_at,
                 otel_context=speech_handle._agent_turn_context,
             )
+            if self._audio_recognition:
+                self._audio_recognition._endpointing.on_agent_speech_started(
+                    adjustment=started_speaking_at - time.time(),
+                )
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2941,7 +2972,8 @@ class AgentActivity(RecognitionHooks):
                 if self.interruption_enabled and self._audio_recognition:
                     self._audio_recognition.on_start_of_agent_speech()
                     self._interruption_by_audio_activity_enabled = False
-
+                if self._audio_recognition:
+                    self._audio_recognition._endpointing.on_agent_speech_started()
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})

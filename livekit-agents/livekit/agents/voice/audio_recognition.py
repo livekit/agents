@@ -28,6 +28,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
+from .endpointing import DynamicEndpointing
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -127,8 +128,9 @@ class AudioRecognition:
         self._stt_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
-        self._min_endpointing_delay = min_endpointing_delay
-        self._max_endpointing_delay = max_endpointing_delay
+        self._endpointing = DynamicEndpointing(
+            min_delay=min_endpointing_delay, max_delay=max_endpointing_delay
+        )
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
@@ -180,9 +182,9 @@ class AudioRecognition:
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         if is_given(min_endpointing_delay):
-            self._min_endpointing_delay = min_endpointing_delay
+            self._endpointing.update_options(min_delay=min_endpointing_delay)
         if is_given(max_endpointing_delay):
-            self._max_endpointing_delay = max_endpointing_delay
+            self._endpointing.update_options(max_delay=max_endpointing_delay)
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
@@ -814,7 +816,7 @@ class AudioRecognition:
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
         ) -> None:
-            endpointing_delay = self._min_endpointing_delay
+            endpointing_delay = self._endpointing.min_delay
             user_turn_span = self._ensure_user_turn_span()
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
@@ -838,7 +840,7 @@ class AudioRecognition:
                                 unlikely_threshold is not None
                                 and end_of_turn_probability < unlikely_threshold
                             ):
-                                endpointing_delay = self._max_endpointing_delay
+                                endpointing_delay = self._endpointing.max_delay
                         except Exception:
                             logger.exception("Error predicting end of turn")
 
