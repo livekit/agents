@@ -297,7 +297,7 @@ class TTS(tts.TTS):
         def _sync_create_and_warmup() -> speechsdk.SpeechSynthesizer:
             import threading
             import time
-            
+
             logger.info("opts for synthesizer creation", extra=vars(self._opts))
             # Build WebSocket v2 endpoint
             if self._opts.speech_endpoint:
@@ -575,6 +575,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._audio_data: list[bytes] = []
         self._text_data: list[str] = []  # Store text chunks
         self._background_tasks: set[asyncio.Task[None]] = set()
+
+    async def aclose(self) -> None:
+        # Cancel any background replacement tasks
+        for task in list(self._background_tasks):
+            await utils.aio.gracefully_cancel(task)
+        self._background_tasks.clear()
+        await super().aclose()
 
     async def _create_replacement_synthesizers(self, target_count: int) -> None:
         """Create replacement synthesizers in the background to maintain pool health.
