@@ -98,7 +98,7 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-@server.text_handler()
+@server.text_handler(endpoint="chat")
 async def text_handler(ctx: TextMessageContext):
     logger.info(f"text message received: {ctx.text}")
 

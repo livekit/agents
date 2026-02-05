@@ -11,7 +11,7 @@ from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
 from ..utils.hw.cpu import get_cpu_monitor
-from . import inference_executor, job_proc_executor, job_thread_executor
+from . import inference_executor, job_proc_executor, job_thread_executor, proto
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
@@ -20,6 +20,8 @@ EventTypes = Literal[
     "process_ready",
     "process_closed",
     "process_job_launched",
+    "text_response",
+    "text_session_complete",
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -98,7 +100,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._closed = True
         await aio.cancel_and_wait(self._main_atask)
 
-    async def launch_job(self, info: RunningJobInfo) -> None:
+    async def launch_job(self, info: RunningJobInfo) -> str:
         self._jobs_waiting_for_process += 1
         if (
             self._warmed_proc_queue.empty()
@@ -114,6 +116,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
         await proc.launch_job(info)
         self.emit("process_job_launched", proc)
+        return proc.id
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
@@ -130,6 +133,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                text_response_fnc=self._on_text_response,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
                 inference_executor=self._inf_executor,
@@ -143,6 +147,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                text_response_fnc=self._on_text_response,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
                 inference_executor=self._inf_executor,
@@ -211,3 +216,9 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
             await asyncio.gather(*self._spawn_tasks)
             await asyncio.gather(*self._monitor_tasks)
+
+    def _on_text_response(self, msg: proto.TextResponseEvent | proto.TextSessionComplete) -> None:
+        if isinstance(msg, proto.TextResponseEvent):
+            self.emit("text_response", msg)
+        elif isinstance(msg, proto.TextSessionComplete):
+            self.emit("text_session_complete", msg)

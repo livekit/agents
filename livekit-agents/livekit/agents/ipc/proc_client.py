@@ -6,7 +6,7 @@ import socket
 import sys
 from collections.abc import Coroutine
 from types import FrameType
-from typing import Callable
+from typing import Callable, Protocol
 
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
@@ -18,6 +18,12 @@ from .proto import (
     PingRequest,
     PongResponse,
 )
+
+
+class JobProcClient(Protocol):
+    async def send(self, msg: Message) -> None:
+        """Send a message from job process to main process"""
+        ...
 
 
 class _ProcClient:

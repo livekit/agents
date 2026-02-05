@@ -40,7 +40,7 @@ from .observability import Tagger
 from .telemetry import _upload_session_report
 from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
-from .utils import aio, http_context, is_given, wait_for_participant
+from .utils import http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -48,7 +48,8 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
-    from .voice.agent_session import AgentSession
+    from .ipc.proc_client import JobProcClient
+    from .voice.agent_session import AgentSession, _AgentSessionState
     from .voice.report import SessionReport
     from .voice.run_result import RunEvent
 
@@ -131,30 +132,86 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 
 class TextMessageContext:
-    def __init__(self, *, text: str, session_data: bytes | None = None) -> None:
-        self._text = text
-        self._session_data = session_data
+    def __init__(self, *, job_ctx: JobContext, text_request: agent.TextMessageRequest) -> None:
+        self._job_ctx = job_ctx
+        self._text_request = text_request
+        try:
+            # TODO: add a endpoint field to the text request?
+            metadata = json.loads(text_request.metadata)
+            self._endpoint: str = metadata["endpoint"]
+        except Exception:
+            logger.error(
+                "endpoint is required in metadata", extra={"metadata": text_request.metadata}
+            )
+            raise
 
-        self._response_ch: aio.Chan[RunEvent] = aio.Chan()
+        # resolve session state from snapshot and delta
+        from .utils.session_store import SessionStore
+
+        if not text_request.HasField("session_state"):
+            self._session_snapshot: bytes | None = None
+            self._session_state: _AgentSessionState | None = None
+            self._version = 0
+        else:
+            assert text_request.session_state.WhichOneof("data") == "snapshot", (
+                "session state should be resolved before starting the job"
+            )
+
+            self._session_snapshot = text_request.session_state.snapshot
+            with SessionStore(self._session_snapshot) as store:
+                self._session_state = store.export_state()
+            self._version = text_request.session_state.version
 
     async def send_response(self, ev: RunEvent) -> None:
-        # simulate sending result
-        await self._response_ch.send(ev)
+        from .ipc.proto import TextResponseEvent
 
-    def mark_done(self) -> None:
-        self._response_ch.close()
+        await self._job_ctx._ipc_client.send(
+            TextResponseEvent(
+                session_id=self.session_id,
+                event_type=ev.type,
+                data=ev.item.model_dump_json(),
+            )
+        )
 
     @property
-    def session_data(self) -> bytes | None:
-        return self._session_data
+    def session_id(self) -> str:
+        return self._text_request.session_id
+
+    @property
+    def session_data(self) -> _AgentSessionState | None:
+        return self._session_state
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
 
     @property
     def text(self) -> str:
-        return self._text
+        return self._text_request.text
 
-    @property
-    def response_ch(self) -> aio.Chan[RunEvent]:
-        return self._response_ch
+    async def _complete(self, error: str | None = None) -> None:
+        from .ipc.proto import TextSessionComplete
+        from .utils.session_store import SessionStore
+
+        msg = TextSessionComplete(session_id=self.session_id)
+        if error:
+            msg.error = error
+            await self._job_ctx._ipc_client.send(msg)
+            return
+
+        session = self._job_ctx._primary_agent_session
+        assert session is not None
+
+        with SessionStore.from_state(session.get_state(), version=self._version + 1) as new_store:
+            msg.session_state = agent.AgentSessionState(version=new_store.version)
+            if not self._session_snapshot:
+                msg.session_state.snapshot = new_store.export_snapshot()
+            else:
+                with SessionStore(self._session_snapshot) as old_store:
+                    delta = new_store.compute_delta(old_store)
+                msg.session_state.delta = delta
+
+        await self._job_ctx._ipc_client.send(msg)
 
 
 class JobContext:
@@ -172,6 +229,7 @@ class JobContext:
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
         inference_executor: InferenceExecutor,
+        ipc_client: JobProcClient,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -191,11 +249,10 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+        self._ipc_client = ipc_client
 
         self._text_message_context = (
-            TextMessageContext(
-                text=self._info.text_request.text, session_data=self._info.text_request.session_data
-            )
+            TextMessageContext(job_ctx=self, text_request=self._info.text_request)
             if self._info.text_request
             else None
         )

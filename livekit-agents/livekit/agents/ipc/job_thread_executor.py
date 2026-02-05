@@ -23,6 +23,7 @@ class _ProcOpts:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    text_response_fnc: Callable[[proto.TextResponseEvent | proto.TextSessionComplete], None]
     initialize_timeout: float
     close_timeout: float
     ping_interval: float
@@ -37,6 +38,7 @@ class ThreadJobExecutor:
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
+        text_response_fnc: Callable[[proto.TextResponseEvent | proto.TextSessionComplete], None],
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
@@ -50,6 +52,7 @@ class ThreadJobExecutor:
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
             session_end_fnc=session_end_fnc,
+            text_response_fnc=text_response_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             ping_interval=ping_interval,
@@ -283,6 +286,9 @@ class ThreadJobExecutor:
 
             if isinstance(msg, proto.InferenceRequest):
                 self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+
+            if isinstance(msg, (proto.TextResponseEvent, proto.TextSessionComplete)):
+                self._opts.text_response_fnc(msg)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:

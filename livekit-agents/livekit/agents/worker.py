@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import datetime
 import inspect
-import json
 import math
 import multiprocessing as mp
 import os
@@ -32,7 +31,6 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
-from aiohttp import web
 from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
@@ -40,6 +38,7 @@ from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError
+from .agent_http_server import AgentHttpServer
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -53,7 +52,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_server, is_given
+from .utils import is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -77,18 +76,19 @@ class _EntrypointWrapper:
     def __init__(
         self,
         entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
-        text_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None,
+        text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]],
     ) -> None:
         self._entrypoint_fnc = entrypoint_fnc
-        self._text_handler_fnc = text_handler_fnc
+        self._text_handler_fncs = text_handler_fncs
 
     async def __call__(self, ctx: JobContext) -> None:
         if ctx.text_message_context is not None:
-            if self._text_handler_fnc is None:
+            endpoint = ctx.text_message_context.endpoint
+            if (text_handler_fnc := self._text_handler_fncs.get(endpoint)) is None:
                 raise RuntimeError(
-                    "No text handler has been registered.\n"
+                    f"No text handler has been registered for endpoint {endpoint}.\n"
                     "Define one using the @server.text_handler() decorator, for example:\n"
-                    "    @server.text_handler()\n"
+                    f'    @server.text_handler(endpoint="{endpoint}")\n'
                     "    async def my_text_handler(ctx: TextMessageContext):\n"
                     "        ...\n"
                 )
@@ -103,9 +103,9 @@ class _EntrypointWrapper:
                 logger.info("SMS job detected, skipping RTC entrypoint")
 
             try:
-                await self._text_handler_fnc(ctx.text_message_context)
+                await text_handler_fnc(ctx.text_message_context)
             finally:
-                ctx.text_message_context.mark_done()
+                await ctx.text_message_context._complete()
                 ctx.shutdown()  # job finished
             return
 
@@ -118,6 +118,13 @@ class _EntrypointWrapper:
                 "        ...\n"
             )
         await self._entrypoint_fnc(ctx)
+
+
+@dataclass
+class _TextSession:
+    proc_id: str
+    event_ch: utils.aio.Chan[ipc.proto.TextResponseEvent]
+    done_fut: asyncio.Future[ipc.proto.TextSessionComplete]
 
 
 class ServerType(Enum):
@@ -372,7 +379,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
-        self._text_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None = None
+        self._text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]] = {}
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -384,7 +391,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
-        self._http_server: http_server.HttpServer | None = None
+        self._http_server: AgentHttpServer | None = None
 
         self._lock = asyncio.Lock()
 
@@ -523,13 +530,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     @overload
     def text_handler(
-        self,
-        func: Callable[[TextMessageContext], Awaitable[None]],
+        self, func: Callable[[TextMessageContext], Awaitable[None]], *, endpoint: str = ""
     ) -> Callable[[TextMessageContext], Awaitable[None]]: ...
 
     @overload
     def text_handler(
-        self,
+        self, *, endpoint: str = ""
     ) -> Callable[
         [Callable[[TextMessageContext], Awaitable[None]]],
         Callable[[TextMessageContext], Awaitable[None]],
@@ -538,6 +544,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def text_handler(
         self,
         func: Callable[[TextMessageContext], Awaitable[None]] | None = None,
+        *,
+        endpoint: str = "",
     ) -> (
         Callable[[TextMessageContext], Awaitable[None]]
         | Callable[
@@ -552,11 +560,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         def decorator(
             f: Callable[[TextMessageContext], Awaitable[None]],
         ) -> Callable[[TextMessageContext], Awaitable[None]]:
-            if self._text_handler_fnc is not None:
-                raise RuntimeError(
-                    "The AgentServer currently only supports registering only one text_handler"
-                )
-            self._text_handler_fnc = f
+            if endpoint in self._text_handler_fncs:
+                raise RuntimeError(f"Text handler for endpoint '{endpoint}' already registered")
+            self._text_handler_fncs[endpoint] = f
             return f
 
         if func is not None:
@@ -623,7 +629,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
-            self._text_request_ch = utils.aio.Chan["agent.TextMessageRequest"](loop=self._loop)
+            self._text_sessions: dict[str, _TextSession] = {}
 
             self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = (
                 None
@@ -645,7 +651,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=_EntrypointWrapper(self._entrypoint_fnc, self._text_handler_fnc),
+                job_entrypoint_fnc=_EntrypointWrapper(
+                    self._entrypoint_fnc, self._text_handler_fncs
+                ),
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
@@ -659,39 +667,23 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 http_proxy=self._http_proxy or None,
             )
 
+            # handler for text message response
+            self._proc_pool.on("text_response", self._on_text_response)
+            self._proc_pool.on("text_session_complete", self._on_text_session_complete)
+            self._proc_pool.on("process_closed", self._on_process_closed)
+
             self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
-            self._http_server = http_server.HttpServer(
-                self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
-            )
             self._worker_load: float = 0.0
 
-            async def health_check(_: Any) -> web.Response:
-                if self._inference_executor and not self._inference_executor.is_alive():
-                    return web.Response(status=503, text="inference process not running")
-
-                if self._connection_failed:
-                    return web.Response(status=503, text="failed to connect to livekit")
-
-                return web.Response(text="OK")
-
-            async def worker(_: Any) -> web.Response:
-                body = json.dumps(
-                    {
-                        "agent_name": self._agent_name,
-                        "worker_type": agent.JobType.Name(self._server_type.value),
-                        "worker_load": self._worker_load,
-                        "active_jobs": len(self.active_jobs),
-                        "sdk_version": __version__,
-                        "project_type": "python",
-                    }
-                )
-                return web.Response(body=body, content_type="application/json")
-
-            self._http_server.app.add_routes([web.get("/", health_check)])
-            self._http_server.app.add_routes([web.get("/worker", worker)])
+            self._http_server = AgentHttpServer(
+                self,
+                host=self._host,
+                port=ServerEnvOption.getvalue(self._port, devmode),
+                loop=self._loop,
+            )
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
@@ -830,22 +822,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             tasks = []
             self._load_task = asyncio.create_task(_load_task(), name="load_task")
             tasks.append(self._load_task)
-
-            if self._text_handler_fnc:
-
-                @utils.log_exceptions(logger=logger)
-                async def _handle_text_request() -> None:
-                    async for req in self._text_request_ch:
-                        await self.simulate_job(
-                            room="text-mode-room",
-                            agent_identity=utils.shortuuid("text-agent-"),
-                            text_request=req,
-                        )
-
-                self._text_request_task = asyncio.create_task(
-                    _handle_text_request(), name="text_request_task"
-                )
-                tasks.append(self._text_request_task)
 
             if not unregistered:
                 self._conn_task = asyncio.create_task(
@@ -1019,10 +995,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
 
-            self._text_request_ch.close()
-            if self._text_request_task is not None:
-                await utils.aio.cancel_and_wait(self._text_request_task)
-
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
 
@@ -1195,8 +1167,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._handle_availability(server_msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(server_msg.assignment)
-                elif which == "text_request":
-                    self._handle_text_request(server_msg.text_request)
                 elif which == "termination":
                     user_task = self._loop.create_task(
                         self._handle_termination(server_msg.termination),
@@ -1204,6 +1174,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                     self._tasks.add(user_task)
                     user_task.add_done_callback(self._tasks.discard)
+
+                # elif which == "text_request":
+                #     # TODO(long): do we want to support text request from ws?
+                #     user_task = self._loop.create_task(
+                #         self._handle_text_request(server_msg.text_request),
+                #         name="agent_text_request",
+                #     )
+                #     self._tasks.add(user_task)
+                #     user_task.add_done_callback(self._tasks.discard)
 
         tasks = [
             asyncio.create_task(_load_task()),
@@ -1379,7 +1358,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
-    def _handle_text_request(self, request: agent.TextMessageRequest) -> None:
+    async def _launch_text_job(self, request: agent.TextMessageRequest) -> _TextSession:
+        """Launch a text message job and track the session."""
+        session_id = request.session_id
+
         logger.debug(
             "received text request",
             extra={
@@ -1388,7 +1370,84 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "session_id": request.session_id,
             },
         )
-        self._text_request_ch.send_nowait(request)
+
+        async with self._lock:
+            if session_id in self._text_sessions:
+                raise ValueError(f"Session {session_id} already exists")
+
+            # TODO: resolve session state from cache
+
+            agent_identity = utils.shortuuid("text-agent-")
+            room_info = models.Room(sid=utils.shortuuid("TEXT_RM_"), name="text-mode-room")
+            job = agent.Job(
+                id=utils.shortuuid("text-job-"),
+                room=room_info,
+                type=agent.JobType.JT_ROOM,
+                participant=None,
+            )
+            token = (
+                api.AccessToken(self._api_key, self._api_secret)
+                .with_identity(agent_identity)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room_info.name, agent=True))
+                .to_jwt()
+            )
+            running_info = RunningJobInfo(
+                worker_id=self._id,
+                accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
+                job=job,
+                url=self._ws_url,
+                token=token,
+                fake_job=False,
+                text_request=request,
+            )
+            proc_id = await self._proc_pool.launch_job(running_info)
+
+            session_info = _TextSession(
+                proc_id=proc_id,
+                event_ch=utils.aio.Chan[ipc.proto.TextResponseEvent](),
+                done_fut=asyncio.Future(),
+            )
+            self._text_sessions[session_id] = session_info
+
+            return session_info
+
+    # async def _handle_text_request(self, request: agent.TextMessageRequest) -> None:
+    #     """Handle text request from ws connection."""
+    #     session_id = request.session_id
+    #     try:
+    #         session_info = await self._launch_text_job(request)
+    #     except Exception as e:
+    #         logger.exception(
+    #             "error while launching text job",
+    #             extra={"message_id": request.message_id, "session_id": session_id},
+    #         )
+    #         final_response = agent.TextMessageResponse(message_id=request.message_id, error=str(e))
+    #         await self._queue_msg(agent.WorkerMessage(text_message_response=final_response))
+    #         return
+
+    #     async for ev in session_info.event_ch:
+    #         push_text = agent.PushTextRequest(message_id=request.message_id, content=ev.data)
+    #         # await self._queue_msg(agent.WorkerMessage(push_text=push_text))
+
+    #     final_response = agent.TextMessageResponse(message_id=request.message_id)
+    #     try:
+    #         complete_ev = await session_info.done_fut
+    #         if complete_ev.error:
+    #             final_response.error = complete_ev.error
+    #         else:
+    #             final_response.session_state = complete_ev.session_state
+    #     except Exception as e:
+    #         logger.exception(
+    #             "error while waiting for text session complete",
+    #             extra={"session_id": session_id},
+    #         )
+    #         final_response.error = str(e)
+    #     finally:
+    #         # notify the cloud the completion of the request
+    #         # msg = agent.WorkerMessage(text_message_response=final_response)
+    #         # await self._queue_msg(msg)
+    #         pass
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:
         proc = self._proc_pool.get_by_job_id(msg.job_id)
@@ -1445,3 +1504,50 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
+
+    def _on_text_response(self, msg: ipc.proto.TextResponseEvent) -> None:
+        """Handle text response event from process pool."""
+        session_id = msg.session_id
+
+        if session_info := self._text_sessions.get(session_id):
+            session_info.event_ch.send_nowait(msg)
+        else:
+            logger.warning(
+                "received text response for unknown session", extra={"session_id": session_id}
+            )
+
+    def _on_text_session_complete(self, ev: ipc.proto.TextSessionComplete) -> None:
+        """Handle text session complete event from process pool."""
+        session_id = ev.session_id
+
+        if session_info := self._text_sessions.pop(session_id, None):
+            session_info.done_fut.set_result(ev)
+            session_info.event_ch.close()
+        else:
+            logger.warning(
+                "received text session complete for unknown session",
+                extra={"session_id": session_id},
+            )
+
+    def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
+        """Clean up any text sessions on this process."""
+        proc_id = proc.id
+
+        uncompleted_sessions: list[str] = []
+        for session_id, session_info in self._text_sessions.items():
+            if session_info.proc_id == proc_id:
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    session_info.done_fut.set_exception(
+                        RuntimeError(f"Process {proc_id} closed before session completed")
+                    )
+                session_info.event_ch.close()
+                uncompleted_sessions.append(session_id)
+
+        for session_id in uncompleted_sessions:
+            del self._text_sessions[session_id]
+
+        if uncompleted_sessions:
+            logger.error(
+                "text sessions terminated due to process closure",
+                extra={"session_ids": uncompleted_sessions, "process_id": proc_id},
+            )

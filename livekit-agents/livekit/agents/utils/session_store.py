@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pickle
 import tempfile
-from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import apsw
@@ -57,12 +58,6 @@ SCHEMA_SQL = """
         FOREIGN KEY (agent_id) REFERENCES agent(id)
     );
 """
-
-
-@dataclass
-class SessionDelta:
-    version: int
-    changeset: bytes
 
 
 class SessionStore:
@@ -196,14 +191,14 @@ class SessionStore:
             agent=agent,
         )
 
-    def update_state(self, state: _AgentSessionState) -> SessionDelta:
+    def update_state(self, state: _AgentSessionState) -> tuple[int, bytes]:
         """Update session state and return the changeset."""
         with SessionStore.from_state(state, version=self._version + 1) as target:
-            delta = self.compute_delta(target)
-            self.apply_changesets([delta])
-            return delta
+            changeset = self.compute_delta(target)
+            self.apply_changeset(changeset)
+            return self._version, changeset
 
-    def compute_delta(self, target_store: SessionStore) -> SessionDelta:
+    def compute_delta(self, target_store: SessionStore) -> bytes:
         """Compute changeset from this store to target store using SQLite's session diff."""
 
         # verify schema versions match
@@ -237,7 +232,7 @@ class SessionStore:
 
             changeset = session.changeset()
 
-            return SessionDelta(version=target_store.version, changeset=changeset)
+            return changeset
 
         finally:
             # detach the target database
@@ -246,41 +241,33 @@ class SessionStore:
             except Exception:
                 pass
 
-    def apply_changesets(self, changesets: list[SessionDelta]) -> None:
-        """Apply a list of changesets in order, verifying versions in the changeset chain."""
-        for cs_meta in changesets:
-            # verify base version matches current
-            if self._version + 1 != cs_meta.version:
-                raise ValueError(
-                    f"Changeset version {cs_meta.version} does not match current version {self._version} + 1"
-                )
-
-            # apply changeset
-            if cs_meta.changeset:
-
-                def conflict_handler(conflict_reason: int, table_change: Any) -> int:
-                    # Always take the new value (single writer scenario)
-                    return apsw.SQLITE_CHANGESET_REPLACE
-
-                apsw.Changeset.apply(cs_meta.changeset, self._conn, conflict=conflict_handler)
-
-            # read version from DB and verify
-            cursor = self._conn.cursor()
-            result = cursor.execute("SELECT version FROM session").fetchone()
-            db_version = result[0] if result else None
-
-            if db_version != cs_meta.version:
-                raise ValueError(
-                    f"Version mismatch after applying changeset! "
-                    f"Expected {cs_meta.version}, got {db_version}"
-                )
-
-            self._version = cs_meta.version
-
-            logger.debug(
-                "applied changeset",
-                extra={"version": cs_meta.version, "changeset_size": len(cs_meta.changeset)},
+    def apply_changeset(self, changeset: bytes, *, version: int | None = None) -> None:
+        """Apply a changeset to the database, verifying the version if provided."""
+        # verify base version matches current
+        if version is not None and version != self._version + 1:
+            raise ValueError(
+                f"Changeset version does not match current version: {version} != {self._version} + 1"
             )
+
+        def conflict_handler(conflict_reason: int, table_change: Any) -> int:
+            # Always take the new value (single writer scenario)
+            return apsw.SQLITE_CHANGESET_REPLACE
+
+        apsw.Changeset.apply(changeset, self._conn, conflict=conflict_handler)
+
+        # read version from DB and verify
+        cursor = self._conn.cursor()
+        result = cursor.execute("SELECT version FROM session").fetchone()
+        if not result:
+            raise ValueError("session version not found after applying changeset")
+        db_version = int(result[0])
+
+        if version is not None and db_version != version:
+            raise ValueError(
+                f"Version mismatch after applying changeset! Expected {version}, got {db_version}"
+            )
+
+        self._version = db_version
 
     def export_snapshot(self) -> bytes:
         with open(self._db_path, "rb") as f:

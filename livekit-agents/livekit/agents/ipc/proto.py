@@ -214,6 +214,43 @@ class DumpStackTraceRequest:
         pass
 
 
+@dataclass
+class TextResponseEvent:
+    MSG_ID: ClassVar[int] = 10
+    session_id: str = ""
+    event_type: str = ""
+    data: str = ""  # in json format
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.session_id)
+        channel.write_string(b, self.event_type)
+        channel.write_string(b, self.data)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.session_id = channel.read_string(b)
+        self.event_type = channel.read_string(b)
+        self.data = channel.read_string(b)
+
+
+@dataclass
+class TextSessionComplete:
+    MSG_ID: ClassVar[int] = 11
+    session_id: str = ""
+    session_state: agent.AgentSessionState = field(init=False)
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.session_id)
+        channel.write_bytes(b, self.session_state.SerializeToString())
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.session_id = channel.read_string(b)
+        self.session_state = agent.AgentSessionState()
+        self.session_state.ParseFromString(channel.read_bytes(b))
+        self.error = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -225,4 +262,6 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
+    TextResponseEvent.MSG_ID: TextResponseEvent,
+    TextSessionComplete.MSG_ID: TextSessionComplete,
 }
