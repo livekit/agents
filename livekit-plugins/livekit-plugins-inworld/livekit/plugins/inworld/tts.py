@@ -470,9 +470,7 @@ class _InworldConnection:
                                     extra={
                                         "context_id": context_id,
                                         "words": [str(ts) for ts in timed_strings],
-                                        "adjusted_starts": [
-                                            ts.start_time for ts in timed_strings
-                                        ],
+                                        "adjusted_starts": [ts.start_time for ts in timed_strings],
                                         "adjusted_ends": [ts.end_time for ts in timed_strings],
                                         "generation_end_time": ctx.generation_end_time,
                                     },
