@@ -326,9 +326,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
@@ -362,17 +362,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(input, str):
                     if input_stream is None:
                         input_stream = self._opts.tokenizer.stream()
-                        self._segments_ch.send_nowait(input_stream)
+                        segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for input_stream in self._segments_ch:
+            async for input_stream in segments_ch:
                 await self._run_stream(input_stream, output_emitter, streaming_config)
 
         tasks = [

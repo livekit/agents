@@ -416,11 +416,11 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute streaming synthesis"""
         request_id = utils.shortuuid()
+        segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -439,7 +439,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._tts._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
+                        segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
@@ -450,11 +450,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             if word_stream is not None:
                 word_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
             """Process segments"""
-            async for word_stream in self._segments_ch:
+            async for word_stream in segments_ch:
                 await self._run_segment(word_stream, output_emitter)
 
         tasks = [
@@ -491,6 +491,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_parts.append(data.token)
 
             if not text_parts:
+                output_emitter.end_segment()
                 return
 
             # Format text
@@ -518,7 +519,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except asyncio.TimeoutError:
                     break
 
-            output_emitter.end_input()
+            output_emitter.end_segment()
 
         except Exception as e:
             logger.error(f"Segment synthesis error: {e}")

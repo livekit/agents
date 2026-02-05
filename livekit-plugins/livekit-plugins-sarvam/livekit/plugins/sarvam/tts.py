@@ -456,7 +456,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         # Connection state management
         self._connection_state = ConnectionState.DISCONNECTED
@@ -471,6 +470,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         self._client_request_id = request_id
         self._server_request_id = None
         output_emitter.initialize(
@@ -495,7 +495,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         else:
                             tokenizer_instance = self._opts.word_tokenizer
                         word_stream = tokenizer_instance.stream()
-                        self._segments_ch.send_nowait(word_stream)
+                        segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream:
@@ -505,10 +505,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             if word_stream is not None:
                 word_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
-            async for word_stream in self._segments_ch:
+            async for word_stream in segments_ch:
                 await self._run_ws(word_stream, output_emitter)
 
         tasks = [
@@ -823,7 +823,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
 
         # Close channels
-        for channel_name, channel in [("segments", self._segments_ch), ("input", self._input_ch)]:
+        channels: list[tuple[str, object]] = [("input", self._input_ch)]
+
+        for channel_name, channel in channels:
             try:
                 if hasattr(channel, "closed") and not channel.closed:
                     if hasattr(channel, "close"):
