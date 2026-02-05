@@ -246,6 +246,10 @@ class ChatContext:
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
+
     def add_message(
         self,
         *,
