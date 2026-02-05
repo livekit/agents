@@ -25,9 +25,8 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Literal
 from urllib.parse import urlencode
-from enum import StrEnum
 
 import aiohttp
 
@@ -129,14 +128,14 @@ class ModelConfig:
     supports_prompt: bool
     supports_mode: bool
     supports_language: bool
-    default_language: Optional[str]
-    default_mode: Optional[str]
+    default_language: str | None
+    default_mode: str | None
     use_translate_endpoint: bool
     use_translate_method: bool
-    allowed_languages: Optional[set[str]]
+    allowed_languages: set[str] | None
 
 
-MODEL_CONFIGS: Dict[str, ModelConfig] = {
+MODEL_CONFIGS: dict[str, ModelConfig] = {
     "saarika:v2.5": ModelConfig(
         supports_prompt=False,
         supports_mode=False,
@@ -174,9 +173,7 @@ def _get_model_config(model: str) -> ModelConfig | None:
     return MODEL_CONFIGS.get(model)
 
 
-def _validate_mode_for_model(
-    model: str, mode: str | None, *, strict: bool = False
-) -> str:
+def _validate_mode_for_model(model: str, mode: str | None, *, strict: bool = False) -> str:
     """Validate and resolve mode for a given model.
 
     Args:
@@ -205,17 +202,13 @@ def _validate_mode_for_model(
         # Model supports mode — validate it
         resolved = mode or model_config.default_mode or "transcribe"
         if resolved not in ALLOWED_MODES:
-            raise ValueError(
-                f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}"
-            )
+            raise ValueError(f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}")
         return resolved
 
     # Unknown model — fallback
     if mode is not None:
         if mode not in ALLOWED_MODES:
-            raise ValueError(
-                f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}"
-            )
+            raise ValueError(f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}")
         return mode
     return "transcribe"
 
@@ -239,9 +232,7 @@ def _validate_language_for_model(model: str, language: str | None) -> str | None
     model_config = _get_model_config(model)
     if model_config and model_config.allowed_languages is not None:
         if language not in model_config.allowed_languages:
-            raise ValueError(
-                f"language {language} is not supported for model {model}"
-            )
+            raise ValueError(f"language {language} is not supported for model {model}")
     return language
 
 
@@ -507,7 +498,9 @@ class STT(stt.STT):
             APITimeoutError: On API timeout
         """
         opts_language, opts_model, opts_mode = self._resolve_opts(
-            language=language, model=model, mode=mode,
+            language=language,
+            model=model,
+            mode=mode,
         )
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
@@ -617,7 +610,9 @@ class STT(stt.STT):
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         opts_language, opts_model, opts_mode = self._resolve_opts(
-            language=language, model=model, mode=mode,
+            language=language,
+            model=model,
+            mode=mode,
         )
 
         # Handle prompt conversion from NotGiven to None
@@ -782,9 +777,7 @@ class SpeechStream(stt.SpeechStream):
                 await self._ws.close()
                 self._logger.debug("WebSocket closed", extra=self._build_log_context())
         except Exception as e:
-            self._logger.warning(
-                f"Error closing WebSocket: {e}", extra=self._build_log_context()
-            )
+            self._logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
         finally:
             self._ws = None
 
@@ -792,9 +785,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             await super().aclose()
         except Exception as e:
-            self._logger.warning(
-                f"Error in parent cleanup: {e}", extra=self._build_log_context()
-            )
+            self._logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
 
         # Close session last
         try:
@@ -802,9 +793,7 @@ class SpeechStream(stt.SpeechStream):
                 await self._session.close()
                 self._logger.debug("HTTP session closed", extra=self._build_log_context())
         except Exception as e:
-            self._logger.warning(
-                f"Error closing session: {e}", extra=self._build_log_context()
-            )
+            self._logger.warning(f"Error closing session: {e}", extra=self._build_log_context())
         finally:
             self._client_request_id = None
             self._server_request_id = None
@@ -940,9 +929,7 @@ class SpeechStream(stt.SpeechStream):
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTED
 
-        self._logger.info(
-            "WebSocket connected successfully", extra=self._build_log_context()
-        )
+        self._logger.info("WebSocket connected successfully", extra=self._build_log_context())
 
         # Send initial configuration message if model supports prompt
         if _model_supports_prompt(self._opts.model) and self._opts.prompt:
