@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import pickle
 import tempfile
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import apsw
+
+from livekit.protocol import agent
 
 from ..log import logger
 from . import is_given
@@ -61,7 +64,7 @@ SCHEMA_SQL = """
 
 
 class SessionStore:
-    def __init__(self, db_file: str | bytes | None, *, create_schema: bool = True):
+    def __init__(self, db_file: str | Path | bytes | None, *, create_schema: bool = True):
         """
         Initialize session store.
 
@@ -447,3 +450,168 @@ class SessionStore:
         exc_tb: Any | None,
     ) -> None:
         self.close()
+
+
+@dataclass
+class _SessionCacheEntry:
+    size: int
+    data: bytes
+
+    @staticmethod
+    def create(db_file: Path | bytes) -> _SessionCacheEntry:
+        if isinstance(db_file, bytes):
+            return _SessionCacheEntry(size=len(db_file), data=db_file)
+        else:
+            return _SessionCacheEntry(size=db_file.stat().st_size, data=b"")
+
+
+class EphemeralSessionCache:
+    """Cache manager for session database files.
+
+    Maintains a temporary directory of cached SQLite database files with LRU eviction.
+    The cache is ephemeral - it lives only for the worker's lifetime and is cleaned
+    up on shutdown.
+    """
+
+    def __init__(
+        self,
+        *,
+        cache_dir: Path | str | None = None,
+        max_size_mb: int = 100,
+        max_files: int = 100,
+        in_memory: bool = False,
+    ) -> None:
+        """Initialize the session database cache.
+
+        Args:
+            cache_dir: Directory to store cached database files.
+                If None, a temporary directory will be created.
+            max_size_mb: Maximum total size of cached files in megabytes.
+            max_files: Maximum number of cached files.
+            in_memory: Whether to store session states in memory.
+        """
+        self._in_memory = in_memory
+        if in_memory and cache_dir is not None:
+            raise ValueError("cache_dir and in_memory cannot be provided together")
+
+        if in_memory:
+            self._cache_dir: Path | None = None
+            self._temp_dir: tempfile.TemporaryDirectory | None = None
+        elif cache_dir is None:
+            self._temp_dir = tempfile.TemporaryDirectory(prefix="livekit_session_cache_")
+            self._cache_dir = Path(self._temp_dir.name)
+        else:
+            self._cache_dir = Path(cache_dir)
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            self._temp_dir = None
+
+        self._max_size_bytes = max_size_mb * 1024 * 1024
+        self._max_files = max_files
+
+        self._cached_sessions = OrderedDict[str, _SessionCacheEntry]()
+
+        logger.debug(
+            "initialized session DB cache",
+            extra={
+                "cache_dir": str(self._cache_dir),
+                "max_size_mb": max_size_mb,
+                "max_files": max_files,
+            },
+        )
+
+    def resolve(
+        self, session_id: str, session_state: agent.AgentSessionState
+    ) -> agent.AgentSessionState:
+        """Resolve the session state from the cache or create a new one."""
+        db_file = self._get_db_file(session_id)
+
+        target_version = session_state.version
+        which_oneof = session_state.WhichOneof("data")
+        if which_oneof == "snapshot":
+            if isinstance(db_file, bytes):
+                db_file = session_state.snapshot
+            else:
+                db_file.write_bytes(session_state.snapshot)
+            store = SessionStore(db_file, create_schema=False)
+        else:
+            store = SessionStore(db_file)
+
+        with store:
+            if store.version != target_version:
+                raise ValueError(
+                    f"Version mismatch: expected {target_version}, got {store.version}"
+                )
+
+            self._cached_sessions[session_id] = _SessionCacheEntry.create(db_file)
+            self._cached_sessions.move_to_end(session_id)
+
+            self._enforce_limits()
+
+            return agent.AgentSessionState(
+                version=store.version,
+                snapshot=store.export_snapshot(),
+            )
+
+    def save(self, session_id: str, session_state: agent.AgentSessionState) -> None:
+        """Update the session state in the cache."""
+        db_file = self._get_db_file(session_id)
+
+        updated = False
+        which_oneof = session_state.WhichOneof("data")
+        if which_oneof == "snapshot":
+            if isinstance(db_file, bytes):
+                db_file = session_state.snapshot
+            else:
+                db_file.write_bytes(session_state.snapshot)
+            updated = True
+
+        elif which_oneof == "delta":
+            if not isinstance(db_file, bytes) and not db_file.exists():
+                raise ValueError(f"Session {session_id} not found in cache")
+
+            with SessionStore(db_file) as store:
+                store.apply_changeset(session_state.delta, version=session_state.version)
+                if isinstance(db_file, bytes):
+                    db_file = store.export_snapshot()
+                updated = True
+
+        if updated:
+            self._cached_sessions[session_id] = _SessionCacheEntry.create(db_file)
+            self._cached_sessions.move_to_end(session_id)
+            self._enforce_limits()
+
+    def _get_db_file(self, session_id: str) -> Path | bytes:
+        if not self._in_memory:
+            assert self._cache_dir is not None
+            return self._cache_dir / f"{session_id}.db"
+
+        return (
+            self._cached_sessions[session_id].data if session_id in self._cached_sessions else b""
+        )
+
+    def _enforce_limits(self) -> None:
+        """Evict oldest files if cache exceeds size or file count limits."""
+        total_size = sum(entry.size for entry in self._cached_sessions.values())
+        while len(self._cached_sessions) > self._max_files or total_size > self._max_size_bytes:
+            try:
+                session_id, entry = self._cached_sessions.popitem(last=False)
+
+                db_path = self._get_db_file(session_id)
+                if isinstance(db_path, Path):
+                    db_path.unlink(missing_ok=True)
+
+                total_size = max(0, total_size - entry.size)
+            except Exception as e:
+                logger.warning("failed to evict cache file", exc_info=e)
+                break
+
+    def close(self) -> None:
+        """Close the cache and clean up resources."""
+        if self._temp_dir:
+            self._temp_dir.cleanup()
+        elif not self._in_memory:
+            for session_id in self._cached_sessions.keys():
+                db_path = self._get_db_file(session_id)
+                if isinstance(db_path, Path):
+                    db_path.unlink(missing_ok=True)
+        self._cached_sessions.clear()

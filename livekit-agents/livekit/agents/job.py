@@ -208,7 +208,7 @@ class TextMessageContext:
                 msg.session_state.snapshot = new_store.export_snapshot()
             else:
                 with SessionStore(self._session_snapshot) as old_store:
-                    delta = new_store.compute_delta(old_store)
+                    delta = old_store.compute_delta(new_store)
                 msg.session_state.delta = delta
 
         await self._job_ctx._ipc_client.send(msg)

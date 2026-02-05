@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
+import aiohttp
 from aiohttp import web
 
 from livekit.protocol import agent
 
-from . import utils
+from . import llm, utils
 from .log import logger
 from .utils.http_server import HttpServer
 from .version import __version__
@@ -29,7 +32,7 @@ class AgentHttpServer(HttpServer):
         *,
         host: str,
         port: int,
-        loop: asyncio.AbstractEventLoop,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__(host, port, loop)
         self._agent_server = agent_server
@@ -91,7 +94,7 @@ class AgentHttpServer(HttpServer):
             2. Response events: {"type": "message|function_call|...", "data": {...}}
             3. Completion: {"type": "complete", "session_state": {...}, "error": "..."}
         """
-
+        logger.info(f"handling text request: {request.method} {request.path}")
         text_request = await self._parse_text_request(request)
 
         response = web.StreamResponse(
@@ -160,24 +163,25 @@ class AgentHttpServer(HttpServer):
     async def _parse_text_request(self, request: web.Request) -> agent.TextMessageRequest:
         endpoint = request.match_info.get("endpoint", "")
         session_id = request.match_info.get("session_id")
+        logger.info(f"parsing text request: {endpoint} {session_id}")
 
         if endpoint not in self._agent_server._text_handler_fncs:
             raise web.HTTPNotFound(
-                body=json.dumps({"error": f"Service '{endpoint}' not found"}),
+                reason=json.dumps({"error": f"Service '{endpoint}' not found"}),
                 content_type="application/json",
             )
         try:
             body = await request.json()
         except Exception as e:
             raise web.HTTPBadRequest(
-                body=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
+                reason=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
                 content_type="application/json",
             ) from e
 
         text = body.get("text")
         if text is None:
             raise web.HTTPBadRequest(
-                body=json.dumps({"error": "Missing 'text' field"}),
+                reason=json.dumps({"error": "Missing 'text' field"}),
                 content_type="application/json",
             )
 
@@ -189,7 +193,7 @@ class AgentHttpServer(HttpServer):
         metadata = body.get("metadata", {})
         if not isinstance(metadata, dict):
             raise web.HTTPBadRequest(
-                body=json.dumps({"error": "'metadata' must be a JSON object"}),
+                reason=json.dumps({"error": "'metadata' must be a JSON object"}),
                 content_type="application/json",
             )
         metadata["endpoint"] = endpoint
@@ -203,13 +207,196 @@ class AgentHttpServer(HttpServer):
             metadata=metadata_str,
             text=text,
         )
-        if session_state := body.get("session_state"):
-            text_request.session_state = agent.AgentSessionState(
-                version=session_state.get("version", 0)
-            )
-            if (snapshot := session_state.get("snapshot")) is not None:
-                text_request.session_state.snapshot = base64.b64decode(snapshot)
-            if (delta := session_state.get("delta")) is not None:
-                text_request.session_state.delta = base64.b64decode(delta)
-
+        if session_state_dict := body.get("session_state"):
+            session_state = agent.AgentSessionState(version=session_state_dict.get("version", 0))
+            if (snapshot := session_state_dict.get("snapshot")) is not None:
+                session_state.snapshot = base64.b64decode(snapshot)
+            if (delta := session_state_dict.get("delta")) is not None:
+                session_state.delta = base64.b64decode(delta)
+            text_request.session_state.CopyFrom(session_state)
         return text_request
+
+
+@dataclass
+class TextSessionStarted:
+    """Acknowledgment response when starting a text session."""
+
+    session_id: str
+    message_id: str
+
+
+@dataclass
+class TextResponseEvent:
+    """Event from the agent during text processing."""
+
+    event_type: Literal["message", "function_call", "function_call_output", "agent_handoff"]
+    data: llm.ChatMessage | llm.FunctionCall | llm.FunctionCallOutput | llm.AgentHandoff
+
+
+@dataclass
+class TextSessionComplete:
+    """Completion response with final session state or error."""
+
+    session_state: agent.AgentSessionState | None = None
+    error: str | None = None
+
+
+class AgentHttpClient:
+    """Client to interact with AgentHttpServer API."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: aiohttp.ClientTimeout | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
+        """Initialize the HTTP client.
+
+        Args:
+            base_url: Base URL of the agent server (e.g., "http://localhost:8080")
+            timeout: Optional timeout configuration for requests
+        """
+        self._base_url = base_url.rstrip("/")
+        self._loop = loop or asyncio.get_event_loop()
+        self._session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(loop=self._loop), timeout=timeout, loop=self._loop
+        )
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop:
+        return self._loop
+
+    async def aclose(self) -> None:
+        """Close the HTTP client session."""
+        await self._session.close()
+
+    async def __aenter__(self) -> AgentHttpClient:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.aclose()
+
+    async def health_check(self) -> bool:
+        """Check if the agent server is healthy.
+
+        Returns:
+            True if healthy, False otherwise
+        """
+        try:
+            async with self._session.get(f"{self._base_url}/") as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    async def worker_info(self) -> dict[str, Any]:
+        """Get worker information from the agent server.
+
+        Returns:
+            Dictionary containing worker metadata
+
+        Raises:
+            aiohttp.ClientError: If request fails
+        """
+        async with self._session.get(f"{self._base_url}/worker") as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def send_text_stream(
+        self,
+        text: str,
+        *,
+        endpoint: str = "",
+        session_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        session_state: agent.AgentSessionState | None = None,
+    ) -> AsyncIterator[TextSessionStarted | TextResponseEvent | TextSessionComplete]:
+        """Send a text message and stream responses as they arrive.
+
+        Args:
+            text: The text message to send
+            endpoint: Optional endpoint name to route to specific handler
+            session_id: Optional session ID to continue an existing session
+            metadata: Optional metadata dictionary
+            session_state: Optional session state to restore
+
+        Yields:
+            TextSessionAck: Initial acknowledgment
+            TextResponseEvent: Events as they arrive
+            TextSessionComplete: Final completion with session state or error
+
+        Raises:
+            aiohttp.ClientError: If request fails
+        """
+        # build url path
+        url = f"{self._base_url}/text"
+        if endpoint:
+            url = f"{url}/{endpoint}"
+        if session_id:
+            url = f"{url}/sessions/{session_id}"
+
+        body: dict[str, Any] = {"text": text}
+        if metadata:
+            body["metadata"] = metadata
+        if session_state:
+            body["session_state"] = {
+                "version": session_state.version,
+            }
+            if session_state.HasField("snapshot"):
+                body["session_state"]["snapshot"] = base64.b64encode(
+                    session_state.snapshot
+                ).decode()
+            if session_state.HasField("delta"):
+                body["session_state"]["delta"] = base64.b64encode(session_state.delta).decode()
+
+        async with self._session.post(url, json=body) as resp:
+            resp.raise_for_status()
+
+            async for line in resp.content:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse NDJSON line: {e}")
+                    continue
+
+                event_type = data.get("type")
+                if event_type == "ack":
+                    yield TextSessionStarted(
+                        session_id=data["session_id"],
+                        message_id=data["message_id"],
+                    )
+                elif event_type == "complete":
+                    # parse completion
+                    error = data.get("error")
+                    session_state_data = data.get("session_state")
+
+                    parsed_state: agent.AgentSessionState | None = None
+                    if session_state_data:
+                        parsed_state = agent.AgentSessionState(
+                            version=session_state_data.get("version", 0)
+                        )
+                        if (snapshot := session_state_data.get("snapshot")) is not None:
+                            parsed_state.snapshot = base64.b64decode(snapshot)
+                        if (delta := session_state_data.get("delta")) is not None:
+                            parsed_state.delta = base64.b64decode(delta)
+
+                    yield TextSessionComplete(session_state=parsed_state, error=error)
+                else:
+                    data = data.get("data", {})
+                    if event_type == "message":
+                        ev = llm.ChatMessage.model_validate(data)
+                    elif event_type == "function_call":
+                        ev = llm.FunctionCall.model_validate(data)
+                    elif event_type == "function_call_output":
+                        ev = llm.FunctionCallOutput.model_validate(data)
+                    elif event_type == "agent_handoff":
+                        ev = llm.AgentHandoff.model_validate(data)
+                    else:
+                        logger.warning(f"Unknown event type: {event_type}")
+                        continue
+
+                    yield TextResponseEvent(event_type=event_type, data=ev)

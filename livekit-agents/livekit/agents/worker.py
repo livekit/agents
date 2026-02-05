@@ -54,6 +54,7 @@ from .plugin import Plugin
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.hw import get_cpu_monitor
+from .utils.session_store import EphemeralSessionCache
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -381,6 +382,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]] = {}
 
+        self._session_cache: EphemeralSessionCache | None = None
+
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
@@ -667,10 +670,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 http_proxy=self._http_proxy or None,
             )
 
-            # handler for text message response
-            self._proc_pool.on("text_response", self._on_text_response)
-            self._proc_pool.on("text_session_complete", self._on_text_session_complete)
-            self._proc_pool.on("process_closed", self._on_process_closed)
+            if self._text_handler_fncs:
+                self._proc_pool.on("text_response", self._on_text_response)
+                self._proc_pool.on("text_session_complete", self._on_text_session_complete)
+                self._proc_pool.on("process_closed", self._on_process_closed)
+                self._session_cache = EphemeralSessionCache(in_memory=True)
 
             self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
@@ -991,6 +995,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             assert self._http_server is not None
 
             self._closed = True
+
+            if self._session_cache is not None:
+                self._session_cache.close()
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
@@ -1375,7 +1382,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if session_id in self._text_sessions:
                 raise ValueError(f"Session {session_id} already exists")
 
-            # TODO: resolve session state from cache
+            assert self._session_cache is not None
+            if request.HasField("session_state"):
+                session_state = self._session_cache.resolve(session_id, request.session_state)
+                request.session_state.CopyFrom(session_state)
 
             agent_identity = utils.shortuuid("text-agent-")
             room_info = models.Room(sid=utils.shortuuid("TEXT_RM_"), name="text-mode-room")
@@ -1519,10 +1529,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def _on_text_session_complete(self, ev: ipc.proto.TextSessionComplete) -> None:
         """Handle text session complete event from process pool."""
         session_id = ev.session_id
+        assert self._session_cache is not None
 
         if session_info := self._text_sessions.pop(session_id, None):
             session_info.done_fut.set_result(ev)
             session_info.event_ch.close()
+            self._session_cache.save(session_id, ev.session_state)
         else:
             logger.warning(
                 "received text session complete for unknown session",

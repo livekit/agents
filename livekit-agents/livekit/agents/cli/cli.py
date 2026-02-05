@@ -37,10 +37,10 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import api, rtc
-from livekit.protocol.agent import TextMessageRequest
 
 from .._exceptions import CLIError
-from ..job import JobExecutorType, get_job_context
+from ..agent_http_server import AgentHttpClient
+from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
@@ -1172,15 +1172,21 @@ def _text_mode(c: AgentsConsole) -> None:
 
 
 def _sms_text_mode(
-    c: AgentsConsole,
-    server: AgentServer,
-    *,
-    sess_data_file: str,
-    loop: asyncio.AbstractEventLoop,
+    c: AgentsConsole, client: AgentHttpClient, *, endpoint: str, sess_data_file: str
 ) -> None:
-    from ..utils.session_store import SessionStore
-    from ..voice.agent_session import _AgentSessionState
+    from livekit.protocol.agent import AgentSessionState
 
+    from ..agent_http_server import TextResponseEvent, TextSessionComplete, TextSessionStarted
+    from ..utils.session_store import SessionStore
+    from ..voice.run_result import (
+        AgentHandoffEvent,
+        ChatMessageEvent,
+        FunctionCallEvent,
+        FunctionCallOutputEvent,
+    )
+
+    session_id: str | None = None
+    target_version: int | None = None  # hot sync if version specified
     while True:
         try:
             text = prompt(
@@ -1195,32 +1201,6 @@ def _sms_text_mode(
             c.console.bell()
             continue
 
-        # TODO: use SessionStore to load the session data
-        if os.path.exists(sess_data_file):
-            with open(sess_data_file, "rb") as rf:
-                session_data = rf.read()
-        else:
-            session_data = None
-
-        # simulate a text message request
-        text_request = TextMessageRequest(
-            message_id=shortuuid("text-message-"),
-            session_id="text-session",
-            agent_name=None,
-            metadata="",
-            session_data=session_data,
-            text=text,
-        )
-        asyncio.run_coroutine_threadsafe(
-            server.simulate_job(
-                "text-mode-room",
-                agent_identity="text-agent",
-                fake_job=True,
-                text_request=text_request,
-            ),
-            loop,
-        )
-
         c.console.print()
         c.console.print(
             Text.assemble(
@@ -1231,37 +1211,50 @@ def _sms_text_mode(
         for line in text.split("\n"):
             c.console.print(Text(f"    {line}"))
 
-        c.wait_for_io_acquisition()
+        session_state: AgentSessionState | None = None
+        if target_version is None and os.path.exists(sess_data_file):
+            with SessionStore(db_file=sess_data_file) as store:
+                session_state = AgentSessionState(
+                    version=store.version,
+                    snapshot=store.export_snapshot(),
+                )
+        else:
+            session_state = AgentSessionState(version=target_version)
 
-        def _collect_responses(
-            output_queue: queue.Queue[RunEvent | _AgentSessionState | None],
+        response_queue = queue.Queue[TextSessionStarted | TextResponseEvent | TextSessionComplete]()
+
+        def async_worker(
+            session_id: str,
+            user_text: str,
+            user_endpoint: str,
+            user_session_state: AgentSessionState | None,
+            user_response_queue: queue.Queue[
+                TextSessionStarted | TextResponseEvent | TextSessionComplete
+            ],
         ) -> None:
-            async def _collect() -> None:
-                text_ctx = get_job_context().text_message_context
-                if text_ctx is None:
-                    logger.error("no text context found")
-                    return
+            """Run async code in a separate thread with its own event loop."""
 
-                async for response in text_ctx.response_ch:
-                    output_queue.put(response, block=False)
+            async def fetch_responses() -> None:
+                logger.info(f"sending text stream: {user_text} {user_endpoint}")
+                async for response in client.send_text_stream(
+                    user_text,
+                    endpoint=user_endpoint,
+                    session_id=session_id,
+                    session_state=user_session_state,
+                ):
+                    user_response_queue.put(response, block=False)
 
-            def _done_callback(_: asyncio.Task[None]) -> None:
-                session = get_job_context()._primary_agent_session
-                if session is None:
-                    logger.warning("no session data available")
-                    output_queue.put(None, block=False)
-                else:
-                    output_queue.put(session.get_state(), block=False)
+            client.loop.run_until_complete(fetch_responses())
 
-            task = asyncio.create_task(_collect())
-            task.add_done_callback(_done_callback)
+        worker_thread = threading.Thread(
+            target=async_worker,
+            args=(session_id, text, endpoint, session_state, response_queue),
+            daemon=True,
+        )
+        worker_thread.start()
 
-        response_queue = queue.Queue[RunEvent | _AgentSessionState | None]()
-        c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
-
-        new_state: _AgentSessionState | None = None
         while True:
-            resp: RunEvent | _AgentSessionState | None = None
+            resp: TextSessionStarted | TextResponseEvent | TextSessionComplete
             with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
@@ -1269,30 +1262,53 @@ def _sms_text_mode(
                         break
                     except queue.Empty:
                         pass
-            if resp is None:
-                break
 
-            if isinstance(resp, _AgentSessionState):
-                new_state = resp
-                break
+            if isinstance(resp, TextSessionStarted):
+                session_id = resp.session_id
 
-            _print_run_event(c, resp)
+            if isinstance(resp, TextSessionComplete):
+                if resp.error:
+                    logger.error(
+                        "error processing text",
+                        extra={"session_data_file": sess_data_file, "error": resp.error},
+                    )
+                    break
 
-        # save the session data
-        if new_state:
-            with SessionStore(db_file=sess_data_file) as old_store:
-                delta = old_store.update_state(new_state)
+                # save session state to file
+                if resp.session_state:
+                    version = resp.session_state.version
+                    which_oneof = resp.session_state.WhichOneof("data")
+                    if which_oneof == "snapshot":
+                        with open(sess_data_file, "wb") as wf:
+                            wf.write(resp.session_state.snapshot)
+                    elif which_oneof == "delta":
+                        with SessionStore(db_file=sess_data_file) as store:
+                            store.apply_changeset(resp.session_state.delta, version=version)
+                    logger.debug(
+                        "session state updated",
+                        extra={"session_data_file": sess_data_file, "version": version},
+                    )
+                    target_version = version  # save for hot sync
 
-            changeset_dir = pathlib.Path(sess_data_file).with_suffix(".changesets")
-            changeset_dir.mkdir(parents=True, exist_ok=True)
-            with open(changeset_dir / f"v{delta.version}.changeset", "wb") as wf:
-                wf.write(delta.changeset)
+                    break
 
-            logger.debug(
-                "session data saved",
-                extra={"session_data_file": sess_data_file, "version": delta.version},
-            )
+            if isinstance(resp, TextResponseEvent):
+                ev: RunEvent | None = None
+                if resp.event_type == "function_call":
+                    ev = FunctionCallEvent(item=resp.data)
+                elif resp.event_type == "function_call_output":
+                    ev = FunctionCallOutputEvent(item=resp.data)
+                elif resp.event_type == "agent_handoff":
+                    ev = AgentHandoffEvent(item=resp.data, old_agent=None, new_agent=None)
+                elif resp.event_type == "message":
+                    ev = ChatMessageEvent(item=resp.data)
+                else:
+                    logger.warning(f"unknown TextResponseEvent type {resp.event_type}")
 
+                if ev:
+                    _print_run_event(c, ev)
+
+        worker_thread.join()
         # release the console for next run
         c.release_io()
 
@@ -1374,18 +1390,18 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
                 )
             )
     elif event.type == "agent_handoff":
-        old_agent = event.old_agent
-        new_agent = event.new_agent
+        old_agent = event.item.old_agent_id or ""
+        new_agent = event.item.new_agent_id
 
-        old_style = _agent_style(old_agent.__class__.__name__)
-        new_style = _agent_style(new_agent.__class__.__name__)
+        old_style = _agent_style(old_agent)
+        new_style = _agent_style(new_agent)
         c.console.print(
             Text.assemble(
                 ("  \u25cf ", "#FFD93D"),
                 ("Handoff: ", "bold #FFD93D"),
-                Text(f"{old_agent.__class__.__name__}", style=old_style),
+                Text(f"{old_agent}", style=old_style),
                 (" \u2192 ", "dim"),
-                Text(f"{new_agent.__class__.__name__}", style=new_style),
+                Text(f"{new_agent}", style=new_style),
             )
         )
 
@@ -1576,10 +1592,10 @@ def _run_console(
         raise typer.Exit(code=1) from None
 
 
-def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
+def _run_sms_console(*, server: AgentServer, sess_data_file: str, endpoint: str) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = "text"
-    c.enabled = True
+    c.enabled = False  # don't acquire IO for SMS mode
 
     _configure_logger(c, logging.DEBUG)
     c.print("Starting SMS console mode 🚀", tag="Agents")
@@ -1612,11 +1628,22 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
             server=server, shutdown_cb=_on_worker_shutdown, simulate_job_on_start=False
         )
         console_worker.start()
+
+        server_started = threading.Event()
+
+        @server.on("worker_started")
+        def on_worker_started() -> None:
+            server_started.set()
+
+        server_started.wait()
+
+        http_client = AgentHttpClient(f"http://localhost:{server.worker_info.http_port}")
         try:
-            _sms_text_mode(c, server, loop=console_worker._loop, sess_data_file=sess_data_file)
+            _sms_text_mode(c, http_client, sess_data_file=sess_data_file, endpoint=endpoint)
         except _ExitCli:
             pass
         finally:
+            http_client.loop.run_until_complete(http_client.aclose())
             console_worker.shutdown()
             console_worker.join()
 
@@ -1769,6 +1796,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     @app.command()
     def sms_console(
         *,
+        endpoint: Annotated[
+            str,
+            typer.Option(help="Endpoint to send the text to"),
+        ] = "",
         sess_data_file: Annotated[
             Optional[str],  # noqa: UP007
             typer.Option(help="Path to the serialized AgentSession data file in SMS mode"),
@@ -1779,7 +1810,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             temp_dir = tempfile.TemporaryDirectory(prefix="lk_", delete=False)
             sess_data_file = os.path.join(temp_dir.name, "session_data.pkl")
         try:
-            _run_sms_console(server=server, sess_data_file=sess_data_file)
+            _run_sms_console(server=server, sess_data_file=sess_data_file, endpoint=endpoint)
         finally:
             if temp_dir:
                 temp_dir.cleanup()
