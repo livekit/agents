@@ -122,6 +122,10 @@ class DynamicEndpointing:
         )
 
     def on_utterance_started(self, adjustment: float = 0.0, interruption: bool = False) -> None:
+        if self._interrupting:
+            # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
+            return
+
         self._utterance_started_at = time.time() + adjustment
         logger.debug(
             f"utterance started at: {self._utterance_started_at}",
@@ -173,10 +177,6 @@ class DynamicEndpointing:
 
             self._agent_speech_started_at = None
             self._interrupting = True
-            return
-
-        if interruption and self._interrupting:
-            # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
 
         if (pause := self.between_utterance_delay) > 0 and self._agent_speech_started_at is None:
