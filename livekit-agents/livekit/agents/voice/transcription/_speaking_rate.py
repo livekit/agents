@@ -83,9 +83,7 @@ class SpeakingRateStream:
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
                     frame = rtc.combine_audio_frames(inference_frames)
-                    frame_f32_data = np.frombuffer(frame.data, dtype=np.int16).astype(
-                        np.float32
-                    ) / np.float32(np.iinfo(np.int16).max)
+                    frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
 
                     sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
                     pub_timestamp += frame.duration
