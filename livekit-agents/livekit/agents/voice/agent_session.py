@@ -12,7 +12,6 @@ from typing import (
     TYPE_CHECKING,
     Generic,
     Literal,
-    Optional,
     Protocol,
     TypeVar,
     cast,
@@ -883,7 +882,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            self._turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
+            self._turn_detection = cast(TurnDetectionMode | None, turn_detection)
 
         if self._activity is not None:
             self._activity.update_options(

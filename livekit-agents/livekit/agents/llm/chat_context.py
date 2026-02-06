@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import TypedDict
 
 from livekit import rtc
 
@@ -173,7 +173,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = Union[ImageContent, AudioContent, str]
+ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
 class FunctionCall(BaseModel):
@@ -225,7 +225,7 @@ class AgentConfigUpdate(BaseModel):
 
 
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
+    ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
     Field(discriminator="type"),
 ]
 
@@ -664,7 +664,7 @@ class ChatContext:
         if len(self.items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items):
+        for a, b in zip(self.items, other.items, strict=False):
             if a.id != b.id or a.type != b.type:
                 return False
 

@@ -7,7 +7,7 @@ import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import Any, NamedTuple, Union, cast
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 
@@ -40,7 +40,7 @@ class BuiltinAudioClip(enum.Enum):
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 
-AudioSource = Union[AsyncIterator[rtc.AudioFrame], str, BuiltinAudioClip]
+AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
 class AudioConfig(NamedTuple):
@@ -269,7 +269,7 @@ class BackgroundAudioPlayer:
 
             if self._ambient_sound:
                 normalized = self._normalize_sound_source(
-                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
+                    cast(AudioSource | AudioConfig | list[AudioConfig], self._ambient_sound)
                 )
                 if normalized:
                     sound_source, volume = normalized
@@ -325,7 +325,7 @@ class BackgroundAudioPlayer:
 
             assert self._thinking_sound is not None
             self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
+                cast(AudioSource | AudioConfig | list[AudioConfig], self._thinking_sound)
             )
 
         elif self._thinking_handle:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Generator, Sequence
-from typing import Any, Callable
+from collections.abc import Callable, Generator, Sequence
+from typing import Any
 
 from opentelemetry import context as otel_context
 

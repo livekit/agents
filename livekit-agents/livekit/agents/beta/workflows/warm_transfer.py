@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, cast
 
 from livekit import api, rtc
 
@@ -117,7 +117,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._background_audio = BackgroundAudioPlayer()
         self._hold_audio_handle: PlayHandle | None = None
         self._hold_audio = (
-            cast(Optional[Union[AudioSource, AudioConfig, list[AudioConfig]]], hold_audio)
+            cast(AudioSource | AudioConfig | list[AudioConfig] | None, hold_audio)
             if is_given(hold_audio)
             else AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
         )

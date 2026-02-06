@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context
@@ -44,7 +43,7 @@ class AvatarSession:
         participant_identity: str,
         participant_name: str,
         as_agent: bool = True,
-        local_participant_identity: Optional[str] = None,
+        local_participant_identity: str | None = None,
     ) -> str:
         token = api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
         token = token.with_identity(participant_identity)

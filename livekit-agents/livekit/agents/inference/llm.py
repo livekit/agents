@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 import httpx
 import openai
@@ -66,7 +66,7 @@ DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = Union[OpenAIModels, GoogleModels, KimiModels, DeepSeekModels]
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):

@@ -1,5 +1,6 @@
 import time
-from typing import Callable, Generic, Optional, TypeVar
+from collections.abc import Callable
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -17,7 +18,7 @@ class PeriodicCollector(Generic[T]):
         self._duration = duration
         self._callback = callback
         self._last_flush_time = time.monotonic()
-        self._total: Optional[T] = None
+        self._total: T | None = None
 
     def push(self, value: T) -> None:
         """Add a value to the accumulator"""

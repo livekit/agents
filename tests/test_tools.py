@@ -314,7 +314,13 @@ class TestToolExecution:
 
         schema4 = function_arguments_to_pydantic_model(agent.raw_tool_in_agent)
         assert schema4.model_json_schema() == {
-            "properties": {"raw_arguments": {"additionalProperties": True, "title": "Raw Arguments", "type": "object"}},
+            "properties": {
+                "raw_arguments": {
+                    "additionalProperties": True,
+                    "title": "Raw Arguments",
+                    "type": "object",
+                }
+            },
             "required": ["raw_arguments"],
             "title": "RawToolInAgentArgs",
             "type": "object",

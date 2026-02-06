@@ -33,7 +33,7 @@ class EncodeOptions:
     resize_options: Optional["ResizeOptions"] = None
     """Options for resizing the image."""
 
-    quality: Optional[int] = 75
+    quality: int | None = 75
     """Image compression quality, 0-100. Only applies to JPEG."""
 
 

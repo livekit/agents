@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Any, Literal, Optional, Union, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
@@ -91,13 +91,13 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    toolChoice: Optional[dict[str, dict[str, str]]] = None
+    toolChoice: dict[str, dict[str, str]] | None = None
     tools: list[Tool]
 
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
-    endpointingSensitivity: Optional[TURN_DETECTION] = "MEDIUM"
+    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -211,19 +211,19 @@ class SessionEndEvent(BaseModel):
 
 
 class Event(BaseModel):
-    event: Union[
-        SessionStartEvent,
-        InputTextContentStartEvent,
-        InputAudioContentStartEvent,
-        InputToolContentStartEvent,
-        PromptStartEvent,
-        TextInputContentEvent,
-        AudioInputContentEvent,
-        ToolResultContentEvent,
-        InputContentEndEvent,
-        PromptEndEvent,
-        SessionEndEvent,
-    ]
+    event: (
+        SessionStartEvent
+        | InputTextContentStartEvent
+        | InputAudioContentStartEvent
+        | InputToolContentStartEvent
+        | PromptStartEvent
+        | TextInputContentEvent
+        | AudioInputContentEvent
+        | ToolResultContentEvent
+        | InputContentEndEvent
+        | PromptEndEvent
+        | SessionEndEvent
+    )
 
 
 class SonicEventBuilder:
@@ -300,11 +300,11 @@ class SonicEventBuilder:
         sample_rate: SAMPLE_RATE_HERTZ,
         system_content: str,
         chat_ctx: llm.ChatContext,
-        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
+        tool_configuration: ToolConfiguration | dict[str, Any] | str | None = None,
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
+        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
@@ -339,7 +339,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
+        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(
@@ -461,7 +461,7 @@ class SonicEventBuilder:
     def create_tool_result_event(
         self,
         content_name: str,
-        content: Union[str, dict[str, Any]],
+        content: str | dict[str, Any],
     ) -> str:
         if isinstance(content, dict):
             content_str = json.dumps(content)
@@ -512,7 +512,7 @@ class SonicEventBuilder:
         self,
         voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
-        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
+        tool_configuration: ToolConfiguration | dict[str, Any] | str | None = None,
     ) -> str:
         if tool_configuration is None:
             tool_configuration = ToolConfiguration(tools=[])

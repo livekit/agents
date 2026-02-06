@@ -10,7 +10,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Union, cast, overload
+from typing import Any, Literal, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -354,8 +354,8 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else 1.0,
-            tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
-            truncation=cast(Union[RealtimeTruncation, None], truncation)
+            tracing=cast(Tracing | None, tracing) if is_given(tracing) else None,
+            truncation=cast(RealtimeTruncation | None, truncation)
             if is_given(truncation)
             else None,
             max_session_duration=max_session_duration
@@ -572,7 +572,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.turn_detection = to_turn_detection(turn_detection)  # type: ignore
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
+            self._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)  # type: ignore
@@ -587,10 +587,10 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = cast(Union[Tracing, None], tracing)
+            self._opts.tracing = cast(Tracing | None, tracing)
 
         if is_given(truncation):
-            self._opts.truncation = cast(Union[RealtimeTruncation, None], truncation)
+            self._opts.truncation = cast(RealtimeTruncation | None, truncation)
 
         for sess in self._sessions:
             sess.update_options(
@@ -678,7 +678,7 @@ class RealtimeSession(
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
+        self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
@@ -1052,7 +1052,7 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
-            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
+            tool_choice = cast(llm.ToolChoice | None, tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             session.tool_choice = to_oai_tool_choice(tool_choice)
             has_changes = True
@@ -1063,15 +1063,13 @@ class RealtimeSession(
             has_changes = True
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
-            session.tracing = cast(Union[Tracing, None], tracing)  # type: ignore
+            self._realtime_model._opts.tracing = cast(Tracing | None, tracing)
+            session.tracing = cast(Tracing | None, tracing)  # type: ignore
             has_changes = True
 
         if is_given(truncation):
-            self._realtime_model._opts.truncation = cast(
-                Union[RealtimeTruncation, None], truncation
-            )
-            session.truncation = cast(Union[RealtimeTruncation, None], truncation)
+            self._realtime_model._opts.truncation = cast(RealtimeTruncation | None, truncation)
+            session.truncation = cast(RealtimeTruncation | None, truncation)
             has_changes = True
 
         has_audio_config = False

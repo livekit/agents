@@ -18,10 +18,10 @@ import asyncio
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -52,8 +52,8 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
-LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, list[LgType]]
+LgType = SpeechLanguages | str
+LanguageCode = LgType | list[LgType]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
