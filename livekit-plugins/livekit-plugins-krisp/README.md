@@ -22,20 +22,26 @@ It must be obtained and installed separately from Krisp.
 
 ## Prerequisites
 
-### For Noise Reduction
+### Required for All Features
 
 1. **Krisp Audio SDK**: `pip install krisp-audio`
-2. **Noise Reduction Model**: Obtain a noise reduction `.kef` model file from Krisp
-3. **Set environment variable**:
+2. **License Key**: Obtain a license key from Krisp and set it as an environment variable:
+   ```bash
+   export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
+   ```
+
+### For Noise Reduction
+
+1. **Noise Reduction Model**: Obtain a noise reduction `.kef` model file from Krisp
+2. **Set environment variable**:
    ```bash
    export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/noise_model.kef
    ```
 
 ### For Turn Detection
 
-1. **Krisp Audio SDK**: `pip install krisp-audio`
-2. **Turn Detection Model**: Obtain a turn detection `.kef` model file from Krisp
-3. **Set environment variable**:
+1. **Turn Detection Model**: Obtain a turn detection `.kef` model file from Krisp
+2. **Set environment variable**:
    ```bash
    export KRISP_VIVA_TURN_MODEL_PATH=/path/to/turn_model.kef
    ```
@@ -212,6 +218,12 @@ KrispSDKManager.release()  # Decrement reference
 ```
 
 ## Troubleshooting
+
+### "Krisp SDK initialization failed" or Licensing Errors
+Make sure the license key is set:
+```bash
+export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
+```
 
 ### "Model path must be provided"
 ```bash

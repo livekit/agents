@@ -11,6 +11,7 @@ Usage:
 
 Requirements:
     pip install soundfile numpy livekit-plugins-krisp
+    Set KRISP_VIVA_SDK_LICENSE_KEY environment variable with your Krisp license key
     Set KRISP_VIVA_TURN_MODEL_PATH environment variable to point to your .kef model file
 
 Note: This is a standalone script, not a pytest test. It will be skipped during pytest collection.
@@ -56,6 +57,14 @@ except ImportError:
 
 def load_turn_detector():
     """Load the Krisp VIVA turn detector module."""
+    # Check license key
+    license_key = os.getenv("KRISP_VIVA_SDK_LICENSE_KEY")
+    if not license_key:
+        print("Warning: KRISP_VIVA_SDK_LICENSE_KEY environment variable not set")
+        print("Set it with: export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key")
+        print("Or in PowerShell: $env:KRISP_VIVA_SDK_LICENSE_KEY='your-license-key'")
+        print("The SDK may fail to initialize without a valid license key.")
+    
     env_var = "KRISP_VIVA_TURN_MODEL_PATH"
 
     # Check model path
@@ -297,7 +306,9 @@ Examples:
 Supported audio formats: WAV, FLAC, OGG, etc. (via soundfile)
 Supported sample rates: 8000, 16000, 24000, 32000, 44100, 48000 Hz
 
-Note: Set KRISP_VIVA_TURN_MODEL_PATH environment variable to point to your .kef model file
+Note: 
+    - Set KRISP_VIVA_SDK_LICENSE_KEY environment variable with your Krisp license key
+    - Set KRISP_VIVA_TURN_MODEL_PATH environment variable to point to your .kef model file
         """,
     )
 

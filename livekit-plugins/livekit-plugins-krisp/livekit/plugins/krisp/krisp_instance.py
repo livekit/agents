@@ -21,6 +21,7 @@ counting, ensuring proper initialization and cleanup when multiple components
 
 from __future__ import annotations
 
+import os
 from threading import Lock
 from typing import Any
 
@@ -87,6 +88,8 @@ class KrispSDKManager:
     to track active users (filters, turn detectors, etc.).
 
     Thread-safe implementation using a lock for all operations.
+
+    The license key should be provided via the KRISP_VIVA_SDK_LICENSE_KEY environment variable.
     """
 
     _initialized = False
@@ -97,6 +100,15 @@ class KrispSDKManager:
     def _log_callback(log_message: str, log_level: Any) -> None:
         """Thread-safe callback for Krisp SDK logging."""
         logger.debug(f"[Krisp {log_level}] {log_message}")
+
+    @staticmethod
+    def licensing_error_callback(error, error_message):
+        logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
+
+    @classmethod
+    def _get_license_key(cls) -> str:
+        """Get the license key from the KRISP_VIVA_SDK_LICENSE_KEY environment variable."""
+        return os.getenv("KRISP_VIVA_SDK_LICENSE_KEY", "")
 
     @classmethod
     def acquire(cls) -> None:
@@ -112,7 +124,8 @@ class KrispSDKManager:
             # Initialize SDK on first acquire
             if cls._reference_count == 0:
                 try:
-                    krisp_audio.globalInit("", cls._log_callback, krisp_audio.LogLevel.Off)
+                    license_key = cls._get_license_key()
+                    krisp_audio.globalInit("", license_key, cls.licensing_error_callback, cls._log_callback, krisp_audio.LogLevel.Off)
                     cls._initialized = True
 
                     version = krisp_audio.getVersion()

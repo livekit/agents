@@ -286,14 +286,15 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         return self._filtering_enabled
 
     def _close(self) -> None:
-        """Clean up processor session resources (required by FrameProcessor interface)."""
+        """Clean up processor session resources (required by FrameProcessor interface).
+        
+        Note: This method is called during track transitions (when streams are closed/reopened),
+        not just when the processor is destroyed. Therefore, we only clean up the session here,
+        not the SDK reference. The SDK will be released in __del__ when the processor is
+        actually being destroyed (at the end of the call).
+        """
         if self._session is not None:
             self._session = None
-
-        # Release SDK reference (only if not already released)
-        if getattr(self, "_sdk_acquired", False):
-            KrispSDKManager.release()
-            self._sdk_acquired = False
 
         logger.debug("Krisp frame processor session closed")
 
