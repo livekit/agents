@@ -1,5 +1,5 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+constraint-dependencies = []
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -81,7 +81,7 @@ docs = ["pdoc3", "setuptools"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [".github"]
 
 [tool.ruff.lint]
