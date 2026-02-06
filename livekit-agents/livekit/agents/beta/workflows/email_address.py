@@ -36,6 +36,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=(
@@ -56,8 +57,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. "
                 "(before asking any questions or providing any answers.) \n"
                 "Don't invent new email addresses, stick strictly to what the user said. \n"
-                "Call `confirm_email_address` after the user confirmed the email address is correct. \n"
-                "If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed. \n"
+                + (
+                    "Call `confirm_email_address` after the user confirmed the email address is correct. \n"
+                    if require_confirmation is not False
+                    else ""
+                )
+                + "If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
@@ -73,7 +78,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
         self._current_email = ""
-
+        self._require_confirmation = require_confirmation
         # speech_handle/turn used to update the email address.
         # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
         self._email_update_speech_handle: SpeechHandle | None = None
@@ -97,7 +102,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self._current_email = email
         separated_email = " ".join(email)
 
-        if ctx.speech_handle.input_mode == "text":
+        if self._require_confirmation is False or ctx.speech_handle.input_mode == "text":
             if not self.done():
                 self.complete(GetEmailResult(email_address=self._current_email))
             return None  # no need to continue the conversation

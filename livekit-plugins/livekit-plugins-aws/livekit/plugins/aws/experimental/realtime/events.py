@@ -316,13 +316,11 @@ class SonicEventBuilder:
         ]
 
         # note: tool call events are not supported yet
-        if chat_ctx.items:
+        messages = chat_ctx.messages()
+        if messages:
             logger.debug("initiating session with chat context")
-            for item in chat_ctx.items:
-                if item.type != "message":
-                    continue
-
-                if (role := item.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
+            for msg in messages:
+                if (role := msg.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
                     continue
 
                 ctx_content_name = str(uuid.uuid4())
@@ -330,7 +328,7 @@ class SonicEventBuilder:
                     self.create_text_content_block(
                         ctx_content_name,
                         cast(ROLE, role),
-                        "".join(c for c in item.content if isinstance(c, str)),
+                        "".join(c for c in msg.content if isinstance(c, str)),
                     )
                 )
 

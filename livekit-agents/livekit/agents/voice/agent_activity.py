@@ -337,7 +337,7 @@ class AgentActivity(RecognitionHooks):
         tools_added = list(new_tool_names - old_tool_names) or None
         tools_removed = list(old_tool_names - new_tool_names) or None
 
-        tools = list(set(tools))
+        tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
         # Record the configuration change
@@ -1021,14 +1021,21 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
+        skip_reply: bool = False
         if self._rt_session is not None:
-            self._rt_session.commit_user_turn()
+            # commit audio buffer and trigger response generation
+            # `skip_reply` prevents duplicate reply from _on_user_turn_completed
+            # but keeps flushing STT transcript into the chat context
+            self._rt_session.commit_audio()
+            self._session.generate_reply()
+            skip_reply = True
 
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
+            skip_reply=skip_reply,
         )
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
@@ -1485,11 +1492,23 @@ class AgentActivity(RecognitionHooks):
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
+        user_message = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
+
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
                 return
 
             if self._rt_session is not None:
+                if info.skip_reply:
+                    if info.new_transcript != "":
+                        # only add user message to chat context if reply should be skipped
+                        self._agent._chat_ctx.items.append(user_message)
+                        self._session._conversation_item_added(user_message)
+                    return
                 self._rt_session.commit_audio()
 
         if (current_speech := self._current_speech) is not None:
@@ -1505,12 +1524,6 @@ class AgentActivity(RecognitionHooks):
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
-
-        user_message = llm.ChatMessage(
-            role="user",
-            content=[info.new_transcript],
-            transcript_confidence=info.transcript_confidence,
-        )
 
         if self._scheduling_paused:
             logger.warning(

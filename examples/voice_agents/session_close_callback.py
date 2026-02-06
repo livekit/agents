@@ -21,9 +21,9 @@ class MyAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant.",
-            stt="assemblyai/universal-streaming",
+            stt="deepgram/nova-3:en",
             llm="openai/gpt-4.1-mini",
-            tts="cartesia/sonic-3",
+            tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
             # llm=google.realtime.RealtimeModel(),
             tools=[
                 EndCallTool(

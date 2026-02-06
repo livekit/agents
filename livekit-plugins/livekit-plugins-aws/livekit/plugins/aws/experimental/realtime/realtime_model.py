@@ -1615,7 +1615,10 @@ class RealtimeSession(  # noqa: F811
             self._chat_ctx_ready = asyncio.get_running_loop().create_future()
 
         chat_ctx = chat_ctx.copy(
-            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
         )
 
         # Initial context setup (once)
@@ -2004,9 +2007,6 @@ class RealtimeSession(  # noqa: F811
 
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Nova Sonic's Realtime API")
-
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Nova Sonic's Realtime API")
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("video is not supported by Nova Sonic's Realtime API")

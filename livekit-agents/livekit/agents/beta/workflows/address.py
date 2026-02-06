@@ -31,6 +31,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=(
@@ -51,8 +52,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 "Call `update_address` at the first opportunity whenever you form a new hypothesis about the address. "
                 "(before asking any questions or providing any answers.) \n"
                 "Don't invent new addresses, stick strictly to what the user said. \n"
-                "Call `confirm_address` after the user confirmed the address is correct. \n"
-                "When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.\n"
+                + (
+                    "Call `confirm_address` after the user confirmed the address is correct. \n"
+                    if require_confirmation is not False
+                    else ""
+                )
+                + "When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.\n"
                 "Do not read the number and the suffix letters separately.\n"
                 "Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.\n"
                 "For example, read 90210 as 'nine zero two one zero.'\n"
@@ -74,7 +79,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
         self._current_address = ""
-
+        self._require_confirmation = require_confirmation
         self._address_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
@@ -83,7 +88,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     @function_tool()
     async def update_address(
         self, street_address: str, unit_number: str, locality: str, country: str, ctx: RunContext
-    ) -> str:
+    ) -> str | None:
         """Update the address provided by the user.
 
         Args:
@@ -101,11 +106,15 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         address = " ".join(address_fields)
         self._current_address = address
 
-        return (
-            f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
-            f"Prompt the user for confirmation, do not call `confirm_address` directly"
-        )
+        if self._require_confirmation:
+            return (
+                f"The address has been updated to {address}\n"
+                f"Repeat the address field by field: {address_fields} if needed\n"
+                f"Prompt the user for confirmation, do not call `confirm_address` directly"
+            )
+        else:
+            self.complete(GetAddressResult(address=self._current_address))
+            return None
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def confirm_address(self, ctx: RunContext) -> None:

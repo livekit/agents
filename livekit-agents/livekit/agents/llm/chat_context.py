@@ -246,6 +246,10 @@ class ChatContext:
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
+
     def add_message(
         self,
         *,
@@ -302,6 +306,7 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
+        exclude_config_update: bool = False,
         tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -341,6 +346,9 @@ class ChatContext:
                 continue
 
             if exclude_handoff and item.type == "agent_handoff":
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if (
@@ -389,6 +397,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
+        exclude_config_update: bool = False,
     ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
         existing_ids = {item.id for item in self._items}
@@ -407,6 +416,9 @@ class ChatContext:
             ):
                 continue
 
+            if exclude_config_update and item.type == "agent_config_update":
+                continue
+
             if item.id not in existing_ids:
                 idx = self.find_insertion_index(created_at=item.created_at)
                 self._items.insert(idx, item)
@@ -422,6 +434,7 @@ class ChatContext:
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
+        exclude_config_update: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -429,6 +442,9 @@ class ChatContext:
                 "function_call",
                 "function_call_output",
             ]:
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if item.type == "message":
@@ -542,17 +558,15 @@ class ChatContext:
         keep_last_turns: int = 2,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
-        for item in self.items:
-            if item.type != "message":
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
-            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
                 continue
 
-            text = (item.text_content or "").strip()
+            text = (msg.text_content or "").strip()
             if text:
-                to_summarize.append(item)
+                to_summarize.append(msg)
         if not to_summarize:
             return self
 

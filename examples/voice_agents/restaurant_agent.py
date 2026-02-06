@@ -126,6 +126,7 @@ class BaseAgent(Agent):
                 exclude_instructions=True,
                 exclude_function_call=False,
                 exclude_handoff=True,
+                exclude_config_update=True,
             ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
             items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]
