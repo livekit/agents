@@ -108,7 +108,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         endpoint: str | None = None,
-        model: str = "gpt-realtime",
+        model: str | None = None,
         voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -125,7 +125,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             endpoint: Azure Voice Live endpoint URL (wss://...). If None, reads from AZURE_VOICELIVE_ENDPOINT.
-            model: Model name (default: "gpt-realtime").
+            model: Model name. If None, reads from AZURE_VOICELIVE_MODEL (default: "gpt-realtime").
             voice: Voice for audio responses (default: "en-US-AvaNeural").
             modalities: List of modalities to enable (default: ["text", "audio"]).
             turn_detection: Turn detection configuration. Accepts ServerVad, AzureSemanticVad,
@@ -186,6 +186,9 @@ class RealtimeModel(llm.RealtimeModel):
                 "or AZURE_VOICELIVE_ENDPOINT environment variable"
             )
 
+        # Get model from environment if not provided
+        model_val = model or os.environ.get("AZURE_VOICELIVE_MODEL") or "gpt-realtime"
+
         # Get API key if not using default credential
         api_key_val = api_key
         if not use_default_credential:
@@ -202,7 +205,7 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._opts = _RealtimeOptions(
             endpoint=endpoint_val,
-            model=model,
+            model=model_val,
             voice=voice,
             tool_choice=tool_choice_val,
             turn_detection=turn_detection_val,
