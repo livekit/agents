@@ -303,7 +303,7 @@ class LLMStream(llm.LLMStream):
                 headers = self._extra_kwargs.setdefault("extra_headers", {})
                 headers["X-LiveKit-Inference-Provider"] = self._provider
 
-            self._oai_stream = stream = await self._client.chat.completions.create(
+            self._oai_stream = stream = await self._client.chat.completions.create(  # type: ignore[call-overload]
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
                 tools=tool_schemas or openai.NOT_GIVEN,
                 model=self._model,

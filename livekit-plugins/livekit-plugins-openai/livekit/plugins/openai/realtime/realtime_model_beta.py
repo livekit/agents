@@ -10,7 +10,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -284,7 +284,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else None,
-            tracing=cast(Tracing | None, tracing) if is_given(tracing) else None,
+            tracing=tracing if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -421,7 +421,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -430,13 +430,13 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(speed):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = cast(Tracing | None, tracing)
+            self._opts.tracing = tracing
 
         for sess in self._sessions:
             sess.update_options(
@@ -918,7 +918,6 @@ class RealtimeSessionBeta(
         kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
-            tool_choice = cast(llm.ToolChoice | None, tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -935,7 +934,7 @@ class RealtimeSessionBeta(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
@@ -951,8 +950,8 @@ class RealtimeSessionBeta(
             kwargs["speed"] = speed
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = cast(Tracing | None, tracing)
-            kwargs["tracing"] = cast(Tracing | None, tracing)
+            self._realtime_model._opts.tracing = tracing
+            kwargs["tracing"] = tracing
 
         if kwargs:
             self.send_event(

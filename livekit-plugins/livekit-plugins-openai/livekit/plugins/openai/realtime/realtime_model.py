@@ -10,7 +10,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -354,10 +354,8 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else 1.0,
-            tracing=cast(Tracing | None, tracing) if is_given(tracing) else None,
-            truncation=cast(RealtimeTruncation | None, truncation)
-            if is_given(truncation)
-            else None,
+            tracing=tracing if is_given(tracing) else None,
+            truncation=truncation if is_given(truncation) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -569,28 +567,28 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.voice = voice
 
         if is_given(turn_detection):
-            self._opts.turn_detection = to_turn_detection(turn_detection)  # type: ignore
+            self._opts.turn_detection = to_turn_detection(turn_detection)
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
-            self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)  # type: ignore
+            self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)
 
         if is_given(input_audio_noise_reduction):
-            self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
+            self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(speed):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = cast(Tracing | None, tracing)
+            self._opts.tracing = tracing
 
         if is_given(truncation):
-            self._opts.truncation = cast(RealtimeTruncation | None, truncation)
+            self._opts.truncation = truncation
 
         for sess in self._sessions:
             sess.update_options(
@@ -1052,24 +1050,23 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
-            tool_choice = cast(llm.ToolChoice | None, tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             session.tool_choice = to_oai_tool_choice(tool_choice)
             has_changes = True
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
-            session.max_output_tokens = max_response_output_tokens  # type: ignore
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            session.max_output_tokens = max_response_output_tokens
             has_changes = True
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = cast(Tracing | None, tracing)
-            session.tracing = cast(Tracing | None, tracing)  # type: ignore
+            self._realtime_model._opts.tracing = tracing
+            session.tracing = tracing  # type: ignore[assignment]
             has_changes = True
 
         if is_given(truncation):
-            self._realtime_model._opts.truncation = cast(RealtimeTruncation | None, truncation)
-            session.truncation = cast(RealtimeTruncation | None, truncation)
+            self._realtime_model._opts.truncation = truncation
+            session.truncation = truncation
             has_changes = True
 
         has_audio_config = False
@@ -1086,8 +1083,8 @@ class RealtimeSession(
             has_audio_config = True
 
         if is_given(turn_detection):
-            self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
-            audio_input.turn_detection = turn_detection  # type: ignore
+            self._realtime_model._opts.turn_detection = turn_detection
+            audio_input.turn_detection = turn_detection
             has_audio_config = True
 
         if is_given(input_audio_transcription):
@@ -1096,7 +1093,7 @@ class RealtimeSession(
             has_audio_config = True
 
         if is_given(input_audio_noise_reduction):
-            input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
+            input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
             audio_input.noise_reduction = input_audio_noise_reduction
             has_audio_config = True

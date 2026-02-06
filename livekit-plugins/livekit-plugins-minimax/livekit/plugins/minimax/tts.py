@@ -309,7 +309,7 @@ class TTS(tts.TTS):
             self._opts.voice_id = voice
 
         if utils.is_given(emotion):
-            self._opts.emotion = cast(TTSEmotion | None, emotion)
+            self._opts.emotion = emotion
 
         if utils.is_given(speed):
             self._opts.speed = speed
@@ -336,7 +336,7 @@ class TTS(tts.TTS):
             self._opts.timbre = timbre
 
         if utils.is_given(language_boost):
-            self._opts.language_boost = cast(TTSLanguageBoost | None, language_boost)
+            self._opts.language_boost = language_boost
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

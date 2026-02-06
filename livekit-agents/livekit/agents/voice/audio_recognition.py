@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from opentelemetry import trace
 
@@ -160,7 +160,6 @@ class AudioRecognition:
             self._max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            turn_detection = cast(TurnDetectionMode | None, turn_detection)
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
 
             mode = turn_detection if isinstance(turn_detection, str) else None

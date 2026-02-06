@@ -14,7 +14,6 @@ from typing import (
     Literal,
     Protocol,
     TypeVar,
-    cast,
     overload,
     runtime_checkable,
 )
@@ -364,7 +363,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
-    def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
+    def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
         super().emit(event, arg)
 
@@ -882,7 +881,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            self._turn_detection = cast(TurnDetectionMode | None, turn_detection)
+            self._turn_detection = turn_detection
 
         if self._activity is not None:
             self._activity.update_options(

@@ -543,7 +543,7 @@ class RealtimeSession(  # noqa: F811
         }
         self._turn_tracker = _TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
-            cast(Callable[[], None], self.emit_generation_event),
+            self.emit_generation_event,
         )
 
         # Create main task to manage session lifecycle
@@ -1843,8 +1843,9 @@ class RealtimeSession(  # noqa: F811
                 # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
 
                 for nf in self._bstream.write(f.data.tobytes()):
-                    self._log_significant_audio(nf.data)
-                    self._audio_input_chan.send_nowait(nf.data)
+                    audio_bytes = bytes(nf.data)
+                    self._log_significant_audio(audio_bytes)
+                    self._audio_input_chan.send_nowait(audio_bytes)
         else:
             logger.warning("audio input channel closed, skipping audio")
 

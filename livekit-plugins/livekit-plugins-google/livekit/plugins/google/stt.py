@@ -192,7 +192,7 @@ class STT(stt.STT):
 
         if not is_given(credentials_file) and not is_given(credentials_info):
             try:
-                gauth_default()  # type: ignore
+                gauth_default()
             except DefaultCredentialsError:
                 raise ValueError(
                     "Application default credentials must be available "
@@ -264,7 +264,7 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()  # type: ignore
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
