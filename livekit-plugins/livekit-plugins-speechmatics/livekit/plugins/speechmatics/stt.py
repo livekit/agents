@@ -312,7 +312,7 @@ class STT(stt.STT):
 
         # Show warning for external
         if self._stt_options.turn_detection_mode == TurnDetectionMode.EXTERNAL:
-            logger.info("STT under external turn detection control.")
+            logger.info("STT under external turn detection control")
 
     @property
     def provider(self) -> str:

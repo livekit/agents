@@ -56,30 +56,22 @@ Usage:
 
 ```python
 from livekit.agents import AgentSession
-from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import speechmatics, silero
 
 agent = AgentSession(
     stt=speechmatics.STT(
-        turn_detection_mode=speechmatics.TurnDetectionMode.EXTERNAL,
+        end_of_utterance_silence_trigger=0.2,
         speaker_active_format="[Speaker {speaker_id}] {text}",
         speaker_passive_format="[Speaker {speaker_id} *PASSIVE*] {text}",
     ),
     vad=silero.VAD.load(),
-    turn_detection=EnglishModel(),
+    turn_detection=MultilingualModel(),
     min_endpointing_delay=0.3,
     max_endpointing_delay=5.0,
     ...
 )
-
-@agent.on("user_state_changed")
-def on_user_state(state):
-    if state.new_state == "listening" and state.old_state == "speaking":
-        stt.finalize()
-
 ```
-
-Note: The plugin was built with LiveKit's [end-of-turn detection feature](https://docs.livekit.io/agents/v1/build/turn-detection/) in mind, and it doesn't implement phrase endpointing. `AddTranscript` and `AddPartialTranscript` events are emitted as soon as they’re received from the Speechmatics STT engine.
 
 ## Pre-requisites
 
