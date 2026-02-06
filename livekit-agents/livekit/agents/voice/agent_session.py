@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import time
 from collections.abc import AsyncIterable, Sequence
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Optional,
@@ -38,7 +40,7 @@ from ..types import (
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent
+from .agent import Agent, _AgentState
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
@@ -97,6 +99,15 @@ Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
+_AgentSessionContextVar = contextvars.ContextVar["AgentSession"]("agents_session")
+
+
+@dataclass
+class _AgentSessionState:
+    userdata: Any
+    tools: list[str]  # tool id
+    history: dict[str, Any]
+    agent: _AgentState
 
 
 @runtime_checkable
@@ -350,6 +361,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        self._rehydrated_agents: dict[str, Agent] = {}
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -608,7 +620,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if job_ctx._primary_agent_session is None:
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 elif self._enable_recording:
                     raise RuntimeError(
@@ -650,7 +662,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(
-                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
+                asyncio.create_task(
+                    self._update_activity(
+                        self._agent,
+                        wait_on_enter=False,
+                        # rehydrated agents have an activity
+                        new_activity="start" if not self._agent._activity else "resume",
+                    )
+                )
             )
 
             try:
@@ -861,6 +880,69 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
+    def get_state(self) -> _AgentSessionState:
+        history = self._chat_ctx.to_dict(
+            exclude_image=True,
+            exclude_audio=True,
+            exclude_function_call=False,
+            exclude_timestamp=False,
+            exclude_config_update=True,
+        )
+        assert self._agent is not None, "AgentSession is not started"
+        return _AgentSessionState(
+            userdata=self._userdata,
+            tools=[tool.id for tool in self.tools],
+            history=history,
+            agent=self._agent._get_state(),
+        )
+
+    async def rehydrate(self, state: _AgentSessionState | bytes) -> None:
+        """Restore session state from bytes."""
+        from ..utils.session_store import SessionStore
+
+        if self._started:
+            # TODO(long): allow rehydrating a session that has already started?
+            raise RuntimeError("Cannot rehydrate session that has already started")
+
+        if isinstance(state, bytes):
+            with SessionStore(db_file=state) as store:
+                sess_state = store.export_state()
+        else:
+            sess_state = state
+
+        self._userdata = sess_state.userdata
+        self._chat_ctx = llm.ChatContext.from_dict(sess_state.history)
+
+        tool_by_id = {tool.id: tool for tool in self.tools}
+        valid_tools: list[llm.Tool | llm.Toolset] = []
+        missing_tools: list[str] = []
+        for tool_id in sess_state.tools:
+            if tool_id in tool_by_id:
+                valid_tools.append(tool_by_id[tool_id])
+            else:
+                missing_tools.append(tool_id)
+        if missing_tools:
+            logger.warning(
+                "tools not found when unpickling", extra={"missing_tools": missing_tools}
+            )
+        self._tools = valid_tools
+
+        # rehydrate agent recursively and register them to the session
+        tk = _AgentSessionContextVar.set(self)
+        try:
+            agent = Agent._rehydrate(sess_state.agent)
+        finally:
+            _AgentSessionContextVar.reset(tk)
+
+        await self.start(agent=agent)
+
+    def _register_rehydrated_agent(self, agent: Agent) -> None:
+        if agent.id in self._rehydrated_agents:
+            raise RuntimeError(
+                f"Agent with id {agent.id} already registered, please avoid creating agents with the same id"
+            )
+        self._rehydrated_agents[agent.id] = agent
+
     def update_options(
         self,
         *,
@@ -1046,6 +1128,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            is_handoff = agent is not self._agent or not agent.is_rehydrated()
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
@@ -1081,17 +1164,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
-            )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
+            if is_handoff:
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
                 )
-            self._chat_ctx.insert(handoff_item)
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()
@@ -1100,8 +1184,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
-            assert self._activity._on_enter_task is not None
-            await asyncio.shield(self._activity._on_enter_task)
+            if self._activity._on_enter_task:
+                await asyncio.shield(self._activity._on_enter_task)
+            elif new_activity == "start":
+                raise RuntimeError("on_enter task is not created when starting a new agent")
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

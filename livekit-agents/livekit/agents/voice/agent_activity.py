@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import json
+import pickle
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
+from livekit.durable import DurableScheduler
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import (
@@ -63,6 +65,7 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    make_tool_output,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -74,6 +77,8 @@ from .generation import (
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from livekit.durable.scheduler import DurableTask
+
     from ..llm import mcp
     from .agent_session import AgentSession
 
@@ -114,6 +119,7 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._durable_scheduler: DurableScheduler | None = None
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -313,6 +319,12 @@ class AgentActivity(RecognitionHooks):
 
         return use_aligned_transcript is True
 
+    @property
+    def durable_scheduler(self) -> DurableScheduler:
+        if self._durable_scheduler is None:
+            raise RuntimeError("DurableScheduler is not initialized")
+        return self._durable_scheduler
+
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
@@ -483,6 +495,7 @@ class AgentActivity(RecognitionHooks):
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
                 self._started = True
+                self._durable_scheduler = DurableScheduler()
 
                 @tracer.start_as_current_span(
                     "on_enter",
@@ -504,6 +517,75 @@ class AgentActivity(RecognitionHooks):
                 _set_activity_task_info(task, inline_task=True)
             finally:
                 start_span.end()
+
+    def _rehydrate(self, durable_state: bytes | None) -> None:
+        self._started = True
+        self._agent._activity = self
+
+        self._durable_scheduler = DurableScheduler()
+
+        if not durable_state:
+            return
+
+        durable_tasks: list[DurableTask] = pickle.loads(durable_state)
+        for task in durable_tasks:
+            num_steps = task.metadata.get("num_steps")
+            if not num_steps:
+                # durable function not bound to a speech handle
+                self.durable_scheduler.execute(task)
+                continue
+
+            # recreate the speech handle with the original number of steps
+            speech_handle = SpeechHandle(
+                speech_id=utils.shortuuid("durable_speech_"),
+                allow_interruptions=task.metadata.get(
+                    "allow_interruptions", self.allow_interruptions
+                ),
+            )
+            speech_handle._num_steps = num_steps
+            for _ in range(num_steps):
+                speech_handle._authorize_generation()
+                speech_handle._mark_generation_done()
+            speech_handle._clear_authorization()
+
+            speech_task = self._create_speech_task(
+                self._resume_durable_function(task, speech_handle),
+                speech_handle=speech_handle,
+                name="AgentTask_replay_durable_function",
+            )
+            self._drain_blocked_tasks.append(speech_task)
+
+    async def _resume_durable_function(
+        self, task: DurableTask, speech_handle: SpeechHandle
+    ) -> None:
+        from .agent import ModelSettings
+
+        fnc_call_json = task.metadata.get("function_call")
+        assert fnc_call_json is not None
+
+        fnc_call = llm.FunctionCall.model_validate_json(fnc_call_json)
+        if task.next_value is not None:
+            task.next_value._c_ctx = contextvars.copy_context()
+
+        exe_task = self.durable_scheduler.execute(task)
+        try:
+            val = await exe_task
+            tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+        except BaseException as e:
+            tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
+
+        # generate tool reply
+        if isinstance(self.llm, llm.LLM):
+            self._on_pipeline_tool_execution_done(
+                tool_outputs=[tool_output],
+                speech_handle=speech_handle,
+                chat_ctx=self._agent._chat_ctx.copy(),
+                tools=self.tools,
+                model_settings=ModelSettings(tool_choice=self._tool_choice or NOT_GIVEN),
+                user_metrics=None,
+            )
+        else:
+            logger.error(f"durable function not supported for {self.llm}")
 
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
@@ -776,6 +858,10 @@ class AgentActivity(RecognitionHooks):
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
+
+            if self._durable_scheduler is not None:
+                await self._durable_scheduler.aclose()
+                self._durable_scheduler = None
 
             self._agent._activity = None
 
@@ -1894,8 +1980,6 @@ class AgentActivity(RecognitionHooks):
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
-        from .agent import ModelSettings
-
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
@@ -2067,6 +2151,7 @@ class AgentActivity(RecognitionHooks):
             function_stream=llm_gen_data.function_ch,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
+            durable_scheduler=self.durable_scheduler,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -2162,8 +2247,28 @@ class AgentActivity(RecognitionHooks):
             self._background_speeches.discard(speech_handle)
 
         # important: no agent output should be used after this point
+        self._on_pipeline_tool_execution_done(
+            tool_outputs=tool_output.output,
+            speech_handle=speech_handle,
+            chat_ctx=chat_ctx,
+            tools=tools,
+            model_settings=model_settings,
+            user_metrics=user_metrics if not forwarded_text else None,
+        )
 
-        if len(tool_output.output) > 0:
+    def _on_pipeline_tool_execution_done(
+        self,
+        *,
+        tool_outputs: list[ToolExecutionOutput],
+        speech_handle: SpeechHandle,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool | llm.Toolset],
+        model_settings: ModelSettings,
+        user_metrics: llm.MetricsReport | None,
+    ) -> None:
+        from .agent import ModelSettings
+
+        if len(tool_outputs) > 0:
             if speech_handle.num_steps >= self._session.options.max_tool_steps + 1:
                 logger.warning(
                     "maximum number of function calls steps reached",
@@ -2180,7 +2285,7 @@ class AgentActivity(RecognitionHooks):
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
-            for sanitized_out in tool_output.output:
+            for sanitized_out in tool_outputs:
                 if sanitized_out.fnc_call_out is not None:
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
@@ -2226,7 +2331,7 @@ class AgentActivity(RecognitionHooks):
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
-                        _previous_user_metrics=user_metrics if not forwarded_text else None,
+                        _previous_user_metrics=user_metrics,
                         _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
@@ -2536,6 +2641,7 @@ class AgentActivity(RecognitionHooks):
             function_stream=fnc_stream,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
+            durable_scheduler=self.durable_scheduler,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])

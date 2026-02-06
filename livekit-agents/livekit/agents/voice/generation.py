@@ -32,6 +32,8 @@ from .speech_handle import SpeechHandle
 from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
+    from livekit.durable.scheduler import DurableScheduler
+
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
     from .transcription.filters import TextTransforms
@@ -425,6 +427,7 @@ def perform_tool_executions(
     function_stream: AsyncIterable[llm.FunctionCall],
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
+    durable_scheduler: DurableScheduler,
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
     tool_output = _ToolOutput(output=[], first_tool_started_fut=asyncio.Future())
     task = asyncio.create_task(
@@ -437,6 +440,7 @@ def perform_tool_executions(
             tool_output=tool_output,
             tool_execution_started_cb=tool_execution_started_cb,
             tool_execution_completed_cb=tool_execution_completed_cb,
+            durable_scheduler=durable_scheduler,
         ),
         name="execute_tools_task",
     )
@@ -454,6 +458,7 @@ async def _execute_tools_task(
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
+    durable_scheduler: DurableScheduler,
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
@@ -499,6 +504,7 @@ async def _execute_tools_task(
                 )
                 continue
 
+            tool_flags = function_tool.info.flags
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -593,7 +599,9 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable,
+                    fnc_call: llm.FunctionCall,
+                    tool_flags: llm.ToolFlag,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -605,7 +613,18 @@ async def _execute_tools_task(
                     )
 
                     try:
-                        val = await function_callable()
+                        if tool_flags & llm.ToolFlag.DURABLE:
+                            val = await durable_scheduler.execute(
+                                function_callable,
+                                metadata={
+                                    "num_steps": speech_handle.num_steps,
+                                    "function_call": fnc_call.model_dump_json(),
+                                    "allow_interruptions": speech_handle.allow_interruptions,
+                                },
+                            )
+                        else:
+                            val = await function_callable()
+
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
                         if not isinstance(e, StopResponse):
@@ -628,7 +647,7 @@ async def _execute_tools_task(
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call),
+                    _traceable_fnc_tool(function_callable, fnc_call, tool_flags),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(

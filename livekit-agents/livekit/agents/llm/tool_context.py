@@ -116,6 +116,7 @@ class StopResponse(Exception):
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
+    DURABLE = auto()
 
 
 @dataclass
@@ -157,6 +158,12 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     """Base class for function tool wrappers with descriptor support."""
 
     def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
+        if info.flags & ToolFlag.DURABLE and instance is None:
+            # only wrap if instance is none, to avoid wrapping the same function multiple times
+            from livekit.durable import durable
+
+            func = durable(func)
+
         functools.update_wrapper(self, func)
         self._func = func
         self._info: _InfoT = info
