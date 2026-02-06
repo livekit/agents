@@ -23,7 +23,7 @@ members = [
     "livekit-plugins-baseten",
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
-    "livekit-plugins-camb",
+    "livekit-plugins-cambai",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
