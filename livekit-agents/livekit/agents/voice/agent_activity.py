@@ -1352,6 +1352,7 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_timer.cancel()
                 self._false_interruption_timer = None
 
+            # only interrupt if not already interrupting
             if (
                 self._audio_recognition
                 and not self._audio_recognition._endpointing._interrupting
@@ -1397,8 +1398,7 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition:
             self._audio_recognition._endpointing.on_utterance_started(
                 adjustment=-ev.speech_duration if ev else 0.0,
-                interruption=self._session.agent_state == "speaking"
-                and not self._audio_recognition._endpointing.is_interrupting,
+                interruption=self._session.agent_state == "speaking",
             )
 
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
