@@ -199,17 +199,20 @@ class LLMStream(llm.LLMStream):
                 ),
             )
 
-            self._oai_stream = stream = await self._client.responses.create(  # type: ignore[assignment]
-                model=self._model,
-                tools=tool_schemas,
-                input=cast(str | ResponseInputParam | openai.NotGiven, chat_ctx),  # type: ignore[arg-type]
-                stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
-                **self._extra_kwargs,
+            self._oai_stream = stream = cast(
+                openai.AsyncStream[ResponseStreamEvent],
+                await self._client.responses.create(
+                    model=self._model,
+                    tools=tool_schemas,
+                    input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
+                    stream=True,
+                    timeout=httpx.Timeout(self._conn_options.timeout),
+                    **self._extra_kwargs,
+                ),
             )
 
-            async with stream:  # type: ignore[union-attr]
-                async for event in stream:  # type: ignore[union-attr]
+            async with stream:
+                async for event in stream:
                     retryable = False
                     chunk = None
 
