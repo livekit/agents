@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from aiohttp import web
 from livekit.protocol import agent
 
 from . import llm, utils
+from .job import TextMessageError
 from .log import logger
 from .utils.http_server import HttpServer
 from .version import __version__
@@ -146,15 +148,23 @@ class AgentHttpServer(HttpServer):
                     ).decode()
 
             await response.write(json.dumps(completion_data).encode() + b"\n")
-        except Exception as e:
+        except TextMessageError as e:
+            logger.error(
+                "text message error", extra={"session_id": text_request.session_id, "error": str(e)}
+            )
+            with contextlib.suppress(Exception):
+                error_data = {"type": "complete", "error": str(e)}
+                await response.write(json.dumps(error_data).encode() + b"\n")
+        except Exception:
             logger.exception(
                 "error processing text request", extra={"session_id": text_request.session_id}
             )
-            try:
-                error_data = {"type": "complete", "error": str(e)}
+            with contextlib.suppress(Exception):
+                error_data = {
+                    "type": "complete",
+                    "error": str(TextMessageError("internal error")),
+                }
                 await response.write(json.dumps(error_data).encode() + b"\n")
-            except Exception:
-                pass
         finally:
             await response.write_eof()
 

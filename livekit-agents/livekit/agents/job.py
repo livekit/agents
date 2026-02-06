@@ -131,24 +131,34 @@ class _ContextLogFieldsFilter(logging.Filter):
         return True
 
 
+class TextMessageError(Exception):
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self._message = message
+        self._code = code
+
+    def __str__(self) -> str:
+        return json.dumps({"message": self._message, "code": self._code})
+
+
 class TextMessageContext:
     def __init__(self, *, job_ctx: JobContext, text_request: agent.TextMessageRequest) -> None:
         self._job_ctx = job_ctx
         self._text_request = text_request
+
+        # read endpoint from metadata
+        # TODO: add a endpoint field to the protocol?
         try:
-            # TODO: add a endpoint field to the text request?
             metadata = json.loads(text_request.metadata)
             self._endpoint: str = metadata["endpoint"]
         except Exception:
-            logger.error(
-                "endpoint is required in metadata", extra={"metadata": text_request.metadata}
-            )
-            raise
+            self._endpoint = ""  # default
 
         # resolve session state from snapshot and delta
         from .utils.session_store import SessionStore
 
         if not text_request.HasField("session_state"):
+            # new session
             self._session_snapshot: bytes | None = None
             self._session_state: _AgentSessionState | None = None
             self._version = 0
@@ -163,10 +173,10 @@ class TextMessageContext:
             self._version = text_request.session_state.version
 
     async def send_response(self, ev: RunEvent) -> None:
-        from .ipc.proto import TextResponseEvent
+        from .ipc import proto
 
         await self._job_ctx._ipc_client.send(
-            TextResponseEvent(
+            proto.TextResponseEvent(
                 session_id=self.session_id,
                 event_type=ev.type,
                 data=ev.item.model_dump_json(),
@@ -189,18 +199,24 @@ class TextMessageContext:
     def text(self) -> str:
         return self._text_request.text
 
-    async def _complete(self, error: str | None = None) -> None:
-        from .ipc.proto import TextSessionComplete
+    async def _complete(self, exc: TextMessageError | None = None) -> None:
+        from .ipc import proto
         from .utils.session_store import SessionStore
 
-        msg = TextSessionComplete(session_id=self.session_id)
-        if error:
-            msg.error = error
+        msg = proto.TextSessionComplete(session_id=self.session_id)
+        if exc:
+            msg.error = str(exc)
             await self._job_ctx._ipc_client.send(msg)
             return
 
         session = self._job_ctx._primary_agent_session
-        assert session is not None
+        if not session:
+            logger.error(
+                "no primary agent session found", extra={"text_session_id": self.session_id}
+            )
+            msg.error = str(TextMessageError("no primary agent session found"))
+            await self._job_ctx._ipc_client.send(msg)
+            return
 
         with SessionStore.from_state(session.get_state(), version=self._version + 1) as new_store:
             msg.session_state = agent.AgentSessionState(version=new_store.version)

@@ -219,7 +219,7 @@ class TextResponseEvent:
     MSG_ID: ClassVar[int] = 10
     session_id: str = ""
     event_type: str = ""
-    data: str = ""  # in json format
+    data: str = ""  # RunEvent.item in json format
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_string(b, self.session_id)
@@ -236,18 +236,24 @@ class TextResponseEvent:
 class TextSessionComplete:
     MSG_ID: ClassVar[int] = 11
     session_id: str = ""
-    session_state: agent.AgentSessionState = field(init=False)
+    session_state: agent.AgentSessionState | None = None
     error: str = ""
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_string(b, self.session_id)
-        channel.write_bytes(b, self.session_state.SerializeToString())
+        channel.write_bool(b, self.session_state is not None)
+        if self.session_state is not None:
+            channel.write_bytes(b, self.session_state.SerializeToString())
         channel.write_string(b, self.error)
 
     def read(self, b: io.BytesIO) -> None:
         self.session_id = channel.read_string(b)
-        self.session_state = agent.AgentSessionState()
-        self.session_state.ParseFromString(channel.read_bytes(b))
+        has_session_state = channel.read_bool(b)
+        if has_session_state:
+            self.session_state = agent.AgentSessionState()
+            self.session_state.ParseFromString(channel.read_bytes(b))
+        else:
+            self.session_state = None
         self.error = channel.read_string(b)
 
 

@@ -48,6 +48,7 @@ from .job import (
     JobRequest,
     RunningJobInfo,
     TextMessageContext,
+    TextMessageError,
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
@@ -87,7 +88,7 @@ class _EntrypointWrapper:
             endpoint = ctx.text_message_context.endpoint
             if (text_handler_fnc := self._text_handler_fncs.get(endpoint)) is None:
                 raise RuntimeError(
-                    f"No text handler has been registered for endpoint {endpoint}.\n"
+                    f"No text handler has been registered for endpoint '{endpoint}'.\n"
                     "Define one using the @server.text_handler() decorator, for example:\n"
                     f'    @server.text_handler(endpoint="{endpoint}")\n'
                     "    async def my_text_handler(ctx: TextMessageContext):\n"
@@ -103,10 +104,19 @@ class _EntrypointWrapper:
             if self._entrypoint_fnc:
                 logger.info("SMS job detected, skipping RTC entrypoint")
 
+            exc: TextMessageError | None = None
             try:
                 await text_handler_fnc(ctx.text_message_context)
+            except Exception as e:
+                exc = TextMessageError(
+                    f"error in text handler: {str(e)}", code="TEXT_HANDLER_ERROR"
+                )
+                logger.exception(
+                    "error in text handler",
+                    extra={"session_id": ctx.text_message_context.session_id},
+                )
             finally:
-                await ctx.text_message_context._complete()
+                await ctx.text_message_context._complete(exc)
                 ctx.shutdown()  # job finished
             return
 
@@ -380,8 +390,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
-        self._text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]] = {}
 
+        self._text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]] = {}
         self._session_cache: EphemeralSessionCache | None = None
 
         # worker cb
@@ -1383,11 +1393,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         async with self._lock:
             if session_id in self._text_sessions:
-                raise ValueError(f"Session {session_id} already exists")
+                raise ValueError(f"Session {session_id} already running")
 
             assert self._session_cache is not None
+            # resolve version/delta to snapshot from the cache
             if request.HasField("session_state"):
-                session_state = self._session_cache.resolve(session_id, request.session_state)
+                try:
+                    session_state = self._session_cache.resolve(session_id, request.session_state)
+                except Exception as e:
+                    raise TextMessageError(
+                        f"failed to resolve session state from cache with error: {str(e)}",
+                        code="SESSION_STATE_RESOLUTION_FAILED",
+                    ) from e
                 request.session_state.CopyFrom(session_state)
 
             agent_identity = utils.shortuuid("text-agent-")
@@ -1536,28 +1553,31 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def _on_text_response(self, msg: ipc.proto.TextResponseEvent) -> None:
         """Handle text response event from process pool."""
         session_id = msg.session_id
-
-        if session_info := self._text_sessions.get(session_id):
-            session_info.event_ch.send_nowait(msg)
-        else:
+        session_info = self._text_sessions.get(session_id)
+        if not session_info:
             logger.warning(
                 "received text response for unknown session", extra={"session_id": session_id}
             )
+            return
+
+        session_info.event_ch.send_nowait(msg)
 
     def _on_text_session_complete(self, ev: ipc.proto.TextSessionComplete) -> None:
         """Handle text session complete event from process pool."""
         session_id = ev.session_id
-        assert self._session_cache is not None
-
-        if session_info := self._text_sessions.pop(session_id, None):
-            session_info.done_fut.set_result(ev)
-            session_info.event_ch.close()
-            self._session_cache.save(session_id, ev.session_state)
-        else:
+        session_info = self._text_sessions.pop(session_id, None)
+        if not session_info:
             logger.warning(
                 "received text session complete for unknown session",
                 extra={"session_id": session_id},
             )
+            return
+
+        session_info.done_fut.set_result(ev)
+        session_info.event_ch.close()
+        if ev.session_state is not None:
+            assert self._session_cache is not None
+            self._session_cache.save(session_id, ev.session_state)
 
     def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
         """Clean up any text sessions on this process."""
@@ -1568,7 +1588,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if session_info.proc_id == proc_id:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     session_info.done_fut.set_exception(
-                        RuntimeError(f"Process {proc_id} closed before session completed")
+                        TextMessageError(
+                            "process closed before text session completed",
+                            code="PROCESS_CLOSED",
+                        )
                     )
                 session_info.event_ch.close()
                 uncompleted_sessions.append(session_id)

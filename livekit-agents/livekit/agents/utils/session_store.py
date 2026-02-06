@@ -538,9 +538,12 @@ class EphemeralSessionCache:
 
         with store:
             if store.version != target_version:
-                raise ValueError(
-                    f"Version mismatch: expected {target_version}, got {store.version}"
-                )
+                if which_oneof == "delta":
+                    store.apply_changeset(session_state.delta, version=target_version)
+                else:
+                    raise ValueError(
+                        f"Version mismatch: expected {target_version}, got {store.version}"
+                    )
 
             self._cached_sessions[session_id] = _SessionCacheEntry.create(db_file)
             self._cached_sessions.move_to_end(session_id)
