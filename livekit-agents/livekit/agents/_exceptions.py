@@ -93,3 +93,7 @@ class APITimeoutError(APIConnectionError):
 
     def __init__(self, message: str = "Request timed out.", *, retryable: bool = True) -> None:
         super().__init__(message, retryable=retryable)
+
+
+class CLIError(Exception):
+    pass

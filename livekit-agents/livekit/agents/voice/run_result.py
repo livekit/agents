@@ -58,6 +58,7 @@ class FunctionCallOutputEvent:
 
 @dataclass
 class AgentHandoffEvent:
+    item: llm.AgentHandoff
     old_agent: Agent | None
     new_agent: Agent
     type: Literal["agent_handoff"] = "agent_handoff"
@@ -133,19 +134,28 @@ class RunResult(Generic[Run_T]):
 
         return _await_impl().__await__()
 
-    def _agent_handoff(self, *, old_agent: Agent | None, new_agent: Agent) -> None:
-        self._recorded_items.append(AgentHandoffEvent(old_agent=old_agent, new_agent=new_agent))
+    def _agent_handoff(
+        self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
+    ) -> None:
+        event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
+        index = self._find_insertion_index(created_at=event.item.created_at)
+        self._recorded_items.insert(index, event)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
             return
 
+        event: RunEvent | None = None
         if item.type == "message":
-            self._recorded_items.append(ChatMessageEvent(item=item))
+            event = ChatMessageEvent(item=item)
         elif item.type == "function_call":
-            self._recorded_items.append(FunctionCallEvent(item=item))
+            event = FunctionCallEvent(item=item)
         elif item.type == "function_call_output":
-            self._recorded_items.append(FunctionCallOutputEvent(item=item))
+            event = FunctionCallOutputEvent(item=item)
+
+        if event is not None:
+            index = self._find_insertion_index(created_at=event.item.created_at)
+            self._recorded_items.insert(index, event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         self._handles.add(handle)
@@ -189,6 +199,19 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_result(None)
             else:
                 self._done_fut.set_exception(final_output)
+
+    def _find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
+        for i in reversed(range(len(self._recorded_items))):
+            if self._recorded_items[i].item.created_at <= created_at:
+                return i + 1
+
+        return 0
 
 
 class RunAssert:

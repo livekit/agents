@@ -7,14 +7,12 @@ from dotenv import load_dotenv
 from livekit import api
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     ChatContext,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    RoomOutputOptions,
     RunContext,
-    WorkerOptions,
     cli,
     metrics,
 )
@@ -90,7 +88,7 @@ class IntroAgent(Agent):
         logger.info(
             "switching to the story agent with the provided user data: %s", context.userdata
         )
-        return story_agent, "Let's start the story!"
+        return story_agent
 
 
 class StoryAgent(Agent):
@@ -132,15 +130,22 @@ class StoryAgent(Agent):
         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
 
 
+server = AgentServer()
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+server.setup_fnc = prewarm
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="echo"),
         userdata=StoryData(),
@@ -163,13 +168,8 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=IntroAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

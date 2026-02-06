@@ -11,9 +11,18 @@ from llama_index.core import (
 from llama_index.core.chat_engine.types import ChatMode
 from llama_index.core.llms import ChatMessage, MessageRole
 
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    AutoSubscribe,
+    JobContext,
+    cli,
+    inference,
+    llm,
+)
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -46,9 +55,9 @@ class ChatEngineAgent(Agent):
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
             vad=silero.VAD.load(),
-            stt=deepgram.STT(),
+            stt=inference.STT("deepgram/nova-3"),
             llm=DummyLLM(),  # use a dummy LLM to enable the pipeline reply
-            tts=openai.TTS(),
+            tts=inference.TTS("cartesia/sonic-3"),
         )
         self.index = index
         self.chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT, llm="default")
@@ -66,8 +75,7 @@ class ChatEngineAgent(Agent):
 
         llama_chat_messages = [
             ChatMessage(content=msg.text_content, role=MessageRole(msg.role))
-            for msg in chat_ctx.items
-            if isinstance(msg, llm.ChatMessage)
+            for msg in chat_ctx.messages()
         ]
 
         stream = await self.chat_engine.astream_chat(user_query, chat_history=llama_chat_messages)
@@ -75,6 +83,10 @@ class ChatEngineAgent(Agent):
             yield delta
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -82,8 +94,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    await session.say("Hey, how can I help you today?", allow_interruptions=True)
+    await session.say("Hey, how can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -5,23 +5,17 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    WorkerOptions,
     cli,
+    inference,
     mcp,
     metrics,
 )
-from livekit.plugins import (
-    cartesia,
-    deepgram,
-    groq,
-    noise_cancellation,
-    silero,
-)
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv(dotenv_path=".env.local")
@@ -35,9 +29,9 @@ class Assistant(Agent):
             "You can help users with Zapier automations and workflows through the MCP server connection. "  # noqa: E501
             "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "  # noqa: E501
             "You were created as a demo to showcase the capabilities of LiveKit's agents framework with MCP integration.",  # noqa: E501
-            stt=deepgram.STT(),
-            llm=groq.LLM(),
-            tts=cartesia.TTS(),
+            stt=inference.STT("deepgram/nova-3"),
+            llm=inference.LLM("google/gemini-2.5-flash"),
+            tts=inference.TTS("rime/arcana"),
             # use LiveKit's transformer-based turn detector
             turn_detection=MultilingualModel(),
         )
@@ -48,10 +42,17 @@ class Assistant(Agent):
         )
 
 
+server = AgentServer()
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+server.setup_fnc = prewarm
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -92,16 +93,8 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         room=ctx.room,
         agent=Assistant(),
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-        ),
-    )
+    cli.run_app(server)

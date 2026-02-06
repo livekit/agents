@@ -1,0 +1,43 @@
+name: Feature Request
+description: Suggest a new feature or capability
+labels: enhancement
+
+body:
+- type: markdown
+  attributes:
+    value: |
+      Thank you for taking the time to fill out this request! Please add as much detail as possible so we can help you.
+      Before submitting, please check to ensure that a similar issue doesn’t already exist to avoid duplicates.
+      
+- type: dropdown
+  attributes:
+    label: Feature Type
+    description: "How important is this feature?"
+    options:
+      - Nice to have
+      - Would make my life easier
+      - I cannot use LiveKit without it
+  validations:
+    required: true
+
+- type: textarea
+  id: feature_description
+  attributes:
+    label: Feature Description
+    description: "A clear and concise description of what you want to happen and why."
+  validations:
+    required: true
+
+- type: textarea
+  id: alternative_workarounds
+  attributes:
+    label: Workarounds / Alternatives
+    description: "A description of any alternative solutions or workarounds you've considered/implemented."
+
+- type: textarea
+  id: additional_context
+  attributes:
+    label: Additional Context
+    description: "Add any other context or screenshots about the feature request here."
+    
+    

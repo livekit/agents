@@ -18,3 +18,19 @@ To use the STT and TTS API, you'll need to enable the respective services for yo
 
 - Cloud Speech-to-Text API
 - Cloud Text-to-Speech API
+
+## Live API model support
+
+LiveKit supports both Gemini Live API on both Gemini Developer API as well as Vertex AI. However, be aware they have slightly different behavior and use different model names.
+
+The following models are supported by Gemini Developer API:
+
+- gemini-2.0-flash-live-001
+- gemini-live-2.5-flash-preview
+- gemini-2.5-flash-native-audio-preview-09-2025
+
+And these on Vertex AI:
+
+- gemini-2.0-flash-exp
+- gemini-live-2.5-flash-preview-native-audio
+- gemini-live-2.5-flash-preview-native-audio-09-2025

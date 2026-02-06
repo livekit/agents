@@ -6,7 +6,7 @@ import datetime
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.stt import MultiSpeakerAdapter
 from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
@@ -48,6 +48,10 @@ class Assistant(Agent):
         )
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -73,4 +77,4 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

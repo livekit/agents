@@ -7,7 +7,7 @@ More information is available in the docs for the [TTS]() integrations.
 ## Installation
 
 ```bash
-pip install livekit-plugins-minimax
+pip install livekit-plugins-minimax-ai
 ```
 
 ## Pre-requisites

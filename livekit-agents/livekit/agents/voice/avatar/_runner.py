@@ -67,6 +67,7 @@ class AvatarRunner:
             video_fps=options.video_fps,
             video_queue_size_ms=self._queue_size_ms,
         )
+        self._read_audio_task: asyncio.Task[None] | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
         self._room_connected_fut = asyncio.Future[None]()
 

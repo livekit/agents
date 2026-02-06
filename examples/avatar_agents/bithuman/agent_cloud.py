@@ -6,12 +6,11 @@ from PIL import Image
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
-    RoomOutputOptions,
-    WorkerOptions,
-    WorkerType,
     cli,
+    room_io,
 )
 from livekit.plugins import bithuman, openai
 
@@ -20,7 +19,10 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
@@ -40,9 +42,9 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
         # audio is forwarded to the avatar, so we disable room audio output
-        room_output_options=RoomOutputOptions(audio_enabled=False),
+        room_options=room_io.RoomOptions(audio_output=False),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))
+    cli.run_app(server)

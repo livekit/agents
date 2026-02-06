@@ -1,0 +1,271 @@
+name: Test STT
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or revision to test"
+        required: false
+        type: string
+        default: "main"
+      pr_number:
+        description: "PR number to post results to (optional)"
+        required: false
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - "tests/test_stt.py"
+      - ".github/workflows/test-stt.yml"
+  issue_comment:
+    types: [created]
+
+jobs:
+  slash-command-dispatch:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Get PR details and check authorization
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = context.payload.comment.body.trim();
+            const isCommand = /^\/test-stt(\s|$)/.test(comment);
+
+            if (!isCommand) {
+              core.setOutput('is_command', 'false');
+              return;
+            }
+
+            // Get PR details
+            const prResponse = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+
+            const pr = prResponse.data;
+            const commenter = context.payload.comment.user.login;
+
+            // Check if commenter is an organization member (not just a collaborator)
+            let isAuthorized = false;
+
+            try {
+              // First check if the repo owner is an organization
+              const orgResponse = await github.rest.orgs.get({
+                org: context.repo.owner,
+              });
+
+              // If it's an organization, check if user is a member
+              if (orgResponse.data) {
+                try {
+                  await github.rest.orgs.checkMembershipForUser({
+                    org: context.repo.owner,
+                    username: commenter,
+                  });
+                  isAuthorized = true;
+                  console.log(`${commenter} is an organization member`);
+                } catch (memberError) {
+                  // User is not an organization member
+                  isAuthorized = false;
+                  console.log(`${commenter} is not an organization member`);
+                }
+              }
+            } catch (orgError) {
+              // Repo owner is not an organization (it's a user account)
+              // In this case, check if commenter is the repo owner
+              if (commenter === context.repo.owner) {
+                isAuthorized = true;
+                console.log(`${commenter} is the repository owner`);
+              } else {
+                isAuthorized = false;
+                console.log(`${commenter} is not authorized (repo is user-owned, not org-owned)`);
+              }
+            }
+
+            if (!isAuthorized) {
+              console.log(`Slash command rejected: ${commenter} is not an organization member`);
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: '-1'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body: '❌ `/test-stt` command is only available for organization members.'
+              });
+              core.setOutput('is_command', 'false');
+              return;
+            }
+
+            core.setOutput('is_command', 'true');
+            core.setOutput('pr_number', pr.number.toString());
+            core.setOutput('branch', pr.head.ref);
+
+            console.log(`Slash command /test-stt detected for PR #${pr.number} by ${commenter}`);
+
+      - name: Trigger workflow
+        if: steps.pr-info.outputs.is_command == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'test-stt.yml',
+              ref: 'main',
+              inputs: {
+                pr_number: '${{ steps.pr-info.outputs.pr_number }}',
+                branch: 'refs/pull/${{ steps.pr-info.outputs.pr_number }}/head'
+              }
+            });
+
+            console.log('Workflow triggered successfully');
+
+            // Add reaction to comment
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+  test-stt:
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras --dev
+
+      - name: Setup Google credentials
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.GOOGLE_STT_CREDENTIALS_JSON }}' > ${{ github.workspace }}/tests/google.json
+
+      - name: Run STT tests
+        env:
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
+          ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKSAI_API_KEY }}
+          GLADIA_API_KEY: ${{ secrets.GLADIA_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/tests/google.json
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # AWS_REGION: ${{ secrets.AWS_REGION }}
+          SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+        run: |
+          uv run pytest -n 3 -v tests/test_stt.py --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+
+      - name: Cleanup Google credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f ${{ github.workspace }}/tests/google.json
+
+      - name: Generate test summary
+        if: always()
+        id: test-summary
+        run: |
+          python3 scripts/generate_test_summary.py test-results.xml -o test-summary.md
+
+      - name: Post results to PR
+        if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('test-summary.md', 'utf8');
+
+            let prNumber;
+            if ('${{ github.event_name }}' === 'pull_request') {
+              prNumber = ${{ github.event.pull_request.number || 0 }};
+            } else if ('${{ github.event.inputs.pr_number }}') {
+              prNumber = parseInt('${{ github.event.inputs.pr_number }}');
+            } else {
+              prNumber = null;
+            }
+
+            if (!prNumber || isNaN(prNumber)) {
+              console.log('No valid PR number, skipping comment');
+              return;
+            }
+
+            const body = `${summary}\n\n---\n*Triggered by workflow run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('## STT Test Results')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+              console.log('Updated existing comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body
+              });
+              console.log('Created new comment');
+            }
+
+      - name: Add to job summary
+        if: always()
+        run: |
+          cat test-summary.md >> $GITHUB_STEP_SUMMARY

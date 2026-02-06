@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias
+from typing_extensions import TypeAlias, TypedDict
 
 from livekit import rtc
 
@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool, RawFunctionTool
+    from ..llm import LLM, Tool, Toolset
 
 
 class ImageContent(BaseModel):
@@ -62,7 +62,7 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
-    """  # noqa: E501
+    """
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
@@ -105,6 +105,49 @@ class AudioContent(BaseModel):
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
+# The metrics are stored in a dict, since some fields may not be relevant
+# in certain context (e.g., text-only mode or when using a speech-to-speech model).
+class MetricsReport(TypedDict, total=False):
+    started_speaking_at: float
+    stopped_speaking_at: float
+
+    transcription_delay: float
+    """Time taken to obtain the transcript after the end of the user's speech
+
+    User `ChatMessage` only
+    """
+
+    end_of_turn_delay: float
+    """Amount of time between the end of speech and the decision to end the user's turn
+
+    User `ChatMessage` only
+    """
+
+    on_user_turn_completed_delay: float
+    """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
+
+    User `ChatMessage` only
+    """
+
+    llm_node_ttft: float
+    """Time taken for the `llm_node` to return the first token
+
+    Assistant `ChatMessage` only
+    """
+
+    tts_node_ttfb: float
+    """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
+
+    Assistant `ChatMessage` only
+    """
+
+    e2e_latency: float
+    """Time from when the user finished speaking to when the agent began responding
+
+    Assistant `ChatMessage` only
+    """
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
@@ -112,8 +155,10 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     transcript_confidence: float | None = None
-    hash: bytes | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
+    hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 
     @property
     def text_content(self) -> str | None:
@@ -138,6 +183,13 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this function call. Can include provider-specific data
+    (e.g., extra["google"] for thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
@@ -150,19 +202,31 @@ class FunctionCallOutput(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-""""
 class AgentHandoff(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
-    old_agent_id: str | None
+    old_agent_id: str | None = None
     new_agent_id: str
-    old_agent: Agent | None = Field(exclude=True)
-    new_agent: Agent | None = Field(exclude=True)
     created_at: float = Field(default_factory=time.time)
-"""
+
+
+class AgentConfigUpdate(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["agent_config_update"] = Field(default="agent_config_update")
+
+    instructions: str | None = None
+    tools_added: list[str] | None = None
+    tools_removed: list[str] | None = None
+
+    created_at: float = Field(default_factory=time.time)
+
+    _tools: list[Tool] = PrivateAttr(default_factory=list)
+    """Full tool definitions (in-memory only, not serialized)."""
+
 
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput], Field(discriminator="type")
+    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
+    Field(discriminator="type"),
 ]
 
 
@@ -182,6 +246,10 @@ class ChatContext:
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
+
     def add_message(
         self,
         *,
@@ -190,6 +258,8 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -198,6 +268,10 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if is_given(metrics):
+            kwargs["metrics"] = metrics
+        if is_given(extra):
+            kwargs["extra"] = extra
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -231,28 +305,29 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
-        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        exclude_handoff: bool = False,
+        exclude_config_update: bool = False,
+        tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import (
-            get_function_info,
-            get_raw_function_info,
-            is_function_tool,
-            is_raw_function_tool,
-        )
+        from .tool_context import FunctionTool, RawFunctionTool, Toolset
 
-        valid_tools = set[str]()
-        if is_given(tools):
+        def get_tool_names(
+            tools: Sequence[Tool | Toolset | str],
+        ) -> Generator[str, None, None]:
             for tool in tools:
                 if isinstance(tool, str):
-                    valid_tools.add(tool)
-                elif is_function_tool(tool):
-                    valid_tools.add(get_function_info(tool).name)
-                elif is_raw_function_tool(tool):
-                    valid_tools.add(get_raw_function_info(tool).name)
-                # TODO(theomonnom): other tools
+                    yield tool
+                elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                    yield tool.info.name
+                elif isinstance(tool, Toolset):
+                    yield from get_tool_names(tool.tools)
+                else:
+                    # TODO(theomonnom): other tools
+                    continue
 
+        valid_tools = set(get_tool_names(tools)) if tools else set()
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -268,6 +343,12 @@ class ChatContext:
                 continue
 
             if exclude_empty_message and item.type == "message" and not item.content:
+                continue
+
+            if exclude_handoff and item.type == "agent_handoff":
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if (
@@ -297,7 +378,7 @@ class ChatContext:
         )
 
         new_items = self._items[-max_items:]
-        # chat ctx shouldn't start with function_call or function_call_output
+        # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
             "function_call",
             "function_call_output",
@@ -316,6 +397,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
+        exclude_config_update: bool = False,
     ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
         existing_ids = {item.id for item in self._items}
@@ -334,6 +416,9 @@ class ChatContext:
             ):
                 continue
 
+            if exclude_config_update and item.type == "agent_config_update":
+                continue
+
             if item.id not in existing_ids:
                 idx = self.find_insertion_index(created_at=item.created_at)
                 self._items.insert(idx, item)
@@ -348,6 +433,8 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
+        exclude_metrics: bool = False,
+        exclude_config_update: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -355,6 +442,9 @@ class ChatContext:
                 "function_call",
                 "function_call_output",
             ]:
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if item.type == "message":
@@ -366,9 +456,11 @@ class ChatContext:
 
             items.append(item)
 
-        exclude_fields = set()
+        exclude_fields: set[str] = set()
         if exclude_timestamp:
             exclude_fields.add("created_at")
+        if exclude_metrics:
+            exclude_fields.add("metrics")
 
         return {
             "items": [
@@ -384,7 +476,10 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["openai", "openai.responses"],
+        *,
+        inject_dummy_user_message: bool = True,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
@@ -412,7 +507,8 @@ class ChatContext:
 
     def to_provider_format(
         self,
-        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
+        format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"]
+        | str,
         *,
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
@@ -429,6 +525,8 @@ class ChatContext:
 
         if format == "openai":
             return _provider_format.openai.to_chat_ctx(self, **kwargs)
+        elif format == "openai.responses":
+            return _provider_format.openai.to_responses_chat_ctx(self, **kwargs)
         elif format == "google":
             return _provider_format.google.to_chat_ctx(self, **kwargs)
         elif format == "aws":
@@ -452,6 +550,91 @@ class ChatContext:
                 return i + 1
 
         return 0
+
+    async def _summarize(
+        self,
+        llm_v: LLM,
+        *,
+        keep_last_turns: int = 2,
+    ) -> ChatContext:
+        to_summarize: list[ChatMessage] = []
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
+                continue
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
+                continue
+
+            text = (msg.text_content or "").strip()
+            if text:
+                to_summarize.append(msg)
+        if not to_summarize:
+            return self
+
+        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
+        if tail_n == 0:
+            head, tail = to_summarize, []
+        else:
+            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+
+        if not head:
+            return self
+
+        source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
+        if not source_text:
+            return self
+
+        chat_ctx = ChatContext()
+        chat_ctx.add_message(
+            role="system",
+            content=(
+                "Compress older chat history into a short, faithful summary.\n"
+                "Focus on user goals, constraints, decisions, key facts/preferences/entities, and pending tasks.\n"
+                "Exclude chit-chat and greetings. Be concise."
+            ),
+        )
+        chat_ctx.add_message(
+            role="user",
+            content=f"Conversation to summarize:\n\n{source_text}",
+        )
+
+        chunks: list[str] = []
+        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
+            if chunk.delta and chunk.delta.content:
+                chunks.append(chunk.delta.content)
+
+        summary = "".join(chunks).strip()
+        if not summary:
+            return self
+
+        tail_start_ts = tail[0].created_at if tail else float("inf")
+
+        preserved: list[ChatItem] = []
+        for it in self.items:
+            if (
+                it.type in ("function_call", "function_call_output")
+                and it.created_at < tail_start_ts
+            ):
+                continue
+
+            if it.type == "message" and it.role in ("user", "assistant"):
+                continue
+
+            preserved.append(it)
+
+        self._items = preserved
+
+        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
+        self.add_message(
+            role="assistant",
+            content=f"[history summary]\n{summary}",
+            created_at=created_at_hint,
+            extra={"is_summary": True},
+        )
+
+        for msg in tail:
+            self._items.append(msg)
+
+        return self
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChatContext:

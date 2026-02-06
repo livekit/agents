@@ -16,22 +16,9 @@ pip install livekit-plugins-turn-detector
 
 ## Usage
 
-### English model
-
-The English model is the smaller of the two models. It requires 200MB of RAM and completes inference in ~10ms
-
-```python
-from livekit.plugins.turn_detector.english import EnglishModel
-
-session = AgentSession(
-    ...
-    turn_detection=EnglishModel(),
-)
-```
-
 ### Multilingual model
 
-We've trained a separate multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish`
+We've trained a multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish`
 
 The multilingual model requires ~400MB of RAM and completes inferences in ~25ms.
 
@@ -64,6 +51,12 @@ This plugin requires model files. Before starting your agent for the first time,
 ```bash
 python my_agent.py download-files
 ```
+
+## Downloaded model files
+
+Model files are downloaded to and loaded from the location specified by the `HF_HUB_CACHE` environment variable. If not set, this defaults to `$HF_HOME/hub` (typically `~/.cache/huggingface/hub`).
+
+For offline deployment, download the model files first while connected to the internet, then copy the cache directory to your deployment environment.
 
 ## Model system requirements
 

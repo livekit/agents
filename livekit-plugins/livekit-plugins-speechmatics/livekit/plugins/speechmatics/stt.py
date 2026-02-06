@@ -54,7 +54,7 @@ from .types import (
     SpeakerFragments,
     SpeechFragment,
 )
-from .utils import get_endpoint_url
+from .utils import get_stt_url
 
 
 @dataclasses.dataclass
@@ -241,7 +241,11 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, diarization=enable_diarization
+                streaming=True,
+                interim_results=True,
+                diarization=enable_diarization,
+                aligned_transcript="chunk",
+                offline_recognize=False,
             ),
         )
 
@@ -448,7 +452,7 @@ class SpeechStream(stt.RecognizeStream):
         """Run the STT stream."""
         self._client = AsyncClient(
             api_key=self._stt._api_key,
-            url=get_endpoint_url(self._stt._base_url),
+            url=get_stt_url(self._stt._base_url),
         )
 
         logger.debug("Connected to Speechmatics STT service")
@@ -623,8 +627,8 @@ class SpeechStream(stt.RecognizeStream):
             alt = result.get("alternatives", [{}])[0]
             if alt.get("content", None):
                 fragment = SpeechFragment(
-                    start_time=result.get("start_time", 0),
-                    end_time=result.get("end_time", 0),
+                    start_time=result.get("start_time", 0) + self.start_time_offset,
+                    end_time=result.get("end_time", 0) + self.start_time_offset,
                     language=alt.get("language", "en"),
                     is_eos=alt.get("is_eos", False),
                     is_final=is_final,

@@ -4,16 +4,16 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    RoomInputOptions,
-    RoomOutputOptions,
     RunContext,
-    WorkerOptions,
     cli,
+    inference,
     metrics,
+    room_io,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
@@ -40,7 +40,8 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply()
+        # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
+        self.session.generate_reply(allow_interruptions=False)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -64,10 +65,17 @@ class MyAgent(Agent):
         return "sunny with a temperature of 70 degrees."
 
 
+server = AgentServer()
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+server.setup_fnc = prewarm
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
     ctx.log_context_fields = {
@@ -76,13 +84,13 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt="assemblyai/universal-streaming:en",
+        stt=inference.STT("deepgram/nova-3", language="multi"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm="openai/gpt-4.1-mini",
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
@@ -114,13 +122,14 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # uncomment to enable the Krisp BVC noise cancellation
+                # noise_cancellation=noise_cancellation.BVC(),
+            ),
         ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

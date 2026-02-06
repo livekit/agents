@@ -422,8 +422,9 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}",
+                        message="Sarvam TTS API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
@@ -460,6 +461,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Connection state management
         self._connection_state = ConnectionState.DISCONNECTED
         self._session_id = id(self)
+        self._client_request_id: str | None = None
+        self._server_request_id: str | None = None
 
         # Task management for cleanup
         self._send_task: asyncio.Task | None = None
@@ -468,6 +471,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
+        self._client_request_id = request_id
+        self._server_request_id = None
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
@@ -553,9 +558,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(json.dumps(config_msg))
 
                 # Count text chunks sent
+                started = False
                 text_chunks_sent = 0
                 # Send text chunks
                 async for word in word_stream:
+                    if not started:
+                        self._mark_started()
+                        started = True
                     text_msg = {"type": "text", "data": {"text": word.token}}
                     await ws.send_str(json.dumps(text_msg))
                     text_chunks_sent += 1
@@ -662,6 +671,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             resp = json.loads(msg_data)
             msg_type = resp.get("type")
+            self._maybe_set_server_request_id(resp)
 
             if not msg_type:
                 logger.warning(
@@ -743,6 +753,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Handle event messages from the API."""
         event_data = resp.get("data", {})
         event_type = event_data.get("event_type")
+        self._maybe_set_server_request_id(event_data)
 
         if event_type == "final":
             logger.debug("Generation complete event received", extra=self._build_log_context())
@@ -759,7 +770,28 @@ class SynthesizeStream(tts.SynthesizeStream):
             "connection_state": self._connection_state.value,
             "model": self._opts.model,
             "speaker": self._opts.speaker,
+            "client_request_id": self._client_request_id,
+            "server_request_id": self._server_request_id,
         }
+
+    def _maybe_set_server_request_id(self, data: dict) -> None:
+        """Capture server-assigned request_id once it is available."""
+        if self._server_request_id is not None:
+            return
+
+        request_id = None
+        if isinstance(data, dict):
+            request_id = data.get("request_id")
+            if request_id is None:
+                nested = data.get("data")
+                if isinstance(nested, dict):
+                    request_id = nested.get("request_id")
+                metadata = data.get("metadata")
+                if request_id is None and isinstance(metadata, dict):
+                    request_id = metadata.get("request_id")
+
+        if request_id:
+            self._server_request_id = str(request_id)
 
     async def aclose(self) -> None:
         """Close the stream and cleanup resources."""
@@ -807,3 +839,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await super().aclose()
         except Exception as e:
             logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
+        finally:
+            self._client_request_id = None
+            self._server_request_id = None

@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, llm
 from livekit.plugins import openai
 
 ## This example shows how to load chat history for OpenAI Realtime Model
@@ -11,7 +11,10 @@ logger = logging.getLogger("realtime-load-chat-history")
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     chat_history = [
         {
@@ -55,4 +58,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

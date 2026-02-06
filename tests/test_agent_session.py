@@ -1,39 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import time
-from typing import Any
 
 import pytest
 
 from livekit.agents import (
-    NOT_GIVEN,
     Agent,
-    AgentSession,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
-    NotGivenOr,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
-    utils,
 )
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.agents.voice.transcription.synchronizer import (
-    TranscriptSynchronizer,
-    _SyncedAudioOutput,
-)
 
-from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
-from .fake_llm import FakeLLM, FakeLLMResponse
-from .fake_stt import FakeSTT, FakeUserSpeech
-from .fake_tts import FakeTTS, FakeTTSResponse
-from .fake_vad import FakeVAD
+from .fake_session import FakeActions, create_session, run_session
 
 
 class MyAgent(Agent):
@@ -84,7 +69,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -211,22 +196,23 @@ async def test_tool_call() -> None:
 
     # chat context
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 6
+    assert len(chat_ctx_items) == 7
     assert chat_ctx_items[0].type == "message"
     assert chat_ctx_items[0].role == "system"
-    assert chat_ctx_items[1].type == "message"
-    assert chat_ctx_items[1].role == "user"
-    assert chat_ctx_items[1].text_content == "What's the weather in Tokyo?"
+    assert chat_ctx_items[1].type == "agent_config_update"
     assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].text_content == "Let me check the weather for you."
-    assert chat_ctx_items[3].type == "function_call"
-    assert chat_ctx_items[3].name == "get_weather"
-    assert chat_ctx_items[4].type == "function_call_output"
-    assert chat_ctx_items[4].output == "The weather in Tokyo is sunny today."
-    assert chat_ctx_items[5].type == "message"
-    assert chat_ctx_items[5].role == "assistant"
-    assert chat_ctx_items[5].text_content == "The weather in Tokyo is sunny today."
+    assert chat_ctx_items[2].role == "user"
+    assert chat_ctx_items[2].text_content == "What's the weather in Tokyo?"
+    assert chat_ctx_items[3].type == "message"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].text_content == "Let me check the weather for you."
+    assert chat_ctx_items[4].type == "function_call"
+    assert chat_ctx_items[4].name == "get_weather"
+    assert chat_ctx_items[5].type == "function_call_output"
+    assert chat_ctx_items[5].output == "The weather in Tokyo is sunny today."
+    assert chat_ctx_items[6].type == "message"
+    assert chat_ctx_items[6].role == "assistant"
+    assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
 
 
 @pytest.mark.parametrize(
@@ -262,10 +248,11 @@ async def test_interruption(
     t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 4
-    assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].interrupted is True
+    assert len(chat_ctx_items) == 5
+    assert chat_ctx_items[1].type == "agent_config_update"
+    assert chat_ctx_items[3].type == "message"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].interrupted is True
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
@@ -368,21 +355,22 @@ async def test_interruption_by_text_input() -> None:
     assert agent_state_events[6].new_state == "listening"
 
     chat_ctx_items = agent.chat_ctx.items
-    assert len(chat_ctx_items) == 5
+    assert len(chat_ctx_items) == 6
     assert chat_ctx_items[0].type == "message"
     assert chat_ctx_items[0].role == "system"
-    assert chat_ctx_items[1].type == "message"
-    assert chat_ctx_items[1].role == "user"
-    assert chat_ctx_items[1].text_content == "Tell me a story."
+    assert chat_ctx_items[1].type == "agent_config_update"
     assert chat_ctx_items[2].type == "message"
-    assert chat_ctx_items[2].role == "assistant"
-    assert chat_ctx_items[2].interrupted is True  # assistant message should be before text input
+    assert chat_ctx_items[2].role == "user"
+    assert chat_ctx_items[2].text_content == "Tell me a story."
     assert chat_ctx_items[3].type == "message"
-    assert chat_ctx_items[3].role == "user"
-    assert chat_ctx_items[3].text_content == "stop from text input"
+    assert chat_ctx_items[3].role == "assistant"
+    assert chat_ctx_items[3].interrupted is True  # assistant message should be before text input
     assert chat_ctx_items[4].type == "message"
-    assert chat_ctx_items[4].role == "assistant"
-    assert chat_ctx_items[4].text_content == "Ok, I'll stop now."
+    assert chat_ctx_items[4].role == "user"
+    assert chat_ctx_items[4].text_content == "stop from text input"
+    assert chat_ctx_items[5].type == "message"
+    assert chat_ctx_items[5].role == "assistant"
+    assert chat_ctx_items[5].text_content == "Ok, I'll stop now."
 
 
 @pytest.mark.parametrize(
@@ -429,17 +417,18 @@ async def test_interruption_before_speaking(
 
     assert len(playback_finished_events) == 0
 
-    assert len(agent.chat_ctx.items) == 3
+    assert len(agent.chat_ctx.items) == 4
     assert agent.chat_ctx.items[0].type == "message"
     assert agent.chat_ctx.items[0].role == "system"
-    assert agent.chat_ctx.items[1].type == "message"
-    assert agent.chat_ctx.items[1].role == "user"
-    assert agent.chat_ctx.items[1].text_content == "Tell me a story."
-    # before we insert an empty assistant message with interrupted=True
-    # now we ignore it when the text is empty
+    assert agent.chat_ctx.items[1].type == "agent_config_update"
     assert agent.chat_ctx.items[2].type == "message"
     assert agent.chat_ctx.items[2].role == "user"
-    assert agent.chat_ctx.items[2].text_content == "Stop!"
+    assert agent.chat_ctx.items[2].text_content == "Tell me a story."
+    # before we insert an empty assistant message with interrupted=True
+    # now we ignore it when the text is empty
+    assert agent.chat_ctx.items[3].type == "message"
+    assert agent.chat_ctx.items[3].role == "user"
+    assert agent.chat_ctx.items[3].text_content == "Stop!"
 
 
 async def test_generate_reply() -> None:
@@ -515,23 +504,24 @@ async def test_generate_reply() -> None:
     )
 
     # chat context
-    assert len(agent.chat_ctx.items) == 7
+    assert len(agent.chat_ctx.items) == 8
     assert agent.chat_ctx.items[0].type == "message"
     assert agent.chat_ctx.items[0].role == "system"
-    assert agent.chat_ctx.items[1].type == "message"
-    assert agent.chat_ctx.items[1].role == "assistant"
-    assert agent.chat_ctx.items[1].text_content == "What can I do for you!"
+    assert agent.chat_ctx.items[1].type == "agent_config_update"
     assert agent.chat_ctx.items[2].type == "message"
-    assert agent.chat_ctx.items[2].role == "user"
-    assert agent.chat_ctx.items[2].text_content == "bye"
+    assert agent.chat_ctx.items[2].role == "assistant"
+    assert agent.chat_ctx.items[2].text_content == "What can I do for you!"
     assert agent.chat_ctx.items[3].type == "message"
-    assert agent.chat_ctx.items[3].role == "assistant"
-    assert agent.chat_ctx.items[3].text_content == "session.say from on_user_turn_completed"
-    assert agent.chat_ctx.items[4].type == "function_call"
-    assert agent.chat_ctx.items[5].type == "function_call_output"
+    assert agent.chat_ctx.items[3].role == "user"
+    assert agent.chat_ctx.items[3].text_content == "bye"
+    assert agent.chat_ctx.items[4].type == "message"
+    assert agent.chat_ctx.items[4].role == "assistant"
+    assert agent.chat_ctx.items[4].text_content == "session.say from on_user_turn_completed"
+    assert agent.chat_ctx.items[5].type == "function_call"
     assert agent.chat_ctx.items[6].type == "message"
     assert agent.chat_ctx.items[6].role == "assistant"
     assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
 @pytest.mark.parametrize(
@@ -542,7 +532,7 @@ async def test_generate_reply() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
@@ -642,79 +632,6 @@ async def test_interrupt_during_on_user_turn_completed(
 # helpers
 
 
-def create_session(
-    actions: FakeActions,
-    *,
-    speed_factor: float = 1.0,
-    extra_kwargs: dict[str, Any] | None = None,
-) -> AgentSession:
-    user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
-    llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
-    tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
-
-    stt = FakeSTT(fake_user_speeches=user_speeches)
-    session = AgentSession(
-        vad=FakeVAD(
-            fake_user_speeches=user_speeches,
-            min_silence_duration=0.5 / speed_factor,
-            min_speech_duration=0.05 / speed_factor,
-        ),
-        stt=stt,
-        llm=FakeLLM(fake_responses=llm_responses),
-        tts=FakeTTS(fake_responses=tts_responses),
-        min_interruption_duration=0.5 / speed_factor,
-        min_endpointing_delay=0.5 / speed_factor,
-        max_endpointing_delay=6.0 / speed_factor,
-        false_interruption_timeout=2.0 / speed_factor,
-        **(extra_kwargs or {}),
-    )
-
-    # setup io with transcription sync
-    audio_input = FakeAudioInput()
-    audio_output = FakeAudioOutput()
-    transcription_output = FakeTextOutput()
-
-    transcript_sync = TranscriptSynchronizer(
-        next_in_chain_audio=audio_output,
-        next_in_chain_text=transcription_output,
-        speed=speed_factor,
-    )
-    session.input.audio = audio_input
-    session.output.audio = transcript_sync.audio_output
-    session.output.transcription = transcript_sync.text_output
-    return session
-
-
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 1.0) -> float:
-    stt = session.stt
-    audio_input = session.input.audio
-    assert isinstance(stt, FakeSTT)
-    assert isinstance(audio_input, FakeAudioInput)
-
-    transcription_sync: TranscriptSynchronizer | None = None
-    if isinstance(session.output.audio, _SyncedAudioOutput):
-        transcription_sync = session.output.audio._synchronizer
-
-    await session.start(agent)
-
-    # start the fake vad and stt
-    t_origin = time.time()
-    audio_input.push(0.1)
-
-    # wait for the user speeches to be processed
-    await stt.fake_user_speeches_done
-
-    await asyncio.sleep(drain_delay)
-    with contextlib.suppress(RuntimeError):
-        await session.drain()
-    await session.aclose()
-
-    if transcription_sync is not None:
-        await transcription_sync.aclose()
-
-    return t_origin
-
-
 def check_timestamp(
     t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.5
 ) -> None:
@@ -729,86 +646,3 @@ def check_timestamp(
     assert abs(t_event - t_target) <= max_abs_diff, (
         f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
     )
-
-
-class FakeActions:
-    def __init__(self) -> None:
-        self._items: list[FakeUserSpeech | FakeLLMResponse | FakeTTSResponse] = []
-
-    def add_user_speech(
-        self, start_time: float, end_time: float, transcript: str, *, stt_delay: float = 0.2
-    ) -> None:
-        self._items.append(
-            FakeUserSpeech(
-                start_time=start_time,
-                end_time=end_time,
-                transcript=transcript,
-                stt_delay=stt_delay,
-            )
-        )
-
-    def add_llm(
-        self,
-        content: str,
-        tool_calls: list[FunctionToolCall] | None = None,
-        *,
-        input: NotGivenOr[str] = NOT_GIVEN,
-        ttft: float = 0.1,
-        duration: float = 0.3,
-    ) -> None:
-        if (
-            not utils.is_given(input)
-            and self._items
-            and isinstance(self._items[-1], FakeUserSpeech)
-        ):
-            # use the last user speech as input
-            input = self._items[-1].transcript
-
-        if not utils.is_given(input):
-            raise ValueError("input is required or previous item needs to be a user speech")
-
-        self._items.append(
-            FakeLLMResponse(
-                content=content,
-                input=input,
-                ttft=ttft,
-                duration=duration,
-                tool_calls=tool_calls or [],
-            )
-        )
-
-    def add_tts(
-        self,
-        audio_duration: float,
-        *,
-        input: NotGivenOr[str] = NOT_GIVEN,
-        ttfb: float = 0.2,
-        duration: float = 0.3,
-    ) -> None:
-        if (
-            not utils.is_given(input)
-            and self._items
-            and isinstance(self._items[-1], FakeLLMResponse)
-        ):
-            input = self._items[-1].content
-
-        if not utils.is_given(input):
-            raise ValueError("input is required or previous item needs to be a llm response")
-
-        self._items.append(
-            FakeTTSResponse(
-                audio_duration=audio_duration,
-                input=input,
-                ttfb=ttfb,
-                duration=duration,
-            )
-        )
-
-    def get_user_speeches(self, *, speed_factor: float = 1.0) -> list[FakeUserSpeech]:
-        return [item.speed_up(speed_factor) for item in self._items if item.type == "user_speech"]
-
-    def get_llm_responses(self, *, speed_factor: float = 1.0) -> list[FakeLLMResponse]:
-        return [item.speed_up(speed_factor) for item in self._items if item.type == "llm"]
-
-    def get_tts_responses(self, *, speed_factor: float = 1.0) -> list[FakeTTSResponse]:
-        return [item.speed_up(speed_factor) for item in self._items if item.type == "tts"]

@@ -1,0 +1,107 @@
+name: Bug Report
+description: Report a bug with the framework
+labels: bug
+
+body:
+- type: markdown
+  attributes:
+    value: |
+      Thank you for taking the time to fill out this report! Please add as much detail as possible so we can help you.
+      
+- type: textarea
+  id: bug_description
+  attributes:
+    label: Bug Description
+    description: "A clear and detailed description of what the bug and current behavior is."
+  validations:
+    required: true
+    
+- type: textarea
+  id: expected_behavior
+  attributes:
+    label: Expected Behavior
+    description: "What is the expected behavior?"
+  validations:
+    required: true
+
+- type: textarea
+  id: reproduction_steps
+  attributes:
+    label: Reproduction Steps
+    description: "Steps to reproduce this behavior, preferably with a minimal reproducible example"
+    value: |
+      1. 
+      2.
+      3.
+      ...
+      - Sample code snippet, or a GitHub Gist link -
+    render: bash
+  validations:
+    required: true
+    
+- type: markdown
+  attributes:
+    value: "Environment Details"
+    
+- type: input
+  id: operating_system
+  attributes:
+    label: Operating System
+    placeholder: "e.g. Windows 11, macOS Tahoe"
+  validations:
+    required: true
+
+- type: input
+  id: pipeline_setup
+  attributes:
+    label: Models Used
+    description: "Your STT/LLM/TTS or RealtimeModel setup"
+    placeholder: "e.g. Deepgram Nova-3, OpenAI GPT-4.1, Cartesia Sonic-2"
+  validations:
+    required: false
+
+- type: textarea
+  id: package_versions
+  attributes:
+    label: Package Versions
+    description: "Relevant package versions"
+    placeholder: |
+      livekit==
+      livekit-agents==
+      livekit-api==
+      ...
+    render: bash
+  validations:
+    required: true
+    
+- type: textarea
+  id: problematic_ids
+  attributes:
+    label: Session/Room/Call IDs
+    description: "LiveKit Cloud related IDs to track particular sessions or SIP calls."
+    placeholder: |
+      roomID: RM_
+      SIP Call ID: SCL_
+      sessionID: ...
+      
+- type: textarea
+  id: proposed_solution
+  attributes:
+    label: Proposed Solution
+    description: "Suggest a solution to the bug if possible."
+    render: python
+- type: textarea
+  id: additional_context
+  attributes:
+    label: Additional Context
+    description: "Add any other context about the problem."
+
+- type: textarea
+  id: file_attachments
+  attributes:
+    label: Screenshots and Recordings
+    description: "If applicable, add screenshots or recording links to help explain your problem."
+
+  
+      
+      

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Callable, Union
@@ -34,6 +35,7 @@ class DataStreamAudioOutput(AudioOutput):
         destination_identity: str,
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
+        clear_buffer_timeout: float | None = 2.0,
     ):
         super().__init__(
             label="DataStreamIO",
@@ -51,6 +53,11 @@ class DataStreamAudioOutput(AudioOutput):
         self._started = False
         self._lock = asyncio.Lock()
         self._start_atask: asyncio.Task | None = None
+
+        # a playback finished event is expected after the clear buffer rpc is performed
+        # if not received after the timeout, we still mark the playout is done to avoid deadlock
+        self._clear_buffer_timeout = clear_buffer_timeout
+        self._clear_buffer_timeout_handler: asyncio.TimerHandle | None = None
 
         def _on_room_connected(fut: asyncio.Future[None]) -> None:
             if not self._start_atask and not fut.cancelled() and not fut.exception():
@@ -128,6 +135,10 @@ class DataStreamAudioOutput(AudioOutput):
                 },
             )
             self._pushed_duration = 0.0
+            # Not ideal since frame isn't actually playing yet
+            # potentially we need another RPC for this
+            self.on_playback_started(created_at=time.time())
+
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
@@ -148,13 +159,7 @@ class DataStreamAudioOutput(AudioOutput):
         if not self._started:
             return
 
-        task = asyncio.create_task(
-            self._room.local_participant.perform_rpc(
-                destination_identity=self._destination_identity,
-                method=RPC_CLEAR_BUFFER,
-                payload="",
-            )
-        )
+        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -167,6 +172,33 @@ class DataStreamAudioOutput(AudioOutput):
             "pause is not supported by DataStreamAudioOutput, "
             "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
         )
+
+    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+        timeout = self._clear_buffer_timeout
+        try:
+            await self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_CLEAR_BUFFER,
+                payload="",
+            )
+        except Exception as e:
+            logger.error("failed to perform clear buffer rpc", exc_info=e)
+            timeout = 0  # mark playout done immediately if clear buffer rpc fails
+
+        def _on_timeout() -> None:
+            logger.warning(
+                "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
+            )
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
+            self._reset_playback_count()
+
+        if self._clear_buffer_timeout_handler:
+            self._clear_buffer_timeout_handler.cancel()
+
+        if timeout is not None:
+            self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
+                timeout, _on_timeout
+            )
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
@@ -183,6 +215,10 @@ class DataStreamAudioOutput(AudioOutput):
             "playback finished event received",
             extra={"caller_identity": data.caller_identity},
         )
+
+        if self._clear_buffer_timeout_handler:
+            self._clear_buffer_timeout_handler.cancel()
+            self._clear_buffer_timeout_handler = None
 
         event = PlaybackFinishedEvent(**json.loads(data.payload))
         self.on_playback_finished(
@@ -289,6 +325,11 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             if self._current_reader:
                 self._current_reader_cleared = True
+
+            # clear the audio internal buffer
+            while not self._data_ch.empty():
+                self._data_ch.recv_nowait()
+
             self.emit("clear_buffer")
             return "ok"
 
@@ -386,7 +427,11 @@ class DataStreamAudioReceiver(AudioReceiver):
                     async for data in self._current_reader:
                         if self._current_reader_cleared:
                             # ignore the rest data of the current reader if clear_buffer was called
+                            while not self._data_ch.empty():
+                                self._data_ch.recv_nowait()
+                            bstream.clear()
                             break
+
                         for frame in bstream.push(data):
                             self._data_ch.send_nowait(frame)
 

@@ -40,8 +40,9 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.misc import is_given
 
 from .log import logger
 
@@ -83,6 +84,10 @@ class SarvamSTTOptions:
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    high_vad_sensitivity: bool | None = None
+    sample_rate: int = 16000
+    flush_signal: bool | None = None
+    input_audio_codec: str | None = None
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -92,11 +97,8 @@ class SarvamSTTOptions:
                 self.base_url = base_url
             if self.streaming_url is None:
                 self.streaming_url = streaming_url
-
-
-def _get_option_value(default_value: str, override_value: NotGivenOr[str]) -> str | NotGiven:
-    """Helper to get option value with NOT_GIVEN handling."""
-    return default_value if isinstance(override_value, type(NOT_GIVEN)) else override_value
+        if self.sample_rate <= 0:
+            raise ValueError("sample_rate must be greater than zero")
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
@@ -135,15 +137,22 @@ def _calculate_audio_duration(
     return 0.0
 
 
-def _build_websocket_url(
-    base_url: str, language: str, model: str, prompt: str | None = None
-) -> str:
+def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     """Build WebSocket URL with parameters."""
     params = {
-        "language-code": language,
-        "model": model,
+        "language-code": opts.language,
+        "model": opts.model,
         "vad_signals": "true",
     }
+
+    if opts.sample_rate:
+        params["sample_rate"] = str(opts.sample_rate)
+    if opts.high_vad_sensitivity is not None:
+        params["high_vad_sensitivity"] = str(opts.high_vad_sensitivity).lower()
+    if opts.flush_signal is not None:
+        params["flush_signal"] = str(opts.flush_signal).lower()
+    if opts.input_audio_codec:
+        params["input_audio_codec"] = opts.input_audio_codec
 
     return f"{base_url}?{urlencode(params)}"
 
@@ -172,8 +181,19 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
+        high_vad_sensitivity: bool | None = None,
+        sample_rate: int = 16000,
+        flush_signal: bool | None = None,
+        input_audio_codec: str | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                # chunk timestamps don't seem to work despite the docs saying they do
+                aligned_transcript=False,
+            )
+        )
 
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
@@ -188,6 +208,10 @@ class STT(stt.STT):
             model=model,
             base_url=base_url,
             prompt=prompt,
+            high_vad_sensitivity=high_vad_sensitivity,
+            sample_rate=sample_rate,
+            flush_signal=flush_signal,
+            input_audio_codec=input_audio_codec,
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
@@ -246,7 +270,7 @@ class STT(stt.STT):
         if opts_model:
             form_data.add_field("model", str(opts_model))
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         headers = {"api-subscription-key": self._api_key}
 
@@ -266,8 +290,9 @@ class STT(stt.STT):
                     error_text = await res.text()
                     self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam API Error: {error_text}",
+                        message="Sarvam API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
@@ -329,10 +354,14 @@ class STT(stt.STT):
         model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        flush_signal: NotGivenOr[bool] = NOT_GIVEN,
+        input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
-        opts_language = _get_option_value(self._opts.language, language)
-        opts_model = _get_option_value(self._opts.model, model)
+        opts_language = language if is_given(language) else self._opts.language
+        opts_model = model if is_given(model) else self._opts.model
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
@@ -346,18 +375,33 @@ class STT(stt.STT):
         else:
             final_prompt = self._opts.prompt
 
+        opts_high_vad = (
+            high_vad_sensitivity
+            if is_given(high_vad_sensitivity)
+            else self._opts.high_vad_sensitivity
+        )
+        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
+        opts_input_codec = (
+            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
+        )
+
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
             language=opts_language,
             api_key=self._api_key if self._api_key else "",
             model=opts_model,
             prompt=final_prompt,
+            high_vad_sensitivity=opts_high_vad,
+            sample_rate=opts_sample_rate,
+            flush_signal=opts_flush_signal,
+            input_audio_codec=opts_input_codec,
         )
 
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         stream = SpeechStream(
             stt=self,
@@ -373,16 +417,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """Sarvam.ai streaming speech-to-text implementation."""
 
-    _END_OF_STREAM_MSG: str = json.dumps(
-        {
-            "type": "end_of_stream",
-            "audio": {
-                "data": "",  # Empty audio data for end-of-stream
-                "encoding": "audio/wav",
-                "sample_rate": 16000,
-            },
-        }
-    )
+    _CHUNK_DURATION_MS = 50
 
     def __init__(
         self,
@@ -393,8 +428,8 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=16000)
         self._opts = opts
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._api_key = api_key
         self._session = http_session
         self._speaking = False
@@ -415,6 +450,24 @@ class SpeechStream(stt.SpeechStream):
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
         self._message_task: asyncio.Task | None = None
+        self._audio_encoding = self._opts.input_audio_codec or "audio/wav"
+        self._chunk_size = max(
+            int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
+            1,
+        )
+        self._end_of_stream_msg = self._build_end_of_stream_message()
+
+    def _build_end_of_stream_message(self) -> str:
+        return json.dumps(
+            {
+                "type": "end_of_stream",
+                "audio": {
+                    "data": "",
+                    "encoding": self._audio_encoding,
+                    "sample_rate": self._opts.sample_rate,
+                },
+            }
+        )
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
@@ -571,12 +624,7 @@ class SpeechStream(stt.SpeechStream):
         # Build WebSocket URL with parameters
         if self._opts.streaming_url is None:
             raise ValueError("streaming_url cannot be None")
-        ws_url = _build_websocket_url(
-            self._opts.streaming_url,
-            self._opts.language,
-            self._opts.model,
-            self._opts.prompt,
-        )
+        ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
 
         # Connect to WebSocket with proper authentication
         headers = {"api-subscription-key": self._api_key}
@@ -666,7 +714,7 @@ class SpeechStream(stt.SpeechStream):
 
         # Audio buffering for chunked sending
         audio_buffer: list[np.int16] = []
-        chunk_size = 16 * 50  # 500ms of audio at 16kHz
+        chunk_size = self._chunk_size  # Derived from selected sample rate
         chunks_sent = 0
 
         self._logger.debug(
@@ -695,8 +743,8 @@ class SpeechStream(stt.SpeechStream):
                             audio_message = {
                                 "audio": {
                                     "data": base64_audio,
-                                    "encoding": "audio/wav",
-                                    "sample_rate": 16000,
+                                    "encoding": self._audio_encoding,
+                                    "sample_rate": self._opts.sample_rate,
                                 }
                             }
 
@@ -727,7 +775,7 @@ class SpeechStream(stt.SpeechStream):
                         "Received FlushSentinel, sending end of stream",
                         extra={"session_id": self._session_id},
                     )
-                    await ws.send_str(self._END_OF_STREAM_MSG)
+                    await ws.send_str(self._end_of_stream_msg)
                     break
 
                 # Check if Sarvam VAD triggered flush
@@ -883,6 +931,8 @@ class SpeechStream(stt.SpeechStream):
             speech_data = stt.SpeechData(
                 language=language,
                 text=transcript_text,
+                start_time=transcript_data.get("speech_start", 0.0),
+                end_time=transcript_data.get("speech_end", 0.0),
             )
 
             # Create final transcript event with request_id

@@ -4,10 +4,10 @@ from collections.abc import AsyncGenerator, AsyncIterable
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.io import TimedString
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -35,11 +35,15 @@ class MyAgent(Agent):
             yield chunk
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        tts=inference.TTS("cartesia/sonic-3"),
         vad=silero.VAD.load(),
         # enable TTS-aligned transcript, can be configured at the Agent level as well
         use_tts_aligned_transcript=True,
@@ -51,4 +55,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

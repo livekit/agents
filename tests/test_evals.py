@@ -3,8 +3,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
-from livekit.plugins import openai
+from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool, inference, llm
+
+
+def _llm_model() -> llm.LLM:
+    return inference.LLM(model="openai/gpt-4.1-mini")
 
 
 class KellyAgent(Agent):
@@ -39,7 +42,7 @@ class EchoAgent(Agent):
 
 @pytest.mark.asyncio
 async def test_function_call():
-    async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         await sess.start(KellyAgent())
 
         result = await sess.run(user_input="What is the weather in San Francisco?")
@@ -63,7 +66,7 @@ async def test_function_call():
 
 @pytest.mark.asyncio
 async def test_start_with_capture_run():
-    async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         result = await sess.start(EchoAgent(), capture_run=True)
 
         print(result.events)
@@ -110,12 +113,12 @@ class AshAgent(Agent):
 
 @pytest.mark.asyncio
 async def test_inline_agent():
-    async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         await sess.start(AshAgent(oneshot=True))
 
         result = await sess.run(user_input="Start the random generator?")
 
-    async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         await sess.start(AshAgent(oneshot=False))
 
         result = await sess.run(user_input="Start the random generator?")

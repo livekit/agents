@@ -5,8 +5,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.plugins import elevenlabs
+from livekit.agents import AgentServer, JobContext, cli, inference
 
 logger = logging.getLogger("elevenlabs-tts-demo")
 logger.setLevel(logging.INFO)
@@ -38,10 +37,15 @@ async def _playout_task(playout_q: asyncio.Queue, audio_source: rtc.AudioSource)
         await audio_source.capture_frame(frame)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(job: JobContext):
-    # use another voice for this demo
-    # you can get a list of the voices using 'await tts_11labs.list_voices()'
-    tts_11labs = elevenlabs.TTS(voice_id="ODq5zmih8GrVes37Dizd", model="eleven_multilingual_v2")
+    # Using LiveKit inference for TTS, to use elevenlabs with your own API key, you can change it to:
+    # from livekit.plugins import elevenlabs
+    # tts_11labs = elevenlabs.TTS(model="elevenlabs/eleven_multilingual_v2", voice_id="ODq5zmih8GrVes37Dizd")
+    tts_11labs = inference.TTS("elevenlabs/eleven_multilingual_v2", voice="ODq5zmih8GrVes37Dizd")
 
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
@@ -87,4 +91,4 @@ async def entrypoint(job: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

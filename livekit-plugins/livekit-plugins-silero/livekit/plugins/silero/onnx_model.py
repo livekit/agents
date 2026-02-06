@@ -1,8 +1,11 @@
 # mypy: disable-error-code=unused-ignore
 
+from __future__ import annotations
+
 import atexit
 import importlib.resources
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
+from pathlib import Path
 
 import numpy as np
 import onnxruntime  # type: ignore
@@ -14,10 +17,21 @@ atexit.register(_resource_files.close)
 SUPPORTED_SAMPLE_RATES = [8000, 16000]
 
 
-def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
-    res = importlib.resources.files("livekit.plugins.silero.resources") / "silero_vad.onnx"
-    ctx = importlib.resources.as_file(res)
-    path = str(_resource_files.enter_context(ctx))
+def new_inference_session(
+    force_cpu: bool, onnx_file_path: Path | str | None = None
+) -> onnxruntime.InferenceSession:
+    if onnx_file_path is None:
+        res = importlib.resources.files("livekit.plugins.silero.resources") / "silero_vad.onnx"
+        ctx = importlib.resources.as_file(res)
+        path = str(_resource_files.enter_context(ctx))
+    else:
+        onnx_file_path = Path(onnx_file_path)
+        if not onnx_file_path.exists():
+            raise FileNotFoundError(f"Silero VAD model file not found: {onnx_file_path}")
+        if not onnx_file_path.is_file():
+            raise FileNotFoundError(f"`onnx_file_path` specified is not a file: {onnx_file_path}")
+        ctx = nullcontext(onnx_file_path)
+        path = str(_resource_files.enter_context(ctx))
 
     opts = onnxruntime.SessionOptions()
     opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
@@ -79,6 +93,6 @@ class OnnxModel:
             "state": self._rnn_state,
             "sr": self._sample_rate_nd,
         }
-        out, self._state = self._sess.run(None, ort_inputs)
+        out, self._rnn_state = self._sess.run(None, ort_inputs)
         self._context = self._input_buffer[:, -self._context_size :]  # type: ignore
         return out.item()  # type: ignore

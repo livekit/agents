@@ -4,12 +4,11 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
-    RoomInputOptions,
-    RoomOutputOptions,
-    WorkerOptions,
     cli,
+    room_io,
     voice,  # noqa: F401
 )
 from livekit.plugins import google, silero
@@ -18,7 +17,10 @@ logger = logging.getLogger("realtime-video-agent")
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -37,8 +39,9 @@ async def entrypoint(ctx: JobContext):
         agent=agent,
         room=ctx.room,
         # by default, video is disabled
-        room_input_options=RoomInputOptions(video_enabled=True),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
+        room_options=room_io.RoomOptions(
+            video_input=True,
+        ),
     )
 
     await session.generate_reply(
@@ -47,4 +50,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

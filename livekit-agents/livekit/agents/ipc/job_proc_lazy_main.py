@@ -1,29 +1,23 @@
 from __future__ import annotations
 
 from multiprocessing import current_process
-from types import TracebackType
 
 if current_process().name == "job_proc":
     import signal
-    import sys
 
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(
-        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
-    ) -> None:
-        if isinstance(exc_val, KeyboardInterrupt):
-            return
-        sys.__excepthook__(exc_type, exc_val, traceback)
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
 
-    sys.excepthook = _no_traceback_excepthook
-
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
 import contextlib
 import socket
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
@@ -31,15 +25,15 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from ..cli import cli
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
+    DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
     InferenceResponse,
@@ -53,34 +47,80 @@ from .proto import (
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
-    user_arguments: Any | None = None
+    logger_levels: dict[str, int]
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    import logging
+
+    from .log_queue import LogQueueHandler
     from .proc_client import _ProcClient
+
+    root_logger = logging.getLogger()
+    for name, level in args.logger_levels.items():
+        logging.getLogger(name).setLevel(level)
+
+    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
+    root_logger.addHandler(log_handler)
 
     job_proc = _JobProc(
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
+        args.session_end_fnc,
         JobExecutorType.PROCESS,
         args.user_arguments,
     )
 
-    client = _ProcClient(
-        args.mp_cch,
-        args.log_cch,
-        job_proc.initialize,
-        job_proc.entrypoint,
-    )
-
-    client.initialize_logger()
+    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
     try:
         client.initialize()
     except Exception:
+        log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
+
     client.run()
+
+    import sys
+    import threading
+    import traceback
+
+    for t in threading.enumerate():
+        if threading.main_thread() == t:
+            continue
+
+        if threading.current_thread() == t:
+            continue
+
+        if t == log_handler.thread:
+            continue
+
+        if t.daemon:
+            continue
+
+        from concurrent.futures.thread import _threads_queues
+
+        if t in _threads_queues:
+            continue
+
+        t.join(timeout=0.25)
+
+        frames = sys._current_frames()
+        frame = frames.get(t.ident)  # type: ignore
+
+        logger.warning(
+            f"non-daemon thread `{t.name}` may prevent the process from exiting",
+            extra={"thread_id": t.native_id, "thread_name": t.name},
+        )
+
+        if frame is not None:
+            logger.warning("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
+
+    log_handler.close()
 
 
 class _InfClient(InferenceExecutor):
@@ -91,12 +131,17 @@ class _InfClient(InferenceExecutor):
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         request_id = shortuuid("inference_job_")
         fut = asyncio.Future[InferenceResponse]()
-
-        await self._client.send(
-            InferenceRequest(request_id=request_id, method=method, data=data),
-        )
-
         self._active_requests[request_id] = fut
+
+        try:
+            await self._client.send(
+                InferenceRequest(request_id=request_id, method=method, data=data),
+            )
+        except Exception:
+            if not fut.done():
+                fut.cancel()
+            self._active_requests.pop(request_id, None)
+            raise
 
         inf_resp = await fut
         if inf_resp.error:
@@ -125,6 +170,7 @@ class _JobProc:
         self,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Any],
+        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
@@ -132,6 +178,7 @@ class _JobProc:
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
+        self._session_end_fnc = session_end_fnc
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -179,13 +226,16 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
+                if isinstance(msg, DumpStackTraceRequest):
+                    _dump_stack_traces_impl()
+
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
         await self._exit_proc_flag.wait()
         await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if msg.running_job.fake_job:
             from .mock_room import create_mock_room
 
             self._room = cast(rtc.Room, create_mock_room())
@@ -219,14 +269,16 @@ class _JobProc:
             inference_executor=self._inf_client,
         )
 
-        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
 
+        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(_exit_proc_cb)
 
+    @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
+        self._job_ctx._on_setup()
+
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
@@ -244,14 +296,14 @@ class _JobProc:
         )
 
         async def _warn_not_connected_task() -> None:
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            if self._job_ctx.is_fake_job():
                 return
 
             await asyncio.sleep(10)
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
                     "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
-                    "This may indicate that job_ctx.connect() was not called. "
+                    "This might mean that job_ctx.connect() was never invoked, or that no AgentSession with an active RoomIO has been started."
                 )
 
         warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
@@ -264,7 +316,7 @@ class _JobProc:
                     exc_info=t.exception(),
                 )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
-                if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                if self._job_ctx.is_fake_job():
                     return
 
                 logger.warning(
@@ -275,14 +327,23 @@ class _JobProc:
         job_entry_task.add_done_callback(log_exception)
 
         shutdown_info = await self._shutdown_fut
+
+        # TODO(theomonnom): move this code?
+        if session := self._job_ctx._primary_agent_session:
+            await session.aclose()
+
+        await self._job_ctx._on_session_end()
+
+        if self._session_end_fnc:
+            try:
+                await self._session_end_fnc(self._job_ctx)
+            except Exception:
+                logger.exception("error while executing the on_session_end callback")
+
         logger.debug(
             "shutting down job task",
-            extra={
-                "reason": shutdown_info.reason,
-                "user_initiated": shutdown_info.user_initiated,
-            },
+            extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
         )
-
         await self._client.send(Exiting(reason=shutdown_info.reason))
         await self._room.disconnect()
 
@@ -299,6 +360,10 @@ class _JobProc:
         except Exception:
             logger.exception("error while shutting down the job")
 
+        if tasks := self._job_ctx._pending_tasks:
+            await aio.cancel_and_wait(*tasks)
+
+        self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 
@@ -307,6 +372,7 @@ class _JobProc:
 class ThreadStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
@@ -322,6 +388,7 @@ def thread_main(
         job_proc = _JobProc(
             args.initialize_process_fnc,
             args.job_entrypoint_fnc,
+            args.session_end_fnc,
             JobExecutorType.THREAD,
             args.user_arguments,
         )

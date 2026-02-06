@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RoomIO, cli
 from livekit.plugins import openai
 
 logger = logging.getLogger("toggle-io")
@@ -16,7 +16,10 @@ load_dotenv()
 ## The example makes use of LiveKit's RPC system to exchange messages between the
 ## client and the server.
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     room_io = RoomIO(session, room=ctx.room)
@@ -76,4 +79,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

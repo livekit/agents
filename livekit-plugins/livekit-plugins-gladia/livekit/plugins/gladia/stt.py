@@ -41,9 +41,11 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector
 from .log import logger
+from .models import GladiaModels
 from .version import __version__
 
 BASE_URL = "https://api.gladia.io/v2/live"
@@ -114,11 +116,14 @@ class PreProcessingConfiguration:
 
 @dataclass
 class STTOptions:
+    model: GladiaModels
     language_config: LanguageConfiguration
     interim_results: bool
     sample_rate: int
     bit_depth: Literal[8, 16, 24, 32]
     channels: int
+    endpointing: float
+    maximum_duration_without_endpointing: float
     region: Literal["us-west", "eu-west"]
     encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"]
     translation_config: TranslationConfiguration = dataclasses.field(
@@ -138,6 +143,9 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         "region": opts.region,
         "encoding": opts.encoding,
         "sample_rate": opts.sample_rate,
+        "model": opts.model,
+        "endpointing": opts.endpointing,
+        "maximum_duration_without_endpointing": opts.maximum_duration_without_endpointing,
         "bit_depth": opts.bit_depth,
         "channels": opts.channels,
         "language_config": {
@@ -196,11 +204,14 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
+        model: GladiaModels = "solaria-1",
         interim_results: bool = True,
         languages: list[str] | None = None,
         code_switching: bool = True,
         sample_rate: int = 16000,
         bit_depth: Literal[8, 16, 24, 32] = 16,
+        endpointing: float = 0.05,
+        maximum_duration_without_endpointing: float = 5,
         channels: int = 1,
         region: Literal["us-west", "eu-west"] = "eu-west",
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] = "wav/pcm",
@@ -224,6 +235,7 @@ class STT(stt.STT):
         """Create a new instance of Gladia STT.
 
         Args:
+            model: The model to use for recognition. Defaults to "solaria-1".
             interim_results: Whether to return interim (non-final) transcription results.
                             Defaults to True.
             languages: List of language codes to use for recognition. Defaults to None
@@ -232,6 +244,8 @@ class STT(stt.STT):
                             Defaults to True.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             bit_depth: The bit depth of the audio. Defaults to 16.
+            endpointing: Endpointing is the duration of silence in seconds which will cause an utterance to be considered as finished. Defaults to 0.05.
+            maximum_duration_without_endpointing: If endpointing is not detected after this duration in seconds, current utterance will be considered as finished. Defaults to 5.
             channels: The number of audio channels. Defaults to 1.
             region: The region to use for the Gladia API. Defaults to "eu-west".
             encoding: The encoding of the audio. Defaults to "wav/pcm".
@@ -260,13 +274,15 @@ class STT(stt.STT):
             ValueError: If no API key is provided or found in environment variables.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=interim_results, aligned_transcript="word"
+            )
         )
         self._base_url = base_url
 
         api_key = api_key or os.environ.get("GLADIA_API_KEY")
-        if api_key is None:
-            raise ValueError("Gladia API key is required")
+        if not api_key:
+            raise ValueError("Gladia API key is required. Set GLADIA_API_KEY or pass api_key")
 
         self._api_key = api_key
 
@@ -294,6 +310,7 @@ class STT(stt.STT):
             )
 
         self._opts = STTOptions(
+            model=model,
             language_config=language_config,
             interim_results=interim_results,
             sample_rate=sample_rate,
@@ -301,6 +318,8 @@ class STT(stt.STT):
             channels=channels,
             region=region,
             encoding=encoding,
+            endpointing=endpointing,
+            maximum_duration_without_endpointing=maximum_duration_without_endpointing,
             translation_config=translation_config,
             pre_processing=pre_processing_config,
             energy_filter=energy_filter,
@@ -312,7 +331,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -482,6 +501,7 @@ class STT(stt.STT):
         # Process each utterance into a SpeechData object
         for utterance in utterances:
             text = utterance.get("text", "").strip()
+            words = utterance.get("words", [])
             if text:
                 alternatives.append(
                     stt.SpeechData(
@@ -490,6 +510,14 @@ class STT(stt.STT):
                         end_time=utterance.get("end", 0),
                         confidence=utterance.get("confidence", 1.0),
                         text=text,
+                        words=[
+                            TimedString(
+                                text=word.get("word", ""),
+                                start_time=word.get("start", 0),
+                                end_time=word.get("end", 0),
+                            )
+                            for word in words
+                        ],
                     )
                 )
 
@@ -501,6 +529,7 @@ class STT(stt.STT):
                     end_time=0,
                     confidence=1.0,
                     text="",
+                    words=[],
                 )
             )
 
@@ -531,6 +560,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
+        model: GladiaModels | None = None,
         languages: list[str] | None = None,
         code_switching: bool | None = None,
         interim_results: bool | None = None,
@@ -538,6 +568,8 @@ class STT(stt.STT):
         bit_depth: Literal[8, 16, 24, 32] | None = None,
         channels: int | None = None,
         region: Literal["us-west", "eu-west"] | None = None,
+        endpointing: float | None = None,
+        maximum_duration_without_endpointing: float | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
         translation_target_languages: list[str] | None = None,
@@ -614,6 +646,12 @@ class STT(stt.STT):
                 else self._opts.pre_processing.speech_threshold,
             )
 
+        if model is not None:
+            self._opts.model = model
+        if endpointing is not None:
+            self._opts.endpointing = endpointing
+        if maximum_duration_without_endpointing is not None:
+            self._opts.maximum_duration_without_endpointing = maximum_duration_without_endpointing
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if sample_rate is not None:
@@ -631,6 +669,7 @@ class STT(stt.STT):
 
         for stream in self._streams:
             stream.update_options(
+                model=model,
                 languages=languages,
                 code_switching=code_switching,
                 interim_results=interim_results,
@@ -638,6 +677,8 @@ class STT(stt.STT):
                 bit_depth=bit_depth,
                 channels=channels,
                 region=region,
+                endpointing=endpointing,
+                maximum_duration_without_endpointing=maximum_duration_without_endpointing,
                 encoding=encoding,
                 translation_enabled=translation_enabled,
                 translation_target_languages=translation_target_languages,
@@ -702,6 +743,7 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
+        model: GladiaModels | None = None,
         languages: list[str] | None = None,
         code_switching: bool | None = None,
         interim_results: bool | None = None,
@@ -709,6 +751,8 @@ class SpeechStream(stt.SpeechStream):
         bit_depth: Literal[8, 16, 24, 32] | None = None,
         channels: int | None = None,
         region: Literal["us-west", "eu-west"] | None = None,
+        endpointing: float | None = None,
+        maximum_duration_without_endpointing: float | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
         translation_target_languages: list[str] | None = None,
@@ -785,6 +829,12 @@ class SpeechStream(stt.SpeechStream):
                 else self._opts.pre_processing.speech_threshold,
             )
 
+        if model is not None:
+            self._opts.model = model
+        if endpointing is not None:
+            self._opts.endpointing = endpointing
+        if maximum_duration_without_endpointing is not None:
+            self._opts.maximum_duration_without_endpointing = maximum_duration_without_endpointing
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if sample_rate is not None:
@@ -962,6 +1012,7 @@ class SpeechStream(stt.SpeechStream):
             is_final = data["data"]["is_final"]
             utterance = data["data"]["utterance"]
             text = utterance.get("text", "").strip()
+            words = utterance.get("words", [])
 
             if not self._speaking and text:
                 self._speaking = True
@@ -981,10 +1032,19 @@ class SpeechStream(stt.SpeechStream):
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0),
-                    end_time=utterance.get("end", 0),
+                    start_time=utterance.get("start", 0) + self.start_time_offset,
+                    end_time=utterance.get("end", 0) + self.start_time_offset,
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
+                    words=[
+                        TimedString(
+                            text=word.get("word", ""),
+                            start_time=word.get("start", 0) + self.start_time_offset,
+                            end_time=word.get("end", 0) + self.start_time_offset,
+                            start_time_offset=self.start_time_offset,
+                        )
+                        for word in words
+                    ],
                 )
 
                 if is_final:
@@ -1038,15 +1098,25 @@ class SpeechStream(stt.SpeechStream):
 
                 # Get the translated text
                 translated_text = translated_utterance.get("text", "").strip()
+                words = translated_utterance.get("words", [])
 
                 if translated_text and language:
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
                         language=language,  # Use the target language
-                        start_time=translated_utterance.get("start", 0),
-                        end_time=translated_utterance.get("end", 0),
+                        start_time=translated_utterance.get("start", 0) + self.start_time_offset,
+                        end_time=translated_utterance.get("end", 0) + self.start_time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
+                        words=[
+                            TimedString(
+                                text=word.get("word", ""),
+                                start_time=word.get("start", 0) + self.start_time_offset,
+                                end_time=word.get("end", 0) + self.start_time_offset,
+                                start_time_offset=self.start_time_offset,
+                            )
+                            for word in words
+                        ],
                     )
 
                     # Emit FINAL_TRANSCRIPT containing the TRANSLATION
