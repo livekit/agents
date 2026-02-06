@@ -2,7 +2,7 @@ FROM python:3.9-slim
 
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y curl strace procps
+RUN apt-get update && apt-get install -y curl strace procps build-essential python3-dev
 
 RUN pip install --no-cache-dir uv
 
