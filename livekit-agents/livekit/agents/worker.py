@@ -1106,6 +1106,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._handle_register(msg.register)
                 self._connecting = False
 
+                # report all active jobs to the server after registration
+                await self._report_active_jobs()
+
                 await self._run_ws(ws)
             except Exception as e:
                 if self._closed:
@@ -1514,6 +1517,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
+
+    async def _report_active_jobs(self) -> None:
+        active_jobs = self.active_jobs
+        if not active_jobs:
+            return
+
+        job_ids = [job_info.job.id for job_info in active_jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        msg = agent.WorkerMessage(migrate_job=migrate_req)
+        await self._queue_msg(msg)
+
+        logger.debug(
+            "reported active jobs after registration",
+            extra={"job_count": len(active_jobs), "job_ids": job_ids},
+        )
 
     def _on_text_response(self, msg: ipc.proto.TextResponseEvent) -> None:
         """Handle text response event from process pool."""

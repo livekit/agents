@@ -575,6 +575,7 @@ class AudioRecognition:
                                         exclude_instructions=True,
                                         exclude_empty_message=True,
                                         exclude_handoff=True,
+                                        exclude_config_update=True,
                                     )
                                     .to_dict(
                                         exclude_audio=True,
