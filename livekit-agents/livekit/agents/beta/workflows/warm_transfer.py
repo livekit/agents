@@ -130,14 +130,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # users can override this method if they want to customize the entire instructions
         prev_convo = ""
         if chat_ctx:
-            context_copy = chat_ctx.copy(
-                exclude_empty_message=True,
-                exclude_instructions=True,
-                exclude_function_call=True,
-                exclude_handoff=True,
-            )
-            for msg in context_copy.items:
-                if msg.type != "message":
+            for msg in chat_ctx.messages():
+                if msg.role not in ("user", "assistant"):
+                    continue
+                if not msg.text_content:
                     continue
                 role = "Caller" if msg.role == "user" else "Assistant"
                 prev_convo += f"{role}: {msg.text_content}\n"

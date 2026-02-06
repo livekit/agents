@@ -241,7 +241,7 @@ class Agent:
 
         tools = valid_tools
         if self._activity is None:
-            self._tools = list(set(tools))
+            self._tools = list({tool.id: tool for tool in tools}.values())
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 

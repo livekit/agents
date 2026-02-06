@@ -246,6 +246,10 @@ class ChatContext:
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
+
     def add_message(
         self,
         *,
@@ -554,17 +558,15 @@ class ChatContext:
         keep_last_turns: int = 2,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
-        for item in self.items:
-            if item.type != "message":
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
-            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
                 continue
 
-            text = (item.text_content or "").strip()
+            text = (msg.text_content or "").strip()
             if text:
-                to_summarize.append(item)
+                to_summarize.append(msg)
         if not to_summarize:
             return self
 

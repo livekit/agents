@@ -137,6 +137,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 summarized_chat_ctx = await self.chat_ctx.copy(
                     exclude_instructions=True,
                     exclude_handoff=True,
+                    exclude_config_update=True,
                     exclude_empty_message=True,
                     exclude_function_call=True,
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)

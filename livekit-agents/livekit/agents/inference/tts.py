@@ -291,7 +291,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model" format
+            model (TTSModels | str): TTS model to use, in "provider/model[:voice]" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -311,6 +311,13 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        # Parse voice from model string if provided: "provider/model:voice"
+        if isinstance(model, str):
+            parsed_model, parsed_voice = _parse_model_string(model)
+            model = parsed_model
+            if parsed_voice is not None and not is_given(voice):
+                voice = parsed_voice
 
         lk_base_url = (
             base_url
