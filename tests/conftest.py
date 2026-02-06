@@ -129,7 +129,7 @@ async def fail_on_leaked_tasks():
 
     yield
 
-    # gc.collect()
+    gc.collect()
 
     tasks_after = set(asyncio.all_tasks())
     async_gens_after = live_async_generators_ids()
