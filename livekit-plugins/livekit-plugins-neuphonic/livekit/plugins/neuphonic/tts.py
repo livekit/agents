@@ -49,6 +49,7 @@ class _TTSOptions:
     voice_id: str
     speed: float | None
     api_key: str
+    jwt_token: str | None
     base_url: str
     word_tokenizer: tokenize.WordTokenizer
 
@@ -64,6 +65,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
+        jwt_token: str | None = None,
         lang_code: TTSLangCodes | str = "en",
         encoding: str = "pcm_linear",
         voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
@@ -131,6 +133,8 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
+        if self._opts.jwt_token:
+            url += f"&jwt_token={self._opts.jwt_token}"
 
         headers = {API_AUTH_HEADER: self._opts.api_key}
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
