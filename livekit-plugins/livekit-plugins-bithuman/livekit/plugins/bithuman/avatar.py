@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
-import cv2
+import cv2  # type: ignore[import-untyped]
 import numpy as np
 from loguru import logger as _logger
 from PIL import Image

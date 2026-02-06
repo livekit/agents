@@ -170,13 +170,13 @@ class SpeakingRateStream:
                 # move the window forward by the hop size
                 pub_timestamp += self._opts.step_size
                 if len(inference_frame.data) - self._step_size_samples > 0:
-                    data = inference_frame.data[self._step_size_samples :]
+                    remaining = inference_frame.data[self._step_size_samples :]
                     inference_frames = [
                         rtc.AudioFrame(
-                            data=data,
+                            data=remaining,
                             sample_rate=inference_frame.sample_rate,
                             num_channels=1,
-                            samples_per_channel=len(data),
+                            samples_per_channel=len(remaining),
                         )
                     ]
 
