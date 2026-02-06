@@ -106,15 +106,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         address = " ".join(address_fields)
         self._current_address = address
 
-        if self._require_confirmation:
-            return (
-                f"The address has been updated to {address}\n"
-                f"Repeat the address field by field: {address_fields} if needed\n"
-                f"Prompt the user for confirmation, do not call `confirm_address` directly"
-            )
-        else:
-            self.complete(GetAddressResult(address=self._current_address))
+        if self._require_confirmation is False or ctx.speech_handle.input_mode == "text":
+            if not self.done():
+                self.complete(GetAddressResult(address=self._current_address))
             return None
+
+        return (
+            f"The address has been updated to {address}\n"
+            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"Prompt the user for confirmation, do not call `confirm_address` directly"
+        )
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def confirm_address(self, ctx: RunContext) -> None:
