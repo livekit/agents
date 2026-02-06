@@ -24,7 +24,7 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=False,
     )
 
-    liveavatar_avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "7b888024-f8c9-4205-95e1-78ce01497bda")
+    liveavatar_avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a")
     avatar = liveavatar.AvatarSession(avatar_id=liveavatar_avatar_id)
     await avatar.start(session, room=ctx.room)
 
