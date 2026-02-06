@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, images]>=1.4.0",
+    "livekit-agents[codecs, images]>=1.4.1",
     "openai[realtime]>=2",
 ]
 
