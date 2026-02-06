@@ -49,7 +49,6 @@ class RecorderIO:
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
 
-        self._input_speech_padded = False
         self._skip_padding_warning = False
 
     async def start(self, *, output_path: str | Path) -> None:
@@ -65,6 +64,7 @@ class RecorderIO:
 
             self._output_path = Path(output_path)
             self._started = True
+            self._skip_padding_warning = False
             self._close_fut = self._loop.create_future()
             self._forward_atask = asyncio.create_task(self._forward_task())
 
@@ -231,7 +231,7 @@ class RecorderIO:
                                 f"Input is shorter by {diff} samples; silence has been prepended to "
                                 "align the input channel. The resulting recording may not accurately "
                                 "reflect the original audio. This is expected if the input device "
-                                " or audio input is disabled. This warning will only be shown once."
+                                "or audio input is disabled. This warning will only be shown once."
                             )
                             self._skip_padding_warning = True
 
