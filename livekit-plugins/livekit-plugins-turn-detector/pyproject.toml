@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.3.12",
+    "livekit-agents>=1.4.0",
     "transformers>=4.47.1,<=4.57.1",  # transformers 4.57.2 has a bug with local_files_only=True
     "numpy>=1.26",
     "onnxruntime>=1.18",
