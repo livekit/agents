@@ -171,6 +171,9 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""

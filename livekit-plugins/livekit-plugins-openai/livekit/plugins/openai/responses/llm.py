@@ -89,6 +89,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
         )
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -105,6 +106,10 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.close()
 
     @property
     def model(self) -> str:
