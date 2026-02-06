@@ -145,6 +145,10 @@ module = "smithy_core.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "smithy_http.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true
 
