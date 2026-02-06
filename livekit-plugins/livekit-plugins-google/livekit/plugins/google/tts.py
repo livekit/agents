@@ -132,8 +132,9 @@ class TTS(tts.TTS):
         if not is_given(model_name):
             # chirp3 voice name format: <locale>-<model>-<voice>
             # only chirp 3 model can support voice cloning
-            if is_given(voice_cloning_key) or (
-                is_given(voice_name) and "chirp" in voice_name.lower()
+            if not is_given(prompt) and (
+                is_given(voice_cloning_key)
+                or (is_given(voice_name) and "chirp" in voice_name.lower())
             ):
                 model_name = "chirp_3"
                 logger.debug(
