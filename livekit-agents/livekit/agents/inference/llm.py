@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 import httpx
 import openai
@@ -66,7 +66,7 @@ DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = Union[OpenAIModels, GoogleModels, KimiModels, DeepSeekModels]
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -305,7 +305,7 @@ class LLMStream(llm.LLMStream):
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
-                tools=tool_schemas or openai.NOT_GIVEN,
+                tools=tool_schemas or openai.omit,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
@@ -326,7 +326,7 @@ class LLMStream(llm.LLMStream):
                         retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
-                        chunk = llm.ChatChunk(
+                        usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=chunk.usage.completion_tokens,
@@ -335,7 +335,7 @@ class LLMStream(llm.LLMStream):
                                 total_tokens=chunk.usage.total_tokens,
                             ),
                         )
-                        self._event_ch.send_nowait(chunk)
+                        self._event_ch.send_nowait(usage_chunk)
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None

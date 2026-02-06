@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Union
 
 import numpy as np
 
@@ -59,7 +58,7 @@ class SpeakingRateStream:
         self._detector = detector
         self._opts = opts
 
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeakingRateStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | SpeakingRateStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeakingRateEvent]()
 
         self._task = asyncio.create_task(self._main_task())
@@ -84,7 +83,13 @@ class SpeakingRateStream:
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
                     frame = rtc.combine_audio_frames(inference_frames)
-                    frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
+                    frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
+                    np.divide(
+                        frame.data,
+                        np.iinfo(np.int16).max,
+                        out=frame_f32_data,
+                        dtype=np.float32,
+                    )
 
                     sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
                     pub_timestamp += frame.duration

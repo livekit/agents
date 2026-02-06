@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LangChain/LangGraph plugin for LiveKit agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9.0"
+requires-python = ">=3.10.0"
 authors = [
     {name = "LiveKit", email = "hello@livekit.io"}
 ]
