@@ -25,17 +25,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.evals import (
-    JudgeGroup,
-    accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
-    handoff_judge,
-    relevancy_judge,
-    safety_judge,
-    task_completion_judge,
-    tool_use_judge,
-)
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -174,7 +163,7 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    report = ctx.make_session_report()
+    ctx.make_session_report()
 
 
 @server.rtc_session(on_session_end=on_session_end)
