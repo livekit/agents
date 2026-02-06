@@ -14,7 +14,7 @@ from .llm import LLM
 from .log import logger
 from .models import LLMModels
 from .stt import STT, SpeechStream
-from .tts import TTS
+from .tts import TTS, SynthesizeStream as TTSSynthesizeStream
 from .version import __version__
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "SpeechStream",
     "logger",
     "TTS",
+    "TTSSynthesizeStream",
     "LLMModels",
     "__version__",
 ]
