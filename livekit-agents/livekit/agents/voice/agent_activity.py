@@ -2689,7 +2689,7 @@ class AgentActivity(RecognitionHooks):
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one AgentTask from the tool executions",
+                        "expected to receive only one Agent from the tool executions",
                     )
                     ignore_task_switch = True
 
