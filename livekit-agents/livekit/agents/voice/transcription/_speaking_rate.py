@@ -85,7 +85,7 @@ class SpeakingRateStream:
                     frame = rtc.combine_audio_frames(inference_frames)
                     frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
                     np.divide(
-                        frame.data,
+                        frame.data[:frame.samples_per_channel],
                         np.iinfo(np.int16).max,
                         out=frame_f32_data,
                         dtype=np.float32,
@@ -166,7 +166,7 @@ class SpeakingRateStream:
                             data=data,
                             sample_rate=inference_frame.sample_rate,
                             num_channels=1,
-                            samples_per_channel=len(data) // 2,
+                            samples_per_channel=len(data),
                         )
                     ]
 
