@@ -598,9 +598,10 @@ class ChatContext:
         )
 
         chunks: list[str] = []
-        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
-            if chunk.delta and chunk.delta.content:
-                chunks.append(chunk.delta.content)
+        async with llm_v.chat(chat_ctx=chat_ctx) as stream:
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    chunks.append(chunk.delta.content)
 
         summary = "".join(chunks).strip()
         if not summary:
