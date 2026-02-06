@@ -122,7 +122,10 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         """Call this tool when the user confirms that the address is correct."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._address_update_speech_handle:
+        if (
+            ctx.speech_handle == self._address_update_speech_handle
+            and ctx.speech_handle.input_mode == "audio"
+        ):
             raise ToolError("error: the user must confirm the address explicitly")
 
         if not self._current_address:
