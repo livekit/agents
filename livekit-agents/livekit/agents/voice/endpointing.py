@@ -35,6 +35,7 @@ class DynamicEndpointing:
         Args:
             min_delay: Minimum delay in seconds.
             max_delay: Maximum delay in seconds.
+            alpha: Exponential moving average coefficient.
 
         The endpointing delay is adjusted based on the following information:
 
@@ -47,7 +48,7 @@ class DynamicEndpointing:
         [utterance] [   pause   ] [immediate interruption] (<- this should be a false EOT, and min delay should cover this)
                         [agent speech interrupted]
 
-        3. Pauses between an user utterance and agent speech:
+        3. Pauses between a user utterance and agent speech:
 
         [utterance] [pause]                  (<- max delay should cover this)
                            [agent speech]    (this could be interrupted later, but that would be the next turn)
@@ -66,11 +67,15 @@ class DynamicEndpointing:
 
     @property
     def min_delay(self) -> float:
-        return self._utterance_pause.value or self._min_delay
+        return (
+            self._utterance_pause.value
+            if self._utterance_pause.value is not None
+            else self._min_delay
+        )
 
     @property
     def max_delay(self) -> float:
-        return self._turn_pause.value or self._max_delay
+        return self._turn_pause.value if self._turn_pause.value is not None else self._max_delay
 
     @property
     def between_utterance_delay(self) -> float:
@@ -107,10 +112,6 @@ class DynamicEndpointing:
             abs(self.between_utterance_delay - self.between_turn_delay),
         )
 
-    @property
-    def is_interrupting(self) -> bool:
-        return self._interrupting
-
     def on_agent_speech_started(self, adjustment: float = 0.0) -> None:
         self._agent_speech_started_at = time.time() + adjustment
         logger.debug(
@@ -131,14 +132,13 @@ class DynamicEndpointing:
             },
         )
 
-        if interruption:
+        if interruption and not self._interrupting:
             # If this is an immediate interruption, update the min delay (case 2)
             turn_delay, interruption_delay = self.immediate_interruption_delay
             if (
                 (0 < interruption_delay <= self.min_delay)
                 and (0 < turn_delay <= self.max_delay)
                 and (pause := self.between_utterance_delay) > 0
-                and not self._interrupting
             ):
                 prev_val = self.min_delay
                 self._utterance_pause.update(min(max(pause, self._min_delay), self._max_delay))
@@ -170,8 +170,13 @@ class DynamicEndpointing:
                         "between_turn_delay": self.between_turn_delay,
                     },
                 )
+
             self._agent_speech_started_at = None
             self._interrupting = True
+            return
+
+        if interruption and self._interrupting:
+            # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
 
         if (pause := self.between_utterance_delay) > 0 and self._agent_speech_started_at is None:
@@ -202,6 +207,7 @@ class DynamicEndpointing:
             )
 
         self._agent_speech_started_at = None
+        self._interrupting = False
 
     def on_utterance_ended(self, adjustment: float = 0.0) -> None:
         self._utterance_ended_at = time.time() + adjustment
