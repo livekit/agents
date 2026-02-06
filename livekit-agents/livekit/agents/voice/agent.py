@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, find_function_tools
+from ..llm import AgentTaskCancelled, ChatContext, RealtimeModel, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -685,6 +686,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
+        self._old_agent: Agent | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -755,6 +757,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+        self._old_agent = old_agent
 
         old_allow_interruptions = True
         if speech_handle:
@@ -788,6 +791,22 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
+
+        def _on_activity_draining(_: asyncio.Future[None], activity: AgentActivity) -> None:
+            activity.interrupt(force=True)
+            if not self.done():
+                self.complete(AgentTaskCancelled(f"activity of {activity.agent.id} is draining"))
+
+        if self._activity:
+            self._activity._drain_fut.add_done_callback(
+                functools.partial(_on_activity_draining, activity=self._activity)
+            )
+        elif not self.done():
+            self.complete(
+                AgentTaskCancelled(
+                    f"activity doesn't start for {self.id}, likely due to session closing"
+                )
+            )
 
         # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
         run_state = session._global_run_state

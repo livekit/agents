@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import heapq
 import json
@@ -113,6 +114,7 @@ class AgentActivity(RecognitionHooks):
 
         self._started = False
         self._closed = False
+        self._drain_fut = asyncio.Future[None]()
         self._scheduling_paused = True
 
         self._current_speech: SpeechHandle | None = None
@@ -463,6 +465,7 @@ class AgentActivity(RecognitionHooks):
             if self._started:
                 return
 
+            self._drain_fut = asyncio.Future[None]()
             start_span = tracer.start_span(
                 "start_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
@@ -623,6 +626,10 @@ class AgentActivity(RecognitionHooks):
         )
         self._audio_recognition.start()
 
+    def _mark_draining(self) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._drain_fut.set_result(None)
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
         # `drain` must only be called by AgentSession
@@ -638,6 +645,9 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._drain_fut.set_result(None)
+
             self._on_exit_task = task = self._create_speech_task(
                 _traceable_on_exit(), name="AgentTask_on_exit"
             )
@@ -1042,14 +1052,16 @@ class AgentActivity(RecognitionHooks):
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
+            speech.interrupt(force=True)
             raise RuntimeError(
-                "cannot schedule new speech, the speech scheduling is draining/pausing"
+                "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"
             )
 
         if self._scheduling_atask and self._scheduling_atask.done():
             logger.warning(
-                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running."
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled"
             )
+            speech.interrupt(force=True)
             return
 
         while True:

@@ -38,6 +38,7 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
 )
 from .tool_context import (
+    AgentTaskCancelled,
     FunctionTool,
     ProviderTool,
     RawFunctionTool,
@@ -90,6 +91,7 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "StopResponse",
+    "AgentTaskCancelled",
     "utils",
     "remote_chat_context",
     "FunctionToolCall",

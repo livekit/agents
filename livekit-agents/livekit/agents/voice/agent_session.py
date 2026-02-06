@@ -38,7 +38,7 @@ from ..types import (
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent
+from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
@@ -784,35 +784,45 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._closing = True
             self._cancel_user_away_timer()
 
-            if self._activity is not None:
+            top_activity = activity = self._activity
+            while activity is not None and not activity._closed:
+                activity._mark_draining()
                 if not drain:
                     try:
                         # force interrupt speeches when closing the session
-                        await self._activity.interrupt(force=True)
+                        await activity.interrupt(force=True)
                     except RuntimeError:
                         # uninterruptible speech
                         pass
-                await self._activity.drain()
+                await activity.drain()
 
-                # wait any uninterruptible speech to finish
-                if self._activity.current_speech:
-                    await self._activity.current_speech
+                if activity is top_activity:
+                    # wait any uninterruptible speech to finish
+                    if activity.current_speech:
+                        await activity.current_speech
 
-                # detach the inputs and outputs
-                self.input.audio = None
-                self.input.video = None
-                self.output.audio = None
-                self.output.transcription = None
+                    # detach the inputs and outputs
+                    self.input.audio = None
+                    self.input.video = None
+                    self.output.audio = None
+                    self.output.transcription = None
 
-                if (
-                    reason != CloseReason.ERROR
-                    and (audio_recognition := self._activity._audio_recognition) is not None
-                ):
-                    # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
+                    if (
+                        reason != CloseReason.ERROR
+                        and (audio_recognition := activity._audio_recognition) is not None
+                    ):
+                        # wait for the user transcript to be committed
+                        audio_recognition.commit_user_turn(
+                            audio_detached=True, transcript_timeout=2.0
+                        )
 
-                await self._activity.aclose()
-                self._activity = None
+                await activity.aclose()
+
+                # close the parent agent if the current one is an AgentTask
+                if isinstance(activity.agent, AgentTask) and activity.agent._old_agent:
+                    activity = activity.agent._old_agent._activity
+
+            self._activity = None
 
             if self._agent_speaking_span:
                 self._agent_speaking_span.end()
@@ -1070,12 +1080,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 otel_context.attach(self._root_span_context)
 
             previous_activity_v = self._activity
-            if self._activity is not None:
+            if (activity := self._activity) is not None:
                 if previous_activity == "close":
-                    await self._activity.drain()
-                    await self._activity.aclose()
+                    await activity.drain()
+                    await activity.aclose()
                 elif previous_activity == "pause":
-                    await self._activity.pause(blocked_tasks=blocked_tasks or [])
+                    await activity.pause(blocked_tasks=blocked_tasks or [])
 
             self._activity = self._next_activity
             self._next_activity = None
@@ -1092,6 +1102,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     new_agent=self._activity.agent,
                 )
             self._chat_ctx.insert(handoff_item)
+
+            if self._closing:
+                logger.warning(
+                    f"session is closing, skipping {new_activity} next activity for {self._activity.agent.id}",
+                )
+                return
 
             if new_activity == "start":
                 await self._activity.start()
