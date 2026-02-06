@@ -85,7 +85,7 @@ class SpeakingRateStream:
                     frame = rtc.combine_audio_frames(inference_frames)
                     frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
                     np.divide(
-                        frame.data[: frame.samples_per_channel],
+                        frame.data,
                         np.iinfo(np.int16).max,
                         out=frame_f32_data,
                         dtype=np.float32,
@@ -128,6 +128,16 @@ class SpeakingRateStream:
                     },
                 )
                 continue
+
+            if input_frame.num_channels > 1:
+                data = np.array(input_frame.data, dtype=np.int16)
+                mono = data.reshape(-1, input_frame.num_channels).mean(axis=1).astype(np.int16)
+                input_frame = rtc.AudioFrame(
+                    data=mono.tobytes(),
+                    sample_rate=input_frame.sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_frame.samples_per_channel,
+                )
 
             if resampler is not None:
                 inference_frames.extend(resampler.push(input_frame))
