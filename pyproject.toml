@@ -149,6 +149,10 @@ module = "smithy_http.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true
 
