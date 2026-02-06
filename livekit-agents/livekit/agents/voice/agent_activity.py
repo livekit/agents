@@ -866,7 +866,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
-        input_mode: Literal["text", "audio"] = "audio",
+        input_modality: Literal["text", "audio"] = "audio",
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -912,7 +912,7 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions,
-            input_mode=input_mode,
+            input_modality=input_modality,
         )
         self._session.emit(
             "speech_created",
@@ -1205,7 +1205,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         handle = SpeechHandle.create(
-            allow_interruptions=self.allow_interruptions, input_mode="audio"
+            allow_interruptions=self.allow_interruptions, input_modality="audio"
         )
         self._session.emit(
             "speech_created",
@@ -1413,7 +1413,7 @@ class AgentActivity(RecognitionHooks):
             user_message=user_message,
             chat_ctx=chat_ctx,
             schedule_speech=False,
-            input_mode="audio",
+            input_modality="audio",
         )
 
         self._preemptive_generation = _PreemptiveGeneration(
@@ -1620,7 +1620,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
-                input_mode="audio",
+                input_modality="audio",
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():

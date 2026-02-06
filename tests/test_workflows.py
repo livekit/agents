@@ -14,21 +14,23 @@ def _llm_model() -> llm.LLM:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_mode", ["text", "audio"])
-async def test_collect_email(input_mode: Literal["text", "audio"]) -> None:
+@pytest.mark.parametrize("input_modality", ["text", "audio"])
+async def test_collect_email(input_modality: Literal["text", "audio"]) -> None:
     async with _llm_model() as llm, AgentSession(llm=llm) as sess:
         await sess.start(beta.workflows.GetEmailTask())
 
         result = await sess.run(
-            user_input="My email address is theo at livekit dot io?", input_mode=input_mode
+            user_input="My email address is theo at livekit dot io?", input_modality=input_modality
         )
 
-        if input_mode == "text":
+        if input_modality == "text":
             assert isinstance(result.final_output, beta.workflows.GetEmailResult)
         else:
             # confirmation is required for audio input
             result = await sess.run(
-                user_input="Yes", output_type=beta.workflows.GetEmailResult, input_mode=input_mode
+                user_input="Yes",
+                output_type=beta.workflows.GetEmailResult,
+                input_modality=input_modality,
             )
 
         assert result.final_output.email_address == "theo@livekit.io"

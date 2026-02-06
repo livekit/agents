@@ -102,7 +102,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self._current_email = email
         separated_email = " ".join(email)
 
-        if self._require_confirmation is False or ctx.speech_handle.input_mode == "text":
+        if self._require_confirmation is False or ctx.speech_handle.input_source.modality == "text":
             if not self.done():
                 self.complete(GetEmailResult(email_address=self._current_email))
             return None  # no need to continue the conversation
@@ -120,7 +120,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         if (
             ctx.speech_handle == self._email_update_speech_handle
-            and ctx.speech_handle.input_mode == "audio"
+            and ctx.speech_handle.input_source.modality == "audio"
         ):
             raise ToolError("error: the user must confirm the email address explicitly")
 

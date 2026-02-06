@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Generator, Sequence
+from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
 from opentelemetry import context as otel_context
@@ -11,6 +12,11 @@ from .. import llm, utils
 from ..log import logger
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
+
+
+@dataclass
+class InputSource:
+    modality: Literal["text", "audio"]
 
 
 class SpeechHandle:
@@ -22,11 +28,11 @@ class SpeechHandle:
     """Priority for important messages that should be played before others."""
 
     def __init__(
-        self, *, speech_id: str, allow_interruptions: bool, input_mode: Literal["text", "audio"]
+        self, *, speech_id: str, allow_interruptions: bool, input_source: InputSource
     ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
-        self._input_mode = input_mode
+        self._input_source = input_source
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -55,12 +61,13 @@ class SpeechHandle:
 
     @staticmethod
     def create(
-        allow_interruptions: bool = True, input_mode: Literal["text", "audio"] = "audio"
+        allow_interruptions: bool = True,
+        input_modality: Literal["text", "audio"] = "audio",
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
-            input_mode=input_mode,
+            input_source=InputSource(modality=input_modality),
         )
 
     @property
@@ -72,8 +79,8 @@ class SpeechHandle:
         return self._id
 
     @property
-    def input_mode(self) -> Literal["text", "audio"]:
-        return self._input_mode
+    def input_source(self) -> InputSource:
+        return self._input_source
 
     @property
     def _generation_id(self) -> str:

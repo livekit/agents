@@ -106,7 +106,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         address = " ".join(address_fields)
         self._current_address = address
 
-        if self._require_confirmation is False or ctx.speech_handle.input_mode == "text":
+        if self._require_confirmation is False or ctx.speech_handle.input_source.modality == "text":
             if not self.done():
                 self.complete(GetAddressResult(address=self._current_address))
             return None
@@ -124,7 +124,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         if (
             ctx.speech_handle == self._address_update_speech_handle
-            and ctx.speech_handle.input_mode == "audio"
+            and ctx.speech_handle.input_source.modality == "audio"
         ):
             raise ToolError("error: the user must confirm the address explicitly")
 
