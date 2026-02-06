@@ -131,11 +131,7 @@ class SpeakingRateStream:
 
             if input_frame.num_channels > 1:
                 data = np.array(input_frame.data, dtype=np.int16)
-                mono = (
-                    data.reshape(-1, input_frame.num_channels)
-                    .mean(axis=1)
-                    .astype(np.int16)
-                )
+                mono = data.reshape(-1, input_frame.num_channels).mean(axis=1).astype(np.int16)
                 input_frame = rtc.AudioFrame(
                     data=mono.tobytes(),
                     sample_rate=input_frame.sample_rate,
