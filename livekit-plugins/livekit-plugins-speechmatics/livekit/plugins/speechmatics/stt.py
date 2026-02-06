@@ -826,9 +826,9 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
             logger.warning(f"`{name}` is deprecated and no longer used")
 
     # Partials
-    if "enable_partials" in kwargs and bool(kwargs["enable_partials"]):
+    if "enable_partials" in kwargs:
         logger.warning("`enable_partials` is deprecated, migrated to `include_partials`")
-        opts.include_partials = kwargs["enable_partials"]
+        opts.include_partials = bool(kwargs["enable_partials"])
 
     # Diarization
     if "diarization_sensitivity" in kwargs and isinstance(
