@@ -16,10 +16,10 @@ TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_in
 
 
 @pytest.fixture
-def job_process(event_loop):
+async def job_process():
     utils.http_context._new_session_ctx()
     yield
-    event_loop.run_until_complete(utils.http_context._close_http_ctx())
+    await utils.http_context._close_http_ctx()
 
 
 @pytest.fixture(autouse=True)
