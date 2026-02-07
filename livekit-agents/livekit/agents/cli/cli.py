@@ -1650,7 +1650,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
         main_file = pathlib.Path(sys.argv[0]).parent
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         watch_server = WatchServer(_run_worker, server, main_file, args, loop=loop)
