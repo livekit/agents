@@ -48,7 +48,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
-    from .voice.agent_session import AgentSession
+    from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
 
@@ -215,7 +215,8 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        if report.enable_recording:
+        opts = report.recording_options
+        if any(vars(opts).values()):
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
                 if not cloud_hostname:
@@ -224,6 +225,7 @@ class JobContext:
                     agent_name=self._info.job.agent_name,
                     cloud_hostname=cloud_hostname,
                     report=report,
+                    recording_options=opts,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
                 )
@@ -280,7 +282,7 @@ class JobContext:
             )
 
         sr = SessionReport(
-            enable_recording=session._enable_recording,
+            recording_options=session._recording_options,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -585,7 +587,7 @@ class JobContext:
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
-    def init_recording(self) -> None:
+    def init_recording(self, options: RecordingOptions) -> None:
         if not is_cloud(self._info.url):
             return
 
@@ -596,6 +598,8 @@ class JobContext:
                 room_id=self.job.room.sid,
                 job_id=self.job.id,
                 cloud_hostname=cloud_hostname,
+                enable_traces=options.traces,
+                enable_logs=options.logs,
             )
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:

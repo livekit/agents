@@ -64,6 +64,30 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class RecordingOptions:
+    """Granular control over which recording features are active.
+
+    All fields default to ``True`` so that ``RecordingOptions(logs=False)``
+    means "record everything except logs."
+
+    Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
+
+    * ``record=True``  → all on (backward compatible)
+    * ``record=False`` → all off (backward compatible)
+    * ``record=RecordingOptions(audio=True, traces=False)`` → granular
+    """
+
+    audio: bool = True
+    """Record session audio."""
+    traces: bool = True
+    """Export OpenTelemetry trace spans."""
+    logs: bool = True
+    """Export OpenTelemetry logs."""
+    transcript: bool = True
+    """Upload the conversation transcript (chat history)."""
+
+
+@dataclass
 class SessionConnectOptions:
     stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -357,7 +381,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
-        self._enable_recording: bool = False
+        self._recording_options = RecordingOptions(
+            audio=False, traces=False, logs=False, transcript=False
+        )
         self._started_at: float | None = None
 
         # ivr activity
@@ -449,7 +475,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: bool = True,
+        record: bool | RecordingOptions = True,
     ) -> RunResult: ...
 
     @overload
@@ -463,7 +489,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: bool = True,
+        record: bool | RecordingOptions = True,
     ) -> None: ...
 
     async def start(
@@ -476,7 +502,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: NotGivenOr[bool] = NOT_GIVEN,
+        record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -502,15 +528,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 job_ctx = get_job_context()
                 if not is_given(record):
                     record = job_ctx.job.enable_recording
-
-                self._enable_recording = record
-
-                if self._enable_recording:
-                    job_ctx.init_recording()
-
             except RuntimeError:
                 # JobContext is not available in evals
                 pass
+
+            if isinstance(record, RecordingOptions):
+                recording_options = record
+            elif isinstance(record, bool):
+                recording_options = RecordingOptions(
+                    audio=record, traces=record, logs=record, transcript=record
+                )
+            else:
+                recording_options = RecordingOptions(
+                    audio=False, traces=False, logs=False, transcript=False
+                )
+
+            self._recording_options = recording_options
+
+            if job_ctx and any(vars(self._recording_options).values()):
+                job_ctx.init_recording(recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
@@ -593,7 +629,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
-                    if self._enable_recording or (c.enabled and c.record):
+                    if self._recording_options.audio or (c.enabled and c.record):
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
@@ -608,7 +644,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if job_ctx._primary_agent_session is None:
                     job_ctx._primary_agent_session = self
-                elif self._enable_recording:
+                elif any(vars(self._recording_options).values()):
                     raise RuntimeError(
                         "Only one `AgentSession` can be the primary at a time. "
                         "If you want to ignore primary designation, use session.start(record=False)."

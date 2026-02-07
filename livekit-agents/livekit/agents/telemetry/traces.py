@@ -41,6 +41,7 @@ from . import trace_types
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
     from ..observability import Tagger
+    from ..voice.agent_session import RecordingOptions
     from ..voice.report import SessionReport
 
 
@@ -114,7 +115,14 @@ def set_tracer_provider(
     tracer.set_provider(tracer_provider)
 
 
-def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> None:
+def _setup_cloud_tracer(
+    *,
+    room_id: str,
+    job_id: str,
+    cloud_hostname: str,
+    enable_traces: bool = True,
+    enable_logs: bool = True,
+) -> None:
     token_ttl = timedelta(hours=6)
     refresh_margin = timedelta(minutes=5)
 
@@ -164,47 +172,50 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    # Check if a tracer provider is not set and set one up
-    # below shows how the ProxyTracerProvider is returned when none have been setup
-    # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
-    tracer_provider: trace_api.TracerProvider
-    if isinstance(
-        tracer._tracer_provider, (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider)
-    ):
-        tracer_provider = trace_sdk.TracerProvider(resource=resource)
-        set_tracer_provider(tracer_provider)
-    else:
-        # attach the processor to the existing tracer provider
-        tracer_provider = tracer._tracer_provider
+    if enable_traces:
+        # Check if a tracer provider is not set and set one up
+        # below shows how the ProxyTracerProvider is returned when none have been setup
+        # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+        tracer_provider: trace_api.TracerProvider
+        if isinstance(
+            tracer._tracer_provider,
+            (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
+        ):
+            tracer_provider = trace_sdk.TracerProvider(resource=resource)
+            set_tracer_provider(tracer_provider)
+        else:
+            # attach the processor to the existing tracer provider
+            tracer_provider = tracer._tracer_provider
+            if isinstance(tracer_provider, trace_sdk.TracerProvider):
+                tracer_provider.resource.merge(resource)
+
+        span_exporter = OTLPSpanExporter(
+            endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+        )
+
         if isinstance(tracer_provider, trace_sdk.TracerProvider):
-            tracer_provider.resource.merge(resource)
+            tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+            tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    span_exporter = OTLPSpanExporter(
-        endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        compression=otlp_compression,
-        session=session,
-    )
+    if enable_logs:
+        logger_provider = get_logger_provider()
+        if not isinstance(logger_provider, LoggerProvider):
+            logger_provider = LoggerProvider()
+            set_logger_provider(logger_provider)
 
-    if isinstance(tracer_provider, trace_sdk.TracerProvider):
-        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
-        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+        log_exporter = OTLPLogExporter(
+            endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+        )
+        logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+        handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
-    logger_provider = get_logger_provider()
-    if not isinstance(logger_provider, LoggerProvider):
-        logger_provider = LoggerProvider()
-        set_logger_provider(logger_provider)
-
-    log_exporter = OTLPLogExporter(
-        endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        compression=otlp_compression,
-        session=session,
-    )
-    logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
-    logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-    handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
-
-    root = logging.getLogger()
-    root.addHandler(handler)
+        root = logging.getLogger()
+        root.addHandler(handler)
 
 
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
@@ -331,6 +342,7 @@ async def _upload_session_report(
     agent_name: str,
     cloud_hostname: str,
     report: SessionReport,
+    recording_options: RecordingOptions,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
@@ -360,36 +372,37 @@ async def _upload_session_report(
             severity_text=severity_text,
         )
 
-    chat_logger = _get_logger("chat_history")
-
-    _log(
-        chat_logger,
-        body="session report",
-        timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
-        attributes={
-            "session.options": vars(report.options),
-            "session.report_timestamp": report.timestamp,
-            "agent_name": agent_name,
-        },
-    )
-
-    for item in report.chat_history.items:
-        item_log = _to_proto_chat_item(item)
-        severity: SeverityNumber = SeverityNumber.UNSPECIFIED
-        severity_text: str = "unspecified"
-
-        if item.type == "function_call_output" and item.is_error:
-            severity = SeverityNumber.ERROR
-            severity_text = "error"
+    if recording_options.transcript:
+        chat_logger = _get_logger("chat_history")
 
         _log(
             chat_logger,
-            body="chat item",
-            timestamp=int(item.created_at * 1e9),
-            attributes={"chat.item": item_log},
-            severity=severity,
-            severity_text=severity_text,
+            body="session report",
+            timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
+            attributes={
+                "session.options": vars(report.options),
+                "session.report_timestamp": report.timestamp,
+                "agent_name": agent_name,
+            },
         )
+
+        for item in report.chat_history.items:
+            item_log = _to_proto_chat_item(item)
+            severity: SeverityNumber = SeverityNumber.UNSPECIFIED
+            severity_text: str = "unspecified"
+
+            if item.type == "function_call_output" and item.is_error:
+                severity = SeverityNumber.ERROR
+                severity_text = "error"
+
+            _log(
+                chat_logger,
+                body="chat item",
+                timestamp=int(item.created_at * 1e9),
+                attributes={"chat.item": item_log},
+                severity=severity,
+                severity_text=severity_text,
+            )
 
     eval_logger = _get_logger("evaluations")
     if tagger.evaluations:
@@ -418,6 +431,9 @@ async def _upload_session_report(
             attributes={"outcome": {"reason": tagger.outcome_reason}},
         )
 
+    if not recording_options.transcript and not recording_options.audio:
+        return
+
     # emit recording
     access_token = (
         api.AccessToken()
@@ -439,13 +455,18 @@ async def _upload_session_report(
     part.headers["Content-Type"] = "application/protobuf"
     part.headers["Content-Length"] = str(len(header_bytes))
 
-    chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
-    part = mp.append(chat_history_json)
-    part.set_content_disposition("form-data", name="chat_history", filename="chat_history.json")
-    part.headers["Content-Type"] = "application/json"
-    part.headers["Content-Length"] = str(len(chat_history_json))
+    if recording_options.transcript:
+        chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
+        part = mp.append(chat_history_json)
+        part.set_content_disposition("form-data", name="chat_history", filename="chat_history.json")
+        part.headers["Content-Type"] = "application/json"
+        part.headers["Content-Length"] = str(len(chat_history_json))
 
-    if report.audio_recording_path and report.audio_recording_started_at:
+    if (
+        recording_options.audio
+        and report.audio_recording_path
+        and report.audio_recording_started_at
+    ):
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
