@@ -113,6 +113,7 @@ class TTS(tts.TTS):
             voice_id=voice_id,
             speed=speed,
             api_key=neuphonic_api_key,
+            jwt_token=jwt_token,
             base_url=base_url,
             word_tokenizer=word_tokenizer,
         )
