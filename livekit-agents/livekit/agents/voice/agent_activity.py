@@ -1540,7 +1540,7 @@ class AgentActivity(RecognitionHooks):
         except StopResponse:
             return  # ignore this turn
         except Exception:
-            logger.exception("error occured during on_user_turn_completed")
+            logger.exception("error occurred during on_user_turn_completed")
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time

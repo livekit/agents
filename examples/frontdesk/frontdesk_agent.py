@@ -93,7 +93,7 @@ class FrontDeskAgent(Agent):
                 start_time=slot.start_time, attendee_email=email_result.email_address
             )
         except SlotUnavailableError:
-            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
+            # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
