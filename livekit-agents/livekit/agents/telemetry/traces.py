@@ -434,7 +434,12 @@ async def _upload_session_report(
             attributes={"outcome": {"reason": tagger.outcome_reason}},
         )
 
-    if not recording_options.transcript and not recording_options.audio:
+    has_audio = (
+        recording_options.audio
+        and report.audio_recording_path
+        and report.audio_recording_started_at
+    )
+    if not recording_options.transcript and not has_audio:
         return
 
     # emit recording
@@ -465,11 +470,7 @@ async def _upload_session_report(
         part.headers["Content-Type"] = "application/json"
         part.headers["Content-Length"] = str(len(chat_history_json))
 
-    if (
-        recording_options.audio
-        and report.audio_recording_path
-        and report.audio_recording_started_at
-    ):
+    if has_audio:
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()

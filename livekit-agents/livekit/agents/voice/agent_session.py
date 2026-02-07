@@ -869,6 +869,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._session_span.end()
                 self._session_span = None
 
+            job_ctx = get_job_context()
+            if job_ctx._primary_agent_session == self:
+                job_ctx._primary_agent_session = None
+
             self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))

@@ -217,7 +217,7 @@ class JobContext:
                 logger.exception("failed to save session report")
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
-        if any(vars(report.recording_options).values()) or has_evals:
+        if (any(vars(report.recording_options).values()) or has_evals) and is_cloud(self._info.url):
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
                 if not cloud_hostname:
