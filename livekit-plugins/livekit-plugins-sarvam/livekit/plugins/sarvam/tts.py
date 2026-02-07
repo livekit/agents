@@ -462,6 +462,15 @@ class TTS(tts.TTS):
             if not model.strip():
                 raise ValueError("Model cannot be empty")
             self._opts.model = model
+            if speaker is None and self._opts.speaker is not None:
+                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+                        "all", []
+                    )
+                    raise ValueError(
+                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Compatible speakers: {', '.join(compatible_speakers)}"
+                    )
         if enable_preprocessing is not None:
             self._opts.enable_preprocessing = enable_preprocessing
         if send_completion_event is not None:
@@ -688,19 +697,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 # Send initial config
-                config_msg = {
-                    "type": "config",
-                    "data": {
-                        "target_language_code": self._opts.target_language_code,
-                        "speaker": self._opts.speaker,
-                        "pace": self._opts.pace,
-                        "enable_preprocessing": self._opts.enable_preprocessing,
-                        "model": self._opts.model,
-                    },
+                data: dict[str, object] = {
+                    "target_language_code": self._opts.target_language_code,
+                    "speaker": self._opts.speaker,
+                    "pace": self._opts.pace,
+                    "enable_preprocessing": self._opts.enable_preprocessing,
+                    "model": self._opts.model,
                 }
                 if self._opts.model == "bulbul:v2":
-                    config_msg["data"]["pitch"] = self._opts.pitch
-                    config_msg["data"]["loudness"] = self._opts.loudness
+                    data["pitch"] = self._opts.pitch
+                    data["loudness"] = self._opts.loudness
+                config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
