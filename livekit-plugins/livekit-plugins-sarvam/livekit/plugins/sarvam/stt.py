@@ -174,23 +174,17 @@ def _get_model_config(model: str) -> ModelConfig | None:
     return MODEL_CONFIGS.get(model)
 
 
-def _validate_mode_for_model(model: str, mode: str | None, *, strict: bool = False) -> str:
+def _validate_mode_for_model(model: str, mode: str | None) -> str:
     """Validate and resolve mode for a given model.
 
     Args:
         model: The Sarvam model name.
         mode: The requested mode (may be None to use default).
-        strict: When True, raise if mode is explicitly provided for a model
-                that doesn't support it. Use strict=True when the caller has
-                *explicitly* chosen a mode (e.g. _resolve_opts, update_options).
-                Use strict=False (default) for initialisation paths where mode
-                may come from a dataclass default.
-
     Returns:
         The resolved mode string.
 
     Raises:
-        ValueError: If mode is invalid, or (in strict mode) unsupported for the model.
+        ValueError: If mode is invalid or unsupported for the model.
     """
     model_config = _get_model_config(model)
 
@@ -465,7 +459,7 @@ class STT(stt.STT):
         if is_given(mode):
             resolved_mode = str(mode)
             # Validate: caller explicitly asked for a mode — error if unsupported
-            _validate_mode_for_model(resolved_model, resolved_mode, strict=True)
+            _validate_mode_for_model(resolved_model, resolved_mode)
         else:
             resolved_mode = self._opts.mode
 
@@ -524,10 +518,9 @@ class STT(stt.STT):
         headers = {"api-subscription-key": self._api_key}
 
         try:
-            if self._opts.base_url is None:
-                raise ValueError("base_url cannot be None")
+            base_url, _ = _get_urls_for_model(opts_model)
             async with self._ensure_session().post(
-                url=self._opts.base_url,
+                url=base_url,
                 data=form_data,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(
@@ -819,8 +812,8 @@ class SpeechStream(stt.SpeechStream):
         if prompt is not None:
             self._opts.prompt = prompt
 
-        # Use centralised validation — strict because caller explicitly chose mode
-        self._opts.mode = _validate_mode_for_model(model, mode, strict=True)
+        # Use centralised validation
+        self._opts.mode = _validate_mode_for_model(model, mode)
         _validate_language_for_model(model, self._opts.language)
 
         self._logger.info(

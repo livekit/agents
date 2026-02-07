@@ -462,6 +462,10 @@ class TTS(tts.TTS):
             if not model.strip():
                 raise ValueError("Model cannot be empty")
             self._opts.model = model
+        if enable_preprocessing is not None:
+            self._opts.enable_preprocessing = enable_preprocessing
+        if send_completion_event is not None:
+            self._opts.send_completion_event = send_completion_event
 
         if speaker is not None:
             if not speaker.strip():
@@ -689,13 +693,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "data": {
                         "target_language_code": self._opts.target_language_code,
                         "speaker": self._opts.speaker,
-                        "pitch": self._opts.pitch,
                         "pace": self._opts.pace,
-                        "loudness": self._opts.loudness,
                         "enable_preprocessing": self._opts.enable_preprocessing,
                         "model": self._opts.model,
                     },
                 }
+                if self._opts.model == "bulbul:v2":
+                    config_msg["data"]["pitch"] = self._opts.pitch
+                    config_msg["data"]["loudness"] = self._opts.loudness
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
@@ -850,8 +855,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
-
-        logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
