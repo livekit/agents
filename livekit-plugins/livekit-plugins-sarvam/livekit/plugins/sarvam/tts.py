@@ -349,7 +349,7 @@ class TTS(tts.TTS):
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
         if speaker is None:
-            # speaker = "shubh" 
+            # speaker = "shubh"
             if model == "bulbul:v3-beta" or model == "bulbul:v3":
                 speaker = "shubh"
             else:
@@ -824,7 +824,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 return True
 
-            #logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
+            # logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)
@@ -836,7 +836,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             else:
                 logger.debug(f"Unknown message type: {msg_type}", extra=self._build_log_context())
                 return True
-        
+
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
