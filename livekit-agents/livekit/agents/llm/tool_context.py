@@ -113,6 +113,21 @@ class StopResponse(Exception):
         super().__init__()
 
 
+class AgentTaskCancelled(Exception):
+    """Exception raised when an AgentTask is cancelled.
+
+    This exception is raised when an AgentTask is cancelled, typically due to the session being closed.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self._message = message
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
