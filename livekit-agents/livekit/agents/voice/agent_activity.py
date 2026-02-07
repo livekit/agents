@@ -645,9 +645,7 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._drain_fut.set_result(None)
-
+            self._mark_draining()
             self._on_exit_task = task = self._create_speech_task(
                 _traceable_on_exit(), name="AgentTask_on_exit"
             )

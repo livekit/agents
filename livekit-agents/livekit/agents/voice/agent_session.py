@@ -821,6 +821,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # close the parent agent if the current one is an AgentTask
                 if isinstance(activity.agent, AgentTask) and activity.agent._old_agent:
                     activity = activity.agent._old_agent._activity
+                else:
+                    break
 
             self._activity = None
 
@@ -1087,6 +1089,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 elif previous_activity == "pause":
                     await activity.pause(blocked_tasks=blocked_tasks or [])
 
+            if self._closing:
+                logger.warning(
+                    f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
+                )
+                # new activity is not started yet, so no need to close it
+                # the pause activity will be closed in `_aclose_impl` since it belongs to an old agent of an AgentTask
+                self._next_activity = None
+                return
+
             self._activity = self._next_activity
             self._next_activity = None
 
@@ -1102,12 +1113,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     new_agent=self._activity.agent,
                 )
             self._chat_ctx.insert(handoff_item)
-
-            if self._closing:
-                logger.warning(
-                    f"session is closing, skipping {new_activity} next activity for {self._activity.agent.id}",
-                )
-                return
 
             if new_activity == "start":
                 await self._activity.start()
