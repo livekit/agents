@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, TypeGuard, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
-from typing_extensions import TypeGuard
 
 _T = TypeVar("_T")
 

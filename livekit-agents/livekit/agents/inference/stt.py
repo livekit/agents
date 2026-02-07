@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -99,7 +99,7 @@ class FallbackModel(TypedDict, total=False):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
@@ -125,13 +125,13 @@ def _normalize_fallback(
     return [_make_fallback(fallback)]
 
 
-STTModels = Union[
-    DeepgramModels,
-    CartesiaModels,
-    AssemblyAIModels,
-    ElevenlabsModels,
-    Literal["auto"],  # automatically select a provider based on the language
-]
+STTModels = (
+    DeepgramModels
+    | CartesiaModels
+    | AssemblyAIModels
+    | ElevenlabsModels
+    | Literal["auto"]  # automatically select a provider based on the language
+)
 STTEncoding = Literal["pcm_s16le"]
 
 
@@ -264,7 +264,7 @@ class STT(stt.STT):
         """Livekit Cloud Inference STT
 
         Args:
-            model (STTModels | str, optional): STT model to use.
+            model (STTModels | str, optional): STT model to use, in "provider/model[:language]" format.
             language (str, optional): Language of the STT model.
             encoding (STTEncoding, optional): Encoding of the STT model.
             sample_rate (int, optional): Sample rate of the STT model.
@@ -285,6 +285,13 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+
+        # Parse language from model string if provided: "provider/model:language"
+        if is_given(model) and isinstance(model, str):
+            parsed_model, parsed_language = _parse_model_string(model)
+            model = parsed_model
+            if is_given(parsed_language) and not is_given(language):
+                language = parsed_language
 
         lk_base_url = (
             base_url

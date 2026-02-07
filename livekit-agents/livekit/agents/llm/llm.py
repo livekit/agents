@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, ClassVar, Generic, Literal, TypeVar, Union
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
@@ -90,7 +90,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:

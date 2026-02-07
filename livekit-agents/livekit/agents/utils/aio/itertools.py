@@ -1,7 +1,7 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator
-from typing import Any, Generic, Protocol, TypeVar, Union, overload, runtime_checkable
+from typing import Any, Generic, Protocol, TypeVar, overload, runtime_checkable
 
 from typing_extensions import AsyncContextManager
 
@@ -78,9 +78,7 @@ class Tee(Generic[T]):
     @overload
     def __getitem__(self, item: slice) -> tuple[AsyncIterator[T], ...]: ...
 
-    def __getitem__(
-        self, item: Union[int, slice]
-    ) -> Union[AsyncIterator[T], tuple[AsyncIterator[T], ...]]:
+    def __getitem__(self, item: int | slice) -> AsyncIterator[T] | tuple[AsyncIterator[T], ...]:
         return self._children[item]
 
     def __iter__(self) -> Iterator[AsyncIterator[T]]:

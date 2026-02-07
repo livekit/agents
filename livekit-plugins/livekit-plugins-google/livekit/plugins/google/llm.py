@@ -308,7 +308,7 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
@@ -334,7 +334,7 @@ class LLM(llm.LLM):
 
             # Extract both parameters
             _budget = None
-            _level = None
+            _level: str | types.ThinkingLevel | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")

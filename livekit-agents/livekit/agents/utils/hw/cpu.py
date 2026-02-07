@@ -1,7 +1,6 @@
 import os
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import psutil
 
@@ -22,7 +21,7 @@ class CPUMonitor(ABC):
         pass
 
 
-def _cpu_count_from_env() -> Optional[float]:
+def _cpu_count_from_env() -> float | None:
     try:
         if "NUM_CPUS" in os.environ:
             return float(os.environ["NUM_CPUS"])
@@ -111,7 +110,7 @@ class CGroupV1CPUMonitor(CPUMonitor):
         percent = usage_seconds / (interval * num_cpus)
         return max(min(percent, 1.0), 0.0)
 
-    def _read_cfs_quota_and_period(self) -> tuple[Optional[int], Optional[int]]:
+    def _read_cfs_quota_and_period(self) -> tuple[int | None, int | None]:
         quota_path_candidates = [
             "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
         ]
@@ -131,7 +130,7 @@ class CGroupV1CPUMonitor(CPUMonitor):
             raise RuntimeError("Failed to read cpuacct.usage for cgroup v1")
         return value
 
-    def _read_first_int(self, paths: list[str]) -> Optional[int]:
+    def _read_first_int(self, paths: list[str]) -> int | None:
         for p in paths:
             try:
                 with open(p) as f:

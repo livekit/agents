@@ -17,10 +17,10 @@ import textwrap
 import threading
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import numpy as np
 import typer
@@ -1040,7 +1040,7 @@ def prompt(
     return "".join(buffer)
 
 
-UpdateFn = Callable[[Optional[Union[str, Text]]], None]
+UpdateFn = Callable[[str | Text | None], None]
 
 
 @contextmanager
@@ -1499,13 +1499,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     def console(
         *,
         input_device: Annotated[
-            Optional[str],  # noqa: UP007, required for python 3.9
+            str | None,  # noqa: UP007, required for python 3.9
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),
@@ -1551,28 +1551,28 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Set the log level", case_sensitive=False),
         ] = LogLevel.info,
         url: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
             ),
         ] = None,
         drain_timeout: Annotated[
-            Optional[int],  # noqa: UP007
+            int | None,  # noqa: UP007
             typer.Option(
                 help="Time in seconds to wait for jobs to finish before shutting down.",
             ),
@@ -1603,21 +1603,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Enable auto-reload of the server when (code) files change."),
         ] = True,
         url: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1683,21 +1683,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Set the log level", case_sensitive=False),
         ] = LogLevel.debug,
         url: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1708,7 +1708,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Room name to connect to"),
         ],
         participant_identity: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(help="Participant identity"),
         ] = None,
     ) -> None:

@@ -59,7 +59,7 @@ class Agent:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
         self._instructions = instructions
-        self._tools = tools.copy() + find_function_tools(self)
+        self._tools = [*tools, *find_function_tools(self)]
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
 

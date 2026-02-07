@@ -5,7 +5,7 @@ import dataclasses
 import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal, Union
+from typing import Any, ClassVar, Literal
 
 from livekit import rtc
 
@@ -362,7 +362,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 tts_status = self._fallback_adapter._status[i]
                 if tts_status.available or all_failed:
                     try:
-                        new_input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+                        new_input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
 
                         for text in self._pushed_tokens:
                             new_input_ch.send_nowait(text)
@@ -432,7 +432,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
             async def _recover_tts_task(tts: TTS) -> None:
                 try:
-                    input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+                    input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
                     for t in retry_text:
                         input_ch.send_nowait(t)
 

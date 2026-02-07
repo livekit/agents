@@ -8,7 +8,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -158,7 +158,7 @@ class AgentActivity(RecognitionHooks):
 
         # validate turn detection mode and turn detector
         turn_detection = (
-            cast(Optional[TurnDetectionMode], self._agent.turn_detection)
+            self._agent.turn_detection
             if is_given(self._agent.turn_detection)
             else self._session.turn_detection
         )
@@ -295,7 +295,7 @@ class AgentActivity(RecognitionHooks):
     def tools(
         self,
     ) -> list[llm.Tool | llm.Toolset]:
-        return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
+        return self._session.tools + self._agent.tools + self._mcp_tools
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -382,15 +382,13 @@ class AgentActivity(RecognitionHooks):
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         if utils.is_given(tool_choice):
-            self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
+            self._tool_choice = tool_choice
 
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
         if utils.is_given(turn_detection):
-            turn_detection = self._validate_turn_detection(
-                cast(Optional[TurnDetectionMode], turn_detection)
-            )
+            turn_detection = self._validate_turn_detection(turn_detection)
 
             if (
                 self._turn_detection == "manual" or turn_detection == "manual"
@@ -542,7 +540,7 @@ class AgentActivity(RecognitionHooks):
                 return_exceptions=True,
             )
             tools: list[mcp.MCPTool] = []
-            for mcp_server, res in zip(self.mcp_servers, gathered):
+            for mcp_server, res in zip(self.mcp_servers, gathered, strict=False):
                 if isinstance(res, BaseException):
                     logger.error(
                         f"failed to list tools from MCP server {mcp_server}",
@@ -2833,10 +2831,7 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def llm(self) -> llm.LLM | llm.RealtimeModel | None:
-        return cast(
-            Optional[Union[llm.LLM, llm.RealtimeModel]],
-            self._agent.llm if is_given(self._agent.llm) else self._session.llm,
-        )
+        return self._agent.llm if is_given(self._agent.llm) else self._session.llm
 
     @property
     def tts(self) -> tts.TTS | None:

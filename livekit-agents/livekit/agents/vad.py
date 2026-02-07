@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import Literal, Union
+from typing import Literal
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
@@ -102,7 +102,7 @@ class VADStream(ABC):
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
         self._last_activity_time = time.perf_counter()
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
         self._event_ch = aio.Chan[VADEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
