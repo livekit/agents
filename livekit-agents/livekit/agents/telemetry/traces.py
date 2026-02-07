@@ -41,7 +41,6 @@ from . import trace_types
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
     from ..observability import Tagger
-    from ..voice.agent_session import RecordingOptions
     from ..voice.report import SessionReport
 
 
@@ -345,7 +344,6 @@ async def _upload_session_report(
     agent_name: str,
     cloud_hostname: str,
     report: SessionReport,
-    recording_options: RecordingOptions,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
@@ -376,6 +374,7 @@ async def _upload_session_report(
         )
 
     chat_logger = _get_logger("chat_history")
+    recording_options = report.recording_options
 
     if any(vars(recording_options).values()):
         _log(

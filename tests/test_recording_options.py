@@ -266,7 +266,6 @@ async def test_upload_returns_early_when_none() -> None:
             agent_name="test-agent",
             cloud_hostname="test.livekit.cloud",
             report=report,
-            recording_options=opts,
             tagger=tagger,
             http_session=mock_http,
         )
@@ -323,7 +322,6 @@ async def test_upload_transcript_only() -> None:
             agent_name="test-agent",
             cloud_hostname="test.livekit.cloud",
             report=report,
-            recording_options=opts,
             tagger=_make_mock_tagger(),
             http_session=mock_http,
         )
@@ -363,7 +361,6 @@ async def test_upload_session_report_sent_without_transcript() -> None:
             agent_name="test-agent",
             cloud_hostname="test.livekit.cloud",
             report=report,
-            recording_options=opts,
             tagger=_make_mock_tagger(),
             http_session=mock_http,
         )
@@ -395,7 +392,6 @@ async def test_upload_audio_only_no_file() -> None:
             agent_name="test-agent",
             cloud_hostname="test.livekit.cloud",
             report=report,
-            recording_options=opts,
             tagger=_make_mock_tagger(),
             http_session=mock_http,
         )
@@ -437,7 +433,6 @@ async def test_upload_evaluations_emitted_without_logs() -> None:
             agent_name="test-agent",
             cloud_hostname="test.livekit.cloud",
             report=report,
-            recording_options=opts,
             tagger=tagger,
             http_session=mock_http,
         )
