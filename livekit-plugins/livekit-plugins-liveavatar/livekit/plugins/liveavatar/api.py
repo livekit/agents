@@ -64,7 +64,7 @@ class LiveAvatarAPI:
         }
 
         payload = {
-            "mode": "CUSTOM",
+            "mode": "LITE",
             "avatar_id": avatar_id,
             "is_sandbox": is_sandbox,
             "livekit_config": livekit_config,
