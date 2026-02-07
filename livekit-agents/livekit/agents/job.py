@@ -232,6 +232,8 @@ class JobContext:
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
+        self._primary_agent_session = None
+
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
         _shutdown_telemetry()
