@@ -1665,9 +1665,6 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             await watch_server.run()
 
         try:
-            loop = asyncio.get_event_loop()
-            asyncio.set_event_loop(loop)
-
             loop.run_until_complete(_run_loop())
         except _ExitCli:
             raise typer.Exit() from None
@@ -1718,7 +1715,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         c = AgentsConsole.get_instance()
         _configure_logger(c, log_level.value)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         _task: asyncio.Task | None = None
 
         @server.once("worker_started")
