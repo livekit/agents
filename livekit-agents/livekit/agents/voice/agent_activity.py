@@ -2693,7 +2693,7 @@ class AgentActivity(RecognitionHooks):
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
-                # most realtime models dont't support generating multiple responses at the same time
+                # most realtime models don't support generating multiple responses at the same time
                 while self._current_speech or self._speech_q:
                     if (
                         self._current_speech
