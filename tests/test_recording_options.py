@@ -242,7 +242,7 @@ def _get_multipart_part_names(mp_writer: aiohttp.MultipartWriter) -> list[str]:
 
 
 async def test_upload_returns_early_when_none() -> None:
-    """When both transcript and audio are False, no HTTP request should be made."""
+    """When all options are False, no HTTP request and no session report log should be made."""
     from livekit.agents.telemetry.traces import _upload_session_report
 
     opts = RecordingOptions(audio=False, traces=False, logs=False, transcript=False)
@@ -252,8 +252,9 @@ async def test_upload_returns_early_when_none() -> None:
     mock_http = MagicMock(spec=aiohttp.ClientSession)
     mock_http.post = MagicMock()
 
+    mock_logger = MagicMock()
     with patch("livekit.agents.telemetry.traces.get_logger_provider") as mock_glp:
-        mock_glp.return_value.get_logger.return_value = MagicMock()
+        mock_glp.return_value.get_logger.return_value = mock_logger
 
         await _upload_session_report(
             agent_name="test-agent",
@@ -265,6 +266,9 @@ async def test_upload_returns_early_when_none() -> None:
         )
 
     mock_http.post.assert_not_called()
+    # "session report" log should not be emitted
+    for call in mock_logger.emit.call_args_list:
+        assert call.kwargs.get("body") != "session report"
 
 
 def _patch_upload_deps():
@@ -327,6 +331,48 @@ async def test_upload_transcript_only() -> None:
     assert "header" in part_names
     assert "chat_history" in part_names
     assert "audio" not in part_names
+
+
+async def test_upload_session_report_sent_without_transcript() -> None:
+    """Session report log should be emitted even when transcript=False, if other options are on."""
+    from livekit.agents.telemetry.traces import _upload_session_report
+
+    opts = RecordingOptions(audio=True, traces=True, logs=False, transcript=False)
+    report = _make_mock_report(opts)
+    mock_http = _make_mock_http()
+
+    mock_logger = MagicMock()
+    with (
+        patch("livekit.agents.telemetry.traces.get_logger_provider") as mock_glp,
+        patch("livekit.agents.telemetry.traces.api.AccessToken") as mock_at,
+    ):
+        mock_glp.return_value.get_logger.return_value = mock_logger
+        mock_token = MagicMock()
+        mock_token.with_observability_grants.return_value = mock_token
+        mock_token.with_ttl.return_value = mock_token
+        mock_token.to_jwt.return_value = "test-jwt"
+        mock_at.return_value = mock_token
+
+        await _upload_session_report(
+            agent_name="test-agent",
+            cloud_hostname="test.livekit.cloud",
+            report=report,
+            recording_options=opts,
+            tagger=_make_mock_tagger(),
+            http_session=mock_http,
+        )
+
+    # "session report" should have been logged
+    session_report_calls = [
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+    ]
+    assert len(session_report_calls) == 1
+
+    # but no "chat item" logs (transcript is disabled)
+    chat_item_calls = [
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "chat item"
+    ]
+    assert len(chat_item_calls) == 0
 
 
 async def test_upload_audio_only_no_file() -> None:

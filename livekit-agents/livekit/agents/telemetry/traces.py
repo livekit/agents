@@ -372,9 +372,9 @@ async def _upload_session_report(
             severity_text=severity_text,
         )
 
-    if recording_options.transcript:
-        chat_logger = _get_logger("chat_history")
+    chat_logger = _get_logger("chat_history")
 
+    if any(vars(recording_options).values()):
         _log(
             chat_logger,
             body="session report",
@@ -386,6 +386,7 @@ async def _upload_session_report(
             },
         )
 
+    if recording_options.transcript:
         for item in report.chat_history.items:
             item_log = _to_proto_chat_item(item)
             severity: SeverityNumber = SeverityNumber.UNSPECIFIED
