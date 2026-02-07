@@ -470,7 +470,7 @@ async def _upload_session_report(
         part.headers["Content-Type"] = "application/json"
         part.headers["Content-Length"] = str(len(chat_history_json))
 
-    if has_audio:
+    if has_audio and report.audio_recording_path:
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
