@@ -72,6 +72,7 @@ class STTOptions:
     include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
+    keyterms: list[str] | None
 
 
 class STT(stt.STT):
@@ -88,6 +89,7 @@ class STT(stt.STT):
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -105,6 +107,9 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            keyterms (NotGivenOr[list[str]]): A list of keyterms to bias the transcription towards.
+                Only supported for scribe_v2 model. Max 100 terms, each under 50 characters
+                and at most 5 words.
         """
 
         if is_given(use_realtime):
@@ -149,6 +154,7 @@ class STT(stt.STT):
             server_vad=server_vad,
             include_timestamps=include_timestamps,
             model_id=model_id,
+            keyterms=keyterms or None,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -184,6 +190,9 @@ class STT(stt.STT):
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
         if self._opts.language_code:
             form.add_field("language_code", self._opts.language_code)
+        if self._opts.keyterms:
+            for keyterm in self._opts.keyterms:
+                form.add_field("keyterms", keyterm)
 
         try:
             async with self._ensure_session().post(
