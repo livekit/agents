@@ -545,7 +545,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._recording_options = recording_options
 
-            if job_ctx and any(vars(self._recording_options).values()):
+            if job_ctx:
                 job_ctx.init_recording(recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")

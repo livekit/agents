@@ -199,19 +199,22 @@ def _setup_cloud_tracer(
             tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
             tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    if enable_logs:
-        logger_provider = get_logger_provider()
-        if not isinstance(logger_provider, LoggerProvider):
-            logger_provider = LoggerProvider()
-            set_logger_provider(logger_provider)
+    # Always set up the logger provider — it's needed for session reports,
+    # evaluations, and chat history, not just Python log export.
+    logger_provider = get_logger_provider()
+    if not isinstance(logger_provider, LoggerProvider):
+        logger_provider = LoggerProvider()
+        set_logger_provider(logger_provider)
 
-        log_exporter = OTLPLogExporter(
-            endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-            compression=otlp_compression,
-            session=session,
-        )
-        logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
-        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+    log_exporter = OTLPLogExporter(
+        endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
+        compression=otlp_compression,
+        session=session,
+    )
+    logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+    logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+
+    if enable_logs:
         handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
         root = logging.getLogger()

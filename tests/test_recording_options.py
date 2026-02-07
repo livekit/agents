@@ -138,15 +138,21 @@ async def test_init_recording_called_with_options() -> None:
     await _cleanup(session)
 
 
-async def test_init_recording_not_called_when_all_false() -> None:
-    """init_recording should NOT be called when all recording options are False."""
+async def test_init_recording_called_even_when_all_false() -> None:
+    """init_recording should still be called when record=False (evals need the OTel infrastructure)."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
 
     with patch("livekit.agents.voice.agent_session.get_job_context", return_value=mock_ctx):
         await session.start(SimpleAgent(), record=False)
 
-    mock_ctx.init_recording.assert_not_called()
+    mock_ctx.init_recording.assert_called_once()
+    call_opts = mock_ctx.init_recording.call_args[0][0]
+    assert isinstance(call_opts, RecordingOptions)
+    assert call_opts.audio is False
+    assert call_opts.traces is False
+    assert call_opts.logs is False
+    assert call_opts.transcript is False
     await _cleanup(session)
 
 
@@ -179,15 +185,15 @@ async def test_init_recording_defers_to_job_enable_recording() -> None:
     await _cleanup(session)
 
 
-async def test_init_recording_not_called_when_job_disabled() -> None:
-    """When record is omitted and job.enable_recording=False, init_recording should not be called."""
+async def test_init_recording_called_when_job_recording_disabled() -> None:
+    """init_recording should be called even when job.enable_recording=False (evals need it)."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx(enable_recording=False)
 
     with patch("livekit.agents.voice.agent_session.get_job_context", return_value=mock_ctx):
         await session.start(SimpleAgent())
 
-    mock_ctx.init_recording.assert_not_called()
+    mock_ctx.init_recording.assert_called_once()
     opts = session._recording_options
     assert opts.audio is False
     assert opts.traces is False
@@ -401,6 +407,83 @@ async def test_upload_audio_only_no_file() -> None:
     part_names = _get_multipart_part_names(mp_writer)
     assert "chat_history" not in part_names
     assert "audio" not in part_names
+
+
+async def test_upload_evaluations_emitted_without_logs() -> None:
+    """Evaluations should be emitted even when logs=False, as long as something is recorded."""
+    from livekit.agents.telemetry.traces import _upload_session_report
+
+    opts = RecordingOptions(audio=True, traces=False, logs=False, transcript=False)
+    report = _make_mock_report(opts)
+    mock_http = _make_mock_http()
+
+    tagger = _make_mock_tagger()
+    tagger.evaluations = [{"name": "test-eval", "verdict": "pass"}]
+    tagger.outcome_reason = "all good"
+
+    mock_logger = MagicMock()
+    with (
+        patch("livekit.agents.telemetry.traces.get_logger_provider") as mock_glp,
+        patch("livekit.agents.telemetry.traces.api.AccessToken") as mock_at,
+    ):
+        mock_glp.return_value.get_logger.return_value = mock_logger
+        mock_token = MagicMock()
+        mock_token.with_observability_grants.return_value = mock_token
+        mock_token.with_ttl.return_value = mock_token
+        mock_token.to_jwt.return_value = "test-jwt"
+        mock_at.return_value = mock_token
+
+        await _upload_session_report(
+            agent_name="test-agent",
+            cloud_hostname="test.livekit.cloud",
+            report=report,
+            recording_options=opts,
+            tagger=tagger,
+            http_session=mock_http,
+        )
+
+    eval_calls = [
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "evaluation"
+    ]
+    assert len(eval_calls) == 1
+
+    outcome_calls = [
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "outcome"
+    ]
+    assert len(outcome_calls) == 1
+
+
+def test_setup_cloud_tracer_logger_provider_always_created() -> None:
+    """LoggerProvider should be set up even when enable_logs=False (needed for evals)."""
+    from livekit.agents.telemetry.traces import _setup_cloud_tracer
+
+    with (
+        patch("livekit.agents.telemetry.traces.api.AccessToken") as mock_at,
+        patch("livekit.agents.telemetry.traces.get_logger_provider") as mock_glp,
+        patch("livekit.agents.telemetry.traces.set_logger_provider") as mock_slp,
+        patch("livekit.agents.telemetry.traces.OTLPLogExporter"),
+        patch("livekit.agents.telemetry.traces.BatchLogRecordProcessor"),
+        patch("livekit.agents.telemetry.traces.logging"),
+    ):
+        mock_token = MagicMock()
+        mock_token.with_observability_grants.return_value = mock_token
+        mock_token.with_ttl.return_value = mock_token
+        mock_token.to_jwt.return_value = "test-jwt"
+        mock_at.return_value = mock_token
+
+        # Return a non-LoggerProvider so the code creates a new one
+        mock_glp.return_value = MagicMock()
+
+        _setup_cloud_tracer(
+            room_id="room-1",
+            job_id="job-1",
+            cloud_hostname="test.livekit.cloud",
+            enable_traces=False,
+            enable_logs=False,
+        )
+
+    # LoggerProvider should still be created and set
+    mock_slp.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
