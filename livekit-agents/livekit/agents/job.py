@@ -182,6 +182,7 @@ class JobContext:
         self._connected = False
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
+        self._recording_initialized = False
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -587,9 +588,10 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
-        if not is_cloud(self._info.url):
+        if self._recording_initialized or not is_cloud(self._info.url):
             return
 
+        self._recording_initialized = True
         cloud_hostname = urlparse(self._info.url).hostname
         logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
         if cloud_hostname:
