@@ -25,6 +25,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 from urllib.parse import urlencode
 
@@ -60,7 +61,7 @@ SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "cod
 ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 
 
-class SpeechToTextLanguage(enum.StrEnum):
+class SpeechToTextLanguage(str, Enum):
     """Languages supported for STT.
 
     saarika:v2.5 supports only a subset; saaras:v3 supports all.
@@ -93,7 +94,7 @@ class SpeechToTextLanguage(enum.StrEnum):
     DOGRI = "doi-IN"
 
 
-SAARAS_V3_LANGUAGES: set[str] = {lang.value for lang in SpeechToTextLanguage}
+SAARAS_V3_LANGUAGES = {lang.value for lang in SpeechToTextLanguage}
 SAARIKA_V25_LANGUAGES: set[str] = {
     SpeechToTextLanguage.UNKNOWN.value,
     SpeechToTextLanguage.HI_IN.value,
