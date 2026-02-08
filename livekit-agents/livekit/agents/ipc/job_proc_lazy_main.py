@@ -267,6 +267,7 @@ class _JobProc:
             on_connect=_on_ctx_connect,
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
+            ipc_client=self._client,
         )
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:

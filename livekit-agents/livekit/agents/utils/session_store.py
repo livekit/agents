@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import pickle
 import tempfile
+from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import apsw
+
+from livekit.protocol import agent
 
 from ..log import logger
 from . import is_given
@@ -59,33 +62,27 @@ SCHEMA_SQL = """
 """
 
 
-@dataclass
-class SessionDelta:
-    version: int
-    changeset: bytes
-
-
 class SessionStore:
-    def __init__(self, db_file: str | bytes | None, *, create_schema: bool = True):
+    def __init__(self, db_file: str | Path | bytes | None, *, create_schema: bool = True):
         """
         Initialize session store.
 
         Args:
             db_file: path to SQLite database file, or bytes of the database file
-                if None, a temporary database will be created
+                if None, a temporary in-memory database will be created
             create_schema: whether to create the schema if it doesn't exist
         """
-        self._temp_file: str | None = None
+
         if db_file is None or isinstance(db_file, bytes):
-            self._temp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
-            if isinstance(db_file, bytes):
-                with open(self._temp_file, "wb") as f:
-                    f.write(db_file)
-            self._db_path = self._temp_file
+            self._in_memory = True
+            self._db_path = ":memory:"
         else:
+            self._in_memory = False
             self._db_path = str(db_file)
 
         self._conn = apsw.Connection(self._db_path)
+        if isinstance(db_file, bytes) and db_file:
+            self._conn.deserialize("main", db_file)
 
         if create_schema:
             if (
@@ -156,7 +153,7 @@ class SessionStore:
         store._version = version
         return store
 
-    def export_state(self) -> _AgentSessionState:
+    def export_state(self) -> _AgentSessionState | None:
         """Export current session state from database."""
         from ..voice.agent_session import _AgentSessionState
 
@@ -166,7 +163,8 @@ class SessionStore:
             "SELECT version, current_agent_id, tools_json, userdata_blob, userdata_encrypted FROM session"
         ).fetchone()
         if not meta:
-            raise ValueError("session not initialized")
+            # raise ValueError("session not initialized")
+            return None
 
         _, current_agent_id, tools_json, userdata_blob, userdata_encrypted = meta
 
@@ -196,14 +194,7 @@ class SessionStore:
             agent=agent,
         )
 
-    def update_state(self, state: _AgentSessionState) -> SessionDelta:
-        """Update session state and return the changeset."""
-        with SessionStore.from_state(state, version=self._version + 1) as target:
-            delta = self.compute_delta(target)
-            self.apply_changesets([delta])
-            return delta
-
-    def compute_delta(self, target_store: SessionStore) -> SessionDelta:
+    def compute_delta(self, target_store: SessionStore) -> bytes:
         """Compute changeset from this store to target store using SQLite's session diff."""
 
         # verify schema versions match
@@ -215,11 +206,17 @@ class SessionStore:
                 "Cannot compute changeset between different schema versions."
             )
 
-        # attach target database to current connection for diff
+        # If target is in-memory, we need to make it attachable
         attached_name = "_target_diff_db"
         try:
             # attach target database
-            self._conn.execute(f"ATTACH DATABASE ? AS {attached_name}", (target_store._db_path,))
+            if target_store._in_memory:
+                self._conn.execute(f"ATTACH DATABASE ':memory:' AS {attached_name}")
+                self._conn.deserialize(attached_name, target_store.export_snapshot())
+            else:
+                self._conn.execute(
+                    f"ATTACH DATABASE ? AS {attached_name}", (target_store._db_path,)
+                )
 
             # we want a changeset that transforms THIS db (main) into TARGET db.
             # so we create a session on the attached TARGET database and diff FROM main.
@@ -237,7 +234,7 @@ class SessionStore:
 
             changeset = session.changeset()
 
-            return SessionDelta(version=target_store.version, changeset=changeset)
+            return changeset
 
         finally:
             # detach the target database
@@ -246,45 +243,36 @@ class SessionStore:
             except Exception:
                 pass
 
-    def apply_changesets(self, changesets: list[SessionDelta]) -> None:
-        """Apply a list of changesets in order, verifying versions in the changeset chain."""
-        for cs_meta in changesets:
-            # verify base version matches current
-            if self._version + 1 != cs_meta.version:
-                raise ValueError(
-                    f"Changeset version {cs_meta.version} does not match current version {self._version} + 1"
-                )
-
-            # apply changeset
-            if cs_meta.changeset:
-
-                def conflict_handler(conflict_reason: int, table_change: Any) -> int:
-                    # Always take the new value (single writer scenario)
-                    return apsw.SQLITE_CHANGESET_REPLACE
-
-                apsw.Changeset.apply(cs_meta.changeset, self._conn, conflict=conflict_handler)
-
-            # read version from DB and verify
-            cursor = self._conn.cursor()
-            result = cursor.execute("SELECT version FROM session").fetchone()
-            db_version = result[0] if result else None
-
-            if db_version != cs_meta.version:
-                raise ValueError(
-                    f"Version mismatch after applying changeset! "
-                    f"Expected {cs_meta.version}, got {db_version}"
-                )
-
-            self._version = cs_meta.version
-
-            logger.debug(
-                "applied changeset",
-                extra={"version": cs_meta.version, "changeset_size": len(cs_meta.changeset)},
+    def apply_changeset(self, changeset: bytes, *, version: int | None = None) -> None:
+        """Apply a changeset to the database, verifying the version if provided."""
+        # verify base version matches current
+        if version is not None and version != self._version + 1:
+            raise ValueError(
+                f"Changeset version does not match current version: {version} != {self._version} + 1"
             )
 
+        def conflict_handler(conflict_reason: int, table_change: Any) -> int:
+            # Always take the new value (single writer scenario)
+            return apsw.SQLITE_CHANGESET_REPLACE
+
+        apsw.Changeset.apply(changeset, self._conn, conflict=conflict_handler)
+
+        # read version from DB and verify
+        cursor = self._conn.cursor()
+        result = cursor.execute("SELECT version FROM session").fetchone()
+        if not result:
+            raise ValueError("session version not found after applying changeset")
+        db_version = int(result[0])
+
+        if version is not None and db_version != version:
+            raise ValueError(
+                f"Version mismatch after applying changeset! Expected {version}, got {db_version}"
+            )
+
+        self._version = db_version
+
     def export_snapshot(self) -> bytes:
-        with open(self._db_path, "rb") as f:
-            return f.read()
+        return self._conn.serialize("main")
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -446,9 +434,6 @@ class SessionStore:
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
-        if self._temp_file and os.path.exists(self._temp_file):
-            os.unlink(self._temp_file)
-            self._temp_file = None
 
     def __enter__(self) -> SessionStore:
         return self
@@ -460,3 +445,194 @@ class SessionStore:
         exc_tb: Any | None,
     ) -> None:
         self.close()
+
+
+@dataclass
+class _SessionCacheEntry:
+    """A cached session stored either as in-memory bytes or as a file on disk."""
+
+    data: Path | bytes
+    size: int
+
+    @staticmethod
+    def create(source: Path | bytes) -> _SessionCacheEntry:
+        if isinstance(source, bytes):
+            return _SessionCacheEntry(data=source, size=len(source))
+        size = source.stat().st_size if source.exists() else 0
+        return _SessionCacheEntry(data=source, size=size)
+
+    def write_snapshot(self, snapshot: bytes) -> None:
+        """Write a full snapshot, replacing any existing data."""
+        if isinstance(self.data, bytes):
+            self.data = snapshot
+        else:
+            self.data.write_bytes(snapshot)
+        self.size = len(snapshot)
+
+    def sync_from_store(self, store: SessionStore) -> None:
+        """Synchronize entry after a store mutation (e.g. applied delta)."""
+        if isinstance(self.data, Path) and self.data.samefile(Path(store._db_path)):
+            # file-based entry backed by the same file — just refresh the cached size
+            try:
+                self.size = self.data.stat().st_size
+            except OSError:
+                self.size = 0
+        else:
+            self.write_snapshot(store.export_snapshot())
+
+    def exists(self) -> bool:
+        if isinstance(self.data, bytes):
+            return len(self.data) > 0
+        return self.data.exists()
+
+    def delete(self) -> None:
+        """Delete the underlying file (no-op for in-memory entries)."""
+        if isinstance(self.data, Path):
+            self.data.unlink(missing_ok=True)
+
+
+class EphemeralSessionCache:
+    """LRU cache for session database snapshots.
+
+    Supports two storage modes:
+    - **File-based** (default): each session is a SQLite file on disk.
+    - **In-memory**: each session is a serialized SQLite snapshot held as bytes.
+
+    Evicts least-recently-used entries when the cache exceeds size or count limits.
+    The cache is ephemeral — it is cleaned up when ``close()`` is called.
+    """
+
+    def __init__(
+        self,
+        *,
+        cache_dir: Path | str | None = None,
+        max_size_mb: int = 100,
+        max_entries: int = 100,
+        in_memory: bool = False,
+    ) -> None:
+        """Initialize the session cache.
+
+        Args:
+            cache_dir: Directory to store cached database files.
+                If None, a temporary directory will be created.
+            max_size_mb: Maximum total size of cached data in megabytes.
+            max_entries: Maximum number of cached sessions.
+            in_memory: Whether to store session states in memory instead of on disk.
+        """
+        if in_memory and cache_dir is not None:
+            raise ValueError("cache_dir and in_memory cannot be used together")
+
+        self._in_memory = in_memory
+        self._max_size_bytes = max_size_mb * 1024 * 1024
+        self._max_entries = max_entries
+        self._entries: OrderedDict[str, _SessionCacheEntry] = OrderedDict()
+
+        # set up storage directory
+        self._temp_dir: tempfile.TemporaryDirectory | None = None
+        if in_memory:
+            self._cache_dir: Path | None = None
+        elif cache_dir is None:
+            self._temp_dir = tempfile.TemporaryDirectory(prefix="livekit_session_cache_")
+            self._cache_dir = Path(self._temp_dir.name)
+        else:
+            self._cache_dir = Path(cache_dir)
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.debug(
+            "initialized session cache",
+            extra={
+                "cache_dir": str(self._cache_dir),
+                "max_size_mb": max_size_mb,
+                "max_entries": max_entries,
+                "in_memory": in_memory,
+            },
+        )
+
+    def resolve(
+        self, session_id: str, session_state: agent.AgentSessionState
+    ) -> agent.AgentSessionState:
+        """Resolve session state by applying a snapshot or delta, returning a full snapshot."""
+        entry = self._get_or_create(session_id)
+        target_version = session_state.version
+        data_kind = session_state.WhichOneof("data")
+
+        if data_kind == "snapshot":
+            entry.write_snapshot(session_state.snapshot)
+            store = SessionStore(entry.data, create_schema=False)
+        else:
+            store = SessionStore(entry.data)
+
+        with store:
+            if store.version != target_version:
+                if data_kind == "delta":
+                    store.apply_changeset(session_state.delta, version=target_version)
+                else:
+                    raise ValueError(
+                        f"version mismatch: expected {target_version}, got {store.version}"
+                    )
+
+            snapshot = store.export_snapshot()
+            entry.sync_from_store(store)
+
+        self._touch(session_id, entry)
+        return agent.AgentSessionState(version=target_version, snapshot=snapshot)
+
+    def save(self, session_id: str, session_state: agent.AgentSessionState) -> None:
+        """Update a cached session with a snapshot or delta."""
+        entry = self._get_or_create(session_id)
+        data_kind = session_state.WhichOneof("data")
+
+        if data_kind == "snapshot":
+            entry.write_snapshot(session_state.snapshot)
+        elif data_kind == "delta":
+            if not entry.exists():
+                raise ValueError(f"cannot apply delta: session {session_id!r} not in cache")
+            with SessionStore(entry.data) as store:
+                store.apply_changeset(session_state.delta, version=session_state.version)
+                entry.sync_from_store(store)
+        else:
+            return
+
+        self._touch(session_id, entry)
+
+    def _get_or_create(self, session_id: str) -> _SessionCacheEntry:
+        """Return an existing entry or create a new empty one."""
+        if session_id in self._entries:
+            return self._entries[session_id]
+
+        if self._in_memory:
+            return _SessionCacheEntry.create(b"")
+        assert self._cache_dir is not None
+        return _SessionCacheEntry.create(self._cache_dir / f"{session_id}.db")
+
+    def _touch(self, session_id: str, entry: _SessionCacheEntry) -> None:
+        """Mark an entry as recently used and enforce cache limits."""
+        self._entries[session_id] = entry
+        self._entries.move_to_end(session_id)
+        self._enforce_limits()
+
+    def _enforce_limits(self) -> None:
+        """Evict least-recently-used entries until within size and count limits."""
+        total_size = sum(e.size for e in self._entries.values())
+        while self._entries and (
+            len(self._entries) > self._max_entries or total_size > self._max_size_bytes
+        ):
+            session_id, evicted = self._entries.popitem(last=False)
+            total_size -= evicted.size
+            try:
+                evicted.delete()
+            except Exception:
+                logger.warning(
+                    "failed to delete evicted cache entry",
+                    extra={"session_id": session_id},
+                    exc_info=True,
+                )
+
+    def close(self) -> None:
+        """Release all cached data and clean up resources."""
+        if self._temp_dir:
+            self._temp_dir.cleanup()
+        else:
+            for entry in self._entries.values():
+                entry.delete()
+        self._entries.clear()
