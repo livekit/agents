@@ -150,14 +150,14 @@ class AgentHttpServer(HttpServer):
             await response.write(json.dumps(completion_data).encode() + b"\n")
         except TextMessageError as e:
             logger.error(
-                "text message error", extra={"session_id": text_request.session_id, "error": str(e)}
+                "error processing text request", extra={"session_id": text_request.session_id, "error": str(e)}
             )
             with contextlib.suppress(Exception):
                 error_data = {"type": "complete", "error": str(e)}
                 await response.write(json.dumps(error_data).encode() + b"\n")
         except Exception:
             logger.exception(
-                "error processing text request", extra={"session_id": text_request.session_id}
+                "unexpected error processing text request", extra={"session_id": text_request.session_id}
             )
             with contextlib.suppress(Exception):
                 error_data = {

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import pickle
 import tempfile
 from collections import OrderedDict
@@ -70,20 +69,20 @@ class SessionStore:
 
         Args:
             db_file: path to SQLite database file, or bytes of the database file
-                if None, a temporary database will be created
+                if None, a temporary in-memory database will be created
             create_schema: whether to create the schema if it doesn't exist
         """
-        self._temp_file: str | None = None
+
         if db_file is None or isinstance(db_file, bytes):
-            self._temp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
-            if isinstance(db_file, bytes):
-                with open(self._temp_file, "wb") as f:
-                    f.write(db_file)
-            self._db_path = self._temp_file
+            self._in_memory = True
+            self._db_path = ":memory:"
         else:
+            self._in_memory = False
             self._db_path = str(db_file)
 
         self._conn = apsw.Connection(self._db_path)
+        if isinstance(db_file, bytes):
+            self._conn.deserialize("main", db_file)
 
         if create_schema:
             if (
@@ -194,13 +193,6 @@ class SessionStore:
             agent=agent,
         )
 
-    def update_state(self, state: _AgentSessionState) -> tuple[int, bytes]:
-        """Update session state and return the changeset."""
-        with SessionStore.from_state(state, version=self._version + 1) as target:
-            changeset = self.compute_delta(target)
-            self.apply_changeset(changeset)
-            return self._version, changeset
-
     def compute_delta(self, target_store: SessionStore) -> bytes:
         """Compute changeset from this store to target store using SQLite's session diff."""
 
@@ -213,11 +205,17 @@ class SessionStore:
                 "Cannot compute changeset between different schema versions."
             )
 
-        # attach target database to current connection for diff
+        # If target is in-memory, we need to make it attachable
         attached_name = "_target_diff_db"
         try:
             # attach target database
-            self._conn.execute(f"ATTACH DATABASE ? AS {attached_name}", (target_store._db_path,))
+            if target_store._in_memory:
+                self._conn.execute(f"ATTACH DATABASE ':memory:' AS {attached_name}")
+                self._conn.deserialize(attached_name, target_store.export_snapshot())
+            else:
+                self._conn.execute(
+                    f"ATTACH DATABASE ? AS {attached_name}", (target_store._db_path,)
+                )
 
             # we want a changeset that transforms THIS db (main) into TARGET db.
             # so we create a session on the attached TARGET database and diff FROM main.
@@ -273,8 +271,7 @@ class SessionStore:
         self._version = db_version
 
     def export_snapshot(self) -> bytes:
-        with open(self._db_path, "rb") as f:
-            return f.read()
+        return self._conn.serialize("main")
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -436,9 +433,6 @@ class SessionStore:
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
-        if self._temp_file and os.path.exists(self._temp_file):
-            os.unlink(self._temp_file)
-            self._temp_file = None
 
     def __enter__(self) -> SessionStore:
         return self
