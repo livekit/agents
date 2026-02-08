@@ -8,7 +8,7 @@ import contextlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from aiohttp import web
@@ -150,14 +150,16 @@ class AgentHttpServer(HttpServer):
             await response.write(json.dumps(completion_data).encode() + b"\n")
         except TextMessageError as e:
             logger.error(
-                "error processing text request", extra={"session_id": text_request.session_id, "error": str(e)}
+                "error processing text request",
+                extra={"session_id": text_request.session_id, "error": str(e)},
             )
             with contextlib.suppress(Exception):
                 error_data = {"type": "complete", "error": str(e)}
                 await response.write(json.dumps(error_data).encode() + b"\n")
         except Exception:
             logger.exception(
-                "unexpected error processing text request", extra={"session_id": text_request.session_id}
+                "unexpected error processing text request",
+                extra={"session_id": text_request.session_id},
             )
             with contextlib.suppress(Exception):
                 error_data = {
@@ -239,8 +241,7 @@ class TextSessionStarted:
 class TextResponseEvent:
     """Event from the agent during text processing."""
 
-    event_type: Literal["message", "function_call", "function_call_output", "agent_handoff"]
-    data: llm.ChatMessage | llm.FunctionCall | llm.FunctionCallOutput | llm.AgentHandoff
+    item: llm.ChatItem
 
 
 @dataclass
@@ -310,7 +311,7 @@ class AgentHttpClient:
         """
         async with self._session.get(f"{self._base_url}/worker") as resp:
             resp.raise_for_status()
-            return await resp.json()
+            return await resp.json()  # type: ignore
 
     async def send_text_stream(
         self,
@@ -397,6 +398,12 @@ class AgentHttpClient:
                     yield TextSessionComplete(session_state=parsed_state, error=error)
                 else:
                     data = data.get("data", {})
+                    ev: (
+                        llm.ChatMessage
+                        | llm.FunctionCall
+                        | llm.FunctionCallOutput
+                        | llm.AgentHandoff
+                    )
                     if event_type == "message":
                         ev = llm.ChatMessage.model_validate(data)
                     elif event_type == "function_call":
@@ -406,7 +413,7 @@ class AgentHttpClient:
                     elif event_type == "agent_handoff":
                         ev = llm.AgentHandoff.model_validate(data)
                     else:
-                        logger.warning(f"Unknown event type: {event_type}")
+                        logger.warning(f"unsupported event type: {event_type}")
                         continue
 
-                    yield TextResponseEvent(event_type=event_type, data=ev)
+                    yield TextResponseEvent(item=ev)

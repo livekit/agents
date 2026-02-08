@@ -448,23 +448,57 @@ class SessionStore:
 
 @dataclass
 class _SessionCacheEntry:
+    """A cached session stored either as in-memory bytes or as a file on disk."""
+
+    data: Path | bytes
     size: int
-    data: bytes
 
     @staticmethod
-    def create(db_file: Path | bytes) -> _SessionCacheEntry:
-        if isinstance(db_file, bytes):
-            return _SessionCacheEntry(size=len(db_file), data=db_file)
+    def create(source: Path | bytes) -> _SessionCacheEntry:
+        if isinstance(source, bytes):
+            return _SessionCacheEntry(data=source, size=len(source))
+        size = source.stat().st_size if source.exists() else 0
+        return _SessionCacheEntry(data=source, size=size)
+
+    def write_snapshot(self, snapshot: bytes) -> None:
+        """Write a full snapshot, replacing any existing data."""
+        if isinstance(self.data, bytes):
+            self.data = snapshot
         else:
-            return _SessionCacheEntry(size=db_file.stat().st_size, data=b"")
+            self.data.write_bytes(snapshot)
+        self.size = len(snapshot)
+
+    def sync_from_store(self, store: SessionStore) -> None:
+        """Synchronize entry after a store mutation (e.g. applied delta)."""
+        if isinstance(self.data, Path) and self.data.samefile(Path(store._db_path)):
+            # file-based entry backed by the same file — just refresh the cached size
+            try:
+                self.size = self.data.stat().st_size
+            except OSError:
+                self.size = 0
+        else:
+            self.write_snapshot(store.export_snapshot())
+
+    def exists(self) -> bool:
+        if isinstance(self.data, bytes):
+            return len(self.data) > 0
+        return self.data.exists()
+
+    def delete(self) -> None:
+        """Delete the underlying file (no-op for in-memory entries)."""
+        if isinstance(self.data, Path):
+            self.data.unlink(missing_ok=True)
 
 
 class EphemeralSessionCache:
-    """Cache manager for session database files.
+    """LRU cache for session database snapshots.
 
-    Maintains a temporary directory of cached SQLite database files with LRU eviction.
-    The cache is ephemeral - it lives only for the worker's lifetime and is cleaned
-    up on shutdown.
+    Supports two storage modes:
+    - **File-based** (default): each session is a SQLite file on disk.
+    - **In-memory**: each session is a serialized SQLite snapshot held as bytes.
+
+    Evicts least-recently-used entries when the cache exceeds size or count limits.
+    The cache is ephemeral — it is cleaned up when ``close()`` is called.
     """
 
     def __init__(
@@ -472,143 +506,132 @@ class EphemeralSessionCache:
         *,
         cache_dir: Path | str | None = None,
         max_size_mb: int = 100,
-        max_files: int = 100,
+        max_entries: int = 100,
         in_memory: bool = False,
     ) -> None:
-        """Initialize the session database cache.
+        """Initialize the session cache.
 
         Args:
             cache_dir: Directory to store cached database files.
                 If None, a temporary directory will be created.
-            max_size_mb: Maximum total size of cached files in megabytes.
-            max_files: Maximum number of cached files.
-            in_memory: Whether to store session states in memory.
+            max_size_mb: Maximum total size of cached data in megabytes.
+            max_entries: Maximum number of cached sessions.
+            in_memory: Whether to store session states in memory instead of on disk.
         """
-        self._in_memory = in_memory
         if in_memory and cache_dir is not None:
-            raise ValueError("cache_dir and in_memory cannot be provided together")
+            raise ValueError("cache_dir and in_memory cannot be used together")
 
+        self._in_memory = in_memory
+        self._max_size_bytes = max_size_mb * 1024 * 1024
+        self._max_entries = max_entries
+        self._entries: OrderedDict[str, _SessionCacheEntry] = OrderedDict()
+
+        # set up storage directory
+        self._temp_dir: tempfile.TemporaryDirectory | None = None
         if in_memory:
             self._cache_dir: Path | None = None
-            self._temp_dir: tempfile.TemporaryDirectory | None = None
         elif cache_dir is None:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="livekit_session_cache_")
             self._cache_dir = Path(self._temp_dir.name)
         else:
             self._cache_dir = Path(cache_dir)
             self._cache_dir.mkdir(parents=True, exist_ok=True)
-            self._temp_dir = None
-
-        self._max_size_bytes = max_size_mb * 1024 * 1024
-        self._max_files = max_files
-
-        self._cached_sessions = OrderedDict[str, _SessionCacheEntry]()
 
         logger.debug(
-            "initialized session DB cache",
+            "initialized session cache",
             extra={
                 "cache_dir": str(self._cache_dir),
                 "max_size_mb": max_size_mb,
-                "max_files": max_files,
+                "max_entries": max_entries,
+                "in_memory": in_memory,
             },
         )
 
     def resolve(
         self, session_id: str, session_state: agent.AgentSessionState
     ) -> agent.AgentSessionState:
-        """Resolve the session state from the cache or create a new one."""
-        db_file = self._get_db_file(session_id)
-
+        """Resolve session state by applying a snapshot or delta, returning a full snapshot."""
+        entry = self._get_or_create(session_id)
         target_version = session_state.version
-        which_oneof = session_state.WhichOneof("data")
-        if which_oneof == "snapshot":
-            if isinstance(db_file, bytes):
-                db_file = session_state.snapshot
-            else:
-                db_file.write_bytes(session_state.snapshot)
-            store = SessionStore(db_file, create_schema=False)
+        data_kind = session_state.WhichOneof("data")
+
+        if data_kind == "snapshot":
+            entry.write_snapshot(session_state.snapshot)
+            store = SessionStore(entry.data, create_schema=False)
         else:
-            store = SessionStore(db_file)
+            store = SessionStore(entry.data)
 
         with store:
             if store.version != target_version:
-                if which_oneof == "delta":
+                if data_kind == "delta":
                     store.apply_changeset(session_state.delta, version=target_version)
                 else:
                     raise ValueError(
-                        f"Version mismatch: expected {target_version}, got {store.version}"
+                        f"version mismatch: expected {target_version}, got {store.version}"
                     )
 
-            self._cached_sessions[session_id] = _SessionCacheEntry.create(db_file)
-            self._cached_sessions.move_to_end(session_id)
+            snapshot = store.export_snapshot()
+            entry.sync_from_store(store)
 
-            self._enforce_limits()
-
-            return agent.AgentSessionState(
-                version=store.version,
-                snapshot=store.export_snapshot(),
-            )
+        self._touch(session_id, entry)
+        return agent.AgentSessionState(version=target_version, snapshot=snapshot)
 
     def save(self, session_id: str, session_state: agent.AgentSessionState) -> None:
-        """Update the session state in the cache."""
-        db_file = self._get_db_file(session_id)
+        """Update a cached session with a snapshot or delta."""
+        entry = self._get_or_create(session_id)
+        data_kind = session_state.WhichOneof("data")
 
-        updated = False
-        which_oneof = session_state.WhichOneof("data")
-        if which_oneof == "snapshot":
-            if isinstance(db_file, bytes):
-                db_file = session_state.snapshot
-            else:
-                db_file.write_bytes(session_state.snapshot)
-            updated = True
-
-        elif which_oneof == "delta":
-            if not isinstance(db_file, bytes) and not db_file.exists():
-                raise ValueError(f"Session {session_id} not found in cache")
-
-            with SessionStore(db_file) as store:
+        if data_kind == "snapshot":
+            entry.write_snapshot(session_state.snapshot)
+        elif data_kind == "delta":
+            if not entry.exists():
+                raise ValueError(f"cannot apply delta: session {session_id!r} not in cache")
+            with SessionStore(entry.data) as store:
                 store.apply_changeset(session_state.delta, version=session_state.version)
-                if isinstance(db_file, bytes):
-                    db_file = store.export_snapshot()
-                updated = True
+                entry.sync_from_store(store)
+        else:
+            return
 
-        if updated:
-            self._cached_sessions[session_id] = _SessionCacheEntry.create(db_file)
-            self._cached_sessions.move_to_end(session_id)
-            self._enforce_limits()
+        self._touch(session_id, entry)
 
-    def _get_db_file(self, session_id: str) -> Path | bytes:
-        if not self._in_memory:
-            assert self._cache_dir is not None
-            return self._cache_dir / f"{session_id}.db"
+    def _get_or_create(self, session_id: str) -> _SessionCacheEntry:
+        """Return an existing entry or create a new empty one."""
+        if session_id in self._entries:
+            return self._entries[session_id]
 
-        return (
-            self._cached_sessions[session_id].data if session_id in self._cached_sessions else b""
-        )
+        if self._in_memory:
+            return _SessionCacheEntry.create(b"")
+        assert self._cache_dir is not None
+        return _SessionCacheEntry.create(self._cache_dir / f"{session_id}.db")
+
+    def _touch(self, session_id: str, entry: _SessionCacheEntry) -> None:
+        """Mark an entry as recently used and enforce cache limits."""
+        self._entries[session_id] = entry
+        self._entries.move_to_end(session_id)
+        self._enforce_limits()
 
     def _enforce_limits(self) -> None:
-        """Evict oldest files if cache exceeds size or file count limits."""
-        total_size = sum(entry.size for entry in self._cached_sessions.values())
-        while len(self._cached_sessions) > self._max_files or total_size > self._max_size_bytes:
+        """Evict least-recently-used entries until within size and count limits."""
+        total_size = sum(e.size for e in self._entries.values())
+        while self._entries and (
+            len(self._entries) > self._max_entries or total_size > self._max_size_bytes
+        ):
+            session_id, evicted = self._entries.popitem(last=False)
+            total_size -= evicted.size
             try:
-                session_id, entry = self._cached_sessions.popitem(last=False)
-
-                db_path = self._get_db_file(session_id)
-                if isinstance(db_path, Path):
-                    db_path.unlink(missing_ok=True)
-
-                total_size = max(0, total_size - entry.size)
-            except Exception as e:
-                logger.warning("failed to evict cache file", exc_info=e)
-                break
+                evicted.delete()
+            except Exception:
+                logger.warning(
+                    "failed to delete evicted cache entry",
+                    extra={"session_id": session_id},
+                    exc_info=True,
+                )
 
     def close(self) -> None:
-        """Close the cache and clean up resources."""
+        """Release all cached data and clean up resources."""
         if self._temp_dir:
             self._temp_dir.cleanup()
-        elif not self._in_memory:
-            for session_id in self._cached_sessions.keys():
-                db_path = self._get_db_file(session_id)
-                if isinstance(db_path, Path):
-                    db_path.unlink(missing_ok=True)
-        self._cached_sessions.clear()
+        else:
+            for entry in self._entries.values():
+                entry.delete()
+        self._entries.clear()

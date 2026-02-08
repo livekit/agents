@@ -41,6 +41,7 @@ from livekit import api, rtc
 from .._exceptions import CLIError
 from ..agent_http_server import AgentHttpClient
 from ..job import JobExecutorType
+from ..llm import ChatItem
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
@@ -1168,7 +1169,7 @@ def _text_mode(c: AgentsConsole) -> None:
                 time.sleep(0.1)
 
         for event in h.result():
-            _print_run_event(c, event)
+            _print_chat_item(c, event.item)
 
 
 def _sms_text_mode(
@@ -1178,12 +1179,6 @@ def _sms_text_mode(
 
     from ..agent_http_server import TextResponseEvent, TextSessionComplete, TextSessionStarted
     from ..utils.session_store import SessionStore
-    from ..voice.run_result import (
-        AgentHandoffEvent,
-        ChatMessageEvent,
-        FunctionCallEvent,
-        FunctionCallOutputEvent,
-    )
 
     session_id: str | None = None
     target_version: int | None = None  # hot sync if version specified
@@ -1293,20 +1288,7 @@ def _sms_text_mode(
                     break
 
             if isinstance(resp, TextResponseEvent):
-                ev: RunEvent | None = None
-                if resp.event_type == "function_call":
-                    ev = FunctionCallEvent(item=resp.data)
-                elif resp.event_type == "function_call_output":
-                    ev = FunctionCallOutputEvent(item=resp.data)
-                elif resp.event_type == "agent_handoff":
-                    ev = AgentHandoffEvent(item=resp.data, old_agent=None, new_agent=None)
-                elif resp.event_type == "message":
-                    ev = ChatMessageEvent(item=resp.data)
-                else:
-                    logger.warning(f"unknown TextResponseEvent type {resp.event_type}")
-
-                if ev:
-                    _print_run_event(c, ev)
+                _print_chat_item(c, resp.item)
 
         worker_thread.join()
         # release the console for next run
@@ -1342,17 +1324,17 @@ def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
     return "\n".join(head + ["..."] + tail)
 
 
-def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
-    if event.type == "function_call":
+def _print_chat_item(c: AgentsConsole, item: ChatItem) -> None:
+    if item.type == "function_call":
         c.console.print()
         c.console.print(
             Text.assemble(
                 ("  \u279c ", "#1FD5F9"),
-                (event.item.name, "bold #1FD5F9"),
+                (item.name, "bold #1FD5F9"),
             )
         )
-    elif event.type == "function_call_output":
-        output = event.item.output
+    elif item.type == "function_call_output":
+        output = item.output
         display_output = output
         is_error = output.lower().startswith("error") or output.lower().startswith("exception")
 
@@ -1389,9 +1371,9 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
                     (display_output, "dim"),
                 )
             )
-    elif event.type == "agent_handoff":
-        old_agent = event.item.old_agent_id or ""
-        new_agent = event.item.new_agent_id
+    elif item.type == "agent_handoff":
+        old_agent = item.old_agent_id or ""
+        new_agent = item.new_agent_id
 
         old_style = _agent_style(old_agent)
         new_style = _agent_style(new_agent)
@@ -1405,8 +1387,8 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
             )
         )
 
-    elif event.type == "message":
-        if event.item.text_content:
+    elif item.type == "message":
+        if item.text_content:
             c.console.print()
             c.console.print(
                 Text.assemble(
@@ -1414,10 +1396,10 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
                     ("Agent", "bold #6BCB77"),
                 )
             )
-            for line in event.item.text_content.split("\n"):
+            for line in item.text_content.split("\n"):
                 c.console.print(Text(f"    {line}"))
     else:
-        logger.warning(f"unknown RunEvent type {event.type}")
+        logger.warning(f"unsupported ChatItem type {item.type}")
 
 
 def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:

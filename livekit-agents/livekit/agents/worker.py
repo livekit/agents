@@ -1575,8 +1575,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         session_info.done_fut.set_result(ev)
         session_info.event_ch.close()
-        if ev.session_state is not None:
-            assert self._session_cache is not None
+        if ev.session_state and self._session_cache:
             self._session_cache.save(session_id, ev.session_state)
 
     def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
