@@ -136,68 +136,44 @@ AzureConversationItem = (
 
 
 def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
-    """Convert LiveKit ChatItem to Azure conversation item format.
-
-    Returns proper Azure SDK model instances instead of raw dicts to ensure
-    compatibility with the Azure SDK's conversation.item.create() method.
-    """
-
     if item.type == "function_call_output":
-        return FunctionCallOutputItem(
-            call_id=item.call_id,
-            output=item.output,
-        )
+        return FunctionCallOutputItem(call_id=item.call_id, output=item.output)
 
     if item.type == "function_call":
         return FunctionCallItem(
-            id=item.id,
             call_id=item.call_id,
             name=item.name,
             arguments=item.arguments,
+            id=item.id,
         )
 
     if item.type == "message":
         if item.role in ("system", "developer"):
-            content_list: list[InputTextContentPart] = []
-            for c in item.content:
-                if isinstance(c, str):
-                    content_list.append(InputTextContentPart(text=c))
-            return SystemMessageItem(
-                id=item.id,
-                content=cast(list[MessageContentPart], content_list),
-            )
+            content_parts: list[MessageContentPart] = [
+                InputTextContentPart(text=c) for c in item.content if isinstance(c, str)
+            ]
+            return SystemMessageItem(content=content_parts, id=item.id)
 
         if item.role == "assistant":
-            assistant_content: list[OutputTextContentPart] = []
-            for c in item.content:
-                if isinstance(c, str):
-                    assistant_content.append(OutputTextContentPart(text=c))
-            return AssistantMessageItem(
-                id=item.id,
-                content=cast(list[MessageContentPart], assistant_content),
-            )
+            content_parts = [
+                OutputTextContentPart(text=c) for c in item.content if isinstance(c, str)
+            ]
+            return AssistantMessageItem(content=content_parts, id=item.id)
 
         if item.role == "user":
-            user_content: list[InputTextContentPart | InputAudioContentPart] = []
+            content_parts = []
             for c in item.content:
                 if isinstance(c, str):
-                    user_content.append(InputTextContentPart(text=c))
+                    content_parts.append(InputTextContentPart(text=c))
                 elif isinstance(c, llm.AudioContent):
                     encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
                         "utf-8"
                     )
-                    audio_part = InputAudioContentPart(
-                        audio=encoded_audio,
-                        transcript=c.transcript,
+                    content_parts.append(
+                        InputAudioContentPart(audio=encoded_audio, transcript=c.transcript)
                     )
-                    user_content.append(audio_part)
-            return UserMessageItem(
-                id=item.id,
-                content=cast(list[MessageContentPart], user_content),
-            )
-
+            return UserMessageItem(content=content_parts, id=item.id)
         raise ValueError(f"Unsupported role: {item.role}")
-
     raise ValueError(f"Unsupported item type: {item.type}")
 
 
