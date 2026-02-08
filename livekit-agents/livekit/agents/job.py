@@ -22,11 +22,11 @@ import json
 import logging
 import multiprocessing as mp
 import tempfile
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import aiohttp

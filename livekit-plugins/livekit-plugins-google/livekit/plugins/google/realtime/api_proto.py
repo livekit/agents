@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, Union
+from typing import Literal
 
 from google.genai import types
 
@@ -56,13 +56,13 @@ Voice = Literal[
 ]
 
 
-ClientEvents = Union[
-    types.ContentListUnion,
-    types.ContentListUnionDict,
-    types.LiveClientContentOrDict,
-    types.LiveClientRealtimeInput,
-    types.LiveClientRealtimeInputOrDict,
-    types.LiveClientToolResponseOrDict,
-    types.FunctionResponseOrDict,
-    Sequence[types.FunctionResponseOrDict],
-]
+ClientEvents = (
+    types.ContentListUnion
+    | types.ContentListUnionDict
+    | types.LiveClientContentOrDict
+    | types.LiveClientRealtimeInput
+    | types.LiveClientRealtimeInputOrDict
+    | types.LiveClientToolResponseOrDict
+    | types.FunctionResponseOrDict
+    | Sequence[types.FunctionResponseOrDict]
+)

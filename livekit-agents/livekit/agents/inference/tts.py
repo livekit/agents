@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import NotRequired
@@ -51,7 +51,7 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 
-TTSModels = Union[CartesiaModels, DeepgramModels, ElevenlabsModels, RimeModels, InworldModels]
+TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -87,7 +87,7 @@ class FallbackModel(TypedDict):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _normalize_fallback(

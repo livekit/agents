@@ -6,17 +6,15 @@ import contextvars
 import functools
 import json
 import os
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Generic,
     Literal,
     TypeVar,
-    Union,
     overload,
 )
 
@@ -64,7 +62,7 @@ class AgentHandoffEvent:
     type: Literal["agent_handoff"] = "agent_handoff"
 
 
-RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent]
+RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
 class RunResult(Generic[Run_T]):

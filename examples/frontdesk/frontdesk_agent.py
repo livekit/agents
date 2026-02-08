@@ -25,17 +25,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.evals import (
-    JudgeGroup,
-    accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
-    handoff_judge,
-    relevancy_judge,
-    safety_judge,
-    task_completion_judge,
-    tool_use_judge,
-)
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -104,7 +93,7 @@ class FrontDeskAgent(Agent):
                 start_time=slot.start_time, attendee_email=email_result.email_address
             )
         except SlotUnavailableError:
-            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
+            # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
@@ -174,33 +163,7 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    report = ctx.make_session_report()
-
-    # Skip evaluation for very short conversations
-    messages = [m for m in report.chat_history.messages() if m.role in ("user", "assistant")]
-    if len(messages) < 3:
-        return
-
-    judges = JudgeGroup(
-        llm="openai/gpt-4o-mini",
-        judges=[
-            task_completion_judge(),
-            accuracy_judge(),
-            tool_use_judge(),
-            handoff_judge(),
-            safety_judge(),
-            relevancy_judge(),
-            coherence_judge(),
-            conciseness_judge(),
-        ],
-    )
-
-    await judges.evaluate(report.chat_history)
-
-    if ctx.primary_session.userdata.appointment_booked:
-        ctx.tagger.success()
-    else:
-        ctx.tagger.fail(reason="Appointment was not booked")
+    ctx.make_session_report()
 
 
 @server.rtc_session(on_session_end=on_session_end)

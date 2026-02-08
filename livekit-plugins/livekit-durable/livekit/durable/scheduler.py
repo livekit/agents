@@ -5,10 +5,10 @@ import contextvars
 import functools
 import pickle
 import reprlib
-from collections.abc import Awaitable, Generator
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from livekit.agents.voice.agent import AgentTask
 

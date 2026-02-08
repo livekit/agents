@@ -14,7 +14,7 @@ Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS te
 ## Installation
 
 ```bash
-pip install livekit-plugins-camb
+pip install livekit-plugins-cambai
 ```
 
 ## Prerequisites
@@ -31,7 +31,7 @@ Or obtain it from [Camb.ai Studio](https://studio.camb.ai/public/onboarding).
 
 ```python
 import asyncio
-from livekit.plugins.camb import TTS
+from livekit.plugins.cambai import TTS
 
 async def main():
     # Initialize TTS (uses CAMB_API_KEY env var)
@@ -52,7 +52,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from livekit.plugins.camb import list_voices
+from livekit.plugins.cambai import list_voices
 
 async def main():
     voices = await list_voices()
@@ -98,7 +98,7 @@ tts = TTS(
 
 ```python
 from livekit import agents
-from livekit.plugins.camb import TTS
+from livekit.plugins.cambai import TTS
 
 async def entrypoint(ctx: agents.JobContext):
     # Connect to room

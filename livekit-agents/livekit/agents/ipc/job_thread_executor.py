@@ -5,9 +5,9 @@ import contextlib
 import socket
 import threading
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo

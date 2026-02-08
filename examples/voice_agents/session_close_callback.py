@@ -55,7 +55,8 @@ async def entrypoint(ctx: JobContext):
         print("Chat History:")
         for item in session.history.items:
             if item.type == "message":
-                text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
+                content = item.text_content.replace("\n", "\\n")
+                text = f"{item.role}: {content}"
                 if item.interrupted:
                     text += " (interrupted)"
 

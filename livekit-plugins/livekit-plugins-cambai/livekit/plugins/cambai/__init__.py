@@ -88,11 +88,11 @@ async def list_voices(
             return voices
 
 
-class CambPlugin(Plugin):
+class CambaiPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(CambPlugin())
+Plugin.register_plugin(CambaiPlugin())
 
 __all__ = ["TTS", "list_voices", "__version__"]

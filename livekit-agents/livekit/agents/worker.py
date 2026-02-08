@@ -23,10 +23,10 @@ import multiprocessing as mp
 import os
 import sys
 import threading
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Generic, Literal, TypeVar, overload
+from typing import Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -407,21 +407,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: AgentHttpServer | None = None
 
         self._lock = asyncio.Lock()
-
-    if sys.version_info < (3, 10):
-        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
-        def __getstate__(self) -> dict[str, Any]:
-            """Custom pickle support - exclude unpickleable asyncio objects."""
-            state = self.__dict__.copy()
-            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
-            state.pop("_lock", None)
-            return state
-
-        def __setstate__(self, state: dict[str, Any]) -> None:
-            """Restore state and recreate asyncio.Lock."""
-            self.__dict__.update(state)
-            # recreate the lock
-            self._lock = asyncio.Lock()
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:

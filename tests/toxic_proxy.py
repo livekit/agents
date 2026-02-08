@@ -4,7 +4,7 @@ import socket
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -45,7 +45,7 @@ class APIConsumer:
         return f"http://{cls.host}:{cls.port}"
 
     @classmethod
-    def get(cls, url: str, params: Optional[dict[str, Any]] = None, **kwargs) -> requests.Response:
+    def get(cls, url: str, params: dict[str, Any] | None = None, **kwargs) -> requests.Response:
         endpoint = cls.get_base_url() + url
         return validate_response(requests.get(url=endpoint, params=params, **kwargs))
 
@@ -64,7 +64,7 @@ class APIConsumer:
 class Toxic:
     type: str
     stream: str = "downstream"
-    name: Optional[str] = None
+    name: str | None = None
     toxicity: float = 1.0
     attributes: dict[str, Any] = field(default_factory=dict)
 
@@ -106,7 +106,7 @@ class Proxy:
             toxics_dict[toxic_name] = Toxic(**toxic_data)
         return toxics_dict
 
-    def get_toxic(self, toxic_name: str) -> Optional[Toxic]:
+    def get_toxic(self, toxic_name: str) -> Toxic | None:
         return self.toxics().get(toxic_name)
 
     def add_toxic(
@@ -114,9 +114,9 @@ class Proxy:
         *,
         type: str,
         stream: str = "downstream",
-        name: Optional[str] = None,
+        name: str | None = None,
         toxicity: float = 1.0,
-        attributes: Optional[dict[str, Any]] = None,
+        attributes: dict[str, Any] | None = None,
     ) -> None:
         if name is None:
             name = f"{type}_{stream}"
@@ -164,13 +164,13 @@ class Toxiproxy:
         for proxy in list(self.proxies().values()):
             self.destroy(proxy)
 
-    def get_proxy(self, proxy_name: str) -> Optional[Proxy]:
+    def get_proxy(self, proxy_name: str) -> Proxy | None:
         return self.proxies().get(proxy_name)
 
     def running(self) -> bool:
         return can_connect_to(APIConsumer.host, APIConsumer.port)
 
-    def version(self) -> Optional[bytes]:
+    def version(self) -> bytes | None:
         if self.running():
             return APIConsumer.get("/version").content
         return None
@@ -180,7 +180,7 @@ class Toxiproxy:
         return response.ok
 
     def create(
-        self, upstream: str, name: str, listen: Optional[str] = None, enabled: Optional[bool] = None
+        self, upstream: str, name: str, listen: str | None = None, enabled: bool | None = None
     ) -> Proxy:
         if name in self.proxies():
             raise ProxyExists("This proxy already exists.")

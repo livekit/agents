@@ -4,9 +4,9 @@ import asyncio
 import logging
 import multiprocessing as mp
 import socket
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
-from typing import Any, Callable
+from typing import Any
 
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger

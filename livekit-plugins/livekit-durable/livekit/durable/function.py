@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
-from collections.abc import Coroutine, Generator
+from collections.abc import Callable, Coroutine, Generator
 from types import (
     AsyncGeneratorType,
     CodeType,
@@ -13,7 +13,7 @@ from types import (
     MethodType,
     TracebackType,
 )
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import lk_durable as ext
 

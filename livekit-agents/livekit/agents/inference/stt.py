@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -99,7 +99,7 @@ class FallbackModel(TypedDict, total=False):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
@@ -125,13 +125,13 @@ def _normalize_fallback(
     return [_make_fallback(fallback)]
 
 
-STTModels = Union[
-    DeepgramModels,
-    CartesiaModels,
-    AssemblyAIModels,
-    ElevenlabsModels,
-    Literal["auto"],  # automatically select a provider based on the language
-]
+STTModels = (
+    DeepgramModels
+    | CartesiaModels
+    | AssemblyAIModels
+    | ElevenlabsModels
+    | Literal["auto"]  # automatically select a provider based on the language
+)
 STTEncoding = Literal["pcm_s16le"]
 
 
