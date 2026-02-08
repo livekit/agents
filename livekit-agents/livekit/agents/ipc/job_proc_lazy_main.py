@@ -291,6 +291,7 @@ class _JobProc:
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
+        self._job_ctx._start_log_buffering()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
@@ -322,12 +323,18 @@ class _JobProc:
         warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
         job_entry_task.add_done_callback(lambda _: warn_unconnected_task.cancel())
 
-        def log_exception(t: asyncio.Task[Any]) -> None:
+        def _on_entry_done(t: asyncio.Task[Any]) -> None:
             if not t.cancelled() and t.exception():
                 logger.error(
                     "unhandled exception while running the job task",
                     exc_info=t.exception(),
                 )
+                # if the process crashes before ctx.connect(), shutdown_fut will never resolve
+                # we'll force it to trigger shutdown so _on_cleanup can flush crash logs
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    self._shutdown_fut.set_result(
+                        _ShutdownInfo(user_initiated=False, reason="job crashed")
+                    )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
                 if self._job_ctx.is_fake_job():
                     return
@@ -337,7 +344,7 @@ class _JobProc:
                     "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
                 )
 
-        job_entry_task.add_done_callback(log_exception)
+        job_entry_task.add_done_callback(_on_entry_done)
 
         shutdown_info = await self._shutdown_fut
 
