@@ -5,6 +5,7 @@ from typing import Any
 
 from azure.ai.voicelive.models import (
     AssistantMessageItem,
+    AudioInputTranscriptionOptions,
     FunctionCallItem,
     FunctionCallOutputItem,
     FunctionTool,
@@ -27,6 +28,10 @@ from livekit.agents.utils import is_given
 from ..log import logger
 
 # Default configurations for Azure Voice Live
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioInputTranscriptionOptions(
+    model="whisper-1",
+)
+
 DEFAULT_TURN_DETECTION = ServerVad(
     threshold=0.5,
     prefix_padding_ms=300,
@@ -59,6 +64,27 @@ def to_turn_detection(
         return None
 
     return turn_detection
+
+
+def to_audio_transcription(
+    audio_transcription: NotGivenOr[AudioInputTranscriptionOptions | None],
+) -> AudioInputTranscriptionOptions | None:
+    """Convert audio transcription configuration to Azure AudioInputTranscriptionOptions format.
+
+    Args:
+        audio_transcription: Audio transcription options. If NOT_GIVEN, returns default config.
+            If None, transcription is disabled. Otherwise, returns the provided config.
+
+    Returns:
+        AudioInputTranscriptionOptions or None if transcription is disabled.
+    """
+    if not is_given(audio_transcription):
+        return DEFAULT_INPUT_AUDIO_TRANSCRIPTION
+
+    if audio_transcription is None:
+        return None
+
+    return audio_transcription
 
 
 def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
@@ -156,9 +182,9 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
                 if isinstance(c, str):
                     user_content.append(InputTextContentPart(text=c))
                 elif isinstance(c, llm.AudioContent):
-                    encoded_audio = base64.b64encode(
-                        rtc.combine_audio_frames(c.frame).data
-                    ).decode("utf-8")
+                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
+                        "utf-8"
+                    )
                     audio_part = InputAudioContentPart(
                         audio=encoded_audio,
                         transcript=c.transcript,

@@ -72,7 +72,7 @@ For full control over Azure Voice Live settings:
 
 ```python
 import os
-from azure.ai.voicelive.models import AzureSemanticVadEn
+from azure.ai.voicelive.models import AzureSemanticVadEn, AudioInputTranscriptionOptions
 from livekit.agents import AgentSession
 from livekit.plugins import azure
 
@@ -89,12 +89,20 @@ turn_detection = AzureSemanticVadEn(
     remove_filler_words=True,   # Remove filler words like "um", "uh"
 )
 
+# Configure input audio transcription with language constraint
+# This helps prevent language misidentification
+input_audio_transcription = AudioInputTranscriptionOptions(
+    model="whisper-1",
+    language="en-US",  # Constrain to English for reliable detection
+)
+
 session = AgentSession(
     llm=azure.realtime.RealtimeModel(
         endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
         api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
         model=os.getenv("AZURE_VOICELIVE_MODEL", "gpt-4o"),
         voice=os.getenv("AZURE_VOICELIVE_VOICE", "en-US-AvaMultilingualNeural"),
+        input_audio_transcription=input_audio_transcription,
         turn_detection=turn_detection,
         tool_choice="auto",  # Enable function calling
     )
@@ -109,6 +117,7 @@ session = AgentSession(
 | `api_key` | Azure API key | `AZURE_VOICELIVE_API_KEY` env var |
 | `model` | Model name | `AZURE_VOICELIVE_MODEL` env var |
 | `voice` | Azure neural voice name | `AZURE_VOICELIVE_VOICE` env var |
+| `input_audio_transcription` | Audio transcription config (model, language) | `whisper-1` with auto-detect |
 | `turn_detection` | VAD configuration object | Server default |
 | `tool_choice` | Function calling mode ("auto", "none", etc.) | "auto" |
 

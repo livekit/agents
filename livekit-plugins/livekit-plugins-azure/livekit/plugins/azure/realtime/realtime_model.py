@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
+    AudioInputTranscriptionOptions,
     AzureStandardVoice,
     FunctionTool,
     InputAudioFormat,
@@ -44,6 +45,7 @@ from .utils import (
     DEFAULT_TEMPERATURE,
     livekit_item_to_azure_item,
     livekit_tool_to_azure_tool,
+    to_audio_transcription,
     to_turn_detection,
 )
 
@@ -58,6 +60,7 @@ class _RealtimeOptions:
     endpoint: str
     model: str
     voice: str | AzureStandardVoice
+    input_audio_transcription: AudioInputTranscriptionOptions | None
     tool_choice: llm.ToolChoice | None
     turn_detection: TurnDetection | None
     input_audio_format: InputAudioFormat
@@ -110,6 +113,7 @@ class RealtimeModel(llm.RealtimeModel):
         endpoint: str | None = None,
         model: str | None = None,
         voice: str = DEFAULT_VOICE,
+        input_audio_transcription: NotGivenOr[AudioInputTranscriptionOptions | None] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -126,7 +130,10 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             endpoint: Azure Voice Live endpoint URL (wss://...). If None, reads from AZURE_VOICELIVE_ENDPOINT.
             model: Model name. If None, reads from AZURE_VOICELIVE_MODEL (default: "gpt-realtime").
-            voice: Voice for audio responses (default: "en-US-AvaNeural").
+            voice: Voice for audio responses (default: "en-US-AvaMultilingualNeural").
+            input_audio_transcription: Configuration for input audio transcription. If NOT_GIVEN,
+                uses default config (whisper-1). Set to None to disable transcription.
+                Use AudioInputTranscriptionOptions to configure model and language.
             modalities: List of modalities to enable (default: ["text", "audio"]).
             turn_detection: Turn detection configuration. Accepts ServerVad, AzureSemanticVad,
                 AzureSemanticVadEn, or AzureSemanticVadMultilingual (default: ServerVad with threshold=0.5).
@@ -141,13 +148,29 @@ class RealtimeModel(llm.RealtimeModel):
         Example:
             ```python
             from livekit.plugins.azure.realtime import RealtimeModel
-            from azure.ai.voicelive.models import ServerVad
+            from azure.ai.voicelive.models import AudioInputTranscriptionOptions, ServerVad
 
+            # English-only session (recommended for reliable language detection)
             model = RealtimeModel(
                 endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
                 api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
                 voice="en-US-AvaNeural",
+                input_audio_transcription=AudioInputTranscriptionOptions(
+                    model="whisper-1",
+                    language="en-US",  # Constrains transcription to English
+                ),
                 turn_detection=ServerVad(threshold=0.5, silence_duration_ms=500),
+            )
+
+            # Multi-language session with auto-detection
+            model = RealtimeModel(
+                endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
+                api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
+                voice="en-US-AvaMultilingualNeural",
+                input_audio_transcription=AudioInputTranscriptionOptions(
+                    model="whisper-1",
+                    language="en,zh,ja",  # Allow English, Chinese, and Japanese
+                ),
             )
             ```
         """
@@ -167,11 +190,13 @@ class RealtimeModel(llm.RealtimeModel):
             f"[AZURE_INIT] turn_detection capability will be: {turn_detection_val is not None}"
         )
 
+        input_audio_transcription_val = to_audio_transcription(input_audio_transcription)
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=turn_detection_val is not None,
-                user_transcription=True,
+                user_transcription=input_audio_transcription_val is not None,
                 auto_tool_reply_generation=False,  # Tool responses handled via generate_reply
                 audio_output=Modality.AUDIO in modalities_list,
                 manual_function_calls=True,
@@ -207,6 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
             endpoint=endpoint_val,
             model=model_val,
             voice=voice,
+            input_audio_transcription=input_audio_transcription_val,
             tool_choice=tool_choice_val,
             turn_detection=turn_detection_val,
             input_audio_format=DEFAULT_INPUT_AUDIO_FORMAT,
@@ -396,6 +422,11 @@ class RealtimeSession(
 
         # Wrap voice name in AzureStandardVoice if it's an Azure voice name
         voice_config: str | AzureStandardVoice = self._realtime_model._opts.voice
+        input_audio_transcription = self._realtime_model._opts.input_audio_transcription
+
+        # Extract language from input_audio_transcription for voice locale
+        language = input_audio_transcription.language if input_audio_transcription else None
+
         if isinstance(voice_config, str):
             # Check if it's an Azure voice name (contains hyphen like "en-US-AvaNeural")
             if "-" in voice_config and voice_config not in [
@@ -410,7 +441,11 @@ class RealtimeSession(
                 "marin",
                 "cedar",
             ]:
-                voice_config = AzureStandardVoice(name=voice_config)
+                # Create AzureStandardVoice with locale if language is specified
+                voice_config = AzureStandardVoice(
+                    name=voice_config,
+                    locale=language if language else None,
+                )
 
         session_config = RequestSession(
             modalities=list(self._realtime_model._opts.modalities),
@@ -419,6 +454,7 @@ class RealtimeSession(
             input_audio_format=self._realtime_model._opts.input_audio_format,
             output_audio_format=self._realtime_model._opts.output_audio_format,
             turn_detection=self._realtime_model._opts.turn_detection,
+            input_audio_transcription=input_audio_transcription,
             tools=tools_list if tools_list else None,  # type: ignore[arg-type]
             temperature=self._realtime_model._opts.temperature,
             max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
