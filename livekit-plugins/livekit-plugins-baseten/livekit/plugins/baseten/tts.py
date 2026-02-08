@@ -286,6 +286,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     raise APIConnectionError()
+            if segment_started:
+                output_emitter.end_segment()
+
 
         try:
             session = self._tts._ensure_session()
