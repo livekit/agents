@@ -2335,7 +2335,13 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self.llm.model)
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self.llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.llm.model,
+            }
+        )
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = current_span
 
