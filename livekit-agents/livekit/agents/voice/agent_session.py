@@ -86,6 +86,10 @@ class RecordingOptions:
     transcript: bool = True
     """Upload the conversation transcript (chat history)."""
 
+    @property
+    def enabled(self) -> bool:
+        return self.audio or self.traces or self.logs or self.transcript
+
 
 @dataclass
 class SessionConnectOptions:
@@ -472,10 +476,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: bool | RecordingOptions = True,
     ) -> RunResult: ...
 
     @overload
@@ -486,10 +490,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: bool | RecordingOptions = True,
     ) -> None: ...
 
     async def start(
@@ -499,10 +503,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -525,28 +529,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # configure observability first
             job_ctx: JobContext | None = None
             try:
+                # defer to server-side setting for recording
                 job_ctx = get_job_context()
                 if not is_given(record):
                     record = job_ctx.job.enable_recording
             except RuntimeError:
-                # JobContext is not available in evals
-                pass
+                # JobContext is not available in evals, will not be able to record
+                record = False
 
             if isinstance(record, RecordingOptions):
-                recording_options = record
-            elif isinstance(record, bool):
-                recording_options = RecordingOptions(
+                self._recording_options = record
+            else:
+                self._recording_options = RecordingOptions(
                     audio=record, traces=record, logs=record, transcript=record
                 )
-            else:
-                recording_options = RecordingOptions(
-                    audio=False, traces=False, logs=False, transcript=False
-                )
-
-            self._recording_options = recording_options
 
             if job_ctx:
-                job_ctx.init_recording(recording_options)
+                job_ctx.init_recording(self._recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
@@ -644,7 +643,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if job_ctx._primary_agent_session is None:
                     job_ctx._primary_agent_session = self
-                elif any(vars(self._recording_options).values()):
+                elif self._recording_options.enabled:
                     raise RuntimeError(
                         "Only one `AgentSession` can be the primary at a time. "
                         "If you want to ignore primary designation, use session.start(record=False)."
