@@ -896,27 +896,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent=self._agent._get_state(),
         )
 
-    async def rehydrate(self, state: _AgentSessionState | bytes) -> None:
-        """Restore session state from bytes."""
-        from ..utils.session_store import SessionStore
-
+    async def rehydrate(self, state: _AgentSessionState) -> None:
         if self._started:
             # TODO(long): allow rehydrating a session that has already started?
             raise RuntimeError("Cannot rehydrate session that has already started")
 
-        if isinstance(state, bytes):
-            with SessionStore(db_file=state) as store:
-                sess_state = store.export_state()
-        else:
-            sess_state = state
-
-        self._userdata = sess_state.userdata
-        self._chat_ctx = llm.ChatContext.from_dict(sess_state.history)
+        self._userdata = state.userdata
+        self._chat_ctx = llm.ChatContext.from_dict(state.history)
 
         tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
         missing_tools: list[str] = []
-        for tool_id in sess_state.tools:
+        for tool_id in state.tools:
             if tool_id in tool_by_id:
                 valid_tools.append(tool_by_id[tool_id])
             else:
@@ -930,7 +921,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # rehydrate agent recursively and register them to the session
         tk = _AgentSessionContextVar.set(self)
         try:
-            agent = Agent._rehydrate(sess_state.agent)
+            agent = Agent._rehydrate(state.agent)
         finally:
             _AgentSessionContextVar.reset(tk)
 

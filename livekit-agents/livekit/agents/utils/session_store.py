@@ -81,7 +81,7 @@ class SessionStore:
             self._db_path = str(db_file)
 
         self._conn = apsw.Connection(self._db_path)
-        if isinstance(db_file, bytes):
+        if isinstance(db_file, bytes) and db_file:
             self._conn.deserialize("main", db_file)
 
         if create_schema:
@@ -153,7 +153,7 @@ class SessionStore:
         store._version = version
         return store
 
-    def export_state(self) -> _AgentSessionState:
+    def export_state(self) -> _AgentSessionState | None:
         """Export current session state from database."""
         from ..voice.agent_session import _AgentSessionState
 
@@ -163,7 +163,8 @@ class SessionStore:
             "SELECT version, current_agent_id, tools_json, userdata_blob, userdata_encrypted FROM session"
         ).fetchone()
         if not meta:
-            raise ValueError("session not initialized")
+            # raise ValueError("session not initialized")
+            return None
 
         _, current_agent_id, tools_json, userdata_blob, userdata_encrypted = meta
 
