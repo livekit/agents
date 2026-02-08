@@ -196,7 +196,13 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        self._llm_request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+            }
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
