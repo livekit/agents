@@ -2690,6 +2690,10 @@ class AgentActivity(RecognitionHooks):
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
+                # Skip chat context update and reply creation - the new agent will handle this.
+                # The old realtime session is being closed by update_agent(), so we cannot
+                # continue using self._rt_session after this point.
+                return
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
