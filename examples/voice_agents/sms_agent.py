@@ -95,7 +95,7 @@ class MyAgent(Agent):
         return "You are now registered for the weather event."
 
 
-server = AgentServer()
+server = AgentServer(port=8081)
 
 
 @server.text_handler()

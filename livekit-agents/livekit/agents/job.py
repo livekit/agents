@@ -154,23 +154,15 @@ class TextMessageContext:
         except Exception:
             self._endpoint = ""  # default
 
-        # resolve session state from snapshot and delta
-        from .utils.session_store import SessionStore
-
-        if not text_request.HasField("session_state"):
-            # new session
-            self._session_snapshot: bytes | None = None
-            self._session_state: _AgentSessionState | None = None
-            self._version = 0
-        else:
+        # read session snapshot
+        if text_request.HasField("session_state"):
             assert text_request.session_state.WhichOneof("data") == "snapshot", (
                 "session state should be resolved before starting the job"
             )
-
-            self._session_snapshot = text_request.session_state.snapshot
-            with SessionStore(self._session_snapshot) as store:
-                self._session_state = store.export_state()
-            self._version = text_request.session_state.version
+            self._session_snapshot: bytes | None = text_request.session_state.snapshot
+        else:
+            self._session_snapshot = None
+        self._session_state: _AgentSessionState | None = None
 
     async def send_response(self, ev: RunEvent) -> None:
         from .ipc import proto
@@ -189,6 +181,12 @@ class TextMessageContext:
 
     @property
     def session_data(self) -> _AgentSessionState | None:
+        from .utils.session_store import SessionStore
+
+        if self._session_state is None and self._session_snapshot:
+            with SessionStore(self._session_snapshot) as store:
+                self._session_state = store.export_state()
+
         return self._session_state
 
     @property
@@ -218,14 +216,14 @@ class TextMessageContext:
             await self._job_ctx._ipc_client.send(msg)
             return
 
-        with SessionStore.from_state(session.get_state(), version=self._version + 1) as new_store:
-            msg.session_state = agent.AgentSessionState(version=new_store.version)
-            if not self._session_snapshot:
-                msg.session_state.snapshot = new_store.export_snapshot()
-            else:
-                with SessionStore(self._session_snapshot) as old_store:
-                    delta = old_store.compute_delta(new_store)
-                msg.session_state.delta = delta
+        with SessionStore(self._session_snapshot) as old_store:
+            new_version = old_store.version + 1
+            msg.session_state = agent.AgentSessionState(version=new_version)
+            with SessionStore.from_state(session.get_state(), version=new_version) as new_store:
+                if not self._session_snapshot:
+                    msg.session_state.snapshot = new_store.export_snapshot()
+                else:
+                    msg.session_state.delta = old_store.compute_delta(new_store)
 
         await self._job_ctx._ipc_client.send(msg)
 
