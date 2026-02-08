@@ -17,6 +17,8 @@ TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opu
 
 @pytest.mark.asyncio
 async def test_decode_and_transcribe():
+    if not os.environ.get("DEEPGRAM_API_KEY"):
+        pytest.skip("DEEPGRAM_API_KEY not set")
     # Skip if test file doesn't exist
     if not os.path.exists(TEST_AUDIO_FILEPATH):
         pytest.skip(f"Test file not found: {TEST_AUDIO_FILEPATH}")

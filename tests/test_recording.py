@@ -312,7 +312,7 @@ async def test_upload_session_report_sent_without_transcript() -> None:
 
 
 async def test_upload_audio_only_no_file() -> None:
-    """When transcript=False, audio=True but no audio file exists, upload has header only."""
+    """When transcript=False, audio=True but no audio file exists, no upload is made."""
     report = _make_mock_report(
         RecordingOptions(audio=True, traces=False, logs=False, transcript=False)
     )
@@ -322,11 +322,7 @@ async def test_upload_audio_only_no_file() -> None:
     with _patch_upload_deps():
         await _call_upload(report, http_session=mock_http)
 
-    mock_http.post.assert_called_once()
-    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
-    part_names = _get_multipart_part_names(mp_writer)
-    assert "chat_history" not in part_names
-    assert "audio" not in part_names
+    mock_http.post.assert_not_called()
 
 
 async def test_upload_evaluations_emitted_without_logs() -> None:

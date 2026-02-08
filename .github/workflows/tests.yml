@@ -36,20 +36,11 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run tests
-
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-        run: uv run pytest tests/test_agent_session.py
-          tests/test_tts_fallback.py
-          tests/test_stt_fallback.py
-          tests/test_aio.py
-          tests/test_chat_ctx.py
-          tests/test_config.py
-          tests/test_schema_gemini.py
-          tests/test_tokenizer.py
-          tests/test_transcription_filter.py
-          tests/test_tools.py
+        run: make unit-tests
+        working-directory: tests
 
   evaluation:
     # don't run tests for PRs on forks

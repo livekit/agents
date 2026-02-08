@@ -193,6 +193,7 @@ async def test_proc_pool():
     pool = ipc.proc_pool.ProcPool(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
@@ -200,6 +201,7 @@ async def test_proc_pool():
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -232,7 +234,7 @@ async def test_proc_pool():
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(created_q, num_idle_processes)
     await _wait_for_elements(start_q, num_idle_processes)
@@ -273,12 +275,14 @@ async def test_slow_initialization():
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -302,7 +306,7 @@ async def test_slow_initialization():
         pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
@@ -329,6 +333,7 @@ def _create_proc(
     proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         memory_warn_mb=0,
@@ -337,6 +342,7 @@ def _create_proc(
         ping_timeout=10.0,
         high_ping_threshold=1.0,
         inference_executor=None,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
