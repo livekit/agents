@@ -5,6 +5,7 @@ from time import perf_counter
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import Plugin, get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
@@ -64,10 +65,11 @@ class MultilingualModel(EOUModelBase):
         chat_ctx: llm.ChatContext,
         *,
         timeout: float | None = 3,
+        audio: rtc.AudioFrame | None = None,
     ) -> float:
         url = _remote_inference_url()
         if not url:
-            return await super().predict_end_of_turn(chat_ctx, timeout=timeout)
+            return await super().predict_end_of_turn(chat_ctx, timeout=timeout, audio=audio)
 
         messages = chat_ctx.copy(
             exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
