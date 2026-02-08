@@ -4,13 +4,20 @@ import base64
 from typing import Any
 
 from azure.ai.voicelive.models import (
+    AssistantMessageItem,
+    FunctionCallItem,
     FunctionCallOutputItem,
     FunctionTool,
+    InputAudioContentPart,
     InputAudioFormat,
+    InputTextContentPart,
     Modality,
     OutputAudioFormat,
+    OutputTextContentPart,
     ServerVad,
+    SystemMessageItem,
     TurnDetection,
+    UserMessageItem,
 )
 from livekit import rtc
 from livekit.agents import llm
@@ -91,100 +98,80 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
         raise ValueError(f"Unsupported tool type: {type(tool)}")
 
 
-def livekit_item_to_azure_item(item: llm.ChatItem) -> dict[str, Any] | FunctionCallOutputItem:
-    """Convert LiveKit ChatItem to Azure conversation item format."""
+# Type alias for Azure conversation items
+AzureConversationItem = (
+    SystemMessageItem
+    | UserMessageItem
+    | AssistantMessageItem
+    | FunctionCallItem
+    | FunctionCallOutputItem
+)
 
-    # FunctionCallOutput needs to use FunctionCallOutputItem class
+
+def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
+    """Convert LiveKit ChatItem to Azure conversation item format.
+
+    Returns proper Azure SDK model instances instead of raw dicts to ensure
+    compatibility with the Azure SDK's conversation.item.create() method.
+    """
+
     if item.type == "function_call_output":
         return FunctionCallOutputItem(
             call_id=item.call_id,
             output=item.output,
         )
 
-    # Other items use dict format
-    azure_item: dict[str, Any] = {"id": item.id}
-
     if item.type == "function_call":
-        azure_item.update(
-            {
-                "type": "function_call",
-                "call_id": item.call_id,
-                "name": item.name,
-                "arguments": item.arguments,
-            }
+        return FunctionCallItem(
+            id=item.id,
+            call_id=item.call_id,
+            name=item.name,
+            arguments=item.arguments,
         )
 
-    elif item.type == "message":
-        content_list = []
-
+    if item.type == "message":
         if item.role in ("system", "developer"):
+            content_list: list[InputTextContentPart] = []
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
-                        {
-                            "type": "input_text",
-                            "text": c,
-                        }
-                    )
-            azure_item.update(
-                {
-                    "type": "message",
-                    "role": "system",
-                    "content": content_list,
-                }
+                    content_list.append(InputTextContentPart(text=c))
+            return SystemMessageItem(
+                id=item.id,
+                content=content_list,
             )
 
-        elif item.role == "assistant":
+        if item.role == "assistant":
+            assistant_content: list[OutputTextContentPart] = []
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
-                        {
-                            "type": "text",
-                            "text": c,
-                        }
-                    )
-            azure_item.update(
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": content_list,
-                }
+                    assistant_content.append(OutputTextContentPart(text=c))
+            return AssistantMessageItem(
+                id=item.id,
+                content=assistant_content,
             )
 
-        elif item.role == "user":
+        if item.role == "user":
+            user_content: list[InputTextContentPart | InputAudioContentPart] = []
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
-                        {
-                            "type": "input_text",
-                            "text": c,
-                        }
-                    )
+                    user_content.append(InputTextContentPart(text=c))
                 elif isinstance(c, llm.AudioContent):
-                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
-                        "utf-8"
+                    encoded_audio = base64.b64encode(
+                        rtc.combine_audio_frames(c.frame).data
+                    ).decode("utf-8")
+                    audio_part = InputAudioContentPart(
+                        audio=encoded_audio,
+                        transcript=c.transcript,
                     )
-                    audio_item: dict[str, str] = {
-                        "type": "input_audio",
-                        "audio": encoded_audio,
-                    }
-                    if c.transcript is not None:
-                        audio_item["transcript"] = c.transcript
-                    content_list.append(audio_item)
-            azure_item.update(
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": content_list,
-                }
+                    user_content.append(audio_part)
+            return UserMessageItem(
+                id=item.id,
+                content=user_content,
             )
-        else:
-            raise ValueError(f"Unsupported role: {item.role}")
 
-    else:
-        raise ValueError(f"Unsupported item type: {item.type}")
+        raise ValueError(f"Unsupported role: {item.role}")
 
-    return azure_item
+    raise ValueError(f"Unsupported item type: {item.type}")
 
 
 def azure_item_to_livekit_item(item: dict[str, Any]) -> llm.ChatItem:

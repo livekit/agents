@@ -1012,7 +1012,7 @@ class RealtimeSession(
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
                 self._response_created_futures.pop(event_id, None)
 
-        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        handle = asyncio.get_running_loop().call_later(5.0, _on_timeout)
         fut.add_done_callback(lambda _: handle.cancel())
 
         return fut
