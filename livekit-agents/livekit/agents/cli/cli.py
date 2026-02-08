@@ -1783,7 +1783,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Endpoint to send the text to"),
         ] = "",
         sess_data_file: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(help="Path to the serialized AgentSession data file in SMS mode"),
         ] = None,
     ) -> None:
