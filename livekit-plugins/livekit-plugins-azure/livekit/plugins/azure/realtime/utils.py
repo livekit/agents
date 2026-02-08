@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import Any, cast
 
 from azure.ai.voicelive.models import (
     AssistantMessageItem,
@@ -12,6 +12,7 @@ from azure.ai.voicelive.models import (
     InputAudioContentPart,
     InputAudioFormat,
     InputTextContentPart,
+    MessageContentPart,
     Modality,
     OutputAudioFormat,
     OutputTextContentPart,
@@ -163,7 +164,7 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
                     content_list.append(InputTextContentPart(text=c))
             return SystemMessageItem(
                 id=item.id,
-                content=content_list,
+                content=cast(list[MessageContentPart], content_list),
             )
 
         if item.role == "assistant":
@@ -173,7 +174,7 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
                     assistant_content.append(OutputTextContentPart(text=c))
             return AssistantMessageItem(
                 id=item.id,
-                content=assistant_content,
+                content=cast(list[MessageContentPart], assistant_content),
             )
 
         if item.role == "user":
@@ -192,7 +193,7 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
                     user_content.append(audio_part)
             return UserMessageItem(
                 id=item.id,
-                content=user_content,
+                content=cast(list[MessageContentPart], user_content),
             )
 
         raise ValueError(f"Unsupported role: {item.role}")
