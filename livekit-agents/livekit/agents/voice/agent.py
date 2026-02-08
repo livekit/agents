@@ -124,13 +124,13 @@ class Agent:
         # TODO: fix configure actually not applied after rehydration
         restart_required = False
         if is_given(turn_detection):
-            self._turn_detection = turn_detection  # type: ignore
+            self._turn_detection = turn_detection
             restart_required = True
 
         if is_given(stt):
             if isinstance(stt, str):
                 stt = inference.STT.from_model_string(stt)
-            self._stt = stt  # type: ignore
+            self._stt = stt
             restart_required = True
 
         if is_given(vad):
@@ -140,12 +140,12 @@ class Agent:
         if is_given(llm):
             if isinstance(llm, str):
                 llm = inference.LLM.from_model_string(llm)
-            self._llm = llm  # type: ignore
+            self._llm = llm
 
         if is_given(tts):
             if isinstance(tts, str):
                 tts = inference.TTS.from_model_string(tts)
-            self._tts = tts  # type: ignore
+            self._tts = tts
 
         if is_given(mcp_servers):
             if isinstance(mcp_servers, list) and len(mcp_servers) == 0:

@@ -1213,10 +1213,12 @@ def _sms_text_mode(
                     version=store.version,
                     snapshot=store.export_snapshot(),
                 )
-        else:
+        elif target_version is not None:
             session_state = AgentSessionState(version=target_version)
 
-        response_queue = queue.Queue[TextSessionStarted | TextResponseEvent | TextSessionComplete]()
+        response_queue = queue.Queue[
+            TextSessionStarted | TextResponseEvent | TextSessionComplete | None
+        ]()
 
         def async_worker(
             session_id: str,
@@ -1224,20 +1226,23 @@ def _sms_text_mode(
             user_endpoint: str,
             user_session_state: AgentSessionState | None,
             user_response_queue: queue.Queue[
-                TextSessionStarted | TextResponseEvent | TextSessionComplete
+                TextSessionStarted | TextResponseEvent | TextSessionComplete | None
             ],
         ) -> None:
             """Run async code in a separate thread with its own event loop."""
 
             async def fetch_responses() -> None:
                 logger.info(f"sending text stream: {user_text} {user_endpoint}")
-                async for response in client.send_text_stream(
-                    user_text,
-                    endpoint=user_endpoint,
-                    session_id=session_id,
-                    session_state=user_session_state,
-                ):
-                    user_response_queue.put(response, block=False)
+                try:
+                    async for response in client.send_text_stream(
+                        user_text,
+                        endpoint=user_endpoint,
+                        session_id=session_id,
+                        session_state=user_session_state,
+                    ):
+                        user_response_queue.put(response, block=False)
+                finally:
+                    user_response_queue.put(None)
 
             client.loop.run_until_complete(fetch_responses())
 
@@ -1249,7 +1254,7 @@ def _sms_text_mode(
         worker_thread.start()
 
         while True:
-            resp: TextSessionStarted | TextResponseEvent | TextSessionComplete
+            resp: TextSessionStarted | TextResponseEvent | TextSessionComplete | None = None
             with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
@@ -1258,10 +1263,13 @@ def _sms_text_mode(
                     except queue.Empty:
                         pass
 
+            if resp is None:
+                break
+
             if isinstance(resp, TextSessionStarted):
                 session_id = resp.session_id
 
-            if isinstance(resp, TextSessionComplete):
+            elif isinstance(resp, TextSessionComplete):
                 if resp.error:
                     logger.error(
                         "error processing text",
@@ -1285,9 +1293,9 @@ def _sms_text_mode(
                     )
                     target_version = version  # save for hot sync
 
-                    break
+                break
 
-            if isinstance(resp, TextResponseEvent):
+            elif isinstance(resp, TextResponseEvent):
                 _print_chat_item(c, resp.item)
 
         worker_thread.join()
