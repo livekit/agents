@@ -503,7 +503,12 @@ def _shutdown_telemetry() -> None:
         tracer_provider.shutdown()
 
     if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
-        # force_flush will cause deadlock when new logs from OTLPLogExporter are emitted
-        # logger_provider.force_flush()
-        logger.debug("shutting down telemetry logger provider")
+        # remove the OTLP LoggingHandler before flushing to avoid deadlock —
+        # force_flush triggers log export which emits new logs back through the handler
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            if isinstance(h, LoggingHandler):
+                root.removeHandler(h)
+
+        logger_provider.force_flush()
         logger_provider.shutdown()  # type: ignore
