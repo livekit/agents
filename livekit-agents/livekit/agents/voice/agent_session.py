@@ -514,7 +514,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
-            record: Whether to record the audio
+            record: Whether to record the audio, transcripts, traces, or logs
         """
         async with self._lock:
             if self._started:
