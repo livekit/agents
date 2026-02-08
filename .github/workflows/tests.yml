@@ -38,9 +38,7 @@ jobs:
       - name: Run tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
         run: make unit-tests
-        working-directory: tests
 
   evaluation:
     # don't run tests for PRs on forks
