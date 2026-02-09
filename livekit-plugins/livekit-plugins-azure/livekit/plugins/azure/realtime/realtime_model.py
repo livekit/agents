@@ -548,10 +548,37 @@ class RealtimeSession(
             logger.error(f"Azure Voice Live error: {error_msg}")
             self._emit_error(APIError(error_msg), recoverable=True)
 
+    def _close_generation(self, gen: _ResponseGeneration) -> None:
+        """Close all channels and futures for a generation.
+
+        This is used both when a new response starts (to clean up any existing generation)
+        and when a response completes normally.
+        """
+        for msg_gen in gen.messages.values():
+            if not msg_gen.modalities.done():
+                msg_gen.modalities.set_result([])
+            msg_gen.text_ch.close()
+            msg_gen.audio_ch.close()
+
+        gen.message_ch.close()
+        gen.function_ch.close()
+
+        if not gen._done_fut.done():
+            gen._done_fut.set_result(None)
+
     async def _handle_response_created(self, event: Any) -> None:
         """Handle response.created event."""
         response_id = getattr(event.response, "id", None)
         self._response_id = response_id
+
+        # Clean up any existing generation before starting a new one
+        if self._current_generation is not None:
+            logger.warning(
+                f"New response {response_id} started while previous generation was still active, "
+                "closing previous generation channels"
+            )
+            self._close_generation(self._current_generation)
+            self._current_generation = None
 
         gen = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
@@ -865,22 +892,8 @@ class RealtimeSession(
 
         # Close all channels to signal end of response
         # The RESPONSE_DONE event from Azure signals that all content is complete
-        for msg_gen in self._current_generation.messages.values():
-            if not msg_gen.modalities.done():
-                logger.warning("Modalities future was never awaited for message")
-                msg_gen.modalities.set_result([])
-
-            # MUST close the individual message channels so audio forwarding task can exit
-            msg_gen.text_ch.close()
-            msg_gen.audio_ch.close()
-            logger.info(
-                f"Response done - Closed text_ch and audio_ch for message {msg_gen.message_id}"
-            )
-
-        logger.info(f"Closing message_ch and function_ch for response {self._response_id}")
-        self._current_generation.message_ch.close()
-        self._current_generation.function_ch.close()
-        self._current_generation._done_fut.set_result(None)
+        logger.info(f"Closing channels for response {self._response_id}")
+        self._close_generation(self._current_generation)
 
         # Emit metrics
         if self._response_id:
