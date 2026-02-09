@@ -287,6 +287,11 @@ class STT(stt.STT):
         # Migrate / warn about any deprecated kwargs
         _check_deprecated_args(kwargs, self._stt_options)
 
+        # Validate config options
+        errors = self._validate_config_options()
+        if errors:
+            raise ValueError("Invalid STT options: " + ", ".join(errors))
+
         # Set API key
         self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
 
@@ -352,6 +357,35 @@ class STT(stt.STT):
 
         # Return the stream
         return stream
+
+    def _validate_config_options(self) -> list[str]:
+        """Validate options in STTOptions."""
+        errors: list[str] = []
+        opts = self._stt_options
+
+        # max_delay must exceed silence_trigger so the engine has time to detect silence
+        if (
+            opts.end_of_utterance_max_delay is not None
+            and opts.end_of_utterance_silence_trigger is not None
+            and opts.end_of_utterance_max_delay <= opts.end_of_utterance_silence_trigger
+        ):
+            errors.append(
+                "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger"
+            )
+
+        # server rejects speaker counts outside 1–100
+        if opts.max_speakers is not None and not (0 < opts.max_speakers <= 100):
+            errors.append("max_speakers must be between 1 and 100")
+
+        # latency budget: below 0.7s hurts accuracy, above 10s is unsupported
+        if opts.max_delay is not None and not (0.7 <= opts.max_delay <= 10):
+            errors.append("max_delay must be between 0.7 and 10")
+
+        # diarization sensitivity range enforced by the engine
+        if opts.speaker_sensitivity is not None and not (0.1 <= opts.speaker_sensitivity <= 0.9):
+            errors.append("speaker_sensitivity must be between 0.1 and 0.9")
+
+        return errors
 
     def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> VoiceAgentConfig:
         """Prepare VoiceAgentConfig from STTOptions."""
