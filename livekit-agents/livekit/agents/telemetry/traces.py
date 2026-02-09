@@ -40,6 +40,7 @@ from . import trace_types
 
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
+    from ..observability import Tagger
     from ..voice.report import SessionReport
 
 
@@ -346,25 +347,28 @@ async def _upload_session_report(
     agent_name: str,
     cloud_hostname: str,
     report: SessionReport,
+    tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
-    chat_logger = get_logger_provider().get_logger(
-        name="chat_history",
-        attributes={
-            "room_id": report.room_id,
-            "job_id": report.job_id,
-            "room": report.room,
-        },
-    )
+    def _get_logger(name: str) -> Any:
+        return get_logger_provider().get_logger(
+            name=name,
+            attributes={
+                "room_id": report.room_id,
+                "job_id": report.job_id,
+                "room": report.room,
+            },
+        )
 
     def _log(
+        otel_logger: Any,
         body: str,
         timestamp: int,
         attributes: dict,
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
         severity_text: str = "unspecified",
     ) -> None:
-        chat_logger.emit(
+        otel_logger.emit(
             body=body,
             timestamp=timestamp,
             attributes=attributes,
@@ -372,7 +376,10 @@ async def _upload_session_report(
             severity_text=severity_text,
         )
 
+    chat_logger = _get_logger("chat_history")
+
     _log(
+        chat_logger,
         body="session report",
         timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
         attributes={
@@ -398,11 +405,39 @@ async def _upload_session_report(
             severity_text = "error"
 
         _log(
+            chat_logger,
             body="chat item",
             timestamp=int(item.created_at * 1e9),
             attributes={"chat.item": item_log},
             severity=severity,
             severity_text=severity_text,
+        )
+
+    eval_logger = _get_logger("evaluations")
+    if tagger.evaluations:
+        for evaluation in tagger.evaluations:
+            severity = SeverityNumber.UNSPECIFIED
+            severity_text = "unspecified"
+
+            if evaluation.get("verdict") == "fail":
+                severity = SeverityNumber.ERROR
+                severity_text = "error"
+
+            _log(
+                eval_logger,
+                body="evaluation",
+                timestamp=int(report.timestamp * 1e9),
+                attributes={"evaluation": evaluation},
+                severity=severity,
+                severity_text=severity_text,
+            )
+
+    if tagger.outcome_reason:
+        _log(
+            eval_logger,
+            body="outcome",
+            timestamp=int(report.timestamp * 1e9),
+            attributes={"outcome": {"reason": tagger.outcome_reason}},
         )
 
     # emit recording

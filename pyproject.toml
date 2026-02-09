@@ -1,16 +1,19 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-avatario = { workspace = true }
+livekit-plugins-asyncai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
@@ -36,6 +39,7 @@ livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
+livekit-plugins-rtzr = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }
@@ -77,7 +81,7 @@ docs = ["pdoc3", "setuptools"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [".github"]
 
 [tool.ruff.lint]
@@ -141,5 +145,17 @@ module = "smithy_core.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "smithy_http.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "speechmatics.*"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "livekit.plugins"
 follow_untyped_imports = true

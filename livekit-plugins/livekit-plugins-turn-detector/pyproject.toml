@@ -1,39 +1,38 @@
-[project]
-name = "livekit-plugins-turn-detector"
-description = "End of utterance detection for LiveKit Agents"
-readme = "README.md"
-requires-python = ">=3.9.0"
-license = "Apache-2.0"
-authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["ai", "audio", "livekit", "realtime", "video", "voice", "webrtc"]
-classifiers = [
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Topic :: Multimedia :: Sound/Audio",
-  "Topic :: Multimedia :: Video",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = [
-  "jinja2",
-  "livekit-agents>=1.4.0.rc2",
-  "numpy>=1.26",
-  "onnxruntime>=1.18",
-  "transformers>=4.47.1,<=4.57.1",  # transformers 4.57.2 has a bug with local_files_only=True
-]
-dynamic = ["version"]
-
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-turn-detector"
+dynamic = ["version"]
+description = "End of utterance detection for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.4.1",
+    "transformers>=4.47.1,<=4.57.1",  # transformers 4.57.2 has a bug with local_files_only=True
+    "numpy>=1.26",
+    "onnxruntime>=1.18",
+    "jinja2",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/turn_detector/version.py"

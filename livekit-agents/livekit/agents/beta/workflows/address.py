@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -31,6 +32,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=(
@@ -51,8 +53,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 "Call `update_address` at the first opportunity whenever you form a new hypothesis about the address. "
                 "(before asking any questions or providing any answers.) \n"
                 "Don't invent new addresses, stick strictly to what the user said. \n"
-                "Call `confirm_address` after the user confirmed the address is correct. \n"
-                "When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.\n"
+                + (
+                    "Call `confirm_address` after the user confirmed the address is correct. \n"
+                    if require_confirmation is not False
+                    else ""
+                )
+                + "When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.\n"
                 "Do not read the number and the suffix letters separately.\n"
                 "Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.\n"
                 "For example, read 90210 as 'nine zero two one zero.'\n"
@@ -74,7 +80,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
         self._current_address = ""
-
+        self._require_confirmation = require_confirmation
         self._address_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
@@ -83,7 +89,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     @function_tool()
     async def update_address(
         self, street_address: str, unit_number: str, locality: str, country: str, ctx: RunContext
-    ) -> str:
+    ) -> str | None:
         """Update the address provided by the user.
 
         Args:
@@ -101,6 +107,11 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         address = " ".join(address_fields)
         self._current_address = address
 
+        if not self._confirmation_required(ctx):
+            if not self.done():
+                self.complete(GetAddressResult(address=self._current_address))
+            return None
+
         return (
             f"The address has been updated to {address}\n"
             f"Repeat the address field by field: {address_fields} if needed\n"
@@ -112,7 +123,9 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         """Call this tool when the user confirms that the address is correct."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._address_update_speech_handle:
+        if ctx.speech_handle == self._address_update_speech_handle and self._confirmation_required(
+            ctx
+        ):
             raise ToolError("error: the user must confirm the address explicitly")
 
         if not self._current_address:
@@ -132,3 +145,8 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the address: {reason}"))
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"

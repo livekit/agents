@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -144,11 +144,4 @@ class RealtimeModelMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-AgentMetrics = Union[
-    STTMetrics,
-    LLMMetrics,
-    TTSMetrics,
-    VADMetrics,
-    EOUMetrics,
-    RealtimeModelMetrics,
-]
+AgentMetrics = STTMetrics | LLMMetrics | TTSMetrics | VADMetrics | EOUMetrics | RealtimeModelMetrics

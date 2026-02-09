@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-from typing import Any, Literal, TypeVar, Union
+from typing import Any, Literal, TypeAlias, TypeVar
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
-from typing_extensions import TypeAlias
 
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
@@ -24,8 +23,54 @@ const { state, ... } = useVoiceAssistant();
 ```
 """
 
+ATTRIBUTE_AGENT_NAME = "lk.agent.name"
+"""
+The name of the agent, stored in the agent's attributes.
+This is set when the agent joins a room and can be used to identify the agent type.
+"""
+
+ATTRIBUTE_SIMULATOR = "lk.simulator"
+"""
+Indicates that the participant is a simulator for testing purposes.
+When set to "true", the agent will skip audio input/output processing.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
+TOPIC_CLIENT_EVENTS = "lk.agent.events"
+"""
+Topic for streaming agent events to room participants.
+"""
+
+RPC_GET_SESSION_STATE = "lk.agent.get_session_state"
+"""
+RPC method to get the current session state.
+"""
+
+RPC_GET_CHAT_HISTORY = "lk.agent.get_chat_history"
+"""
+RPC method to get the agent<>user conversation turns.
+"""
+
+RPC_GET_AGENT_INFO = "lk.agent.get_agent_info"
+"""
+RPC method to get information about the current agent.
+"""
+
+RPC_SEND_MESSAGE = "lk.agent.send_message"
+"""
+RPC method to send a message and get the agent's response.
+"""
+
+TOPIC_AGENT_REQUEST = "lk.agent.request"
+"""
+Topic for sending requests to the agent via text streams (no size limit).
+"""
+
+TOPIC_AGENT_RESPONSE = "lk.agent.response"
+"""
+Topic for receiving responses from the agent via text streams (no size limit).
+"""
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
@@ -56,7 +101,7 @@ class NotGiven:
         return core_schema.is_instance_schema(cls)
 
 
-NotGivenOr: TypeAlias = Union[_T, NotGiven]
+NotGivenOr: TypeAlias = _T | NotGiven
 NOT_GIVEN = NotGiven()
 
 

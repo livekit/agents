@@ -1,35 +1,35 @@
-[project]
-name = "livekit-plugins-groq"
-description = "Groq inference plugin for LiveKit Agents"
-readme = "README.md"
-requires-python = ">=3.9.0"
-license = "Apache-2.0"
-authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["ai", "audio", "groq", "livekit", "realtime", "video", "voice"]
-classifiers = [
-  "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Multimedia :: Sound/Audio",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = [
-  "aiohttp",
-  "livekit",
-  "livekit-agents[codecs, openai]>=1.4.0.rc2",
-]
-dynamic = ["version"]
-
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-groq"
+dynamic = ["version"]
+description = "Groq inference plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "groq"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents[codecs, openai]>=1.4.1",
+    "aiohttp",
+    "livekit",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/groq/version.py"

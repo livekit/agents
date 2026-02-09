@@ -412,7 +412,7 @@ class STT(stt.STT):
             if is_given(language):
                 self._opts.language = language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
-            prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.NOT_GIVEN
+            prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.omit
 
             format = "json"
             if self._opts.model == "whisper-1":
@@ -525,7 +525,9 @@ class SpeechStream(stt.SpeechStream):
 
                     # this will trigger a reconnection, see the _run loop
                     raise APIStatusError(
-                        message="OpenAI Realtime STT connection closed unexpectedly"
+                        message="OpenAI Realtime STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

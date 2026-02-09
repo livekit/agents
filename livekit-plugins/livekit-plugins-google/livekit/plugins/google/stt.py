@@ -18,10 +18,10 @@ import asyncio
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -52,8 +52,8 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
-LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, list[LgType]]
+LgType = SpeechLanguages | str
+LanguageCode = LgType | list[LgType]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -192,7 +192,7 @@ class STT(stt.STT):
 
         if not is_given(credentials_file) and not is_given(credentials_info):
             try:
-                gauth_default()  # type: ignore
+                gauth_default()
             except DefaultCredentialsError:
                 raise ValueError(
                     "Application default credentials must be available "
@@ -264,7 +264,7 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()  # type: ignore
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
@@ -606,6 +606,7 @@ class SpeechStream(stt.SpeechStream):
             ],
         ) -> None:
             has_started = False
+            last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
@@ -671,6 +672,16 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
                     has_started = False
+
+                if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=_get_request_id(resp),
+                            recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                        )
+                    )
+                    last_usage_event_time += audio_duration
 
         while True:
             audio_pushed = False
@@ -853,3 +864,32 @@ def _streaming_recognize_response_to_speech_data(
     )
 
     return data
+
+
+def _get_audio_duration(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+    last_usage_event_time: float,
+) -> float:
+    """Calculate the audio duration from the response.
+
+    References:
+        - https://docs.cloud.google.com/python/docs/reference/speech/latest/google.cloud.speech_v1.types.StreamingRecognizeResponse
+        - https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/StreamingRecognitionResult
+    """
+    # total_billed_time is only set "if this is the last response in the stream"
+    # use speech event time/offset before the last response is received
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        if resp.metadata.total_billed_duration:
+            return _duration_to_seconds(resp.metadata.total_billed_duration) - last_usage_event_time
+        return _duration_to_seconds(resp.speech_event_offset) - last_usage_event_time
+    if resp.total_billed_time:
+        return _duration_to_seconds(resp.total_billed_time) - last_usage_event_time
+    return _duration_to_seconds(resp.speech_event_time) - last_usage_event_time
+
+
+def _get_request_id(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+) -> str:
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        return resp.metadata.request_id
+    return str(resp.request_id)

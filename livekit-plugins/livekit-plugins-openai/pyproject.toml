@@ -1,39 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "livekit-plugins-openai"
+dynamic = ["version"]
 description = "Agent Framework plugin for services from OpenAI"
 readme = "README.md"
-requires-python = ">=3.9.0"
 license = "Apache-2.0"
+requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["ai", "audio", "livekit", "openai", "realtime", "video", "voice"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "openai"]
 classifiers = [
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Topic :: Multimedia :: Sound/Audio",
-  "Topic :: Multimedia :: Video",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-  "livekit-agents[codecs, images]>=1.4.0.rc2",
-  "openai[realtime]>=1.107.2",
+    "livekit-agents[codecs, images]>=1.4.1",
+    "openai[realtime]>=2",
 ]
-dynamic = ["version"]
 
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
 
 [project.optional-dependencies]
 vertex = ["google-auth>=2.0.0"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/openai/version.py"

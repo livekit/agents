@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -27,17 +27,21 @@ from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url
 
 DeepgramModels = Literal[
+    "deepgram/flux-general",
+    "deepgram/flux-general-en",
     "deepgram/nova-3",
-    "deepgram/nova-3-general",
     "deepgram/nova-3-medical",
     "deepgram/nova-2",
-    "deepgram/nova-2-general",
     "deepgram/nova-2-medical",
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
 CartesiaModels = Literal["cartesia/ink-whisper",]
-AssemblyAIModels = Literal["assemblyai/universal-streaming",]
+AssemblyAIModels = Literal[
+    "assemblyai/universal-streaming",
+    "assemblyai/universal-streaming-multilingual",
+]
+ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -52,7 +56,7 @@ class DeepgramOptions(TypedDict, total=False):
     punctuate: bool  # default: False
     smart_format: bool
     keywords: list[tuple[str, float]]
-    keyterms: list[str]
+    keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
@@ -67,6 +71,15 @@ class AssemblyaiOptions(TypedDict, total=False):
     keyterms_prompt: list[str]  # default: not specified
 
 
+class ElevenlabsOptions(TypedDict, total=False):
+    commit_strategy: Literal["manual", "vad"]
+    include_timestamps: bool
+    vad_silence_threshold_secs: float
+    vad_threshold: float
+    min_speech_duration_ms: int
+    min_silence_duration_ms: int
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -76,7 +89,7 @@ class FallbackModel(TypedDict, total=False):
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(model="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
+        >>> FallbackModel(model="deepgram/nova-3", extra_kwargs={"keyterm": ["livekit"]})
     """
 
     model: Required[str]
@@ -86,7 +99,7 @@ class FallbackModel(TypedDict, total=False):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
@@ -112,12 +125,13 @@ def _normalize_fallback(
     return [_make_fallback(fallback)]
 
 
-STTModels = Union[
-    DeepgramModels,
-    CartesiaModels,
-    AssemblyAIModels,
-    Literal["auto"],  # automatically select a provider based on the language
-]
+STTModels = (
+    DeepgramModels
+    | CartesiaModels
+    | AssemblyAIModels
+    | ElevenlabsModels
+    | Literal["auto"]  # automatically select a provider based on the language
+)
 STTEncoding = Literal["pcm_s16le"]
 
 
@@ -194,6 +208,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: ElevenlabsModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -220,7 +251,11 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | AssemblyaiOptions
+            | ElevenlabsOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -228,7 +263,7 @@ class STT(stt.STT):
         """Livekit Cloud Inference STT
 
         Args:
-            model (STTModels | str, optional): STT model to use.
+            model (STTModels | str, optional): STT model to use, in "provider/model[:language]" format.
             language (str, optional): Language of the STT model.
             encoding (STTEncoding, optional): Encoding of the STT model.
             sample_rate (int, optional): Sample rate of the STT model.
@@ -249,6 +284,13 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+
+        # Parse language from model string if provided: "provider/model:language"
+        if is_given(model) and isinstance(model, str):
+            parsed_model, parsed_language = _parse_model_string(model)
+            model = parsed_model
+            if is_given(parsed_language) and not is_given(language):
+                language = parsed_language
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 

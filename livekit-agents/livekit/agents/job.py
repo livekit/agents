@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import functools
 import inspect
@@ -23,22 +22,22 @@ import json
 import logging
 import multiprocessing as mp
 import tempfile
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import aiohttp
-from opentelemetry import trace
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
 from .log import logger
-from .telemetry import _upload_session_report, trace_types, tracer
+from .observability import Tagger
+from .telemetry import _upload_session_report
 from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
@@ -182,6 +181,7 @@ class JobContext:
 
         self._connected = False
         self._lock = asyncio.Lock()
+        self._tagger = Tagger()
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -224,6 +224,7 @@ class JobContext:
                     agent_name=self._info.job.agent_name,
                     cloud_hostname=cloud_hostname,
                     report=report,
+                    tagger=self._tagger,
                     http_session=http_context.http_session(),
                 )
             except Exception:
@@ -247,6 +248,21 @@ class JobContext:
     @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
+
+    @property
+    def tagger(self) -> Tagger:
+        """Returns the Tagger for adding tags and outcomes to the session.
+
+        Tags are uploaded to LiveKit Cloud at session end.
+
+        Example:
+            ```python
+            ctx.tagger.success(reason="Task completed successfully")
+            ctx.tagger.fail(reason="User hung up before completing")
+            ctx.tagger.add("voicemail:true")
+            ```
+        """
+        return self._tagger
 
     def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
         from .voice.report import SessionReport
@@ -283,6 +299,7 @@ class JobContext:
             if recorder_io.recording_started_at:
                 sr.audio_recording_started_at = recorder_io.recording_started_at
                 sr.duration = sr.timestamp - sr.audio_recording_started_at
+
         return sr
 
     @functools.cached_property
@@ -323,6 +340,13 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    @property
+    def primary_session(self) -> AgentSession:
+        """Returns the primary AgentSession for this job."""
+        if not self._primary_agent_session:
+            raise RuntimeError("No AgentSession was started for this job")
+        return self._primary_agent_session
 
     @property
     def local_participant_identity(self) -> str:
@@ -716,122 +740,3 @@ class JobRequest:
 class _JobShutdownInfo:
     user_initiated: bool
     reason: str
-
-
-async def run_job(
-    job_entrypoint_fnc: Callable[[JobContext], Any],
-    *,
-    info: RunningJobInfo,
-    room: rtc.Room | None = None,
-    executor_type: JobExecutorType = JobExecutorType.THREAD,
-    user_arguments: Any | None = None,
-    http_proxy: str | None = None,
-    inference_executor: InferenceExecutor,
-) -> None:
-    is_fake_room = False
-    if not room:
-        from .ipc.mock_room import create_mock_room
-
-        is_fake_room = True
-        room = cast(rtc.Room, create_mock_room())
-
-    room._info.name = info.job.room.name
-    shutdown_fut: asyncio.Future[_JobShutdownInfo] = asyncio.Future()
-
-    ctx_connect_called = False
-    ctx_shutdown_called = False
-
-    @room.on("disconnected")
-    def _on_room_disconnected(*args: Any) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
-            shutdown_fut.set_result(
-                _JobShutdownInfo(user_initiated=False, reason="room disconnected")
-            )
-
-    def _on_ctx_connect() -> None:
-        nonlocal ctx_connect_called
-        ctx_connect_called = True
-
-    def _on_ctx_shutdown(reason: str) -> None:
-        nonlocal ctx_shutdown_called
-        ctx_shutdown_called = True
-
-        with contextlib.suppress(asyncio.InvalidStateError):
-            shutdown_fut.set_result(_JobShutdownInfo(user_initiated=True, reason=reason))
-
-    proc = JobProcess(
-        executor_type=executor_type, user_arguments=user_arguments, http_proxy=http_proxy
-    )
-    job_ctx = JobContext(
-        proc=proc,
-        info=info,
-        room=room,
-        inference_executor=inference_executor,
-        on_connect=_on_ctx_connect,
-        on_shutdown=_on_ctx_shutdown,
-    )
-
-    job_ctx_token = _JobContextVar.set(job_ctx)
-    http_context._new_session_ctx()
-
-    @tracer.start_as_current_span("job_entrypoint")
-    async def _traceable_entrypoint(job_ctx: JobContext) -> None:
-        job = job_ctx.job
-        current_span = trace.get_current_span()
-        current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
-        current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
-        current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
-        await job_entrypoint_fnc(job_ctx)
-
-    job_task = asyncio.create_task(_traceable_entrypoint(job_ctx), name="job_user_entrypoint")
-
-    async def _warn_not_connected_task() -> None:
-        await asyncio.sleep(10)
-        if not ctx_connect_called and not ctx_shutdown_called:
-            logger.warning(
-                "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
-                "This may indicate that job_ctx.connect() was not called. "
-            )
-
-    if not is_fake_room:
-        warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
-        job_task.add_done_callback(lambda _: warn_unconnected_task.cancel())
-
-    def log_exception(t: asyncio.Task[Any]) -> None:
-        if not t.cancelled() and t.exception():
-            logger.error(
-                "unhandled exception while running the job task",
-                exc_info=t.exception(),
-            )
-        elif not ctx_connect_called and not ctx_shutdown_called:
-            if is_fake_room:
-                return
-
-            logger.warning(
-                "The job task completed without establishing a connection or performing a proper shutdown. "  # noqa: E501
-                "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
-            )
-
-    job_task.add_done_callback(log_exception)
-
-    shutdown_info = await shutdown_fut
-    logger.debug(
-        "shutting down job task",
-        extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
-    )
-
-    await room.disconnect()
-
-    try:
-        shutdown_tasks = []
-        for callback in job_ctx._shutdown_callbacks:
-            shutdown_tasks.append(
-                asyncio.create_task(callback(shutdown_info.reason), name="job_shutdown_callback")
-            )
-
-        await asyncio.gather(*shutdown_tasks)
-    except Exception:
-        logger.exception("error while shutting down the job")
-
-    await http_context._close_http_ctx()
-    _JobContextVar.reset(job_ctx_token)

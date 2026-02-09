@@ -1,9 +1,9 @@
 import asyncio
 import time
 import weakref
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Callable, Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 from . import aio
 
@@ -20,10 +20,10 @@ class ConnectionPool(Generic[T]):
     def __init__(
         self,
         *,
-        max_session_duration: Optional[float] = None,
+        max_session_duration: float | None = None,
         mark_refreshed_on_get: bool = False,
-        connect_cb: Optional[Callable[[float], Awaitable[T]]] = None,
-        close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
+        connect_cb: Callable[[float], Awaitable[T]] | None = None,
+        close_cb: Callable[[T], Awaitable[None]] | None = None,
         connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
@@ -46,7 +46,7 @@ class ConnectionPool(Generic[T]):
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
 
-        self._prewarm_task: Optional[weakref.ref[asyncio.Task[None]]] = None
+        self._prewarm_task: weakref.ref[asyncio.Task[None]] | None = None
 
     async def _connect(self, timeout: float) -> T:
         """Create a new connection.

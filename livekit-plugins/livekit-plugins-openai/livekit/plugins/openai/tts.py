@@ -18,7 +18,7 @@ import asyncio
 import base64
 import json
 from dataclasses import dataclass, replace
-from typing import Literal, Union
+from typing import Literal
 
 import httpx
 
@@ -42,7 +42,7 @@ NUM_CHANNELS = 1
 DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
-RESPONSE_FORMATS = Union[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"], str]
+RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
 
 # Models that use audio stream format (character-based billing)
 AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
@@ -225,7 +225,7 @@ class AudioChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
-            instructions=self._opts.instructions or openai.NOT_GIVEN,
+            instructions=self._opts.instructions or openai.omit,
             stream_format="audio",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )

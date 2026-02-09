@@ -65,6 +65,7 @@ ATTR_E2E_LATENCY = "lk.e2e_latency"
 # OpenTelemetry GenAI attributes
 # OpenTelemetry specification: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"

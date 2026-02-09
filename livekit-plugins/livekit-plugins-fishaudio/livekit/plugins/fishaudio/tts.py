@@ -6,13 +6,13 @@ import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 
-from fish_audio_sdk import (  # type: ignore[import-untyped]
+from fish_audio_sdk import (
     AsyncWebSocketSession,
     Session as FishAudioSession,
     TTSRequest,
 )
-from fish_audio_sdk.exceptions import WebSocketErr  # type: ignore[import-untyped]
-from fish_audio_sdk.schemas import Backends  # type: ignore[import-untyped]
+from fish_audio_sdk.exceptions import WebSocketErr
+from fish_audio_sdk.schemas import Backends
 
 from livekit.agents import (
     APIConnectionError,
@@ -190,7 +190,7 @@ class TTS(tts.TTS):
         self._streams.clear()
 
         if self._ws_session is not None:
-            await self._ws_session.close()
+            await self._ws_session.close()  # type: ignore[no-untyped-call]
             self._ws_session = None
 
 

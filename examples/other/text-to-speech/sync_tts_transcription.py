@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -60,7 +61,7 @@ async def _eg_single_segment(
     tts_forwarder.push_text(text)
     tts_forwarder.mark_text_segment_end()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
     playout_task = asyncio.create_task(_playout_task(tts_forwarder, playout_q, source))
 
     async for output in tts_11labs.synthesize(text):
@@ -93,7 +94,7 @@ async def _eg_streamed_tts_stream(
     tts_stream.end_input()
     tts_forwarder.mark_text_segment_end()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
 
     async def _synth_task() -> None:
         async for ev in tts_stream:

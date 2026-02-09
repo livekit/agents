@@ -1,36 +1,38 @@
-[project]
-name = "livekit-plugins-langchain"
-description = "LangChain/LangGraph plugin for LiveKit agents"
-readme = "README.md"
-requires-python = ">=3.9.0"
-license = "Apache-2.0"
-authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["LangChain", "LangGraph", "ai", "livekit", "realtime", "voice"]
-classifiers = [
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Multimedia :: Sound/Audio",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = [
-  "langchain-core>=0.3.0",
-  "langgraph>=0.6.0",
-  "livekit-agents>=1.4.0.rc2",
-]
-dynamic = ["version"]
-
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-langchain"
+dynamic = ["version"]
+description = "LangChain/LangGraph plugin for LiveKit agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [
+    {name = "LiveKit", email = "hello@livekit.io"}
+]
+keywords = ["voice", "ai", "realtime", "livekit", "LangChain", "LangGraph"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.4.1",
+    "langchain-core>=0.3.0",
+    "langgraph>=0.6.0",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/langchain/version.py"

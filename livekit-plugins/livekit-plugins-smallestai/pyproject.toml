@@ -1,31 +1,32 @@
-[project]
-name = "livekit-plugins-smallestai"
-description = "Agent Framework plugin for speech synthesis with the Smallest AI."
-readme = "README.md"
-requires-python = ">=3.9.0"
-license = "Apache-2.0"
-authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = [
-  "audio",
-  "livekit",
-  "multilingual",
-  "realtime",
-  "smallestai",
-  "tts",
-  "video",
-  "webrtc"
-]
-dependencies = ["livekit-agents[codecs]>=1.4.0.rc2", "numpy>=1.26"]
-dynamic = ["version"]
-
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-smallestai"
+dynamic = ["version"]
+description = "Agent Framework plugin for speech synthesis with the Smallest AI."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "smallestai", "multilingual", "tts"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["livekit-agents[codecs]>=1.4.1", "numpy>=1.26"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/smallestai/version.py"
@@ -34,4 +35,4 @@ path = "livekit/plugins/smallestai/version.py"
 packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/livekit"]
+include = ["/livekit"] 

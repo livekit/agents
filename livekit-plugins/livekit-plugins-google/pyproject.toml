@@ -1,48 +1,38 @@
-[project]
-name = "livekit-plugins-google"
-description = "Agent Framework plugin for services from Google Cloud"
-readme = "README.md"
-requires-python = ">=3.10"
-license = "Apache-2.0"
-authors = [{ name = "LiveKit" }]
-keywords = [
-  "ai",
-  "audio",
-  "gemini",
-  "google",
-  "livekit",
-  "realtime",
-  "video",
-  "voice"
-]
-classifiers = [
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Topic :: Multimedia :: Sound/Audio",
-  "Topic :: Multimedia :: Video",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = [
-  "google-auth >= 2, < 3",
-  "google-cloud-speech >= 2, < 3",
-  "google-cloud-texttospeech >= 2.32, < 3",
-  "google-genai >= 1.55; python_version >= '3.10'",
-  "livekit-agents >= 1.3.6",
-]
-dynamic = ["version"]
-
-[project.urls]
-Documentation = "https://docs.livekit.io"
-Source = "https://github.com/livekit/agents"
-Website = "https://livekit.io/"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-google"
+dynamic = ["version"]
+description = "Agent Framework plugin for services from Google Cloud"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "LiveKit" }]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "google", "gemini"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "google-auth >= 2, < 3",
+    "google-cloud-speech >= 2, < 3",
+    "google-cloud-texttospeech >= 2.32, < 3",
+    "google-genai >= 1.55; python_version >= '3.10'",
+    "livekit-agents >= 1.3.6",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/google/version.py"
