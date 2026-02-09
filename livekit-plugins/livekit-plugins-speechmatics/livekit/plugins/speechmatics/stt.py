@@ -79,7 +79,7 @@ class STTOptions:
     domain: str | None = None
 
     # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.ADAPTIVE
 
     # Output formatting
     speaker_active_format: str | None = None
