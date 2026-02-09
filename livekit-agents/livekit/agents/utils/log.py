@@ -1,5 +1,5 @@
-import asyncio
 import functools
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any, TypeVar, cast
@@ -9,7 +9,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) -> Callable[[F], F]:  # noqa: B008
     def deco(fn: F) -> F:
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_fn_logs(*args: Any, **kwargs: Any) -> Any:
