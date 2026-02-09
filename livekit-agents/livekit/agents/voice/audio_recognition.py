@@ -20,6 +20,7 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .agent import ModelSettings
+from .amd import AMD, AMDResult
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -92,7 +93,7 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-
+    def on_amd_result(self, result: AMDResult) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
@@ -146,6 +147,15 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
+
+        # AMD
+        self._amd: AMD | None = (
+            AMD(session._llm)
+            if session._llm and not isinstance(session._llm, llm.RealtimeLLM)
+            else None
+        )
+        if self._amd:
+            self._amd.on("amd_result", self._hooks.on_amd_result)
 
     def update_options(
         self,
@@ -207,6 +217,9 @@ class AudioRecognition:
 
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
+
+        if self._amd is not None:
+            await self._amd.aclose()
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -365,6 +378,9 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
+            if self._amd:
+                self._amd.push_text(transcript)
+
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
@@ -517,6 +533,9 @@ class AudioRecognition:
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
+
+            if self._amd:
+                self._amd.on_user_speech_ended(ev.silence_duration)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
