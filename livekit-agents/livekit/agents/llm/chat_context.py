@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import TypedDict
 
 from livekit import rtc
 
@@ -173,7 +173,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = Union[ImageContent, AudioContent, str]
+ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
 class FunctionCall(BaseModel):
@@ -225,7 +225,7 @@ class AgentConfigUpdate(BaseModel):
 
 
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate],
+    ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
     Field(discriminator="type"),
 ]
 
@@ -245,6 +245,10 @@ class ChatContext:
     @items.setter
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
+
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
 
     def add_message(
         self,
@@ -554,17 +558,15 @@ class ChatContext:
         keep_last_turns: int = 2,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
-        for item in self.items:
-            if item.type != "message":
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
-            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
                 continue
 
-            text = (item.text_content or "").strip()
+            text = (msg.text_content or "").strip()
             if text:
-                to_summarize.append(item)
+                to_summarize.append(msg)
         if not to_summarize:
             return self
 
@@ -596,9 +598,10 @@ class ChatContext:
         )
 
         chunks: list[str] = []
-        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
-            if chunk.delta and chunk.delta.content:
-                chunks.append(chunk.delta.content)
+        async with llm_v.chat(chat_ctx=chat_ctx) as stream:
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    chunks.append(chunk.delta.content)
 
         summary = "".join(chunks).strip()
         if not summary:
@@ -662,7 +665,7 @@ class ChatContext:
         if len(self.items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items):
+        for a, b in zip(self.items, other.items, strict=False):
             if a.id != b.id or a.type != b.type:
                 return False
 

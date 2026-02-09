@@ -7,9 +7,9 @@ import queue
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import av
 import numpy as np
@@ -49,7 +49,7 @@ class RecorderIO:
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
 
-        self._input_speech_padded = False
+        self._skip_padding_warning = False
 
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
@@ -64,6 +64,7 @@ class RecorderIO:
 
             self._output_path = Path(output_path)
             self._started = True
+            self._skip_padding_warning = False
             self._close_fut = self._loop.create_future()
             self._forward_atask = asyncio.create_task(self._forward_task())
 
@@ -225,11 +226,15 @@ class RecorderIO:
                 if len_left != len_right:
                     diff = abs(len_right - len_left)
                     if len_left < len_right:
-                        logger.warning(
-                            f"Input is shorter by {diff} samples; silence has been prepended to "
-                            "align the input channel. The resulting recording may not accurately "
-                            "reflect the original audio."
-                        )
+                        if not self._skip_padding_warning:
+                            logger.warning(
+                                f"Input is shorter by {diff} samples; silence has been prepended to "
+                                "align the input channel. The resulting recording may not accurately "
+                                "reflect the original audio. This is expected if the input device "
+                                "or audio input is disabled. This warning will only be shown once."
+                            )
+                            self._skip_padding_warning = True
+
                         stereo_buf[0, diff : diff + len_left] = stereo_buf[0, :len_left]
                         stereo_buf[0, :diff] = 0.0
                         len_left = len_right

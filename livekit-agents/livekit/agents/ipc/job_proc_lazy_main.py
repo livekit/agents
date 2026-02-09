@@ -17,9 +17,9 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from opentelemetry import trace
 

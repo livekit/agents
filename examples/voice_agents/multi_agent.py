@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -44,8 +43,8 @@ class StoryData:
     # Shared data that's used by the storyteller agent.
     # This structure is passed as a parameter to function calls.
 
-    name: Optional[str] = None
-    location: Optional[str] = None
+    name: str | None = None
+    location: str | None = None
 
 
 class IntroAgent(Agent):
@@ -92,7 +91,7 @@ class IntroAgent(Agent):
 
 
 class StoryAgent(Agent):
-    def __init__(self, name: str, location: str, *, chat_ctx: Optional[ChatContext] = None) -> None:
+    def __init__(self, name: str, location: str, *, chat_ctx: ChatContext | None = None) -> None:
         super().__init__(
             instructions=f"{common_instructions}. You should use the user's information in "
             "order to make the story personalized."

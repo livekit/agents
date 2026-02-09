@@ -7,9 +7,10 @@ import multiprocessing.context as mpc
 import multiprocessing.shared_memory as mp_shm
 import socket
 import tempfile
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 from livekit import rtc
 from livekit.agents import ipc, utils

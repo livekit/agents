@@ -124,7 +124,7 @@ class LLM(llm.LLM):
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
             if model in ["gpt-5.1", "gpt-5.2"]:
-                reasoning_effort = "none"  # type: ignore[assignment]
+                reasoning_effort = "none"
             else:
                 reasoning_effort = "minimal"
 
@@ -150,6 +150,7 @@ class LLM(llm.LLM):
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -166,6 +167,10 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.close()
 
     @property
     def model(self) -> str:
@@ -225,7 +230,7 @@ class LLM(llm.LLM):
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
-        return LLM(
+        llm = LLM(
             model=model,
             client=azure_client,
             user=user,
@@ -238,6 +243,8 @@ class LLM(llm.LLM):
             top_p=top_p,
             verbosity=verbosity,
         )
+        llm._owns_client = True
+        return llm
 
     @staticmethod
     def with_cerebras(
