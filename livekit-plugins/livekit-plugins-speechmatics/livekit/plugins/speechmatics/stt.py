@@ -843,6 +843,6 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
     ):
         value = kwargs["end_of_utterance_mode"]
         opts.turn_detection_mode = (
-            TurnDetectionMode.FIXED if value == "none" else TurnDetectionMode(value)
+            TurnDetectionMode.EXTERNAL if value == "none" else TurnDetectionMode(value)
         )
         logger.warning("`end_of_utterance_mode` is deprecated, migrated to `turn_detection_mode`")
