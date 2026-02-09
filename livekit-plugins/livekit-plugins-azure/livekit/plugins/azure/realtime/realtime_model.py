@@ -399,7 +399,6 @@ class RealtimeSession(
                     await self._handle_event(event)
 
                 # Server closed connection - trigger reconnect
-                print("\033[43m\033[30m [AZURE] Server disconnected, reconnecting... \033[0m")
                 logger.warning("Event loop ended - connection closed by server, will reconnect")
                 raise APIError("Server closed connection", retryable=True)
 
@@ -526,6 +525,10 @@ class RealtimeSession(
             await self._handle_audio_delta(event)
 
         elif event_type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
+            await self._handle_text_delta(event)
+
+        elif event_type == ServerEventType.RESPONSE_TEXT_DELTA:
+            # Handle text-only mode responses (when modalities=["text"])
             await self._handle_text_delta(event)
 
         elif event_type == ServerEventType.RESPONSE_FUNCTION_CALL_ARGUMENTS_DELTA:
