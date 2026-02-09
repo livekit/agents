@@ -92,10 +92,16 @@ class Tee(Generic[T]):
 
     async def aclose(self) -> None:
         for child in self._children:
-            await child.aclose()
+            try:
+                await child.aclose()
+            except Exception:
+                pass
 
         if isinstance(self._iterator, _ACloseable):
-            await self._iterator.aclose()
+            try:
+                await self._iterator.aclose()
+            except Exception:
+                pass
 
 
 tee = Tee

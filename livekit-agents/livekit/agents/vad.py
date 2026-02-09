@@ -105,7 +105,8 @@ class VADStream(ABC):
         self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
         self._event_ch = aio.Chan[VADEvent]()
 
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
@@ -168,6 +169,7 @@ class VADStream(ABC):
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
         await self._metrics_task
+        await self._tee_aiter.aclose()
 
     async def __anext__(self) -> VADEvent:
         try:

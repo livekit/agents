@@ -172,7 +172,8 @@ class LLMStream(ABC):
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
@@ -361,6 +362,8 @@ class LLMStream(ABC):
         if self._llm_request_span:
             self._llm_request_span.end()
             self._llm_request_span = None
+
+        await self._tee_aiter.aclose()
 
     async def __anext__(self) -> ChatChunk:
         try:
