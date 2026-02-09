@@ -325,7 +325,8 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return str(self._prepare_config().operating_point.value)
+        op = self._stt_options.operating_point
+        return str(op.value) if op is not None else "enhanced"
 
     async def _recognize_impl(
         self,
@@ -865,15 +866,28 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
 
     # Partials
     if "enable_partials" in kwargs:
-        logger.warning("`enable_partials` is deprecated, migrated to `include_partials`")
-        opts.include_partials = bool(kwargs["enable_partials"])
+        if opts.include_partials is None:
+            logger.warning("`enable_partials` is deprecated, migrated to `include_partials`")
+            opts.include_partials = bool(kwargs["enable_partials"])
+        else:
+            logger.warning(
+                "Both `enable_partials` and `include_partials` provided; using `include_partials`"
+            )
 
     # Diarization
     if "diarization_sensitivity" in kwargs and isinstance(
         kwargs["diarization_sensitivity"], (int, float)
     ):
-        logger.warning("`diarization_sensitivity` is deprecated, migrated to `speaker_sensitivity`")
-        opts.speaker_sensitivity = kwargs["diarization_sensitivity"]
+        if opts.speaker_sensitivity is None:
+            logger.warning(
+                "`diarization_sensitivity` is deprecated, migrated to `speaker_sensitivity`"
+            )
+            opts.speaker_sensitivity = kwargs["diarization_sensitivity"]
+        else:
+            logger.warning(
+                "Both `diarization_sensitivity` and `speaker_sensitivity` provided;"
+                " using `speaker_sensitivity`"
+            )
 
     # Turn detection — "none" is not a valid TurnDetectionMode, map to FIXED
     if "end_of_utterance_mode" in kwargs and isinstance(
