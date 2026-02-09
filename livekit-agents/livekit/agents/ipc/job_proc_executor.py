@@ -115,7 +115,7 @@ class ProcJobExecutor(SupervisedProc):
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
                     self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
-                elif isinstance(msg, (proto.TextResponseEvent, proto.TextSessionComplete)):
+                elif isinstance(msg, proto.TextResponseEvent | proto.TextSessionComplete):
                     self._text_response_fnc(msg)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)

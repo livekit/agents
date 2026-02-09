@@ -352,7 +352,21 @@ class SupervisedProc(ABC):
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
-        await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
+        await aio.cancel_and_wait(ping_task)
+
+        # let read_ipc_task and main_task drain any remaining buffered messages
+        # before tearing down (the pipe will EOF since the child process exited)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(read_ipc_task, main_task, return_exceptions=True),
+                timeout=2.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "draining remaining messages timed out after process exit",
+                extra=self.logging_extra(),
+            )
+            await aio.cancel_and_wait(read_ipc_task, main_task)
 
         if memory_monitor_task is not None:
             await aio.cancel_and_wait(memory_monitor_task)

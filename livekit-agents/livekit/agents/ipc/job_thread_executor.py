@@ -257,7 +257,18 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
-        await utils.aio.cancel_and_wait(ping_task, monitor_task)
+        await utils.aio.cancel_and_wait(ping_task)
+
+        # let monitor_task drain any remaining buffered messages
+        try:
+            await asyncio.wait_for(monitor_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "draining remaining messages timed out after thread exit",
+                extra=self.logging_extra(),
+            )
+            await utils.aio.cancel_and_wait(monitor_task)
+
         await utils.aio.cancel_and_wait(*self._inference_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
@@ -287,7 +298,7 @@ class ThreadJobExecutor:
             if isinstance(msg, proto.InferenceRequest):
                 self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
 
-            if isinstance(msg, (proto.TextResponseEvent, proto.TextSessionComplete)):
+            if isinstance(msg, proto.TextResponseEvent | proto.TextSessionComplete):
                 self._opts.text_response_fnc(msg)
 
     @utils.log_exceptions(logger=logger)
