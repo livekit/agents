@@ -373,17 +373,17 @@ class STT(stt.STT):
                 "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger"
             )
 
-        # server rejects speaker counts outside 1–100
-        if opts.max_speakers is not None and not (0 < opts.max_speakers <= 100):
-            errors.append("max_speakers must be between 1 and 100")
+        # server rejects speaker counts outside 2–100
+        if opts.max_speakers is not None and not (1 < opts.max_speakers <= 100):
+            errors.append("max_speakers must be between 2 and 100")
 
-        # latency budget: below 0.7s hurts accuracy, above 10s is unsupported
-        if opts.max_delay is not None and not (0.7 <= opts.max_delay <= 10):
-            errors.append("max_delay must be between 0.7 and 10")
+        # latency budget: below 0.7s is unsupported
+        if opts.max_delay is not None and not (0.7 <= opts.max_delay <= 4.0):
+            errors.append("max_delay must be between 0.7 and 4.0")
 
         # diarization sensitivity range enforced by the engine
-        if opts.speaker_sensitivity is not None and not (0.1 <= opts.speaker_sensitivity <= 0.9):
-            errors.append("speaker_sensitivity must be between 0.1 and 0.9")
+        if opts.speaker_sensitivity is not None and not (0.0 < opts.speaker_sensitivity < 1.0):
+            errors.append("speaker_sensitivity must be between 0.0 and 1.0")
 
         return errors
 
