@@ -4,10 +4,10 @@ from livekit.agents import Plugin
 
 from .llm import LLM
 from .log import logger
-from .stt import STT
+from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["LLM", "STT", "__version__"]
+__all__ = ["LLM", "STT", "SpeechStream", "__version__"]
 
 
 class MistralAIPlugin(Plugin):
