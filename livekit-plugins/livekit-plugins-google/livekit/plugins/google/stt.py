@@ -18,10 +18,10 @@ import asyncio
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -52,8 +52,8 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
-LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, list[LgType]]
+LgType = SpeechLanguages | str
+LanguageCode = LgType | list[LgType]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -192,7 +192,7 @@ class STT(stt.STT):
 
         if not is_given(credentials_file) and not is_given(credentials_info):
             try:
-                gauth_default()  # type: ignore
+                gauth_default()
             except DefaultCredentialsError:
                 raise ValueError(
                     "Application default credentials must be available "
@@ -264,7 +264,7 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()  # type: ignore
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:

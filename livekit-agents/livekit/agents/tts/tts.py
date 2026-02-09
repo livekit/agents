@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,7 +65,7 @@ TEvent = TypeVar("TEvent")
 
 class TTS(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(
@@ -412,7 +412,7 @@ class SynthesizeStream(ABC):
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
@@ -728,13 +728,11 @@ class AudioEmitter:
         from ..voice.io import TimedString
 
         self._write_ch = aio.Chan[
-            Union[
-                bytes,
-                AudioEmitter._FlushSegment,
-                AudioEmitter._StartSegment,
-                AudioEmitter._EndSegment,
-                TimedString,
-            ]
+            bytes
+            | AudioEmitter._FlushSegment
+            | AudioEmitter._StartSegment
+            | AudioEmitter._EndSegment
+            | TimedString
         ]()
         self._main_atask = asyncio.create_task(self._main_task(), name="AudioEmitter._main_task")
 

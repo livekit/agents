@@ -14,4 +14,4 @@
 
 import logging
 
-logger = logging.getLogger("livekit.plugins.camb")
+logger = logging.getLogger("livekit.plugins.cambai")

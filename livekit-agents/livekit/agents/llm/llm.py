@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, ClassVar, Generic, Literal, TypeVar, Union
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
@@ -90,7 +90,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -196,7 +196,13 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        self._llm_request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+            }
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:

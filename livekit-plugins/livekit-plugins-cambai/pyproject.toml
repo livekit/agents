@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-camb"
+name = "livekit-plugins-cambai"
 dynamic = ["version"]
 description = "LiveKit Agents plugin for Camb.ai TTS"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["voice", "ai", "tts", "text-to-speech", "livekit", "camb", "mars"]
+keywords = ["voice", "ai", "tts", "text-to-speech", "livekit", "camb", "cambai", "mars"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -37,7 +37,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/camb/version.py"
+path = "livekit/plugins/cambai/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

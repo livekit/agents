@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -31,7 +31,7 @@ class LiveAvatarAPI:
         *,
         api_url: str = DEFAULT_API_URL,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: Optional[aiohttp.ClientSession] = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         self._api_key = api_key or os.getenv("LIVEAVATAR_API_KEY")
         if self._api_key is None:
@@ -64,7 +64,7 @@ class LiveAvatarAPI:
         }
 
         payload = {
-            "mode": "CUSTOM",
+            "mode": "LITE",
             "avatar_id": avatar_id,
             "is_sandbox": is_sandbox,
             "livekit_config": livekit_config,

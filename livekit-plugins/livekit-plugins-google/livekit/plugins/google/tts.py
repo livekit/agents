@@ -64,7 +64,7 @@ class TTS(tts.TTS):
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
-        model_name: GeminiTTSModels | str = "gemini-2.5-flash-tts",
+        model_name: NotGivenOr[GeminiTTSModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
@@ -93,7 +93,7 @@ class TTS(tts.TTS):
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
-            model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts", "chirp_3"). Default is "gemini-2.5-flash-tts".
+            model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts", "chirp_3"). Default is "gemini-2.5-flash-tts" or "chirp_3" depending on the voice_name and voice_cloning_key.
             prompt (str, optional): Style prompt for Gemini TTS models. Controls tone, style, and speaking characteristics. Only applied to first input chunk in streaming mode.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
@@ -128,6 +128,21 @@ class TTS(tts.TTS):
 
         lang = language if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
+
+        if not is_given(model_name):
+            # chirp3 voice name format: <locale>-<model>-<voice>
+            # only chirp 3 model can support voice cloning
+            if not is_given(prompt) and (
+                is_given(voice_cloning_key)
+                or (is_given(voice_name) and "chirp" in voice_name.lower())
+            ):
+                model_name = "chirp_3"
+                logger.debug(
+                    f"using {model_name} model for voice {voice_name or voice_cloning_key}"
+                )
+            else:
+                model_name = "gemini-2.5-flash-tts"
+                logger.debug(f"using default {model_name} model")
 
         voice_params = texttospeech.VoiceSelectionParams(
             language_code=lang,
