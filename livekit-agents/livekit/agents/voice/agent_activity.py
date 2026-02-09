@@ -1550,7 +1550,7 @@ class AgentActivity(RecognitionHooks):
         except StopResponse:
             return  # ignore this turn
         except Exception:
-            logger.exception("error occured during on_user_turn_completed")
+            logger.exception("error occurred during on_user_turn_completed")
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
@@ -2345,7 +2345,13 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self.llm.model)
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self.llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.llm.model,
+            }
+        )
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = current_span
 
@@ -2703,7 +2709,7 @@ class AgentActivity(RecognitionHooks):
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
-                # most realtime models dont't support generating multiple responses at the same time
+                # most realtime models don't support generating multiple responses at the same time
                 while self._current_speech or self._speech_q:
                     if (
                         self._current_speech
