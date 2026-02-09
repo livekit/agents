@@ -7,9 +7,10 @@ import multiprocessing as mp
 import socket
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import Callable, ClassVar
+from typing import ClassVar
 
 import psutil
 
