@@ -1033,7 +1033,7 @@ class RealtimeSession(
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Update session options."""
         if is_given(tool_choice):
-            self._realtime_model._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            self._realtime_model._opts.tool_choice = tool_choice
 
     def generate_reply(
         self,

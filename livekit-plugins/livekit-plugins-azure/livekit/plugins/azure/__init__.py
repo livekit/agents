@@ -17,12 +17,12 @@ Support for Azure AI including Azure Speech and Azure Voice Live Realtime API. F
 See https://docs.livekit.io/agents/integrations/azure/ for more information.
 """
 
-from . import realtime
+from . import realtime, responses
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "TTS", "realtime", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "realtime", "responses", "__version__"]
 
 from livekit.agents import Plugin
 
