@@ -19,7 +19,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
@@ -38,19 +38,23 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 from mistralai import Mistral
+from mistralai.extra.realtime.connection import UnknownRealtimeEvent
 from mistralai.extra.realtime.transcription import RealtimeTranscription
-
-try:
-    from mistralai.models import AudioFormat
-except Exception:  # pragma: no cover - fallback for older SDK versions
-
-    @dataclass
-    class AudioFormat:  # type: ignore[no-redef]
-        encoding: str
-        sample_rate: int
-
-
+from mistralai.models import AudioFormat
+from mistralai.models.realtimetranscriptionerror import RealtimeTranscriptionError
+from mistralai.models.realtimetranscriptionsessioncreated import (
+    RealtimeTranscriptionSessionCreated,
+)
+from mistralai.models.realtimetranscriptionsessionupdated import (
+    RealtimeTranscriptionSessionUpdated,
+)
 from mistralai.models.sdkerror import SDKError
+from mistralai.models.transcriptionstreamdone import TranscriptionStreamDone
+from mistralai.models.transcriptionstreamlanguage import TranscriptionStreamLanguage
+from mistralai.models.transcriptionstreamsegmentdelta import (
+    TranscriptionStreamSegmentDelta,
+)
+from mistralai.models.transcriptionstreamtextdelta import TranscriptionStreamTextDelta
 
 from .log import logger
 from .models import STTModels
@@ -160,14 +164,11 @@ class STT(stt.STT):
         *, model: STTModels | str, interim_results: bool
     ) -> stt.STTCapabilities:
         is_realtime = STT._is_realtime_model(model)
-        base_kwargs: dict[str, Any] = {
-            "streaming": is_realtime,
-            "interim_results": interim_results,
-        }
-        try:
-            return stt.STTCapabilities(offline_recognize=not is_realtime, **base_kwargs)
-        except TypeError:
-            return stt.STTCapabilities(**base_kwargs)
+        return stt.STTCapabilities(
+            streaming=is_realtime,
+            interim_results=interim_results,
+            offline_recognize=not is_realtime,
+        )
 
     def stream(
         self,
@@ -205,7 +206,6 @@ class STT(stt.STT):
                 self._opts.language = language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
-            # MistralAI transcription API call
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
@@ -218,7 +218,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=self._opts.language if self._opts.language else "",
+                        language=self._opts.language or "",
                         start_time=resp.segments[0].start if resp.segments else 0.0,
                         end_time=resp.segments[-1].end if resp.segments else 0.0,
                         words=[
@@ -236,10 +236,9 @@ class STT(stt.STT):
             )
 
         except SDKError as e:
-            if e.status_code in (408, 504):  # Request Timeout, Gateway Timeout
+            if e.status_code in (408, 504):
                 raise APITimeoutError() from e
-            else:
-                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
         except (APIStatusError, APITimeoutError):
             raise
         except Exception as e:
@@ -289,9 +288,7 @@ class SpeechStream(stt.RecognizeStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        audio_format = cast(Any, AudioFormat)(
-            encoding="pcm_s16le", sample_rate=self._opts.sample_rate
-        )
+        audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=self._opts.sample_rate)
 
         async def audio_generator() -> AsyncIterator[bytes]:
             samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
@@ -319,8 +316,6 @@ class SpeechStream(stt.RecognizeStream):
                 yield frame.data.tobytes()
 
         try:
-            # Directly instantiate RealtimeTranscription to avoid intermittent
-            # AttributeError on client.audio.realtime property in forked processes
             realtime = RealtimeTranscription(self._client.sdk_configuration)
 
             finalize_task = asyncio.create_task(self._finalization_checker())
@@ -357,7 +352,6 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(retryable=not self._data_sent) from e
 
     async def _finalization_checker(self) -> None:
-        """Background task that finalizes utterances after debounce delay or idle timeout."""
         check_interval = 0.05
         finalize_delay_s = max(self._opts.finalize_delay_ms / 1000.0, 0.05)
         idle_finalize_delay_s = max(finalize_delay_s, MIN_IDLE_FINALIZE_MS / 1000.0)
@@ -429,54 +423,59 @@ class SpeechStream(stt.RecognizeStream):
             )
 
     def _process_event(self, event: Any) -> None:
-        event_name = type(event).__name__
-        event_type = self._event_type(event)
-
-        if event_name == "RealtimeTranscriptionSessionCreated" or event_type == "session.created":
+        if isinstance(
+            event,
+            RealtimeTranscriptionSessionCreated | RealtimeTranscriptionSessionUpdated,
+        ):
             return
 
-        if event_name == "RealtimeTranscriptionSessionUpdated" or event_type == "session.updated":
+        if isinstance(event, TranscriptionStreamLanguage):
+            if event.audio_language:
+                self._detected_language = event.audio_language
             return
 
-        if event_name == "TranscriptionStreamLanguage" or event_type == "transcription.language":
-            language = getattr(event, "audio_language", "") or ""
-            if language:
-                self._detected_language = language
+        if isinstance(event, TranscriptionStreamTextDelta):
+            self._handle_interim_text(event.text)
             return
 
-        if event_name == "TranscriptionStreamTextDelta" or event_type == "transcription.text.delta":
-            self._handle_interim_text(self._extract_text(event))
-            return
-
-        if event_name == "TranscriptionStreamSegmentDelta" or event_type == "transcription.segment":
+        if isinstance(event, TranscriptionStreamSegmentDelta):
             self._handle_final_text(
-                self._extract_text(event),
-                start_time=float(getattr(event, "start", 0.0) or 0.0),
-                end_time=float(getattr(event, "end", 0.0) or 0.0),
+                event.text,
+                start_time=event.start,
+                end_time=event.end,
             )
             return
 
-        if event_name == "TranscriptionStreamDone" or event_type == "transcription.done":
-            done_text = self._extract_text(event)
-            if done_text:
-                self._handle_final_text(done_text)
+        if isinstance(event, TranscriptionStreamDone):
+            if event.text:
+                self._handle_final_text(event.text)
             else:
                 self._finalize_utterance(reason="transcription_done")
             return
 
-        if event_name == "RealtimeTranscriptionError" or event_type == "error":
-            error = getattr(event, "error", None)
+        if isinstance(event, RealtimeTranscriptionError):
+            error = event.error
+            message = error.message if isinstance(error.message, str) else str(error.message)
             raise APIStatusError(
-                message=getattr(error, "message", "Unknown realtime transcription error"),
-                status_code=getattr(error, "status_code", 500),
+                message=message,
+                status_code=error.code,
                 request_id=None,
                 body=error,
                 retryable=not self._data_sent,
             )
 
-        if event_name == "UnknownRealtimeEvent":
-            self._handle_unknown_event(event)
-            return
+        if isinstance(event, UnknownRealtimeEvent):
+            logger.warning(
+                "unhandled unknown realtime event | type=%s | error=%s",
+                event.type or "unknown",
+                event.error or "n/a",
+            )
+
+    def _ensure_speaking(self) -> None:
+        if not self._speaking:
+            self._speaking = True
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            self._data_sent = True
 
     def _handle_interim_text(self, text: str) -> None:
         clean_text = text.strip()
@@ -484,16 +483,11 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._last_text_time = time.monotonic()
-
-        if not self._speaking:
-            self._speaking = True
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-            self._data_sent = True
-
+        self._ensure_speaking()
         self._partial_text = self._merge_partial_text(self._partial_text, clean_text)
-        language = self._detected_language or self._opts.language or ""
 
         if self._opts.interim_results:
+            language = self._detected_language or self._opts.language or ""
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -515,37 +509,9 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._last_text_time = time.monotonic()
-        if not self._speaking:
-            self._speaking = True
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-            self._data_sent = True
-
+        self._ensure_speaking()
         self._partial_text = self._merge_partial_text(self._partial_text, clean_text)
         self._finalize_utterance(reason="segment", start_time=start_time, end_time=end_time)
-
-    def _handle_unknown_event(self, event: Any) -> None:
-        payload = getattr(event, "content", None)
-        event_type = getattr(event, "type", None)
-        event_type_str = event_type if isinstance(event_type, str) else ""
-
-        if isinstance(payload, dict):
-            payload_type = payload.get("type")
-            if not event_type_str and isinstance(payload_type, str):
-                event_type_str = payload_type
-
-            text = self._extract_text_from_mapping(payload)
-            if text:
-                if self._is_final_payload(payload, event_type_str):
-                    self._handle_final_text(text)
-                else:
-                    self._handle_interim_text(text)
-                return
-
-        logger.warning(
-            "unhandled unknown realtime event | type=%s | error=%s",
-            event_type_str or "unknown",
-            getattr(event, "error", "n/a"),
-        )
 
     def _is_duplicate_final(self, text: str) -> bool:
         if not self._last_final_text:
@@ -574,42 +540,3 @@ class SpeechStream(stt.RecognizeStream):
             else " "
         )
         return f"{current}{separator}{incoming}"
-
-    @staticmethod
-    def _event_type(event: Any) -> str:
-        event_type = getattr(event, "type", None)
-        if isinstance(event_type, str):
-            return event_type
-        alias_type = getattr(event, "TYPE", None)
-        if isinstance(alias_type, str):
-            return alias_type
-        return ""
-
-    def _extract_text(self, payload: Any) -> str:
-        if isinstance(payload, dict):
-            return self._extract_text_from_mapping(payload)
-
-        for key in ("text", "transcript", "full_transcript", "delta", "utterance"):
-            value = getattr(payload, key, None)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    @staticmethod
-    def _extract_text_from_mapping(payload: dict[str, Any]) -> str:
-        for key in ("text", "transcript", "full_transcript", "delta", "utterance"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    @staticmethod
-    def _is_final_payload(payload: dict[str, Any], event_type: str) -> bool:
-        if any(token in event_type.lower() for token in ("done", "final", "segment")):
-            return True
-
-        for key in ("is_final", "final", "is_last", "done", "completed"):
-            value = payload.get(key)
-            if isinstance(value, bool) and value:
-                return True
-        return False
