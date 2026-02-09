@@ -644,10 +644,12 @@ class AgentActivity(RecognitionHooks):
 
         async with self._lock:
             self._mark_draining()
-            self._on_exit_task = task = self._create_speech_task(
-                _traceable_on_exit(), name="AgentTask_on_exit"
-            )
-            _set_activity_task_info(task, inline_task=True)
+
+            if self._on_exit_task is None:
+                self._on_exit_task = task = self._create_speech_task(
+                    _traceable_on_exit(), name="AgentTask_on_exit"
+                )
+                _set_activity_task_info(task, inline_task=True)
 
             self._cancel_preemptive_generation()
 
@@ -776,6 +778,9 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+
+            # on_exit_task should be awaited in `drain`
+            self._on_exit_task = None
 
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
