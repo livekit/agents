@@ -7,14 +7,14 @@ from ..utils.exp_filter import ExpFilter
 
 
 class DynamicEndpointing:
-    def __init__(self, min_delay: float, max_delay: float, alpha: float = 0.1):
+    def __init__(self, min_delay: float, max_delay: float, alpha: float = 0.9):
         """
         Dynamically adjust the endpointing delay based on the speech activity.
 
         Args:
             min_delay: Minimum delay in seconds.
             max_delay: Maximum delay in seconds.
-            alpha: Exponential moving average coefficient.
+            alpha: Exponential moving average coefficient. The higher the value, the more weight is given to the history. Defaults to 0.9.
 
         The endpointing delay is adjusted based on the following information:
 
@@ -108,6 +108,19 @@ class DynamicEndpointing:
         if self._interrupting:
             # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
+
+        if (
+            self._utterance_started_at is not None
+            and self._utterance_ended_at is not None
+            and self._utterance_ended_at < self._utterance_started_at
+            and interruption
+        ):
+            # VAD interrupt by audio activity is triggered before end of speech is detected
+            # adjust the utterance ended time to be just before the agent speech started
+            self._utterance_ended_at = self._agent_speech_started_at - 1e-3
+            logger.debug(
+                f"utterance ended at adjusted: {self._utterance_ended_at}",
+            )
 
         self._utterance_started_at = time.time() + adjustment
         logger.debug(

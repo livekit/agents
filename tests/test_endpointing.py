@@ -77,6 +77,11 @@ class TestDynamicEndpointing:
         assert ep.min_delay == 0.3
         assert ep.max_delay == 1.0
 
+    def test_initialization_uses_updated_default_alpha(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
+        assert ep._utterance_pause._alpha == pytest.approx(0.9, rel=1e-5)
+        assert ep._turn_pause._alpha == pytest.approx(0.9, rel=1e-5)
+
     def test_empty_delays(self) -> None:
         """Test between_utterance_delay returns 0 when no utterances recorded."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
@@ -290,6 +295,27 @@ class TestDynamicEndpointing:
             ep.on_utterance_started(interruption=True)
 
         assert ep.max_delay == pytest.approx(0.5 * 0.9 + 0.5 * 1.0, rel=1e-5)
+
+    def test_interruption_adjusts_stale_utterance_end_time(self) -> None:
+        """Interruption path should adjust stale utterance end timestamp before delay updates."""
+        ep = DynamicEndpointing(min_delay=0.06, max_delay=1.0, alpha=1.0)
+
+        # Simulate stale ordering where end timestamp still belongs to a previous utterance.
+        with patch("time.time", return_value=99):
+            ep.on_utterance_ended()
+
+        with patch("time.time", return_value=100):
+            ep.on_utterance_started()
+
+        with patch("time.time", return_value=100.2):
+            ep.on_agent_speech_started()
+
+        with patch("time.time", return_value=100.25):
+            ep.on_utterance_started(interruption=True)
+
+        assert ep._utterance_ended_at == pytest.approx(100.2, rel=1e-3)
+        assert ep.min_delay == pytest.approx(0.06, rel=1e-5)
+        assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
 
     def test_update_options_preserves_filter_alpha(self) -> None:
         """Changing delays should not overwrite the EMA smoothing coefficient."""
