@@ -288,7 +288,7 @@ class STT(stt.STT):
         _check_deprecated_args(kwargs, self._stt_options)
 
         # Validate config options
-        errors = self._validate_config_options()
+        errors = self._validate_stt_options()
         if errors:
             raise ValueError("Invalid STT options: " + ", ".join(errors))
 
@@ -358,7 +358,7 @@ class STT(stt.STT):
         # Return the stream
         return stream
 
-    def _validate_config_options(self) -> list[str]:
+    def _validate_stt_options(self) -> list[str]:
         """Validate options in STTOptions."""
         errors: list[str] = []
         opts = self._stt_options
