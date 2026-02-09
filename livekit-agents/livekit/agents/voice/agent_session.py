@@ -535,7 +535,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     record = job_ctx.job.enable_recording
             except RuntimeError:
                 # JobContext is not available in evals, will not be able to record
-                record = False
+                if not is_given(record):
+                    record = False
 
             if isinstance(record, RecordingOptions):
                 self._recording_options = record
