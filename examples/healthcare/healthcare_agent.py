@@ -26,13 +26,19 @@ from livekit.agents.beta.workflows import (
     GetEmailTask,
     GetNameTask,
     TaskGroup,
+    WarmTransferTask,
 )
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import ToolError, function_tool
 from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
 
 load_dotenv()
+
+# to test out warm transfer, ensure the following variables/env vars are set
+SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")  # "ST_abcxyz"
+SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+12003004000"
+SIP_NUMBER = os.getenv("LIVEKIT_SIP_NUMBER")  # "+15005006000" - caller ID shown to supervisor
 
 ValidInsurances = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
 
@@ -61,12 +67,62 @@ class ModifyAppointmentResult:
     old_appointment: dict
 
 
+@function_tool()
+async def transfer_to_human(context: RunContext) -> None:
+    """Called when the user asks to speak to a human agent. This will put the user on
+    hold while the supervisor is connected.
+
+    Ensure that the user has confirmed that they wanted to be transferred. Do not start transfer
+    until the user has confirmed.
+    Examples on when the tool should be called:
+    ----
+    - User: Can I speak to your supervisor?
+    - Assistant: Yes of course.
+    ----
+    - Assistant: I'm unable to help with that, would you like to speak to a human agent?
+    - User: Yes please.
+    ----
+    """
+
+    logger.info("tool called to transfer to human")
+    await context.session.say(
+        "Please hold while I connect you to a human agent.", allow_interruptions=False
+    )
+    try:
+        assert SIP_TRUNK_ID is not None
+        assert SUPERVISOR_PHONE_NUMBER is not None
+
+        result = await WarmTransferTask(
+            target_phone_number=SUPERVISOR_PHONE_NUMBER,
+            sip_trunk_id=SIP_TRUNK_ID,
+            sip_number=SIP_NUMBER,
+            chat_ctx=context.session.history,
+        )
+    except ToolError as e:
+        logger.error(f"failed to transfer to supervisor with tool error: {e}")
+        raise e
+    except Exception as e:
+        logger.exception("failed to transfer to supervisor")
+        raise ToolError(f"failed to transfer to supervisor with error: {e}") from e
+
+    logger.info(
+        "transfer to supervisor successful",
+        extra={"supervisor_identity": result.human_agent_identity},
+    )
+    await context.session.say(
+        "you are on the line with my supervisor. I'll be hanging up now.",
+        allow_interruptions=False,
+    )
+    context.session.shutdown()
+
+
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
     def __init__(self):
         super().__init__(
             instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
-        """
+        """,
+            tools=[transfer_to_human],
         )
 
     async def on_enter(self):
@@ -123,7 +179,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
     def __init__(self):
         super().__init__(
             instructions="You will now assist the user with selecting a doctor and appointment time.",
-            tools=[update_record],
+            tools=[update_record, transfer_to_human],
         )
         self._selected_doctor: str | None = None
         self._appointment_time: datetime | None = None
@@ -138,7 +194,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         doctor_confirmation_tool = self._build_doctor_selection_tool(
             available_doctors=available_doctors
         )
-        current_tools = self.tools
+        current_tools = [t for t in self.tools if t.name != "confirm_doctor_selection"]
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
 
@@ -176,7 +232,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             schedule_appointment_tool = self._build_schedule_appointment_tool(
                 available_times=available_times
             )
-            current_tools = self.tools
+            current_tools = [t for t in self.tools if t.name != "schedule_appointment"]
             current_tools.append(schedule_appointment_tool)
             await self.update_tools(current_tools)
 
@@ -211,7 +267,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             self._appointment_time = appointment_time
 
             visit_reason_tool = self._build_visit_reason_tool()
-            current_tools = self.tools
+            current_tools = [t for t in self.tools if t.name != "confirm_visit_reason"]
             current_tools.append(visit_reason_tool)
             await self.update_tools(current_tools)
 
@@ -244,7 +300,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
     def __init__(self, function: str):
         super().__init__(
             instructions="You will now assist the user with modifying their appointment.",
-            tools=[update_record],
+            tools=[update_record, transfer_to_human],
         )
         self._function = function
         self._selected_appointment: dict | None = None
@@ -263,7 +319,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             return
         else:
             cancel_appt_tool = self._build_modify_appt_tool(available_appts=appointments)
-            current_tools = self.tools
+            current_tools = [t for t in self.tools if t.name != "confirm_appointment_selection"]
             current_tools.append(cancel_appt_tool)
             await self.update_tools(current_tools)
             await self.session.generate_reply(
@@ -306,24 +362,6 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
         return confirm_appointment_selection
 
 
-class GetLabResultsTask(AgentTask[None]):
-    def __init__(self, filesearch_tool) -> None:
-        super().__init__(
-            instructions="You will be informing users about their latest checkup by parsing through their lab report.",
-            tools=[update_record, filesearch_tool],
-        )
-
-    async def on_enter(self):
-        await self.session.generate_reply(
-            instructions="You successfully retrieved the user's lab report, welcome any related inquiries they may have."
-        )
-
-    @function_tool()
-    async def conclude_query_session(self):
-        """Call when the user is done asking about their lab results."""
-        self.complete(None)
-
-
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
@@ -338,6 +376,7 @@ class HealthcareAgent(Agent):
                     delete_room=True,
                 ),
                 update_record,
+                transfer_to_human,
             ],
         )
         self._information_verified: bool = False
@@ -358,9 +397,28 @@ class HealthcareAgent(Agent):
                 chat_ctx = task_group.chat_ctx.copy()
                 chat_ctx.add_message(
                     role="system",
-                    content=f"Alert the user that an existing patient record has been found. Here is the patient's record: {str(existing_record)}",
+                    content=f"Alert the user that an existing patient record has been found. This birthday has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['date_of_birth']}",
                 )
                 await task_group.update_chat_ctx(chat_ctx)
+            elif not existing_record and self.session.userdata.profile:
+                # in the case that the user creates a new profile or restarts, the recorded session profile is cleared
+                self.session.userdata.profile = {}
+
+        # each profile field is injected into the taskgroup context before the respective task is executed
+        if event.task_id == "get_dob_task" and self.session.userdata.profile["date_of_birth"]:
+            chat_ctx = task_group.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="system",
+                content=f"This email has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['email']}",
+            )
+            await task_group.update_chat_ctx(chat_ctx)
+        if event.task_id == "get_email_task" and self.session.userdata.profile["email"]:
+            chat_ctx = task_group.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="system",
+                content=f"This insurance has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['insurance']}",
+            )
+            await task_group.update_chat_ctx(chat_ctx)
 
     async def profile_authenticator(self) -> None:
         """Creates a TaskGroup that collects user information"""
@@ -404,11 +462,6 @@ class HealthcareAgent(Agent):
             }
             self.session.userdata.profile = profile
             self._database.add_patient_record(info=profile)
-
-    # @function_tool()
-    # async def create_profile(self):
-    #     """Call to create a new profile for the user if the user requests"""
-    #     await self.profile_authenticator()
 
     @function_tool()
     async def schedule_appointment(self):
@@ -480,19 +533,26 @@ class HealthcareAgent(Agent):
         client.vector_stores.files.create(vector_store_id=vector_store.id, file_id=file.id)
 
         filesearch_tool = openai.tools.FileSearch(vector_store_ids=[vector_store.id])
-        # current_tools = self.tools
-        # current_tools.append(openai.tools.WebSearch())
-        # await self.update_tools(current_tools)
-        await GetLabResultsTask(filesearch_tool)
-        client.vector_stores.delete(self._vector_store.id)
-        client.files.delete(self._file.id)
+        current_tools = self.tools
+        current_tools.append(filesearch_tool)
+        await self.update_tools(current_tools)
+
+        # TODO delete upon exit
+        # client.vector_stores.delete(self._vector_store.id)
+        # client.files.delete(self._file.id)
 
     @function_tool()
-    async def retrieve_available_doctors(self):
+    async def retrieve_available_doctors(self) -> None:
         """Call if the user inquires about the available doctors in the network"""
         await self.session.generate_reply(
             instructions=f"Inform the user about each doctor record: {self._database.doctor_records}"
         )
+
+    @function_tool()
+    async def handle_billing(self):
+        """Call for any billing inquiries and if the user wants to pay their outstanding balance"""
+        ...
+        # results = await GetCreditCardTask()
 
 
 server = AgentServer()
