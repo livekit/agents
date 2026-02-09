@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -29,7 +30,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
     def __init__(
         self,
         extra_instructions: str = "",
-        require_confirmation: bool = True,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -38,6 +38,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         self._init_kwargs = {
             "extra_instructions": extra_instructions,
@@ -64,7 +65,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "Don't invent new email addresses, stick strictly to what the user said. \n"
                 + (
                     "Call `confirm_email_address` after the user confirmed the email address is correct. \n"
-                    if require_confirmation
+                    if require_confirmation is not False
                     else ""
                 )
                 + "If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed. \n"
@@ -109,23 +110,26 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         self._current_email = email
         separated_email = " ".join(email)
-        if self._require_confirmation:
-            return (
-                f"The email has been updated to {email}\n"
-                f"Repeat the email character by character: {separated_email} if needed\n"
-                f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
-            )
 
-        else:
-            self.complete(GetEmailResult(email_address=email))
-            return None
+        if not self._confirmation_required(ctx):
+            if not self.done():
+                self.complete(GetEmailResult(email_address=self._current_email))
+            return None  # no need to continue the conversation
+
+        return (
+            f"The email has been updated to {email}\n"
+            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
+        )
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def confirm_email_address(self, ctx: RunContext) -> None:
         """Validates/confirms the email address provided by the user."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._email_update_speech_handle:
+        if ctx.speech_handle == self._email_update_speech_handle and self._confirmation_required(
+            ctx
+        ):
             raise ToolError("error: the user must confirm the email address explicitly")
 
         if not self._current_email.strip():
@@ -145,6 +149,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the email address: {reason}"))
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"
 
     def _get_state(self) -> _AgentState:
         state = super()._get_state()

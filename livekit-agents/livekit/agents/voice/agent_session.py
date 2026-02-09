@@ -57,7 +57,7 @@ from .events import (
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
-from .speech_handle import SpeechHandle
+from .speech_handle import InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -441,13 +441,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
 
-    def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
+    def run(
+        self,
+        *,
+        user_input: str,
+        input_modality: Literal["text", "audio"] = "text",
+        output_type: type[Run_T] | None = None,
+    ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
         run_state = RunResult(user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
-        self.generate_reply(user_input=user_input)
+        self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
 
     @overload
@@ -1005,6 +1011,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        input_modality: Literal["text", "audio"] = "text",
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -1015,6 +1022,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
+            chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
+                Defaults to the chat context of the current agent if not provided.
+            input_modality (Literal["text", "audio"], optional): The input mode to use for generating the reply.
 
         Returns:
             SpeechHandle: A handle to the generated reply.
@@ -1046,6 +1056,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
+                input_details=InputDetails(modality=input_modality),
             )
             if run_state:
                 run_state._watch_handle(handle)
