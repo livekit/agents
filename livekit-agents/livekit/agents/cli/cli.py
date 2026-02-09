@@ -1468,19 +1468,18 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     finally:
         if jupyter:
             loop.close()  # close can only be called from the main thread
-            return  # noqa: B012
+        else:
+            with contextlib.suppress(_ExitCli):
+                try:
+                    tasks = asyncio.all_tasks(loop)
+                    for task in tasks:
+                        task.cancel()
 
-        with contextlib.suppress(_ExitCli):
-            try:
-                tasks = asyncio.all_tasks(loop)
-                for task in tasks:
-                    task.cancel()
-
-                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            finally:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
-                loop.close()
+                    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                finally:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                    loop.run_until_complete(loop.shutdown_default_executor())
+                    loop.close()
 
 
 class LogLevel(str, enum.Enum):
