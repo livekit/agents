@@ -145,4 +145,4 @@ class GetEmailTask(AgentTask[GetEmailResult]):
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
             return self._require_confirmation
-        return ctx.speech_handle.input_source.modality == "audio"
+        return ctx.speech_handle.input_details.modality == "audio"

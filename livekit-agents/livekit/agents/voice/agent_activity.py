@@ -71,7 +71,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .speech_handle import DEFAULT_INPUT_SOURCE, InputSource, SpeechHandle
+from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -864,7 +864,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
-        input_source: InputSource = DEFAULT_INPUT_SOURCE,
+        input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -910,7 +910,7 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions,
-            input_source=input_source,
+            input_details=input_details,
         )
         self._session.emit(
             "speech_created",
@@ -1203,7 +1203,8 @@ class AgentActivity(RecognitionHooks):
             return
 
         handle = SpeechHandle.create(
-            allow_interruptions=self.allow_interruptions, input_source=InputSource(modality="audio")
+            allow_interruptions=self.allow_interruptions,
+            input_details=InputDetails(modality="audio"),
         )
         self._session.emit(
             "speech_created",
@@ -1411,7 +1412,7 @@ class AgentActivity(RecognitionHooks):
             user_message=user_message,
             chat_ctx=chat_ctx,
             schedule_speech=False,
-            input_source=InputSource(modality="audio"),
+            input_details=InputDetails(modality="audio"),
         )
 
         self._preemptive_generation = _PreemptiveGeneration(
@@ -1618,7 +1619,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
-                input_source=InputSource(modality="audio"),
+                input_details=InputDetails(modality="audio"),
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():

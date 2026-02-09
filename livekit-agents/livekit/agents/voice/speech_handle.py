@@ -15,11 +15,11 @@ INTERRUPTION_TIMEOUT = 5.0  # seconds
 
 
 @dataclass
-class InputSource:
+class InputDetails:
     modality: Literal["text", "audio"]
 
 
-DEFAULT_INPUT_SOURCE = InputSource(modality="audio")
+DEFAULT_INPUT_DETAILS = InputDetails(modality="audio")
 
 
 class SpeechHandle:
@@ -31,11 +31,11 @@ class SpeechHandle:
     """Priority for important messages that should be played before others."""
 
     def __init__(
-        self, *, speech_id: str, allow_interruptions: bool, input_source: InputSource
+        self, *, speech_id: str, allow_interruptions: bool, input_details: InputDetails
     ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
-        self._input_source = input_source
+        self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -65,12 +65,12 @@ class SpeechHandle:
     @staticmethod
     def create(
         allow_interruptions: bool = True,
-        input_source: InputSource = DEFAULT_INPUT_SOURCE,
+        input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
-            input_source=input_source,
+            input_details=input_details,
         )
 
     @property
@@ -82,8 +82,8 @@ class SpeechHandle:
         return self._id
 
     @property
-    def input_source(self) -> InputSource:
-        return self._input_source
+    def input_details(self) -> InputDetails:
+        return self._input_details
 
     @property
     def _generation_id(self) -> str:
