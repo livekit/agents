@@ -441,7 +441,7 @@ class STT(stt.STT):
                 stream._config.speaker_config.focus_mode = focus_mode
 
             # Send update to client if stream is active
-            if stream._client:
+            if stream._client and stream._client._is_connected:
                 stream._client.update_diarization_config(stream._config.speaker_config)
 
     def finalize(self) -> None:
@@ -460,9 +460,7 @@ class STT(stt.STT):
                 continue
 
             # Check that VAD is not being handled by the client
-            if stream._config.vad_config is None or (
-                stream._config.vad_config and not stream._config.vad_config.enabled
-            ):
+            if stream._config.vad_config is None or not stream._config.vad_config.enabled:
                 stream._client.finalize()
 
     async def get_speaker_ids(
