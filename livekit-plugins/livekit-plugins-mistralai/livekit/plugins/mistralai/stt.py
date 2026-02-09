@@ -100,10 +100,7 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=self._is_realtime_model(model),
-                interim_results=interim_results,
-            )
+            capabilities=self._build_capabilities(model=model, interim_results=interim_results)
         )
         self._opts = _STTOptions(
             language=language,
@@ -153,10 +150,24 @@ class STT(stt.STT):
             self._opts.interim_results = interim_results
 
         if is_given(model) or is_given(interim_results):
-            self._capabilities = stt.STTCapabilities(
-                streaming=self._is_realtime_model(self._opts.model),
+            self._capabilities = self._build_capabilities(
+                model=self._opts.model,
                 interim_results=self._opts.interim_results,
             )
+
+    @staticmethod
+    def _build_capabilities(
+        *, model: STTModels | str, interim_results: bool
+    ) -> stt.STTCapabilities:
+        is_realtime = STT._is_realtime_model(model)
+        base_kwargs: dict[str, Any] = {
+            "streaming": is_realtime,
+            "interim_results": interim_results,
+        }
+        try:
+            return stt.STTCapabilities(offline_recognize=not is_realtime, **base_kwargs)
+        except TypeError:
+            return stt.STTCapabilities(**base_kwargs)
 
     def stream(
         self,
@@ -229,6 +240,8 @@ class STT(stt.STT):
                 raise APITimeoutError() from e
             else:
                 raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+        except (APIStatusError, APITimeoutError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -338,6 +351,8 @@ class SpeechStream(stt.RecognizeStream):
                 body=e.body,
                 retryable=not self._data_sent,
             ) from e
+        except (APIStatusError, APITimeoutError):
+            raise
         except Exception as e:
             raise APIConnectionError(retryable=not self._data_sent) from e
 
