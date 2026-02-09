@@ -541,6 +541,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if isinstance(record, RecordingOptions):
                 self._recording_options = record
             else:
+                # some type checkers due to inability to resolve NOT_GIVEN & is_given checks above
+                record = bool(record)
                 self._recording_options = RecordingOptions(
                     audio=record, traces=record, logs=record, transcript=record
                 )
