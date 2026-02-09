@@ -96,6 +96,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    text_endpoint: str = ""
     text_request: agent.TextMessageRequest | None = None
 
 
@@ -142,17 +143,12 @@ class TextMessageError(Exception):
 
 
 class TextMessageContext:
-    def __init__(self, *, job_ctx: JobContext, text_request: agent.TextMessageRequest) -> None:
+    def __init__(
+        self, *, job_ctx: JobContext, endpoint: str, text_request: agent.TextMessageRequest
+    ) -> None:
         self._job_ctx = job_ctx
         self._text_request = text_request
-
-        # read endpoint from metadata
-        # TODO: add a endpoint field to the protocol?
-        try:
-            metadata = json.loads(text_request.metadata)
-            self._endpoint: str = metadata["endpoint"]
-        except Exception:
-            self._endpoint = ""  # default
+        self._endpoint = endpoint
 
         # read session snapshot
         if text_request.HasField("session_state"):
@@ -265,8 +261,13 @@ class JobContext:
         self._inf_executor = inference_executor
         self._ipc_client = ipc_client
 
+        logger.info(f"text endpoint: {self._info.text_endpoint}")
         self._text_message_context = (
-            TextMessageContext(job_ctx=self, text_request=self._info.text_request)
+            TextMessageContext(
+                job_ctx=self,
+                endpoint=self._info.text_endpoint,
+                text_request=self._info.text_request,
+            )
             if self._info.text_request
             else None
         )

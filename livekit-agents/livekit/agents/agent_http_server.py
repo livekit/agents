@@ -121,7 +121,7 @@ class AgentHttpServer(HttpServer):
             3. Completion: {"type": "complete", "session_state": {...}, "error": "..."}
         """
         logger.info(f"handling text request: {request.method} {request.path}")
-        text_request = await self._parse_text_request(request)
+        endpoint, text_request = await self._parse_text_request(request)
 
         response = web.StreamResponse(
             status=200,
@@ -136,7 +136,7 @@ class AgentHttpServer(HttpServer):
         await response.prepare(request)
 
         try:
-            session_info = await self._agent_server._launch_text_job(text_request)
+            session_info = await self._agent_server._launch_text_job(endpoint, text_request)
             ack_data = {
                 "type": "ack",
                 "session_id": text_request.session_id,
@@ -197,7 +197,9 @@ class AgentHttpServer(HttpServer):
 
         return response
 
-    async def _parse_text_request(self, request: web.Request) -> agent.TextMessageRequest:
+    async def _parse_text_request(
+        self, request: web.Request
+    ) -> tuple[str, agent.TextMessageRequest]:
         endpoint = request.match_info.get("endpoint", "")
         session_id = request.match_info.get("session_id")
         logger.info(f"parsing text request: {endpoint} {session_id}")
@@ -226,22 +228,12 @@ class AgentHttpServer(HttpServer):
             session_id = utils.shortuuid("text_session_")
         message_id = utils.shortuuid("text_msg_")
 
-        # add "endpoint" to metadata for now
-        metadata = body.get("metadata", {})
-        if not isinstance(metadata, dict):
-            raise web.HTTPBadRequest(
-                reason=json.dumps({"error": "'metadata' must be a JSON object"}),
-                content_type="application/json",
-            )
-        metadata["endpoint"] = endpoint
-        metadata_str = json.dumps(metadata)
-
         # create TextMessageRequest proto
         text_request = agent.TextMessageRequest(
             message_id=message_id,
             session_id=session_id,
             agent_name=self._agent_server._agent_name,
-            metadata=metadata_str,
+            metadata=body.get("metadata"),
             text=text,
         )
         if session_state_dict := body.get("session_state"):
@@ -251,7 +243,7 @@ class AgentHttpServer(HttpServer):
             if (delta := session_state_dict.get("delta")) is not None:
                 session_state.delta = base64.b64decode(delta)
             text_request.session_state.CopyFrom(session_state)
-        return text_request
+        return endpoint, text_request
 
 
 @dataclass

@@ -57,6 +57,7 @@ class ActiveJobsResponse:
             channel.write_string(b, running_job.token)
             channel.write_string(b, running_job.worker_id)
             channel.write_bool(b, running_job.fake_job)
+            channel.write_string(b, running_job.text_endpoint)
             channel.write_bool(b, running_job.text_request is not None)
             if running_job.text_request is not None:
                 channel.write_bytes(b, running_job.text_request.SerializeToString())
@@ -78,6 +79,7 @@ class ActiveJobsResponse:
                 token=channel.read_string(b),
                 worker_id=channel.read_string(b),
                 fake_job=channel.read_bool(b),
+                text_endpoint=channel.read_string(b),
             )
             has_text_request = channel.read_bool(b)
             if has_text_request:

@@ -926,6 +926,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
         token: str | None = None,
+        text_endpoint: str = "",
         text_request: agent.TextMessageRequest | None = None,
     ) -> None:
         async with self._lock:
@@ -970,6 +971,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=fake_job,
+                text_endpoint=text_endpoint,
                 text_request=text_request,
             )
 
@@ -1222,6 +1224,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=jwt.encode(decoded, self._api_secret, algorithm="HS256"),
                 worker_id=aj.worker_id,
                 fake_job=aj.fake_job,
+                text_endpoint=aj.text_endpoint,
                 text_request=aj.text_request,
             )
             await self._proc_pool.launch_job(running_info)
@@ -1363,14 +1366,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
-    async def _launch_text_job(self, request: agent.TextMessageRequest) -> _TextSession:
+    async def _launch_text_job(
+        self, endpoint: str, request: agent.TextMessageRequest
+    ) -> _TextSession:
         """Launch a text message job and track the session."""
         session_id = request.session_id
 
         logger.debug(
             "received text request",
             extra={
-                "agent_name": self._agent_name,
+                "endpoint": endpoint,
                 "message_id": request.message_id,
                 "session_id": request.session_id,
             },
@@ -1414,6 +1419,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=False,
+                text_endpoint=endpoint,
                 text_request=request,
             )
             proc_id = await self._proc_pool.launch_job(running_info)
@@ -1426,43 +1432,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._text_sessions[session_id] = session_info
 
             return session_info
-
-    # async def _handle_text_request(self, request: agent.TextMessageRequest) -> None:
-    #     """Handle text request from ws connection."""
-    #     session_id = request.session_id
-    #     try:
-    #         session_info = await self._launch_text_job(request)
-    #     except Exception as e:
-    #         logger.exception(
-    #             "error while launching text job",
-    #             extra={"message_id": request.message_id, "session_id": session_id},
-    #         )
-    #         final_response = agent.TextMessageResponse(message_id=request.message_id, error=str(e))
-    #         await self._queue_msg(agent.WorkerMessage(text_message_response=final_response))
-    #         return
-
-    #     async for ev in session_info.event_ch:
-    #         push_text = agent.PushTextRequest(message_id=request.message_id, content=ev.data)
-    #         # await self._queue_msg(agent.WorkerMessage(push_text=push_text))
-
-    #     final_response = agent.TextMessageResponse(message_id=request.message_id)
-    #     try:
-    #         complete_ev = await session_info.done_fut
-    #         if complete_ev.error:
-    #             final_response.error = complete_ev.error
-    #         else:
-    #             final_response.session_state = complete_ev.session_state
-    #     except Exception as e:
-    #         logger.exception(
-    #             "error while waiting for text session complete",
-    #             extra={"session_id": session_id},
-    #         )
-    #         final_response.error = str(e)
-    #     finally:
-    #         # notify the cloud the completion of the request
-    #         # msg = agent.WorkerMessage(text_message_response=final_response)
-    #         # await self._queue_msg(msg)
-    #         pass
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:
         proc = self._proc_pool.get_by_job_id(msg.job_id)
