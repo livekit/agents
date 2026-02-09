@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -106,7 +107,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         address = " ".join(address_fields)
         self._current_address = address
 
-        if self._require_confirmation is False or ctx.speech_handle.input_source.modality == "text":
+        if not self._confirmation_required(ctx):
             if not self.done():
                 self.complete(GetAddressResult(address=self._current_address))
             return None
@@ -122,9 +123,8 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         """Call this tool when the user confirms that the address is correct."""
         await ctx.wait_for_playout()
 
-        if (
-            ctx.speech_handle == self._address_update_speech_handle
-            and ctx.speech_handle.input_source.modality == "audio"
+        if ctx.speech_handle == self._address_update_speech_handle and self._confirmation_required(
+            ctx
         ):
             raise ToolError("error: the user must confirm the address explicitly")
 
@@ -145,3 +145,8 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the address: {reason}"))
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_source.modality == "audio"
