@@ -84,7 +84,7 @@ fix: format lint-fix ## Run format and lint checks and fix issues automatically 
 
 unit-tests:
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
-	PYTHONPATH="$$PWD" uv run pytest \
+	PYTHONPATH="$$PWD" uv run pytest -n auto \
 		tests/test_agent_session.py \
 		tests/test_aio.py \
 		tests/test_audio_decoder.py \

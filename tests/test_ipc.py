@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 import psutil
 
@@ -179,6 +179,17 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
 
     with start_args.update_ev:
         start_args.update_ev.notify()
+
+
+async def _poll_until(
+    condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition_fn():
+            return
+        await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Timed out after {timeout}s waiting for condition")
 
 
 async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
@@ -355,7 +366,6 @@ async def test_shutdown_no_job():
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
     await proc.aclose()
 
     assert proc.exitcode == 0
@@ -370,11 +380,10 @@ async def test_job_slow_shutdown():
 
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     # process is killed when there is a job with slow timeout
@@ -388,11 +397,10 @@ async def test_job_graceful_shutdown():
     start_args.shutdown_simulate_work_time = 1.0
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     assert proc.exitcode == 0, "process should have exited cleanly"
