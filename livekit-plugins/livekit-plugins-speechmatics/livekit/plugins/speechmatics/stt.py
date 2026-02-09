@@ -119,7 +119,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
         operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
@@ -156,7 +156,7 @@ class STT(stt.STT):
             turn_detection_mode: Controls how the STT engine detects end of speech
                 turns. Use `EXTERNAL` when LiveKit's built-in endpointing is handling
                 turn detection. Use `ADAPTIVE` for simple VAD or `SMART_TURN` for
-                ML-based endpointing. Defaults to `TurnDetectionMode.FIXED`.
+                ML-based endpointing. Defaults to `TurnDetectionMode.ADAPTIVE`.
 
             operating_point: Operating point for transcription accuracy vs. latency
                 tradeoff. Overrides preset if provided. Optional.
