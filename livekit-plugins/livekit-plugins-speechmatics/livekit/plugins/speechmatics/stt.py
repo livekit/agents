@@ -363,7 +363,13 @@ class STT(stt.STT):
         errors: list[str] = []
         opts = self._stt_options
 
-        # max_delay must exceed silence_trigger so the engine has time to detect silence
+        # end_of_utterance_silence_trigger must be between 0 and 1
+        if opts.end_of_utterance_silence_trigger is not None and not (
+            0 < opts.end_of_utterance_silence_trigger < 2
+        ):
+            errors.append("end_of_utterance_silence_trigger must be between 0 and 2")
+
+        # end_of_utterance_max_delay must exceed end_of_utterance_silence_trigger so the engine has time to detect silence
         if (
             opts.end_of_utterance_max_delay is not None
             and opts.end_of_utterance_silence_trigger is not None
