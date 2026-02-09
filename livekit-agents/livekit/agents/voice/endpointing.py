@@ -3,28 +3,7 @@ import time
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-
-
-class ExponentialMovingAverage:
-    def __init__(self, alpha: float, initial: float | None = None) -> None:
-        if not 0 < alpha <= 1:
-            raise ValueError("alpha must be in (0, 1].")
-        self._alpha = alpha
-        self._value: float | None = initial
-
-    @property
-    def value(self) -> float | None:
-        return self._value
-
-    def update(self, sample: float) -> float:
-        if self._value is None:
-            self._value = sample
-        else:
-            self._value = self._alpha * sample + (1 - self._alpha) * self._value
-        return self._value
-
-    def reset(self, value: float | None = None) -> None:
-        self._value = value
+from ..utils.exp_filter import ExpFilter
 
 
 class DynamicEndpointing:
@@ -57,8 +36,12 @@ class DynamicEndpointing:
         self._min_delay = min_delay
         self._max_delay = max_delay
 
-        self._utterance_pause = ExponentialMovingAverage(alpha=alpha, initial=min_delay)
-        self._turn_pause = ExponentialMovingAverage(alpha=alpha, initial=max_delay)
+        self._utterance_pause = ExpFilter(
+            alpha=alpha, initial=min_delay, min_val=min_delay, max_val=max_delay
+        )
+        self._turn_pause = ExpFilter(
+            alpha=alpha, initial=max_delay, min_val=min_delay, max_val=max_delay
+        )
 
         self._utterance_started_at: float | None = None
         self._agent_speech_started_at: float | None = None
@@ -145,7 +128,7 @@ class DynamicEndpointing:
                 and (pause := self.between_utterance_delay) > 0
             ):
                 prev_val = self.min_delay
-                self._utterance_pause.update(min(max(pause, self._min_delay), self._max_delay))
+                self._utterance_pause.apply(1.0, pause)
                 logger.debug(
                     f"min endpointing delay updated: {prev_val} -> {self.min_delay}",
                     extra={
@@ -161,7 +144,7 @@ class DynamicEndpointing:
             # If this is not an immediate interruption, update the max delay (case 3)
             elif (pause := self.between_turn_delay) > 0:
                 prev_val = self.max_delay
-                self._turn_pause.update(min(max(pause, self.min_delay), self._max_delay))
+                self._turn_pause.apply(1.0, pause)
                 logger.debug(
                     f"max endpointing delay updated: {prev_val} -> {self.max_delay}",
                     extra={
@@ -181,7 +164,7 @@ class DynamicEndpointing:
 
         if (pause := self.between_utterance_delay) > 0 and self._agent_speech_started_at is None:
             prev_val = self.min_delay
-            self._utterance_pause.update(min(max(pause, self._min_delay), self._max_delay))
+            self._utterance_pause.apply(1.0, pause)
             logger.debug(
                 f"min endpointing delay updated: {prev_val} -> {self.min_delay}",
                 extra={
@@ -195,7 +178,7 @@ class DynamicEndpointing:
             )
         elif (pause := self.between_turn_delay) > 0:
             prev_val = self.max_delay
-            self._turn_pause.update(min(max(pause, self.min_delay), self._max_delay))
+            self._turn_pause.apply(1.0, pause)
             logger.debug(
                 f"max endpointing delay updated due to pause: {prev_val} -> {self.max_delay}",
                 extra={
@@ -228,8 +211,8 @@ class DynamicEndpointing:
     ) -> None:
         if is_given(min_delay):
             self._min_delay = min_delay
-            self._utterance_pause.reset(self._min_delay)
+            self._utterance_pause.reset(initial=self._min_delay, min_val=self._min_delay)
 
         if is_given(max_delay):
             self._max_delay = max_delay
-            self._turn_pause.reset(self._max_delay)
+            self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
