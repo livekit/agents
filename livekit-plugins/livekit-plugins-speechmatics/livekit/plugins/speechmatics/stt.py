@@ -119,7 +119,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.ADAPTIVE,
         operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
@@ -841,6 +841,6 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
     ):
         value = kwargs["end_of_utterance_mode"]
         opts.turn_detection_mode = (
-            TurnDetectionMode.EXTERNAL if value == "none" else TurnDetectionMode(value)
+            TurnDetectionMode.ADAPTIVE if value == "none" else TurnDetectionMode(value)
         )
         logger.warning("`end_of_utterance_mode` is deprecated, migrated to `turn_detection_mode`")
