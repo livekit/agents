@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+import aiohttp.typedefs
 from aiohttp import web
 
 from livekit.protocol import agent
@@ -32,7 +33,9 @@ _CORS_HEADERS = {
 
 
 @web.middleware
-async def _cors_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
+async def _cors_middleware(
+    request: web.Request, handler: aiohttp.typedefs.Handler
+) -> web.StreamResponse:
     try:
         resp = await handler(request)
     except web.HTTPException as exc:
@@ -246,31 +249,22 @@ class AgentHttpServer(HttpServer):
         return endpoint, text_request
 
 
-@dataclass
-class TextSessionStarted:
-    """Acknowledgment response when starting a text session."""
-
-    session_id: str
-    message_id: str
-
-
-@dataclass
-class TextResponseEvent:
-    """Event from the agent during text processing."""
-
-    item: llm.ChatItem
-
-
-@dataclass
-class TextSessionComplete:
-    """Completion response with final session state or error."""
-
-    session_state: agent.AgentSessionState | None = None
-    error: str | None = None
-
-
 class AgentHttpClient:
     """Client to interact with AgentHttpServer API."""
+
+    @dataclass
+    class TextSessionStarted:
+        session_id: str
+        message_id: str
+
+    @dataclass
+    class TextResponseEvent:
+        item: llm.ChatItem
+
+    @dataclass
+    class TextSessionComplete:
+        session_state: agent.AgentSessionState | None = None
+        error: str | None = None
 
     def __init__(
         self,
@@ -393,7 +387,7 @@ class AgentHttpClient:
 
                 event_type = data.get("type")
                 if event_type == "ack":
-                    yield TextSessionStarted(
+                    yield self.TextSessionStarted(
                         session_id=data["session_id"],
                         message_id=data["message_id"],
                     )
@@ -412,7 +406,7 @@ class AgentHttpClient:
                         if (delta := session_state_data.get("delta")) is not None:
                             parsed_state.delta = base64.b64decode(delta)
 
-                    yield TextSessionComplete(session_state=parsed_state, error=error)
+                    yield self.TextSessionComplete(session_state=parsed_state, error=error)
                 else:
                     data = data.get("data", {})
                     ev: (
@@ -433,4 +427,4 @@ class AgentHttpClient:
                         logger.warning(f"unsupported event type: {event_type}")
                         continue
 
-                    yield TextResponseEvent(item=ev)
+                    yield self.TextResponseEvent(item=ev)

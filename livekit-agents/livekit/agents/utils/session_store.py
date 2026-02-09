@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import pickle
 import tempfile
+from abc import ABC, abstractmethod
 from collections import OrderedDict
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -232,9 +234,8 @@ class SessionStore:
             for (table_name,) in tables:
                 session.diff("main", str(table_name))
 
-            changeset = session.changeset()
-
-            return changeset
+            delta = session.patchset()
+            return delta
 
         finally:
             # detach the target database
@@ -447,6 +448,27 @@ class SessionStore:
         self.close()
 
 
+class SessionCache(ABC):
+    """Abstract base class for session caches used by the AgentServer.
+
+    Methods may return either a plain value or an awaitable — the caller
+    will ``await`` the result when it is a coroutine.
+    """
+
+    @abstractmethod
+    def resolve(
+        self, session_id: str, session_state: agent.AgentSessionState
+    ) -> agent.AgentSessionState | Awaitable[agent.AgentSessionState]: ...
+
+    @abstractmethod
+    def store(
+        self, session_id: str, session_state: agent.AgentSessionState
+    ) -> None | Awaitable[None]: ...
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+
 @dataclass
 class _SessionCacheEntry:
     """A cached session stored either as in-memory bytes or as a file on disk."""
@@ -491,7 +513,7 @@ class _SessionCacheEntry:
             self.data.unlink(missing_ok=True)
 
 
-class EphemeralSessionCache:
+class EphemeralSessionCache(SessionCache):
     """LRU cache for session database snapshots.
 
     Supports two storage modes:
@@ -577,7 +599,7 @@ class EphemeralSessionCache:
         self._touch(session_id, entry)
         return agent.AgentSessionState(version=target_version, snapshot=snapshot)
 
-    def save(self, session_id: str, session_state: agent.AgentSessionState) -> None:
+    def store(self, session_id: str, session_state: agent.AgentSessionState) -> None:
         """Update a cached session with a snapshot or delta."""
         entry = self._get_or_create(session_id)
         data_kind = session_state.WhichOneof("data")
@@ -628,7 +650,7 @@ class EphemeralSessionCache:
                     exc_info=True,
                 )
 
-    def close(self) -> None:
+    async def aclose(self) -> None:
         """Release all cached data and clean up resources."""
         if self._temp_dir:
             self._temp_dir.cleanup()

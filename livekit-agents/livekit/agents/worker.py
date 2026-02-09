@@ -55,7 +55,7 @@ from .plugin import Plugin
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.hw import get_cpu_monitor
-from .utils.session_store import EphemeralSessionCache
+from .utils.session_store import EphemeralSessionCache, SessionCache
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -353,6 +353,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        session_cache: SessionCache | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -392,7 +393,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
 
         self._text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]] = {}
-        self._session_cache: EphemeralSessionCache | None = None
+        self._session_cache: SessionCache | None = session_cache
+        self._pending_cache_saves: dict[str, asyncio.Task[None]] = {}
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -669,7 +671,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._proc_pool.on("text_response", self._on_text_response)
                 self._proc_pool.on("text_session_complete", self._on_text_session_complete)
                 self._proc_pool.on("process_closed", self._on_process_closed)
-                self._session_cache = EphemeralSessionCache(in_memory=True)
+                if self._session_cache is None:
+                    self._session_cache = EphemeralSessionCache(in_memory=True)
 
             self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
@@ -994,7 +997,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._closed = True
 
             if self._session_cache is not None:
-                self._session_cache.close()
+                if self._pending_cache_saves:
+                    await asyncio.gather(
+                        *self._pending_cache_saves.values(), return_exceptions=True
+                    )
+                await self._session_cache.aclose()
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
@@ -1386,10 +1393,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise ValueError(f"Session {session_id} already running")
 
             assert self._session_cache is not None
+            # await any pending save for this session before resolving
+            if save_task := self._pending_cache_saves.get(session_id):
+                await save_task
+
             # resolve version/delta to snapshot from the cache
             if request.HasField("session_state"):
                 try:
                     session_state = self._session_cache.resolve(session_id, request.session_state)
+                    if inspect.isawaitable(session_state):
+                        session_state = await session_state
+
                 except Exception as e:
                     raise TextMessageError(
                         f"failed to resolve session state from cache with error: {str(e)}",
@@ -1530,7 +1544,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         session_info.done_fut.set_result(ev)
         session_info.event_ch.close()
         if ev.session_state and self._session_cache:
-            self._session_cache.save(session_id, ev.session_state)
+            result = self._session_cache.store(session_id, ev.session_state)
+            if inspect.isawaitable(result):
+                task = asyncio.ensure_future(result, loop=self._loop)
+                self._pending_cache_saves[session_id] = task
+                task.add_done_callback(lambda _: self._pending_cache_saves.pop(session_id, None))
 
     def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
         """Clean up any text sessions on this process."""

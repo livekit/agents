@@ -1177,7 +1177,6 @@ def _sms_text_mode(
 ) -> None:
     from livekit.protocol.agent import AgentSessionState
 
-    from ..agent_http_server import TextResponseEvent, TextSessionComplete, TextSessionStarted
     from ..utils.session_store import SessionStore
 
     session_id: str | None = None
@@ -1216,18 +1215,19 @@ def _sms_text_mode(
         elif target_version is not None:
             session_state = AgentSessionState(version=target_version)
 
-        response_queue = queue.Queue[
-            TextSessionStarted | TextResponseEvent | TextSessionComplete | None
-        ]()
+        MSG_TYPE = (
+            AgentHttpClient.TextSessionStarted
+            | AgentHttpClient.TextResponseEvent
+            | AgentHttpClient.TextSessionComplete
+        )
+        response_queue = queue.Queue[MSG_TYPE | None]()
 
         def async_worker(
             session_id: str,
             user_text: str,
             user_endpoint: str,
             user_session_state: AgentSessionState | None,
-            user_response_queue: queue.Queue[
-                TextSessionStarted | TextResponseEvent | TextSessionComplete | None
-            ],
+            user_response_queue: queue.Queue[MSG_TYPE | None],
         ) -> None:
             """Run async code in a separate thread with its own event loop."""
 
@@ -1254,7 +1254,7 @@ def _sms_text_mode(
         worker_thread.start()
 
         while True:
-            resp: TextSessionStarted | TextResponseEvent | TextSessionComplete | None = None
+            resp: MSG_TYPE | None = None
             with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
@@ -1266,10 +1266,10 @@ def _sms_text_mode(
             if resp is None:
                 break
 
-            if isinstance(resp, TextSessionStarted):
+            if isinstance(resp, AgentHttpClient.TextSessionStarted):
                 session_id = resp.session_id
 
-            elif isinstance(resp, TextSessionComplete):
+            elif isinstance(resp, AgentHttpClient.TextSessionComplete):
                 if resp.error:
                     logger.error(
                         "error processing text",
@@ -1295,7 +1295,7 @@ def _sms_text_mode(
 
                 break
 
-            elif isinstance(resp, TextResponseEvent):
+            elif isinstance(resp, AgentHttpClient.TextResponseEvent):
                 _print_chat_item(c, resp.item)
 
         worker_thread.join()
