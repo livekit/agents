@@ -24,6 +24,25 @@ from .version import __version__
 if TYPE_CHECKING:
     from .worker import AgentServer
 
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
+
+
+@web.middleware
+async def _cors_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
+    try:
+        resp = await handler(request)
+    except web.HTTPException as exc:
+        for k, v in _CORS_HEADERS.items():
+            exc.headers[k] = v
+        raise
+    for k, v in _CORS_HEADERS.items():
+        resp.headers[k] = v
+    return resp
+
 
 class AgentHttpServer(HttpServer):
     """HTTP server that handles health checks, worker info, and text message endpoints."""
@@ -39,16 +58,21 @@ class AgentHttpServer(HttpServer):
         super().__init__(host, port, loop)
         self._agent_server = agent_server
 
+        self._app.middlewares.append(_cors_middleware)
         self._app.add_routes(
             [
                 web.get("/", self._health_check),
                 web.get("/worker", self._worker_info),
+                web.options("/{path:.*}", self._handle_cors_preflight),
                 web.post("/text", self._handle_text_request),
                 web.post("/text/sessions/{session_id}", self._handle_text_request),
                 web.post("/text/{endpoint}", self._handle_text_request),
                 web.post("/text/{endpoint}/sessions/{session_id}", self._handle_text_request),
             ]
         )
+
+    async def _handle_cors_preflight(self, _: web.Request) -> web.Response:
+        return web.Response(headers={**_CORS_HEADERS, "Access-Control-Max-Age": "3600"})
 
     async def _health_check(self, _: web.Request) -> web.Response:
         """Health check endpoint - returns 200 if server is healthy."""
@@ -106,6 +130,7 @@ class AgentHttpServer(HttpServer):
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
+                **_CORS_HEADERS,
             },
         )
         await response.prepare(request)

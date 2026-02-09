@@ -1,6 +1,9 @@
+import asyncio
 import logging
+import os
 from typing import Any, override
 
+import aiohttp
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -25,6 +28,8 @@ logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
+PORT = int(os.getenv("PORT", 8081))
+
 
 class MyAgent(Agent):
     def __init__(self, *, text_mode: bool) -> None:
@@ -48,29 +53,39 @@ class MyAgent(Agent):
             logger.debug("greeting the user")
             self.session.generate_reply(allow_interruptions=False)
 
-    # all functions annotated with @function_tool will be passed to the LLM when this
-    # agent is active
     @function_tool
-    async def lookup_weather(
-        self, context: RunContext, location: str, latitude: str, longitude: str
+    async def get_weather(
+        self,
+        latitude: str,
+        longitude: str,
     ):
-        """Called when the user asks for weather related information.
-        Ensure the user's location (city or region) is provided.
-        When given a location, please estimate the latitude and longitude of the location and
-        do not ask the user for them.
+        """Called when the user asks about the weather. This function will return the weather for
+        the given location. When given a location, please estimate the latitude and longitude of the
+        location and do not ask the user for them.
 
         Args:
-            location: The location they are asking for
-            latitude: The latitude of the location, do not ask user for it
-            longitude: The longitude of the location, do not ask user for it
+            latitude: The latitude of the location
+            longitude: The longitude of the location
         """
 
-        logger.info(f"Looking up weather for {location}")
+        logger.info(f"getting weather for {latitude}, {longitude}")
+        self.session.say("I'm getting the weather for you...")
 
-        # this will create multiple responses to the user
-        context.session.say("Let me check the weather for you")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+        weather_data = {}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # response from the function call is returned to the LLM
+                    weather_data = {
+                        "temperature": data["current"]["temperature_2m"],
+                        "temperature_unit": "Celsius",
+                    }
+                else:
+                    raise Exception(f"Failed to get weather data, status code: {response.status}")
 
-        return "sunny with a temperature of 70 degrees."
+        return weather_data
 
     @function_tool(flags=ToolFlag.DURABLE)
     async def register_for_weather(self, context: RunContext):
@@ -95,10 +110,10 @@ class MyAgent(Agent):
         return "You are now registered for the weather event."
 
 
-server = AgentServer(port=8081)
+server = AgentServer(port=PORT)
 
 
-@server.text_handler()
+@server.text_handler(endpoint="weather")
 async def text_handler(ctx: TextMessageContext):
     logger.info(f"text message received: {ctx.text}")
 

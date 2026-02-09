@@ -620,6 +620,7 @@ async def _execute_tools_task(
                                     "num_steps": speech_handle.num_steps,
                                     "function_call": fnc_call.model_dump_json(),
                                     "allow_interruptions": speech_handle.allow_interruptions,
+                                    "input_details": speech_handle.input_details,
                                 },
                             )
                         else:

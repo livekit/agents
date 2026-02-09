@@ -539,6 +539,7 @@ class AgentActivity(RecognitionHooks):
                 allow_interruptions=task.metadata.get(
                     "allow_interruptions", self.allow_interruptions
                 ),
+                input_details=task.metadata.get("input_details", DEFAULT_INPUT_DETAILS),
             )
             speech_handle._num_steps = num_steps
             for _ in range(num_steps):
