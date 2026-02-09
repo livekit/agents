@@ -55,7 +55,7 @@ from .events import (
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
-from .speech_handle import SpeechHandle
+from .speech_handle import InputSource, SpeechHandle
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -983,7 +983,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
-                input_modality=input_modality,
+                input_source=InputSource(modality=input_modality),
             )
             if run_state:
                 run_state._watch_handle(handle)

@@ -19,6 +19,9 @@ class InputSource:
     modality: Literal["text", "audio"]
 
 
+DEFAULT_INPUT_SOURCE = InputSource(modality="audio")
+
+
 class SpeechHandle:
     SPEECH_PRIORITY_LOW = 0
     """Priority for messages that should be played after all other messages in the queue"""
@@ -62,12 +65,12 @@ class SpeechHandle:
     @staticmethod
     def create(
         allow_interruptions: bool = True,
-        input_modality: Literal["text", "audio"] = "audio",
+        input_source: InputSource = DEFAULT_INPUT_SOURCE,
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
-            input_source=InputSource(modality=input_modality),
+            input_source=input_source,
         )
 
     @property
