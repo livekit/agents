@@ -36,6 +36,7 @@ from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
+from ..voice.amd import AMDResult
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
@@ -1469,6 +1470,9 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity._user_turn_completed_task",
         )
         return True
+
+    def on_amd_result(self, result: AMDResult) -> None:
+        pass
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(

@@ -13,6 +13,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
+from ..llm.realtime import RealtimeModel
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -151,7 +152,7 @@ class AudioRecognition:
         # AMD
         self._amd: AMD | None = (
             AMD(session._llm)
-            if session._llm and not isinstance(session._llm, llm.RealtimeLLM)
+            if session._llm and not isinstance(session._llm, RealtimeModel)
             else None
         )
         if self._amd:
@@ -219,7 +220,7 @@ class AudioRecognition:
             await self._end_of_turn_task
 
         if self._amd is not None:
-            await self._amd.aclose()
+            self._amd.close()
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -344,6 +345,13 @@ class AudioRecognition:
         if self._audio_interim_transcript:
             return self._audio_transcript + " " + self._audio_interim_transcript
         return self._audio_transcript
+
+    @property
+    async def amd_result(self) -> AMDResult | None:
+        if self._amd:
+            await self._amd._ready_event.wait()
+            return self._amd._verdit
+        return None
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if (
@@ -511,6 +519,9 @@ class AudioRecognition:
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
+
+            if self._amd:
+                self._amd.on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
