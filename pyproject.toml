@@ -16,6 +16,7 @@ livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
+livekit-plugins-deepdub = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }

@@ -86,6 +86,7 @@ jobs:
         plugin:
           [
             cartesia,
+            deepdub,
             deepgram,
             elevenlabs,
             groq,
@@ -111,6 +112,7 @@ jobs:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          DEEPDUB_API_KEY: ${{ secrets.DEEPDUB_API_KEY }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

@@ -69,6 +69,7 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
     -p livekit.plugins.bithuman \
     -p livekit.plugins.cartesia \
     -p livekit.plugins.clova \
+    -p livekit.plugins.deepdub \
     -p livekit.plugins.deepgram \
     -p livekit.plugins.elevenlabs \
     -p livekit.plugins.fal \

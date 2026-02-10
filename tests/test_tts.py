@@ -22,6 +22,7 @@ from livekit.plugins import (
     aws,
     azure,
     cartesia,
+    deepdub,
     deepgram,
     elevenlabs,
     google,
@@ -157,6 +158,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "westus.tts.speech.microsoft.com:443",
         },
         id="azure",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepdub.TTS(),
+            "proxy-upstream": "restapi.deepdub.ai:443",
+        },
+        id="deepdub",
     ),
     pytest.param(
         lambda: {
@@ -405,6 +413,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.cartesia.ai:443",
         },
         id="cartesia",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepdub.TTS(),
+            "proxy-upstream": "wss.deepdub.ai:443",
+        },
+        id="deepdub",
     ),
     pytest.param(
         lambda: {
