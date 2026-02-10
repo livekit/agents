@@ -49,7 +49,10 @@ class CGroupV2CPUMonitor(CPUMonitor):
             return env_cpus
         quota, period = self._read_cpu_max()
         if quota == "max":
-            return psutil.cpu_count() or 1.0
+            try:
+                return len(psutil.Process().cpu_affinity())
+            except:
+                return psutil.cpu_count() or 1.0
         return 1.0 * int(quota) / period
 
     def cpu_percent(self, interval: float = 0.5) -> float:
@@ -67,23 +70,67 @@ class CGroupV2CPUMonitor(CPUMonitor):
         return min(cpu_usage_percent, 1)
 
     def _read_cpu_max(self) -> tuple[str, int]:
+        """Read CPU quota and period from cgroup v2.
+        
+        The cpu.max file can be in different locations depending on the cgroup hierarchy:
+        - /sys/fs/cgroup/cpu.max (container root)
+        - /sys/fs/cgroup/system.slice/cpu.max (systemd system slice)
+        - /sys/fs/cgroup/user.slice/cpu.max (systemd user slice)
+        - /proc/self/cgroup can tell us the actual cgroup path
+        """
+        cpu_max_paths = [
+            "/sys/fs/cgroup/cpu.max",  # Most common in containers
+        ]
+
+        # try to find the actual cgroup path from /proc/self/cgroup
         try:
-            with open("/sys/fs/cgroup/cpu.max") as f:
-                data = f.read().strip().split()
-            quota = data[0]
-            period = int(data[1])
-        except FileNotFoundError:
-            quota = "max"
-            period = 100000
-        return quota, period
+            with open("/proc/self/cgroup", "r") as f:
+                for line in f:
+                    # Format: hierarchy-ID:controller-list:cgroup-path
+                    # Example: 0::/system.slice/docker-xyz.scope
+                    parts = line.strip().split(":")
+                    if len(parts) >= 3:
+                        cgroup_path = parts[2]
+                        if cgroup_path and cgroup_path != "/":
+                            # Add the specific cgroup path
+                            specific_path = f"/sys/fs/cgroup{cgroup_path}/cpu.max"
+                            cpu_max_paths.insert(0, specific_path)
+                            # Also try parent directories
+                            parent_path = os.path.dirname(cgroup_path)
+                            if parent_path and parent_path != "/":
+                                cpu_max_paths.append(f"/sys/fs/cgroup{parent_path}/cpu.max")
+        except (FileNotFoundError, OSError, IOError) as e:
+            pass
 
-    def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat") as f:
-            for line in f:
-                if line.startswith("usage_usec"):
-                    return int(line.split()[1])
-        raise RuntimeError("Failed to read CPU usage")
+        # common fallback paths
+        cpu_max_paths.extend([
+            "/sys/fs/cgroup/system.slice/cpu.max",
+            "/sys/fs/cgroup/user.slice/cpu.max",
+            # For Kubernetes/Docker containers that might be in a pod slice
+            "/sys/fs/cgroup/kubepods.slice/cpu.max",
+            "/sys/fs/cgroup/docker/cpu.max",
+        ])
 
+        # try each path in order
+        for cpu_max_path in cpu_max_paths:
+            try:
+                with open(cpu_max_path) as f:
+                    data = f.read().strip().split()
+                quota = data[0]
+                period = int(data[1]) if len(data) > 1 else 100000
+                if period <= 0:
+                    logger.warning(f"Invalid CPU period {period} in {cpu_max_path}, using default")
+                    period = 100000
+                return quota, period
+            except FileNotFoundError:
+                continue
+            except (ValueError, IndexError) as e:
+                continue
+            except (OSError, IOError) as e:
+                continue
+
+        # if we couldn't find any cpu.max file, return defaults
+        return "max", 100000
 
 class CGroupV1CPUMonitor(CPUMonitor):
     def cpu_count(self) -> float:
