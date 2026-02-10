@@ -22,6 +22,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
+    GetCreditCardTask,
     GetDOBTask,
     GetEmailTask,
     GetNameTask,
@@ -551,8 +552,7 @@ class HealthcareAgent(Agent):
     @function_tool()
     async def handle_billing(self):
         """Call for any billing inquiries and if the user wants to pay their outstanding balance"""
-        ...
-        # results = await GetCreditCardTask()
+        results = await GetCreditCardTask()
 
 
 server = AgentServer()

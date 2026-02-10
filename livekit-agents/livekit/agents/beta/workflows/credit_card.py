@@ -9,7 +9,8 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
-from . import TaskGroup
+from .name import GetNameTask
+from .task_group import TaskGroup
 
 if TYPE_CHECKING:
     from ...voice.agent_session import TurnDetectionMode
@@ -67,62 +68,6 @@ async def restart_card_collection(self, reason: str) -> None:
     """
     if not self.done():
         self.complete(ToolError(f"starting over: {reason}"))
-
-
-class GetCardHolderNameTask(AgentTask[GetCardHolderNameResult]):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="""You are a single step in a broader process of collecting credit card information.
-            You are solely responsible for collecting the cardholder's full name.
-            If the user refuses to provide a name, call decline_card_capture().
-            Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-            """,
-            tools=[decline_card_capture],
-        )
-        self._full_name = ""
-        self._name_update_speech_handle: SpeechHandle | None = None
-
-    async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions="Collect the cardholder's full name.",
-        )
-
-    @function_tool()
-    async def update_cardholder_name(
-        self,
-        context: RunContext,
-        full_name: str,
-    ) -> None:
-        """Updates the cardholder's full name.
-
-        Args:
-            full_name (str): The cardholder's full name
-        """
-        self._name_update_speech_handle = context.speech_handle
-
-        self._full_name = full_name
-        return (
-            f"The cardholder's name has been updated to {full_name}\n"
-            f"Repeat the name character by character: {full_name} if needed\n"
-            f"Prompt the user for confirmation, do not call `confirm_cardholder_name` directly"
-        )
-
-    @function_tool()
-    async def confirm_cardholder_name(
-        self,
-        context: RunContext,
-    ) -> None:
-        """Confirms the cardholder's full name."""
-        await context.wait_for_playout()
-
-        if context.speech_handle == self._name_update_speech_handle:
-            raise ToolError("error: the user must confirm the cardholder name explicitly")
-        if not self._full_name:
-            raise ToolError(
-                "error: no name was provided, 'update_cardholder_name must be called prior"
-            )
-        if not self.done():
-            self.complete(GetCardHolderNameResult(full_name=self._full_name))
 
 
 class GetCardNumberTask(AgentTask[GetCardNumberResult]):
@@ -370,7 +315,10 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         while not self.done():
             task_group = TaskGroup()
             task_group.add(
-                lambda: GetCardHolderNameTask(),
+                lambda: GetNameTask(
+                    last_name=True,
+                    extra_instructions="This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+                ),
                 id="cardholder_name_task",
                 description="Collects the cardholder's full name",
             )
