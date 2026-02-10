@@ -36,8 +36,8 @@ from google.protobuf.json_format import MessageToDict
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
-from . import ipc, telemetry, utils
-from ._exceptions import AssignmentTimeoutError
+from . import ipc, telemetry, types, utils
+from ._exceptions import AssignmentTimeoutError, TextMessageError
 from .http_server import AgentHttpServer
 from .inference_runner import _InferenceRunner
 from .job import (
@@ -48,7 +48,6 @@ from .job import (
     JobRequest,
     RunningJobInfo,
     TextMessageContext,
-    TextMessageError,
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
@@ -109,7 +108,7 @@ class _EntrypointWrapper:
                 await text_handler_fnc(ctx.text_message_context)
             except Exception as e:
                 exc = TextMessageError(
-                    f"error in text handler: {str(e)}", code="TEXT_HANDLER_ERROR"
+                    f"error in text handler: {str(e)}", code=types.ERROR_TEXT_HANDLER_ERROR
                 )
                 logger.exception(
                     "error in text handler",
@@ -1407,7 +1406,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 except Exception as e:
                     raise TextMessageError(
                         f"failed to resolve session state from cache with error: {str(e)}",
-                        code="SESSION_STATE_RESOLUTION_FAILED",
+                        code=types.ERROR_SESSION_STATE_NOT_FOUND,
                     ) from e
                 request.session_state.CopyFrom(session_state)
 
@@ -1561,7 +1560,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     session_info.done_fut.set_exception(
                         TextMessageError(
                             "process closed before text session completed",
-                            code="PROCESS_CLOSED",
+                            code=types.ERROR_PROCESS_CLOSED,
                         )
                     )
                 session_info.event_ch.close()

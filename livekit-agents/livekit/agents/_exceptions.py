@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
@@ -97,3 +99,13 @@ class APITimeoutError(APIConnectionError):
 
 class CLIError(Exception):
     pass
+
+
+class TextMessageError(Exception):
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self._message = message
+        self._code = code
+
+    def to_json(self) -> str:
+        return json.dumps({"message": self._message, "code": self._code})

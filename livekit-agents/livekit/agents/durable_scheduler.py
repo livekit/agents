@@ -246,16 +246,7 @@ class DurableScheduler:
                 if not ec._c or ec._c_ctx is None:
                     raise RuntimeError("invalid EffectCall state")
 
-                if isinstance(ec._c, AgentTask):
-
-                    async def _execute(aw: AgentTask) -> Any:
-                        return await aw
-
-                    coro = _execute(ec._c)
-                else:
-                    coro = ec._c
-
-                exe_task = ec._c_ctx.run(self._loop.create_task, coro)
+                exe_task = ec._c_ctx.run(asyncio.ensure_future, ec._c, loop=self._loop)
                 _pass_through_activity_task_info(exe_task)
 
                 val = await exe_task

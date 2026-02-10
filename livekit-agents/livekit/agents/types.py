@@ -74,6 +74,19 @@ USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 The key for the timed transcripts in the audio frame userdata.
 """
 
+ERROR_SESSION_STATE_NOT_FOUND = "SESSION_STATE_NOT_FOUND"
+"""
+Error code when the session state cache not found or version mismatch.
+"""
+ERROR_TEXT_HANDLER_ERROR = "TEXT_HANDLER_ERROR"
+"""
+Error code for when an error occurred in the text handler.
+"""
+ERROR_PROCESS_CLOSED = "PROCESS_CLOSED"
+"""
+Error code for when a process closed before a text session completed.
+"""
+
 
 _T = TypeVar("_T")
 

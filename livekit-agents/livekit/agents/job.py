@@ -35,6 +35,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from ._exceptions import TextMessageError
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report
@@ -132,16 +133,6 @@ class _ContextLogFieldsFilter(logging.Filter):
         return True
 
 
-class TextMessageError(Exception):
-    def __init__(self, message: str, code: str = "") -> None:
-        super().__init__(message)
-        self._message = message
-        self._code = code
-
-    def __str__(self) -> str:
-        return json.dumps({"message": self._message, "code": self._code})
-
-
 class TextMessageContext:
     def __init__(
         self, *, job_ctx: JobContext, endpoint: str, text_request: agent.TextMessageRequest
@@ -208,7 +199,7 @@ class TextMessageContext:
             logger.error(
                 "no primary agent session found", extra={"text_session_id": self.session_id}
             )
-            msg.error = str(TextMessageError("no primary agent session found"))
+            msg.error = TextMessageError("no primary agent session found").to_json()
             await self._job_ctx._ipc_client.send(msg)
             return
 

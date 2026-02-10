@@ -17,7 +17,7 @@ from aiohttp import web
 from livekit.protocol import agent
 
 from . import llm, utils
-from .job import TextMessageError
+from ._exceptions import TextMessageError
 from .log import logger
 from .utils.http_server import HttpServer
 from .version import __version__
@@ -177,23 +177,20 @@ class AgentHttpServer(HttpServer):
 
             await response.write(json.dumps(completion_data).encode() + b"\n")
         except TextMessageError as e:
+            error_data = {"type": "complete", "error": e.to_json()}
             logger.error(
                 "error processing text request",
-                extra={"session_id": text_request.session_id, "error": str(e)},
+                extra={"session_id": text_request.session_id, **error_data},
             )
             with contextlib.suppress(Exception):
-                error_data = {"type": "complete", "error": str(e)}
                 await response.write(json.dumps(error_data).encode() + b"\n")
         except Exception:
+            error_data = {"type": "complete", "error": TextMessageError("internal error").to_json()}
             logger.exception(
                 "unexpected error processing text request",
                 extra={"session_id": text_request.session_id},
             )
             with contextlib.suppress(Exception):
-                error_data = {
-                    "type": "complete",
-                    "error": str(TextMessageError("internal error")),
-                }
                 await response.write(json.dumps(error_data).encode() + b"\n")
         finally:
             await response.write_eof()
