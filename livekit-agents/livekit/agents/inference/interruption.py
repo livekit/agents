@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from ..vad import VAD
 
 SAMPLE_RATE = 16000
-THRESHOLD = 0.65
+THRESHOLD = 0.5
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
@@ -110,7 +110,7 @@ class InterruptionOptions:
     sample_rate: int
     """The sample rate of the audio frames, defaults to 16000Hz"""
     threshold: float
-    """The threshold for the interruption detection, defaults to 0.65"""
+    """The threshold for the interruption detection, defaults to 0.5"""
     min_frames: int
     """The minimum number of frames to detect a interruption, defaults to 50ms/2 frames"""
     max_audio_duration: float
@@ -186,7 +186,7 @@ class AdaptiveInterruptionDetector(
         Initialize a AdaptiveInterruptionDetector instance.
 
         Args:
-            threshold (float, optional): The threshold for the interruption detection, defaults to 0.65.
+            threshold (float, optional): The threshold for the interruption detection, defaults to 0.5.
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
@@ -552,6 +552,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
             nonlocal cache
 
             agent_speech_started: bool = False
+            overlap_count: int = 0
             inference_s16_data = np.zeros(
                 int(self._opts.max_audio_duration * self._opts.sample_rate), dtype=np.int16
             )
@@ -563,6 +564,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                 if isinstance(input_frame, InterruptionStreamBase._AgentSpeechStartedSentinel):
                     agent_speech_started = True
                     overlap_speech_started = False
+                    overlap_count = 0
                     accumulated_samples = 0
                     start_idx = 0
                     cache.clear()
@@ -572,6 +574,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                 if isinstance(input_frame, InterruptionStreamBase._AgentSpeechEndedSentinel):
                     agent_speech_started = False
                     overlap_speech_started = False
+                    overlap_count = 0
                     accumulated_samples = 0
                     start_idx = 0
                     cache.clear()
@@ -586,15 +589,17 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     logger.debug("overlap speech started, starting interruption inference")
                     overlap_speech_started = True
                     accumulated_samples = 0
+                    overlap_count += 1
                     # include the audio prefix in the window
-                    shift_size = min(
+                    agg = max if overlap_count > 1 else min
+                    shift_size = agg(
                         start_idx,
                         int(input_frame._speech_duration * self._sample_rate)
                         + int(self._opts.audio_prefix_duration * self._sample_rate),
                     )
                     inference_s16_data[:shift_size] = inference_s16_data[
                         start_idx - shift_size : start_idx
-                    ]
+                    ].copy()
                     start_idx = shift_size
                     cache.clear()
                     continue
@@ -625,7 +630,6 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         self._model.emit("user_non_interruption_detected", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
-                    start_idx = 0
                     # we don't clear the cache here since responses might be in flight
                     continue
 
@@ -779,6 +783,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             nonlocal cache
 
             agent_speech_started: bool = False
+            overlap_count: int = 0
             inference_s16_data = np.zeros(
                 int(self._opts.max_audio_duration * self._opts.sample_rate), dtype=np.int16
             )
@@ -791,6 +796,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     agent_speech_started = True
                     overlap_speech_started = False
                     accumulated_samples = 0
+                    overlap_count = 0
                     start_idx = 0
                     cache.clear()
                     continue
@@ -800,6 +806,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     agent_speech_started = False
                     overlap_speech_started = False
                     accumulated_samples = 0
+                    overlap_count = 0
                     start_idx = 0
                     cache.clear()
                     continue
@@ -809,19 +816,28 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     isinstance(input_frame, InterruptionStreamBase._OverlapSpeechStartedSentinel)
                     and agent_speech_started
                 ):
-                    logger.trace("overlap speech started, starting interruption inference")
                     self._user_speech_span = input_frame._user_speaking_span
                     overlap_speech_started = True
                     accumulated_samples = 0
-                    shift_size = min(
+                    overlap_count += 1
+                    agg = max if overlap_count > 1 else min
+                    shift_size = agg(
                         start_idx,
                         int(input_frame._speech_duration * self._sample_rate)
                         + int(self._opts.audio_prefix_duration * self._sample_rate),
                     )
                     inference_s16_data[:shift_size] = inference_s16_data[
                         start_idx - shift_size : start_idx
-                    ]
+                    ].copy()
                     start_idx = shift_size
+                    logger.trace(
+                        "overlap speech started, starting interruption inference",
+                        extra={
+                            "overlap_count": overlap_count,
+                            "shift_size": shift_size,
+                            "start_idx": start_idx,
+                        },
+                    )
                     cache.clear()
                     continue
 
@@ -851,7 +867,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         self._model.emit("user_non_interruption_detected", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
-                    start_idx = 0
                     continue
 
                 if isinstance(input_frame, InterruptionStreamBase._FlushSentinel):
@@ -1087,12 +1102,12 @@ def _estimate_probability(
     if probabilities is None:
         return 0.0
 
-    min_window = math.ceil(window_size / 0.025)  # 25ms per frame
-    if len(probabilities) < min_window:
+    n_th = math.ceil(window_size / 0.025)  # 25ms per frame
+    if len(probabilities) < n_th:
         return 0.0
 
-    windows = np.lib.stride_tricks.sliding_window_view(probabilities, min_window)
-    return float(windows.min(axis=1).max())
+    # return the n-th maximum of the probabilities
+    return float(np.partition(probabilities, -n_th)[-n_th])
 
 
 def _write_to_inference_s16_data(
@@ -1107,7 +1122,7 @@ def _write_to_inference_s16_data(
 
     # shift the data to the left if the window would overflow
     if (shift := start_idx + frame.samples_per_channel - max_window_size) > 0:
-        out_data[: start_idx - shift] = out_data[shift:start_idx]
+        out_data[: start_idx - shift] = out_data[shift:start_idx].copy()
         start_idx -= shift
 
     slice_ = out_data[start_idx : start_idx + frame.samples_per_channel]

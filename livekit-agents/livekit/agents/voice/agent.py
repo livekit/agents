@@ -96,8 +96,8 @@ class Agent:
             self._allow_interruptions = bool(turn_handling.interruption_cfg.mode)
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
-        self._min_endpointing_delay = min_endpointing_delay
-        self._max_endpointing_delay = max_endpointing_delay
+        self._min_endpointing_delay = turn_handling.endpointing_cfg.min_delay
+        self._max_endpointing_delay = turn_handling.endpointing_cfg.max_delay
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
