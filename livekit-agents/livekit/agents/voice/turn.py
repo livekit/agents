@@ -24,14 +24,14 @@ class EndpointingConfig(BaseModel):
             will wait before terminating the turn. Defaults to ``3.0`` s.
     """
 
-    min_delay: float = 0.5
-    max_delay: float = 3.0
+    min_delay: NotGivenOr[float] = 0.5
+    max_delay: NotGivenOr[float] = 3.0
 
 
 # INFO: This duplication is necessary to support dict autocompletion.
 class EndpointingConfigDict(TypedDict, total=False):
-    min_delay: float
-    max_delay: float
+    min_delay: NotGivenOr[float]
+    max_delay: NotGivenOr[float]
 
 
 class InterruptionConfig(BaseModel):
@@ -142,10 +142,9 @@ class TurnHandlingConfig(BaseModel):
             interruption_mode = False
 
         endpointing_kwargs = {}
-        if is_given(min_endpointing_delay):
-            endpointing_kwargs["min_delay"] = min_endpointing_delay
-        if is_given(max_endpointing_delay):
-            endpointing_kwargs["max_delay"] = max_endpointing_delay
+        # allow not given values for agent to inherit from session
+        endpointing_kwargs["min_delay"] = min_endpointing_delay
+        endpointing_kwargs["max_delay"] = max_endpointing_delay
 
         interruption_kwargs: dict[str, Any] = {}
         if is_given(interruption_mode):

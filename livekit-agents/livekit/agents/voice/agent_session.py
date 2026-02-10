@@ -267,8 +267,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         turn_handling = (
             TurnHandlingConfig.migrate(
-                min_endpointing_delay=min_endpointing_delay,
-                max_endpointing_delay=max_endpointing_delay,
+                # backward compatibility for deprecated parameters that had default values
+                min_endpointing_delay=min_endpointing_delay
+                if is_given(min_endpointing_delay)
+                else 0.5,
+                max_endpointing_delay=max_endpointing_delay
+                if is_given(max_endpointing_delay)
+                else 3.0,
                 false_interruption_timeout=false_interruption_timeout,
                 turn_detection=turn_detection,
                 discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -289,8 +294,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             discard_audio_if_uninterruptible=turn_handling.interruption_cfg.discard_audio_if_uninterruptible,
             min_interruption_duration=turn_handling.interruption_cfg.min_duration,
             min_interruption_words=turn_handling.interruption_cfg.min_words,
-            min_endpointing_delay=turn_handling.endpointing_cfg.min_delay,
-            max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,
+            min_endpointing_delay=turn_handling.endpointing_cfg.min_delay,  # type: ignore[arg-type]
+            max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,  # type: ignore[arg-type]
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             preemptive_generation=preemptive_generation,

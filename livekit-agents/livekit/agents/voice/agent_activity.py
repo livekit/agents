@@ -2938,10 +2938,10 @@ class AgentActivity(RecognitionHooks):
         ):
             if (
                 is_given(self._agent.interruption_detection)
-                and self._agent.interruption_detection in {"adaptive", "vad"}
+                and self._agent.interruption_detection == "adaptive"
             ) or (
                 is_given(self._session.interruption_detection)
-                and self._session.interruption_detection in {"adaptive", "vad"}
+                and self._session.interruption_detection == "adaptive"
             ):
                 logger.warning(
                     "interruption_detection is provided, but it's not compatible with the current configuration and will be disabled"

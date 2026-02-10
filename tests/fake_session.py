@@ -10,6 +10,7 @@ from livekit.agents import (
     Agent,
     AgentSession,
     NotGivenOr,
+    TurnHandlingConfig,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
@@ -35,6 +36,20 @@ def create_session(
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
+    extra = dict(extra_kwargs or {})
+
+    interruption_dict: dict[str, Any] = {
+        "min_duration": 0.5 / speed_factor,
+        "false_interruption_timeout": 2.0 / speed_factor,
+    }
+    if "min_interruption_words" in extra:
+        interruption_dict["min_words"] = extra.pop("min_interruption_words")
+    if "allow_interruptions" in extra:
+        if extra.pop("allow_interruptions") is False:
+            interruption_dict["mode"] = False
+    if "resume_false_interruption" in extra:
+        interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
+
     stt = FakeSTT(fake_user_speeches=user_speeches)
     session = AgentSession[None](
         vad=FakeVAD(
@@ -45,11 +60,14 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        min_interruption_duration=0.5 / speed_factor,
-        min_endpointing_delay=0.5 / speed_factor,
-        max_endpointing_delay=6.0 / speed_factor,
-        false_interruption_timeout=2.0 / speed_factor,
-        **(extra_kwargs or {}),
+        turn_handling=TurnHandlingConfig(
+            endpointing={
+                "min_delay": 0.5 / speed_factor,
+                "max_delay": 6.0 / speed_factor,
+            },
+            interruption=interruption_dict,
+        ),
+        **extra,
     )
 
     # setup io with transcription sync
@@ -65,6 +83,7 @@ def create_session(
     session.input.audio = audio_input
     session.output.audio = transcript_sync.audio_output
     session.output.transcription = transcript_sync.text_output
+
     return session
 
 
