@@ -38,7 +38,7 @@ from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError
-from .agent_http_server import AgentHttpServer
+from .http_server import AgentHttpServer
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,

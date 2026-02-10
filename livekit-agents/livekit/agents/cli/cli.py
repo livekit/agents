@@ -39,7 +39,7 @@ from rich.theme import Theme
 from livekit import api, rtc
 
 from .._exceptions import CLIError
-from ..agent_http_server import AgentHttpClient
+from ..http_server import AgentHttpClient
 from ..job import JobExecutorType
 from ..llm import ChatItem
 from ..log import logger

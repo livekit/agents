@@ -9,6 +9,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    EffectCall,
     JobContext,
     RunContext,
     TextMessageContext,
@@ -16,7 +17,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.llm import ToolFlag, function_tool
-from livekit.durable import EffectCall
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 

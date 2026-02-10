@@ -15,9 +15,9 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
-from livekit.durable import DurableScheduler
 
 from .. import llm, stt, tts, utils, vad
+from ..durable_scheduler import DurableScheduler
 from ..llm.tool_context import (
     FunctionToolInfo,
     RawFunctionToolInfo,

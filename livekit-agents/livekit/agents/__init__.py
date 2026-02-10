@@ -28,6 +28,7 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
+from .durable_scheduler import DurableScheduler, EffectCall
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -213,6 +214,8 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "DurableScheduler",
+    "EffectCall",
 ]
 
 # Cleanup docs of unexported modules

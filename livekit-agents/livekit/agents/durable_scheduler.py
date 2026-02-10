@@ -11,8 +11,7 @@ from types import coroutine
 from typing import Any, Generic, TypeVar
 
 from livekit.agents.voice.agent import AgentTask
-
-from .function import DurableCoroutine, DurableGenerator, durable
+from livekit.durable.function import DurableCoroutine, DurableGenerator, durable
 
 
 @coroutine
@@ -249,10 +248,10 @@ class DurableScheduler:
 
                 if isinstance(ec._c, AgentTask):
 
-                    async def _execute() -> Any:
-                        return await ec._c
+                    async def _execute(aw: AgentTask) -> Any:
+                        return await aw
 
-                    coro = _execute()
+                    coro = _execute(ec._c)
                 else:
                     coro = ec._c
 

@@ -32,8 +32,7 @@ from .speech_handle import SpeechHandle
 from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
-    from livekit.durable.scheduler import DurableScheduler
-
+    from ..durable_scheduler import DurableScheduler
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
     from .transcription.filters import TextTransforms
