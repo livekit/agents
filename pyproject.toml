@@ -1,5 +1,5 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -13,7 +13,7 @@ livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
-livekit-plugins-camb = { workspace = true }
+livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
@@ -60,7 +60,6 @@ livekit-plugins-xai = { workspace = true }
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
-    "livekit-plugins/livekit-plugins-browser",
     "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-durable",
 ]
@@ -81,7 +80,7 @@ docs = ["pdoc3", "setuptools"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [".github"]
 
 [tool.ruff.lint]
@@ -145,5 +144,17 @@ module = "smithy_core.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "smithy_http.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "speechmatics.*"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "livekit.plugins"
 follow_untyped_imports = true

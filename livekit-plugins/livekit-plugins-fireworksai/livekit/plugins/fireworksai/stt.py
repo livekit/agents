@@ -19,8 +19,8 @@ import dataclasses
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlencode
 
 import aiohttp

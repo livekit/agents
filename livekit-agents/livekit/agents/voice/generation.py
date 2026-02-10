@@ -5,9 +5,9 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -60,7 +60,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[Union[str, FlushSentinel]]()
+    text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -199,7 +199,7 @@ def perform_tts_inference(
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
-    timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
+    timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
@@ -627,7 +627,10 @@ async def _execute_tools_task(
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
-                task = asyncio.create_task(_traceable_fnc_tool(function_callable, fnc_call))
+                task = asyncio.create_task(
+                    _traceable_fnc_tool(function_callable, fnc_call),
+                    name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
+                )
                 _set_activity_task_info(
                     task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
                 )

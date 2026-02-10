@@ -545,9 +545,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
-            1
-            for item in chat_ctx.items
-            if item.type == "message" and item.role in ["system", "developer"]
+            1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
         )
         if system_msg_count > 0:
             logger.warning(
@@ -558,7 +556,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
         chat_ctx = chat_ctx.copy(
-            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
         )
         async with self._session_lock:
             if not self._active_session:
@@ -771,8 +772,8 @@ class RealtimeSession(llm.RealtimeSession):
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
                             1
-                            for item in self._chat_ctx.items
-                            if item.type == "message" and item.role in ["system", "developer"]
+                            for msg in self._chat_ctx.messages()
+                            if msg.role in ("system", "developer")
                         )
                         if system_msg_count > 0:
                             logger.warning(
@@ -788,6 +789,7 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_handoff=True,
                             exclude_instructions=True,
                             exclude_empty_message=True,
+                            exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
@@ -1312,9 +1314,6 @@ class RealtimeSession(llm.RealtimeSession):
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Gemini Realtime API.")
 
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Gemini Realtime API.")
-
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
@@ -1354,11 +1353,16 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription is not None)
-            or (sc.input_transcription and sc.input_transcription is not None)
-            or (sc.generation_complete is not None)
-            or (sc.turn_complete is not None)
+            or (
+                sc.output_transcription and sc.output_transcription and sc.output_transcription.text
+            )
+            or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
+            # or (sc.generation_complete is not None)
+            # or (sc.turn_complete is not None)
         ):
+            # Some Gemini models send a `generation_complete` event after tool calls, but others do not.
+            # We mark the generation as done after a tool call and need to ignore any empty transcriptions or generation_complete events.
+            # This prevents new empty generations from starting and interrupting tool execution.
             return True
 
         return False

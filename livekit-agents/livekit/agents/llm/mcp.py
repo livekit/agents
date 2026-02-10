@@ -268,7 +268,7 @@ class MCPServerHTTP(MCPServer):
         if self._allowed_tools is None:
             return tools
 
-        filtered_tools = []
+        filtered_tools: list[MCPTool] = []
         for tool in tools:
             # Get tool name based on tool type
             if is_function_tool(tool):
@@ -280,7 +280,7 @@ class MCPServerHTTP(MCPServer):
                 continue
 
             if tool_name in self._allowed_tools:
-                filtered_tools.append(tool)
+                filtered_tools.append(tool)  # type: ignore[arg-type]
 
         return filtered_tools
 

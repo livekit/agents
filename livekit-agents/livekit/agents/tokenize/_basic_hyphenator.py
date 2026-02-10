@@ -65,7 +65,7 @@ class Hyphenator:
 
         # Examine the points to build the pieces list.
         pieces = [""]
-        for c, p in zip(word, points[2:]):
+        for c, p in zip(word, points[2:], strict=False):
             pieces[-1] += c
             if p % 2:
                 pieces.append("")

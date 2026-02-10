@@ -108,7 +108,7 @@ class _EUORunnerBase(_InferenceRunner):
         try:
             import onnxruntime as ort  # type: ignore
             from huggingface_hub import errors
-            from transformers import AutoTokenizer  # type: ignore
+            from transformers import AutoTokenizer
         finally:
             logger.removeFilter(filt)
 
@@ -130,7 +130,7 @@ class _EUORunnerBase(_InferenceRunner):
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
                 HG_MODEL,
                 revision=revision,
                 local_files_only=True,
@@ -181,7 +181,7 @@ class _EUORunnerBase(_InferenceRunner):
         from transformers import AutoTokenizer
 
         # ensure the tokenizer is downloaded
-        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())
+        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())  # type: ignore[no-untyped-call]
         _download_from_hf_hub(
             HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=cls.model_revision()
         )
@@ -266,18 +266,15 @@ class EOUModelBase(ABC):
         timeout: float | None = 3,
     ) -> float:
         messages: list[dict[str, Any]] = []
-        for item in chat_ctx.items:
-            if item.type != "message":
+        for msg in chat_ctx.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
 
-            if item.role not in ("user", "assistant"):
-                continue
-
-            text_content = item.text_content
+            text_content = msg.text_content
             if text_content:
                 messages.append(
                     {
-                        "role": item.role,
+                        "role": msg.role,
                         "content": text_content,
                     }
                 )

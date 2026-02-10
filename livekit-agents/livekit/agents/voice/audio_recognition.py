@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from opentelemetry import trace
 
@@ -31,6 +31,8 @@ _EOU_MAX_HISTORY_TURNS = 6
 
 @dataclass
 class _EndOfTurnInfo:
+    skip_reply: bool
+    """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
 
@@ -66,7 +68,7 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
+TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
 """
 The mode of turn detection to use.
 
@@ -158,7 +160,6 @@ class AudioRecognition:
             self._max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
 
             mode = turn_detection if isinstance(turn_detection, str) else None
@@ -253,6 +254,7 @@ class AudioRecognition:
         audio_detached: bool,
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
     ) -> None:
         if not self._stt or self._closing.is_set():
             return
@@ -313,7 +315,7 @@ class AudioRecognition:
 
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            self._run_eou_detection(chat_ctx, skip_reply=skip_reply)
             self._user_turn_committed = True
 
         if self._commit_user_turn_atask is not None:
@@ -516,7 +518,7 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
-    def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
+    def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
             return
@@ -572,6 +574,7 @@ class AudioRecognition:
                                         exclude_instructions=True,
                                         exclude_empty_message=True,
                                         exclude_handoff=True,
+                                        exclude_config_update=True,
                                     )
                                     .to_dict(
                                         exclude_audio=True,
@@ -622,6 +625,7 @@ class AudioRecognition:
 
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
+                    skip_reply=skip_reply,
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
                     transcription_delay=transcription_delay or 0,
