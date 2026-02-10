@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 from livekit import rtc
+from livekit.agents.inference.interruption import InterruptionEvent
 
 from .. import utils
 from ..llm import (
@@ -96,6 +97,12 @@ class ClientErrorEvent(BaseModel):
     created_at: float
 
 
+class ClientUserInterruptionEvent(BaseModel):
+    type: Literal["user_interruption"] = "user_interruption"
+    is_interruption: bool
+    created_at: float
+
+
 ClientEvent = Annotated[
     ClientAgentStateChangedEvent
     | ClientUserStateChangedEvent
@@ -103,7 +110,8 @@ ClientEvent = Annotated[
     | ClientUserInputTranscribedEvent
     | ClientFunctionToolsExecutedEvent
     | ClientMetricsCollectedEvent
-    | ClientErrorEvent,
+    | ClientErrorEvent
+    | ClientUserInterruptionEvent,
     Field(discriminator="type"),
 ]
 
@@ -252,6 +260,8 @@ class ClientEventsHandler:
             self._session.off("function_tools_executed", self._on_function_tools_executed)
             self._session.off("metrics_collected", self._on_metrics_collected)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
+            self._session.off("user_interruption_detected", self._on_user_overlap_speech)
+            self._session.off("user_non_interruption_detected", self._on_user_overlap_speech)
             self._session.off("error", self._on_error)
             self._event_handlers_registered = False
 
@@ -406,9 +416,18 @@ class ClientEventsHandler:
         self._session.on("function_tools_executed", self._on_function_tools_executed)
         self._session.on("metrics_collected", self._on_metrics_collected)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
+        self._session.on("user_interruption_detected", self._on_user_overlap_speech)
+        self._session.on("user_non_interruption_detected", self._on_user_overlap_speech)
         self._session.on("error", self._on_error)
 
         self._event_handlers_registered = True
+
+    def _on_user_overlap_speech(self, event: InterruptionEvent) -> None:
+        client_event = ClientUserInterruptionEvent(
+            is_interruption=event.is_interruption,
+            created_at=event.timestamp,
+        )
+        self._stream_client_event(client_event)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         client_event = ClientAgentStateChangedEvent(
@@ -592,6 +611,7 @@ RemoteSessionEventTypes = Literal[
     "user_input_transcribed",
     "function_tools_executed",
     "metrics_collected",
+    "user_interruption",
     "error",
 ]
 
