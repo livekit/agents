@@ -522,8 +522,8 @@ class STT(stt.STT):
 
         # Iterate over all streams
         for idx, stream in enumerate(self._streams):
-            # Fail if not connected
-            if stream._client is None:
+            # Skip streams that aren't actively connected
+            if stream._client is None or not stream._client._is_connected:
                 logger.warning(f"Not connected in stream {idx}")
                 results.append([])
                 continue
@@ -667,6 +667,10 @@ class SpeechStream(stt.RecognizeStream):
                 await message_task
             except asyncio.CancelledError:
                 pass
+
+            # Remove from active streams so stale streams aren't iterated
+            if self in self._stt._streams:
+                self._stt._streams.remove(self)
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
