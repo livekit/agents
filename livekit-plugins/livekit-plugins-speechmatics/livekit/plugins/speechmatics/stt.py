@@ -895,7 +895,7 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
                 " using `speaker_sensitivity`"
             )
 
-    # Turn detection — "none" is not a valid TurnDetectionMode, map to FIXED
+    # Turn detection — "none" is not a valid TurnDetectionMode, map to ADAPTIVE
     if "end_of_utterance_mode" in kwargs and isinstance(
         kwargs["end_of_utterance_mode"], (str, EndOfUtteranceMode)
     ):
