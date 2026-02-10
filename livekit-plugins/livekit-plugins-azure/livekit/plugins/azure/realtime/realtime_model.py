@@ -497,7 +497,11 @@ class RealtimeSession(
         elif event_type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
             logger.info("[VAD] Speech stopped detected")
             self.emit(
-                "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
+                "input_speech_stopped",
+                llm.InputSpeechStoppedEvent(
+                    user_transcription_enabled=self._realtime_model._opts.input_audio_transcription
+                    is not None
+                ),
             )
 
         elif event_type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
