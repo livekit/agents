@@ -77,8 +77,7 @@ from .generation import (
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
-    from livekit.durable.scheduler import DurableTask
-
+    from ..durable_scheduler import DurableTask
     from ..llm import mcp
     from .agent_session import AgentSession
 
