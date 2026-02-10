@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING
 
 from livekit import api, rtc
 
@@ -117,7 +117,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._background_audio = BackgroundAudioPlayer()
         self._hold_audio_handle: PlayHandle | None = None
         self._hold_audio = (
-            cast(Optional[Union[AudioSource, AudioConfig, list[AudioConfig]]], hold_audio)
+            hold_audio
             if is_given(hold_audio)
             else AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
         )
@@ -130,14 +130,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # users can override this method if they want to customize the entire instructions
         prev_convo = ""
         if chat_ctx:
-            context_copy = chat_ctx.copy(
-                exclude_empty_message=True,
-                exclude_instructions=True,
-                exclude_function_call=True,
-                exclude_handoff=True,
-            )
-            for msg in context_copy.items:
-                if msg.type != "message":
+            for msg in chat_ctx.messages():
+                if msg.role not in ("user", "assistant"):
+                    continue
+                if not msg.text_content:
                     continue
                 role = "Caller" if msg.role == "user" else "Assistant"
                 prev_convo += f"{role}: {msg.text_content}\n"

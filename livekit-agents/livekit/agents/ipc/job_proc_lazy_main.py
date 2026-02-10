@@ -17,9 +17,9 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from opentelemetry import trace
 
@@ -359,6 +359,9 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
+
+        if tasks := self._job_ctx._pending_tasks:
+            await aio.cancel_and_wait(*tasks)
 
         self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()

@@ -22,7 +22,7 @@ import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Union, cast
+from typing import cast
 from urllib.parse import urlencode
 
 import aiohttp
@@ -198,7 +198,7 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = cast(Union[str, list[float]], voice)
+            self._opts.voice = cast(str | list[float], voice)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -282,7 +282,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     raise APIStatusError(
-                        "Async connection closed unexpectedly", request_id=request_id
+                        "Async connection closed unexpectedly",
+                        request_id=request_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

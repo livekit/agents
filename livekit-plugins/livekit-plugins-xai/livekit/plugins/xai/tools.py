@@ -10,19 +10,25 @@ class XAITool(ProviderTool, ABC):
     def to_dict(self) -> dict[str, Any]: ...
 
 
-@dataclass(slots=True)
+@dataclass
 class WebSearch(XAITool):
     """Enable web search tool for real-time internet searches."""
+
+    def __post_init__(self) -> None:
+        super().__init__(id="xai_web_search")
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "web_search"}
 
 
-@dataclass(slots=True)
+@dataclass
 class XSearch(XAITool):
     """Enable X (Twitter) search tool for searching posts."""
 
     allowed_x_handles: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="xai_x_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"type": "x_search"}
@@ -31,12 +37,15 @@ class XSearch(XAITool):
         return result
 
 
-@dataclass(slots=True)
+@dataclass
 class FileSearch(XAITool):
     """Enable file search tool for searching uploaded document collections."""
 
     vector_store_ids: list[str] = field(default_factory=list)
     max_num_results: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="xai_file_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {

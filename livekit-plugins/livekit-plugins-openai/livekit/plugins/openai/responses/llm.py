@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union, cast
+from typing import Any, Literal, cast
 
 import httpx
-from typing_extensions import Literal
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
@@ -53,7 +52,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ResponsesModel = "gpt-4o-mini",
+        model: str | ResponsesModel = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -90,6 +89,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
         )
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -106,6 +106,10 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.close()
 
     @property
     def model(self) -> str:
@@ -200,13 +204,16 @@ class LLMStream(llm.LLMStream):
                 ),
             )
 
-            self._oai_stream = stream = await self._client.responses.create(
-                model=self._model,
-                tools=tool_schemas,
-                input=cast(Union[str, ResponseInputParam, openai.NotGiven], chat_ctx),
-                stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
-                **self._extra_kwargs,
+            self._oai_stream = stream = cast(
+                openai.AsyncStream[ResponseStreamEvent],
+                await self._client.responses.create(
+                    model=self._model,
+                    tools=tool_schemas,
+                    input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
+                    stream=True,
+                    timeout=httpx.Timeout(self._conn_options.timeout),
+                    **self._extra_kwargs,
+                ),
             )
 
             async with stream:
@@ -246,7 +253,12 @@ class LLMStream(llm.LLMStream):
             raise APIConnectionError(retryable=retryable) from e
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
-        raise APIStatusError(event.message, status_code=-1, retryable=False)
+        error_code = -1
+        try:
+            error_code = int(event.code) if event.code else -1
+        except ValueError:
+            pass
+        raise APIStatusError(event.message, status_code=error_code, retryable=False)
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id

@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -44,7 +43,7 @@ class DtmfAgent(Agent):
             ),
         )
 
-        self.phone_number: Optional[str] = None
+        self.phone_number: str | None = None
 
     async def on_enter(self) -> None:
         self.session.generate_reply(
@@ -71,6 +70,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     extra_instructions=(
                         "Let the caller know they can choose one of three Horizon Wireless services: "
@@ -109,6 +109,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True,
                         exclude_function_call=True,
                         exclude_handoff=True,
+                        exclude_config_update=True,
                     ),
                     ask_for_confirmation=True,
                     extra_instructions=(

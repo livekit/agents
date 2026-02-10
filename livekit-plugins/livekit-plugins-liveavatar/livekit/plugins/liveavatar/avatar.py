@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import os
 import uuid
 from collections.abc import Iterator
@@ -22,7 +23,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import QueueAudioOutput
+from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -73,6 +74,8 @@ class AvatarSession:
         self._session_data = None
         self._msg_ch = utils.aio.Chan[dict]()
         self._audio_playing = False
+        self._avatar_speaking = False
+        self._avatar_interrupted = False
         self._playback_position = 0.0
 
     async def start(
@@ -141,9 +144,6 @@ class AvatarSession:
 
         @self._agent_session.on("agent_state_changed")
         def on_agent_state_changed(ev: Any) -> None:
-            if ev.old_state == "speaking" and ev.new_state == "listening":
-                self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
-                self.send_event({"type": "agent.start_listening", "event_id": str(uuid.uuid4())})
             if ev.new_state == "idle":
                 self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
@@ -166,7 +166,8 @@ class AvatarSession:
                     playback_position=self._playback_position,
                     interrupted=True,
                 )
-                self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
+                if self._avatar_speaking:
+                    self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
                 self._playback_position = 0.0
 
         clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
@@ -219,6 +220,11 @@ class AvatarSession:
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
+                elif isinstance(audio_frame, AudioSegmentEnd):
+                    self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
+                    self.send_event(
+                        {"type": "agent.start_listening", "event_id": str(uuid.uuid4())}
+                    )
 
         async def _keep_alive_task() -> None:
             try:
@@ -258,7 +264,22 @@ class AvatarSession:
                 ):
                     if closing:
                         return
-                    raise APIConnectionError(message="LiveAvatar connection closed unexpectedly.")
+                    if self._is_sandbox:
+                        logger.warning(
+                            "The LiveAvatar Sandbox connection surpassed the 1 minute limit"
+                        )
+                        return
+                    else:
+                        raise APIConnectionError(
+                            message="LiveAvatar connection closed unexpectedly."
+                        )
+                event = json.loads(msg.data)
+                if event["type"] == "agent.speak_interrupted":
+                    self._handle_agent_speak_interrupted(event)
+                if event["type"] == "agent.speak_ended":
+                    self._handle_agent_speak_ended(event)
+                if event["type"] == "agent.speak_started":
+                    self._handle_agent_speak_started(event)
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
@@ -285,3 +306,20 @@ class AvatarSession:
 
             await self._audio_buffer.aclose()
             await ws_conn.close()
+
+    def _handle_agent_speak_interrupted(self, event: dict) -> None:
+        self._avatar_interrupted = True
+
+    def _handle_agent_speak_ended(self, event: dict) -> None:
+        self._avatar_speaking = False
+        if not self._avatar_interrupted:
+            self._audio_buffer.notify_playback_finished(
+                playback_position=self._playback_position,
+                interrupted=False,
+            )
+            self._playback_position = 0.0
+            self._audio_playing = False
+
+    def _handle_agent_speak_started(self, event: dict) -> None:
+        self._avatar_speaking = True
+        self._avatar_interrupted = False

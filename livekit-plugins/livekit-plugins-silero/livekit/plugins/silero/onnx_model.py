@@ -30,7 +30,7 @@ def new_inference_session(
             raise FileNotFoundError(f"Silero VAD model file not found: {onnx_file_path}")
         if not onnx_file_path.is_file():
             raise FileNotFoundError(f"`onnx_file_path` specified is not a file: {onnx_file_path}")
-        ctx = nullcontext(onnx_file_path)
+        ctx = nullcontext(onnx_file_path)  # type: ignore[assignment]
         path = str(_resource_files.enter_context(ctx))
 
     opts = onnxruntime.SessionOptions()
