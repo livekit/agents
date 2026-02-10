@@ -54,13 +54,14 @@ class AvatarSession:
                 "by setting the TRUGEN_API_KEY environment variable"
             )
         if avatar_participant_identity is NOT_GIVEN or avatar_participant_identity is None:
-            self._avatar_participant_identity: str = _AVATAR_AGENT_IDENTITY
+            self._avatar_participant_identity = _AVATAR_AGENT_IDENTITY
         else:
-            self._avatar_participant_identity = avatar_participant_identity
+            self._avatar_participant_identity = str(avatar_participant_identity)
+
         if avatar_participant_name is NOT_GIVEN or avatar_participant_name is None:
-            self._avatar_participant_name: str = _AVATAR_AGENT_NAME
+            self._avatar_participant_name = _AVATAR_AGENT_NAME
         else:
-            self._avatar_participant_name = avatar_participant_name
+            self._avatar_participant_name = str(avatar_participant_name)
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
 
@@ -123,12 +124,14 @@ class AvatarSession:
 
     async def _start_session(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
+        api_key = self._api_key
+        assert isinstance(api_key, str)
         for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     f"{_BASE_API_URL}/v1/sessions",
                     headers={
-                        "x-api-key": self._api_key,
+                        "x-api-key": api_key,
                     },
                     json={
                         "avatar_id": self._avatar_id,
