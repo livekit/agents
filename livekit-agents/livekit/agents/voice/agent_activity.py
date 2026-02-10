@@ -2948,16 +2948,21 @@ class AgentActivity(RecognitionHooks):
                 )
             return None
 
-        if is_given(self._agent.interruption_detection):
-            if self._agent.interruption_detection in {False, "vad"}:
-                return None
+        if is_given(self._agent.interruption_detection) and self._agent.interruption_detection in {
+            False,
+            "vad",
+        }:
+            return None
+        elif is_given(
+            self._session.interruption_detection
+        ) and self._session.interruption_detection in {False, "vad"}:
+            return None
+
+        try:
             detector = inference.AdaptiveInterruptionDetector()
-        elif is_given(self._session.interruption_detection):
-            if self._session.interruption_detection in {False, "vad"}:
-                return None
-            detector = inference.AdaptiveInterruptionDetector()
-        else:
-            detector = inference.AdaptiveInterruptionDetector()
+        except ValueError as e:
+            logger.warning("failed to create AdaptiveInterruptionDetector", extra={"error": str(e)})
+            return None
 
         detector.on(
             "user_interruption_detected",

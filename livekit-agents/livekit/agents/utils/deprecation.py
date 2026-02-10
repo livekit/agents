@@ -1,7 +1,8 @@
 import functools
 import inspect
 from collections import defaultdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..log import logger
 from ..types import NOT_GIVEN

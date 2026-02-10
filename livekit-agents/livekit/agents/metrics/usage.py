@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -88,7 +88,7 @@ class STTModelUsage(_BaseModelUsage):
     """Duration of processed audio in seconds."""
 
 
-ModelUsage = Union[LLMModelUsage, TTSModelUsage, STTModelUsage]
+ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage
 """Union type for all model usage types."""
 
 

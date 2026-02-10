@@ -10,10 +10,10 @@ import warnings
 import weakref
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from time import perf_counter_ns
-from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
 import aiohttp
 import numpy as np
@@ -251,9 +251,7 @@ class AdaptiveInterruptionDetector(
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._sample_rate = SAMPLE_RATE
         self._session = http_session
-        self._streams = weakref.WeakSet[
-            Union[InterruptionHttpStream, InterruptionWebSocketStream]
-        ]()
+        self._streams = weakref.WeakSet[InterruptionHttpStream | InterruptionWebSocketStream]()
 
         logger.info(
             "adaptive interruption detector initialized",
@@ -359,14 +357,12 @@ class InterruptionStreamBase(ABC):
         self._session = model._ensure_session()
         self._last_activity_time = time.perf_counter()
         self._input_ch = aio.Chan[
-            Union[
-                rtc.AudioFrame,
-                InterruptionStreamBase._AgentSpeechStartedSentinel,
-                InterruptionStreamBase._AgentSpeechEndedSentinel,
-                InterruptionStreamBase._OverlapSpeechStartedSentinel,
-                InterruptionStreamBase._OverlapSpeechEndedSentinel,
-                InterruptionStreamBase._FlushSentinel,
-            ]
+            rtc.AudioFrame
+            | InterruptionStreamBase._AgentSpeechStartedSentinel
+            | InterruptionStreamBase._AgentSpeechEndedSentinel
+            | InterruptionStreamBase._OverlapSpeechStartedSentinel
+            | InterruptionStreamBase._OverlapSpeechEndedSentinel
+            | InterruptionStreamBase._FlushSentinel
         ]()
         self._event_ch = aio.Chan[InterruptionEvent]()
         self._task = asyncio.create_task(self._main_task())
