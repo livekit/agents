@@ -53,14 +53,15 @@ from .version import __version__ as lk_version
 class TurnDetectionMode(str, Enum):
     """Endpoint and turn detection handling mode.
 
-    How the STT engine handles the endpointing of speech. If using LiveKit's built-in endpointing,
-    then use `TurnDetectionMode.EXTERNAL`.
+    How the STT engine handles the endpointing of speech. Use `TurnDetectionMode.EXTERNAL` when
+    turn boundaries are controlled manually, for example via an external VAD or the `finalize()`
+    method.
 
-    To use the STT engine's built-in endpointing, then use `TurnDetectionMode.ADAPTIVE` for simple
+    To use the STT engine's built-in endpointing, use `TurnDetectionMode.ADAPTIVE` for simple
     voice activity detection or `TurnDetectionMode.SMART_TURN` for more advanced ML-based
     endpointing.
 
-    The default is `FIXED` which will determine the end of speech after a fixed duration of time.
+    The default is `ADAPTIVE` which uses voice activity detection to determine end of speech.
     """
 
     EXTERNAL = "external"
@@ -154,9 +155,10 @@ class STT(stt.STT):
                 argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
 
             turn_detection_mode: Controls how the STT engine detects end of speech
-                turns. Use `EXTERNAL` when LiveKit's built-in endpointing is handling
-                turn detection. Use `ADAPTIVE` for simple VAD or `SMART_TURN` for
-                ML-based endpointing. Defaults to `TurnDetectionMode.ADAPTIVE`.
+                turns. Use `EXTERNAL` when turn boundaries are controlled manually,
+                for example via an external VAD or the `finalize()` method. Use
+                `ADAPTIVE` for simple VAD or `SMART_TURN` for ML-based endpointing.
+                Defaults to `TurnDetectionMode.ADAPTIVE`.
 
             operating_point: Operating point for transcription accuracy vs. latency
                 tradeoff. Overrides preset if provided. Optional.
