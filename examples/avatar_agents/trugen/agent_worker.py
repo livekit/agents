@@ -29,7 +29,7 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="You are a friendly AI Agent."),
         room=ctx.room,
     )
-    session.generate_reply(instructions="Greet the user with a joke.")
+    session.generate_reply(instructions="Greet the user.")
 
 
 if __name__ == "__main__":
