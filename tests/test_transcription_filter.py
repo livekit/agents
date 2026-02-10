@@ -139,7 +139,7 @@ async def test_markdown_filter(chunk_size: int):
         result_lines = result.strip().split("\n")
 
         print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines)):
+        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
             if exp != got:
                 print(f"Line {i + 1}:")
                 print(f"  Expected: {repr(exp)}")
@@ -232,7 +232,7 @@ async def test_emoji_filter(chunk_size: int):
         result_lines = result.split("\n")
 
         print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines)):
+        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
             if exp != got:
                 print(f"Line {i + 1}:")
                 print(f"  Expected: {repr(exp)}")

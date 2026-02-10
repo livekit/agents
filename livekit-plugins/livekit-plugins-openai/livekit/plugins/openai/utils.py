@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable
-from typing import Callable, Union
+from collections.abc import Awaitable, Callable
 
-AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
+AsyncAzureADTokenProvider = Callable[[], str | Awaitable[str]]
 
 
 def get_base_url(base_url: str | None) -> str:

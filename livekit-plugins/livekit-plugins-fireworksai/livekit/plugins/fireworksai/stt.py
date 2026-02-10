@@ -19,8 +19,8 @@ import dataclasses
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlencode
 
 import aiohttp
@@ -367,6 +367,8 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "Fireworks connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

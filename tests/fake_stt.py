@@ -59,7 +59,7 @@ class FakeSTT(STT):
 
         if fake_user_speeches is not None:
             fake_user_speeches = sorted(fake_user_speeches, key=lambda x: x.start_time)
-            for prev, next in zip(fake_user_speeches[:-1], fake_user_speeches[1:]):
+            for prev, next in zip(fake_user_speeches[:-1], fake_user_speeches[1:], strict=False):
                 if prev.end_time > next.start_time:
                     raise ValueError("fake user speeches overlap")
         self._fake_user_speeches = fake_user_speeches

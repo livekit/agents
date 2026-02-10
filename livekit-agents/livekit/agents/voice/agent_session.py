@@ -12,10 +12,8 @@ from typing import (
     TYPE_CHECKING,
     Generic,
     Literal,
-    Optional,
     Protocol,
     TypeVar,
-    cast,
     overload,
     runtime_checkable,
 )
@@ -41,6 +39,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
+from .client_events import ClientEventsHandler
 from .events import (
     AgentEvent,
     AgentState,
@@ -56,7 +55,7 @@ from .events import (
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
-from .speech_handle import SpeechHandle
+from .speech_handle import InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -334,6 +333,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._client_events_handler: ClientEventsHandler | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -363,7 +363,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
-    def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
+    def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
         super().emit(event, arg)
 
@@ -429,13 +429,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
 
-    def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
+    def run(
+        self,
+        *,
+        user_input: str,
+        input_modality: Literal["text", "audio"] = "text",
+        output_type: type[Run_T] | None = None,
+    ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
         run_state = RunResult(user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
-        self.generate_reply(user_input=user_input)
+        self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
 
     @overload
@@ -524,6 +530,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._recorded_events = []
             self._room_io = None
             self._recorder_io = None
+            self._client_events_handler = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -575,6 +582,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
+
+                # Initialize the client events handler for exposing session state to clients
+                self._client_events_handler = ClientEventsHandler(
+                    session=self,
+                    room_io=self._room_io,
+                )
+
+                # Register text input handler if configured
+                text_input_opts = room_options.get_text_input_options()
+                if text_input_opts:
+                    self._client_events_handler.register_text_input(text_input_opts.text_input_cb)
+
+                # Note: client_events_handler.start() is called after room connection below
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -641,6 +661,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
+
+            # Start client events handler after room is connected (requires local_participant)
+            if self._client_events_handler is not None:
+                await self._client_events_handler.start()
 
             # important: no await should be done after this!
 
@@ -826,6 +850,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._tts_error_counts = 0
             self._root_span_context = None
 
+            # close client events handler before room io
+            if self._client_events_handler:
+                await self._client_events_handler.aclose()
+                self._client_events_handler = None
+
             # close room io after close event is emitted
             if self._room_io:
                 await self._room_io.aclose()
@@ -858,7 +887,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            self._turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
+            self._turn_detection = turn_detection
 
         if self._activity is not None:
             self._activity.update_options(
@@ -909,6 +938,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        input_modality: Literal["text", "audio"] = "text",
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -919,6 +949,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
+            chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
+                Defaults to the chat context of the current agent if not provided.
+            input_modality (Literal["text", "audio"], optional): The input mode to use for generating the reply.
 
         Returns:
             SpeechHandle: A handle to the generated reply.
@@ -950,6 +983,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
+                input_details=InputDetails(modality=input_modality),
             )
             if run_state:
                 run_state._watch_handle(handle)

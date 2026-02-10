@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import TypedDict
 
 from livekit import rtc
 
@@ -173,7 +173,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = Union[ImageContent, AudioContent, str]
+ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
 class FunctionCall(BaseModel):
@@ -210,8 +210,23 @@ class AgentHandoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class AgentConfigUpdate(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["agent_config_update"] = Field(default="agent_config_update")
+
+    instructions: str | None = None
+    tools_added: list[str] | None = None
+    tools_removed: list[str] | None = None
+
+    created_at: float = Field(default_factory=time.time)
+
+    _tools: list[Tool] = PrivateAttr(default_factory=list)
+    """Full tool definitions (in-memory only, not serialized)."""
+
+
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff], Field(discriminator="type")
+    ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
+    Field(discriminator="type"),
 ]
 
 
@@ -230,6 +245,10 @@ class ChatContext:
     @items.setter
     def items(self, items: list[ChatItem]) -> None:
         self._items = items
+
+    def messages(self) -> list[ChatMessage]:
+        """Return only chat messages, ignoring function calls, outputs, and other events."""
+        return [item for item in self._items if isinstance(item, ChatMessage)]
 
     def add_message(
         self,
@@ -287,6 +306,7 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
+        exclude_config_update: bool = False,
         tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -326,6 +346,9 @@ class ChatContext:
                 continue
 
             if exclude_handoff and item.type == "agent_handoff":
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if (
@@ -374,6 +397,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
+        exclude_config_update: bool = False,
     ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
         existing_ids = {item.id for item in self._items}
@@ -392,6 +416,9 @@ class ChatContext:
             ):
                 continue
 
+            if exclude_config_update and item.type == "agent_config_update":
+                continue
+
             if item.id not in existing_ids:
                 idx = self.find_insertion_index(created_at=item.created_at)
                 self._items.insert(idx, item)
@@ -406,6 +433,8 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
+        exclude_metrics: bool = False,
+        exclude_config_update: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -413,6 +442,9 @@ class ChatContext:
                 "function_call",
                 "function_call_output",
             ]:
+                continue
+
+            if exclude_config_update and item.type == "agent_config_update":
                 continue
 
             if item.type == "message":
@@ -424,9 +456,11 @@ class ChatContext:
 
             items.append(item)
 
-        exclude_fields = set()
+        exclude_fields: set[str] = set()
         if exclude_timestamp:
             exclude_fields.add("created_at")
+        if exclude_metrics:
+            exclude_fields.add("metrics")
 
         return {
             "items": [
@@ -524,17 +558,15 @@ class ChatContext:
         keep_last_turns: int = 2,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
-        for item in self.items:
-            if item.type != "message":
+        for msg in self.messages():
+            if msg.role not in ("user", "assistant"):
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
-            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
                 continue
 
-            text = (item.text_content or "").strip()
+            text = (msg.text_content or "").strip()
             if text:
-                to_summarize.append(item)
+                to_summarize.append(msg)
         if not to_summarize:
             return self
 
@@ -566,9 +598,10 @@ class ChatContext:
         )
 
         chunks: list[str] = []
-        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
-            if chunk.delta and chunk.delta.content:
-                chunks.append(chunk.delta.content)
+        async with llm_v.chat(chat_ctx=chat_ctx) as stream:
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    chunks.append(chunk.delta.content)
 
         summary = "".join(chunks).strip()
         if not summary:
@@ -632,7 +665,7 @@ class ChatContext:
         if len(self.items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items):
+        for a, b in zip(self.items, other.items, strict=False):
             if a.id != b.id or a.type != b.type:
                 return False
 

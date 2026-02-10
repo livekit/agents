@@ -20,9 +20,10 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Literal, Union, cast
+from typing import Any, Literal, cast
 from urllib.parse import urljoin
 
 import aiohttp
@@ -58,7 +59,7 @@ DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"], str]
+Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"] | str
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
@@ -131,7 +132,7 @@ class _CloseContextMsg:
     context_id: str
 
 
-_OutboundMessage = Union[_CreateContextMsg, _SendTextMsg, _FlushContextMsg, _CloseContextMsg]
+_OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseContextMsg
 
 
 class _InworldConnection:
@@ -1118,7 +1119,7 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        for word, start, end in zip(words, starts, ends):
+        for word, start, end in zip(words, starts, ends, strict=False):
             timed_strings.append(TimedString(word, start_time=start, end_time=end))
 
     # Handle character-level alignment
@@ -1127,7 +1128,7 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         starts = char_align.get("characterStartTimeSeconds", [])
         ends = char_align.get("characterEndTimeSeconds", [])
 
-        for char, start, end in zip(chars, starts, ends):
+        for char, start, end in zip(chars, starts, ends, strict=False):
             timed_strings.append(TimedString(char, start_time=start, end_time=end))
 
     return timed_strings
