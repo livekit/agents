@@ -36,7 +36,6 @@ from speechmatics.voice import (
     AdditionalVocabEntry,
     AgentServerMessageType,
     AudioEncoding,
-    EndOfUtteranceMode,
     OperatingPoint,
     SpeakerFocusConfig,
     SpeakerFocusMode,
@@ -862,6 +861,7 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
 
     # Removed — no replacement
     for name in (
+        "end_of_utterance_mode",
         "chunk_size",
         "transcription_config",
         "audio_settings",
@@ -894,13 +894,3 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
                 "Both `diarization_sensitivity` and `speaker_sensitivity` provided;"
                 " using `speaker_sensitivity`"
             )
-
-    # Turn detection — "none" is not a valid TurnDetectionMode, map to ADAPTIVE
-    if "end_of_utterance_mode" in kwargs and isinstance(
-        kwargs["end_of_utterance_mode"], (str, EndOfUtteranceMode)
-    ):
-        value = kwargs["end_of_utterance_mode"]
-        opts.turn_detection_mode = (
-            TurnDetectionMode.ADAPTIVE if value == "none" else TurnDetectionMode(value)
-        )
-        logger.warning("`end_of_utterance_mode` is deprecated, migrated to `turn_detection_mode`")
