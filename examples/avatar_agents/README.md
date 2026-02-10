@@ -16,6 +16,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[LiveAvatar](./liveavatar/)** - [Platform](https://www.liveavatar.com/)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
+- **[TruGen](./trugen/)** - [Platform](https://app.trugen.ai/)
 
 ### 🖼️ Cloud-Based with Image Upload
 
