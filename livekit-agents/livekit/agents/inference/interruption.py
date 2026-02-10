@@ -43,7 +43,7 @@ THRESHOLD = 0.5
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
-AUDIO_PREFIX_DURATION = 0.5  # 0.5 second
+AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 1
 _FRAMES_PER_SECOND = 40
 
@@ -116,7 +116,7 @@ class InterruptionOptions:
     max_audio_duration: float
     """The maximum audio duration for the interruption detection, including the audio prefix, defaults to 3 seconds"""
     audio_prefix_duration: float
-    """The audio prefix duration for the interruption detection, defaults to 0.5 seconds"""
+    """The audio prefix duration for the interruption detection, defaults to 1.0 seconds"""
     detection_interval: float
     """The interval between detections, defaults to 0.1 seconds"""
     inference_timeout: float
