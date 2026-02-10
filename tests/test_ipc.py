@@ -7,6 +7,7 @@ import multiprocessing as mp
 import socket
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import ClassVar
@@ -181,6 +182,17 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
         start_args.update_ev.notify()
 
 
+async def _poll_until(
+    condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition_fn():
+            return
+        await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Timed out after {timeout}s waiting for condition")
+
+
 async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
     for _ in range(num_elements):
         await q.get()
@@ -193,6 +205,7 @@ async def test_proc_pool():
     pool = ipc.proc_pool.ProcPool(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
@@ -200,6 +213,7 @@ async def test_proc_pool():
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -232,7 +246,7 @@ async def test_proc_pool():
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(created_q, num_idle_processes)
     await _wait_for_elements(start_q, num_idle_processes)
@@ -273,12 +287,14 @@ async def test_slow_initialization():
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -302,7 +318,7 @@ async def test_slow_initialization():
         pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
@@ -329,6 +345,7 @@ def _create_proc(
     proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         memory_warn_mb=0,
@@ -337,6 +354,7 @@ def _create_proc(
         ping_timeout=10.0,
         high_ping_threshold=1.0,
         inference_executor=None,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -349,7 +367,6 @@ async def test_shutdown_no_job():
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
     await proc.aclose()
 
     assert proc.exitcode == 0
@@ -364,11 +381,10 @@ async def test_job_slow_shutdown():
 
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     # process is killed when there is a job with slow timeout
@@ -382,11 +398,10 @@ async def test_job_graceful_shutdown():
     start_args.shutdown_simulate_work_time = 1.0
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     assert proc.exitcode == 0, "process should have exited cleanly"
