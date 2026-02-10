@@ -1,6 +1,6 @@
 # LiveKit TruGen.AI Realtime Avatar
 
-This example demonstrates how to create a realtime avatar session for your Livekit Voice Agents using [TruGen Developer Studio](https://app.trugen.ai/).
+This example demonstrates how to create a trugen realtime avatar session for your Livekit Voice Agents using [TruGen Developer Studio](https://app.trugen.ai/).
 
 Select your avatar [list](https://docs.trugen.ai/docs/avatars/overview)
 
