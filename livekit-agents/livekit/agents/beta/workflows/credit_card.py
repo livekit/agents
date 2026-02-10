@@ -101,7 +101,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         Args:
             card_number (int): The credit card number
         """
-        if len(str(card_number)) < 13 and len(str(card_number)) > 19:
+        if len(str(card_number)) < 13 or len(str(card_number)) > 19:
             self.session.generate_reply(
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
@@ -188,7 +188,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
         Args:
             security_code (int): The card's security code.
         """
-        if len(str(security_code)) < 3 and len(str(security_code)) > 4:
+        if len(str(security_code)) < 3 or len(str(security_code)) > 4:
             self.session.generate_reply(
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
@@ -257,13 +257,13 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             self.session.generate_reply(
                 instructions="The expiration month has not been formatted correctly, ask the user to repeat the expiration month."
             )
-        if len(str(expiration_year)) != 2:
+        elif len(str(expiration_year)) != 2:
             self.session.generate_reply(
                 instructions="The expiration year has not been formatted correctly, ask the user to repeat the expiration year."
             )
         else:
             self._date_update_speech_handle = context.speech_handle
-            self._expiration_date = expiration_month + "/" + expiration_year
+            self._expiration_date = str(expiration_month) + "/" + str(expiration_year)
             return (
                 f"The expiration date has been updated to {self._expiration_date}\n"
                 f"Repeat the expiration date by stating the corresponding month and year: {self._expiration_date}\n"
@@ -334,17 +334,18 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             )
             task_group.add(
                 lambda: GetExpirationDateTask(),
-                id="get_expiration_date_task",
+                id="expiration_date_task",
                 description="Collects the card's expiration date",
             )
             try:
                 results = await task_group
+                name = f"{results.task_results['cardholder_name_task'].first_name} {results.task_results['cardholder_name_task'].last_name}"
                 result = GetCreditCardResult(
-                    cardholder_name=results["cardholder_name_task"].full_name,
-                    issuer=results["card_number_task"].issuer,
-                    card_number=results["card_number_task"].card_number,
-                    security_code=results["security_code_task"].security_code,
-                    expiration_date=results["get_expiration_date"].date,
+                    cardholder_name=name,
+                    issuer=results.task_results["card_number_task"].issuer,
+                    card_number=results.task_results["card_number_task"].card_number,
+                    security_code=results.task_results["security_code_task"].security_code,
+                    expiration_date=results.task_results["expiration_date_task"].date,
                 )
                 self.complete(result)
             except ToolError as e:
