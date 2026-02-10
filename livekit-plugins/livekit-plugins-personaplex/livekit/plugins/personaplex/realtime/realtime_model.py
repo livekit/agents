@@ -477,8 +477,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 raise APIConnectionError(message="PersonaPlex connection closed unexpectedly")
 
             elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error(f"PersonaPlex WebSocket error: {ws_conn.exception()}")
-                break
+                raise APIConnectionError(
+                    message=f"PersonaPlex WebSocket error: {ws_conn.exception()}"
+                )
 
     # -- Internal: audio encode/decode --
 
