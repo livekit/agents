@@ -305,7 +305,7 @@ async def test_no_availability() -> None:
 </td>
 <td width="50%">
 <h3>🎥 Video avatars</h3>
-<p>Add an AI avatar with Tavus, Beyond Presence, Bithuman, LemonSlice, and more</p>
+<p>Add an AI avatar with Tavus, Hedra, Bithuman, LemonSlice, and more</p>
 <p>
 <a href="examples/avatar_agents/">Code</a>
 </p>
