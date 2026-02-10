@@ -162,7 +162,7 @@ SYNTHESIZE_TTS = [
     pytest.param(
         lambda: {
             "tts": deepdub.TTS(),
-            "proxy-upstream": "restapi.deepdub.ai:443",
+            "proxy-upstream": "wss.deepdub.ai:443",
         },
         id="deepdub",
     ),
@@ -312,6 +312,7 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
     tts_v.prewarm()
 
     metrics_collected_events = EventCollector(tts_v, "metrics_collected")
+    is_deepdub = "deepdub" in tts_v.label.lower()
     try:
         await asyncio.wait_for(
             _do_synthesis(
@@ -324,8 +325,10 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
     finally:
         await tts_v.aclose()
 
-    assert metrics_collected_events.count == 1, (
-        f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+    expected_metrics_count = 2 if is_deepdub else 1
+    assert metrics_collected_events.count == expected_metrics_count, (
+        f"expected {expected_metrics_count} metrics collected event, "
+        f"got {metrics_collected_events.count}"
     )
     logger.info(f"metrics: {metrics_collected_events.events[0][0][0]}")
 
@@ -336,6 +339,7 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
+    is_deepdub = "deepdub" in tts_v.label.lower()
     proxy_upstream = tts_info["proxy-upstream"]
     proxy_name = f"{tts_v.label}-proxy"
     p = toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)
@@ -377,7 +381,10 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        assert error_events.count == 4, "expected 4 errors, got {error_events.count}"
+        expected_error_count = 8 if is_deepdub else 4
+        assert error_events.count == expected_error_count, (
+            f"expected {expected_error_count} errors, got {error_events.count}"
+        )
         assert 1 <= elapsed_time <= 3, (
             f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
         )
@@ -416,7 +423,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": deepdub.TTS(),
+            "tts": deepdub.TTS(model="dd-etts-3.0", format="s16le", sample_rate=16000),
             "proxy-upstream": "wss.deepdub.ai:443",
         },
         id="deepdub",

@@ -1,9 +1,9 @@
 """Deepdub plugin for LiveKit Agents"""
 
-from .tts import TTS, ChunkedStream, SynthesizeStream
+from .tts import TTS, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "SynthesizeStream", "__version__"]
+__all__ = ["TTS", "SynthesizeStream", "__version__"]
 
 from livekit.agents import Plugin
 
