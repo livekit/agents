@@ -12,7 +12,7 @@ import os
 import time
 import weakref
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import quote, urlencode
 
@@ -174,7 +174,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
-        self._opts = realtime_model._opts
+        self._opts = replace(realtime_model._opts)
 
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
@@ -396,7 +396,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)
 
                 is_recoverable = isinstance(
-                    e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)
+                    e, (aiohttp.ClientConnectionError, asyncio.TimeoutError, APIConnectionError)
                 )
 
                 if isinstance(e, APIConnectionError):
