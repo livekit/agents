@@ -484,18 +484,27 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     def _encode_and_send(self, audio_frame: rtc.AudioFrame) -> None:
         """Encode a PCM audio frame to Opus and queue for sending."""
-        # Convert int16 PCM to float32 for sphn
-        pcm_int16 = np.frombuffer(audio_frame.data, dtype=np.int16)
-        pcm_float = pcm_int16.astype(np.float32) / 32768.0
+        if not audio_frame.data or len(audio_frame.data) == 0:
+            return
 
-        self._opus_writer.append_pcm(pcm_float)
-        opus_bytes = self._opus_writer.read_bytes()
+        try:
+            # Convert int16 PCM to float32 for sphn
+            pcm_int16 = np.frombuffer(audio_frame.data, dtype=np.int16)
+            if pcm_int16.size == 0:
+                return
 
-        if opus_bytes:
-            # Prepend audio message type
-            message = bytes([MSG_AUDIO]) + opus_bytes
-            with contextlib.suppress(utils.aio.channel.ChanClosed):
-                self._msg_ch.send_nowait(message)
+            pcm_float = pcm_int16.astype(np.float32) / 32768.0
+
+            self._opus_writer.append_pcm(pcm_float)
+            opus_bytes = self._opus_writer.read_bytes()
+
+            if opus_bytes:
+                # Prepend audio message type
+                message = bytes([MSG_AUDIO]) + opus_bytes
+                with contextlib.suppress(utils.aio.channel.ChanClosed):
+                    self._msg_ch.send_nowait(message)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Skipping invalid audio frame in _encode_and_send: {e}")
 
     def _handle_audio_data(self, opus_payload: bytes) -> None:
         """Decode Opus audio from server and push to generation."""
