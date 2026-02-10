@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
 from ..job import JobAcceptArguments, RunningJobInfo
 from . import channel
@@ -125,7 +126,7 @@ class StartJobRequest:
         )
         has_text_request = channel.read_bool(b)
         if has_text_request:
-            text_request = agent.TextMessageRequest()
+            text_request = agent_text.TextMessageRequest()
             text_request.ParseFromString(channel.read_bytes(b))
             self.running_job.text_request = text_request
 
@@ -217,46 +218,26 @@ class DumpStackTraceRequest:
 
 
 @dataclass
-class TextResponseEvent:
+class TextResponse:
     MSG_ID: ClassVar[int] = 10
+    type: Literal["response", "complete"] = "response"
     session_id: str = ""
-    event_type: str = ""
-    data: str = ""  # RunEvent.item in json format
+    data: agent_text.TextResponseEvent | agent_text.TextSessionComplete = field(init=False)
 
     def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.type)
         channel.write_string(b, self.session_id)
-        channel.write_string(b, self.event_type)
-        channel.write_string(b, self.data)
+        channel.write_bytes(b, self.data.SerializeToString())
 
     def read(self, b: io.BytesIO) -> None:
+        self.type = channel.read_string(b)  # type: ignore
         self.session_id = channel.read_string(b)
-        self.event_type = channel.read_string(b)
-        self.data = channel.read_string(b)
-
-
-@dataclass
-class TextSessionComplete:
-    MSG_ID: ClassVar[int] = 11
-    session_id: str = ""
-    session_state: agent.AgentSessionState | None = None
-    error: str = ""
-
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.session_id)
-        channel.write_bool(b, self.session_state is not None)
-        if self.session_state is not None:
-            channel.write_bytes(b, self.session_state.SerializeToString())
-        channel.write_string(b, self.error)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.session_id = channel.read_string(b)
-        has_session_state = channel.read_bool(b)
-        if has_session_state:
-            self.session_state = agent.AgentSessionState()
-            self.session_state.ParseFromString(channel.read_bytes(b))
-        else:
-            self.session_state = None
-        self.error = channel.read_string(b)
+        if self.type == "response":
+            self.data = agent_text.TextResponseEvent()
+            self.data.ParseFromString(channel.read_bytes(b))
+        elif self.type == "complete":
+            self.data = agent_text.TextSessionComplete()
+            self.data.ParseFromString(channel.read_bytes(b))
 
 
 IPC_MESSAGES = {
@@ -270,6 +251,5 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
-    TextResponseEvent.MSG_ID: TextResponseEvent,
-    TextSessionComplete.MSG_ID: TextSessionComplete,
+    TextResponse.MSG_ID: TextResponse,
 }

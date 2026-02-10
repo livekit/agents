@@ -37,6 +37,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import api, rtc
+from livekit.protocol.agent_pb import agent_text
 
 from .._exceptions import CLIError
 from ..http_server import AgentHttpClient
@@ -1175,9 +1176,14 @@ def _text_mode(c: AgentsConsole) -> None:
 def _sms_text_mode(
     c: AgentsConsole, client: AgentHttpClient, *, endpoint: str, sess_data_file: str
 ) -> None:
-    from livekit.protocol.agent import AgentSessionState
-
+    from ..llm.chat_context import chat_item_from_proto
     from ..utils.session_store import SessionStore
+
+    MSG_TYPE = (
+        agent_text.TextSessionStarted
+        | agent_text.TextResponseEvent
+        | agent_text.TextSessionComplete
+    )
 
     session_id: str | None = None
     target_version: int | None = None  # hot sync if version specified
@@ -1205,28 +1211,23 @@ def _sms_text_mode(
         for line in text.split("\n"):
             c.console.print(Text(f"    {line}"))
 
-        session_state: AgentSessionState | None = None
+        session_state: agent_text.AgentSessionState | None = None
         if target_version is None and os.path.exists(sess_data_file):
             with SessionStore(db_file=sess_data_file) as store:
-                session_state = AgentSessionState(
+                session_state = agent_text.AgentSessionState(
                     version=store.version,
                     snapshot=store.export_snapshot(),
                 )
         elif target_version is not None:
-            session_state = AgentSessionState(version=target_version)
+            session_state = agent_text.AgentSessionState(version=target_version)
 
-        MSG_TYPE = (
-            AgentHttpClient.TextSessionStarted
-            | AgentHttpClient.TextResponseEvent
-            | AgentHttpClient.TextSessionComplete
-        )
         response_queue = queue.Queue[MSG_TYPE | None]()
 
         def async_worker(
             session_id: str,
             user_text: str,
             user_endpoint: str,
-            user_session_state: AgentSessionState | None,
+            user_session_state: agent_text.AgentSessionState | None,
             user_response_queue: queue.Queue[MSG_TYPE | None],
         ) -> None:
             """Run async code in a separate thread with its own event loop."""
@@ -1234,7 +1235,7 @@ def _sms_text_mode(
             async def fetch_responses() -> None:
                 logger.info(f"sending text stream: {user_text} {user_endpoint}")
                 try:
-                    async for response in client.send_text_stream(
+                    async for response in client.send_text(
                         user_text,
                         endpoint=user_endpoint,
                         session_id=session_id,
@@ -1266,19 +1267,23 @@ def _sms_text_mode(
             if resp is None:
                 break
 
-            if isinstance(resp, AgentHttpClient.TextSessionStarted):
+            if isinstance(resp, agent_text.TextSessionStarted):
                 session_id = resp.session_id
 
-            elif isinstance(resp, AgentHttpClient.TextSessionComplete):
-                if resp.error:
+            elif isinstance(resp, agent_text.TextSessionComplete):
+                if resp.HasField("error"):
                     logger.error(
                         "error processing text",
-                        extra={"session_data_file": sess_data_file, "error": resp.error},
+                        extra={
+                            "session_data_file": sess_data_file,
+                            "error": resp.error.message,
+                            "error_code": resp.error.code,
+                        },
                     )
                     break
 
                 # save session state to file
-                if resp.session_state:
+                if resp.HasField("session_state"):
                     version = resp.session_state.version
                     which_oneof = resp.session_state.WhichOneof("data")
                     if which_oneof == "snapshot":
@@ -1295,8 +1300,8 @@ def _sms_text_mode(
 
                 break
 
-            elif isinstance(resp, AgentHttpClient.TextResponseEvent):
-                _print_chat_item(c, resp.item)
+            elif isinstance(resp, agent_text.TextResponseEvent):
+                _print_chat_item(c, chat_item_from_proto(resp.item))
 
         worker_thread.join()
         # release the console for next run

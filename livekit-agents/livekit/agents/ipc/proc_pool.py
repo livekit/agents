@@ -21,7 +21,6 @@ EventTypes = Literal[
     "process_closed",
     "process_job_launched",
     "text_response",
-    "text_session_complete",
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -217,8 +216,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             await asyncio.gather(*self._spawn_tasks)
             await asyncio.gather(*self._monitor_tasks)
 
-    def _on_text_response(self, msg: proto.TextResponseEvent | proto.TextSessionComplete) -> None:
-        if isinstance(msg, proto.TextResponseEvent):
-            self.emit("text_response", msg)
-        elif isinstance(msg, proto.TextSessionComplete):
-            self.emit("text_session_complete", msg)
+    def _on_text_response(self, msg: proto.TextResponse) -> None:
+        self.emit("text_response", msg)

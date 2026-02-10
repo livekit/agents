@@ -34,6 +34,7 @@ import aiohttp
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
+from livekit.protocol.agent_pb import agent_text
 
 from ._exceptions import TextMessageError
 from .log import logger
@@ -98,7 +99,7 @@ class RunningJobInfo:
     worker_id: str
     fake_job: bool
     text_endpoint: str = ""
-    text_request: agent.TextMessageRequest | None = None
+    text_request: agent_text.TextMessageRequest | None = None
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -135,7 +136,7 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 class TextMessageContext:
     def __init__(
-        self, *, job_ctx: JobContext, endpoint: str, text_request: agent.TextMessageRequest
+        self, *, job_ctx: JobContext, endpoint: str, text_request: agent_text.TextMessageRequest
     ) -> None:
         self._job_ctx = job_ctx
         self._text_request = text_request
@@ -152,15 +153,20 @@ class TextMessageContext:
         self._session_state: _AgentSessionState | None = None
 
     async def send_response(self, ev: RunEvent) -> None:
+        from . import llm
         from .ipc import proto
 
-        await self._job_ctx._ipc_client.send(
-            proto.TextResponseEvent(
-                session_id=self.session_id,
-                event_type=ev.type,
-                data=ev.item.model_dump_json(),
-            )
+        if not isinstance(
+            ev.item, llm.ChatMessage | llm.FunctionCall | llm.FunctionCallOutput | llm.AgentHandoff
+        ):
+            return
+
+        msg = proto.TextResponse(session_id=self.session_id, type="response")
+        msg.data = agent_text.TextResponseEvent(
+            message_id=self._text_request.message_id,
+            item=llm.chat_context.chat_item_to_proto(ev.item),
         )
+        await self._job_ctx._ipc_client.send(msg)
 
     @property
     def session_id(self) -> str:
@@ -188,9 +194,9 @@ class TextMessageContext:
         from .ipc import proto
         from .utils.session_store import SessionStore
 
-        msg = proto.TextSessionComplete(session_id=self.session_id)
+        msg = proto.TextResponse(session_id=self.session_id, type="complete")
         if exc:
-            msg.error = str(exc)
+            msg.data = agent_text.TextSessionComplete(error=exc.to_proto())
             await self._job_ctx._ipc_client.send(msg)
             return
 
@@ -199,18 +205,22 @@ class TextMessageContext:
             logger.error(
                 "no primary agent session found", extra={"text_session_id": self.session_id}
             )
-            msg.error = TextMessageError("no primary agent session found").to_json()
+            msg.data = agent_text.TextSessionComplete(
+                error=TextMessageError("no primary agent session found").to_proto()
+            )
             await self._job_ctx._ipc_client.send(msg)
             return
 
         with SessionStore(self._session_snapshot) as old_store:
             new_version = old_store.version + 1
-            msg.session_state = agent.AgentSessionState(version=new_version)
+            msg.data = agent_text.TextSessionComplete(
+                session_state=agent_text.AgentSessionState(version=new_version)
+            )
             with SessionStore.from_state(session.get_state(), version=new_version) as new_store:
                 if not self._session_snapshot:
-                    msg.session_state.snapshot = new_store.export_snapshot()
+                    msg.data.session_state.snapshot = new_store.export_snapshot()
                 else:
-                    msg.session_state.delta = old_store.compute_delta(new_store)
+                    msg.data.session_state.delta = old_store.compute_delta(new_store)
 
         await self._job_ctx._ipc_client.send(msg)
 

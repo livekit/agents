@@ -35,8 +35,9 @@ from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
+from livekit.protocol.agent_pb import agent_text
 
-from . import ipc, telemetry, types, utils
+from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError, TextMessageError
 from .http_server import AgentHttpServer
 from .inference_runner import _InferenceRunner
@@ -108,7 +109,8 @@ class _EntrypointWrapper:
                 await text_handler_fnc(ctx.text_message_context)
             except Exception as e:
                 exc = TextMessageError(
-                    f"error in text handler: {str(e)}", code=types.ERROR_TEXT_HANDLER_ERROR
+                    f"error in text handler: {str(e)}",
+                    code=agent_text.TME_TEXT_HANDLER_ERROR,
                 )
                 logger.exception(
                     "error in text handler",
@@ -133,8 +135,8 @@ class _EntrypointWrapper:
 @dataclass
 class _TextSession:
     proc_id: str
-    event_ch: utils.aio.Chan[ipc.proto.TextResponseEvent]
-    done_fut: asyncio.Future[ipc.proto.TextSessionComplete]
+    event_ch: utils.aio.Chan[agent_text.TextResponseEvent]
+    done_fut: asyncio.Future[agent_text.TextSessionComplete]
 
 
 class ServerType(Enum):
@@ -668,7 +670,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._text_handler_fncs:
                 self._proc_pool.on("text_response", self._on_text_response)
-                self._proc_pool.on("text_session_complete", self._on_text_session_complete)
                 self._proc_pool.on("process_closed", self._on_process_closed)
                 if self._session_cache is None:
                     self._session_cache = EphemeralSessionCache(in_memory=True)
@@ -929,7 +930,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         room_info: models.Room | None = None,
         token: str | None = None,
         text_endpoint: str = "",
-        text_request: agent.TextMessageRequest | None = None,
+        text_request: agent_text.TextMessageRequest | None = None,
     ) -> None:
         async with self._lock:
             if token is not None:
@@ -1373,7 +1374,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
 
     async def _launch_text_job(
-        self, endpoint: str, request: agent.TextMessageRequest
+        self, endpoint: str, request: agent_text.TextMessageRequest
     ) -> _TextSession:
         """Launch a text message job and track the session."""
         session_id = request.session_id
@@ -1406,7 +1407,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 except Exception as e:
                     raise TextMessageError(
                         f"failed to resolve session state from cache with error: {str(e)}",
-                        code=types.ERROR_SESSION_STATE_NOT_FOUND,
+                        code=agent_text.TME_SESSION_STATE_NOT_FOUND,
                     ) from e
                 request.session_state.CopyFrom(session_state)
 
@@ -1439,7 +1440,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             session_info = _TextSession(
                 proc_id=proc_id,
-                event_ch=utils.aio.Chan[ipc.proto.TextResponseEvent](),
+                event_ch=utils.aio.Chan[agent_text.TextResponseEvent](),
                 done_fut=asyncio.Future(),
             )
             self._text_sessions[session_id] = session_info
@@ -1517,7 +1518,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             extra={"job_count": len(active_jobs), "job_ids": job_ids},
         )
 
-    def _on_text_response(self, msg: ipc.proto.TextResponseEvent) -> None:
+    def _on_text_response(self, msg: ipc.proto.TextResponse) -> None:
         """Handle text response event from process pool."""
         session_id = msg.session_id
         session_info = self._text_sessions.get(session_id)
@@ -1527,23 +1528,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
             return
 
-        session_info.event_ch.send_nowait(msg)
-
-    def _on_text_session_complete(self, ev: ipc.proto.TextSessionComplete) -> None:
-        """Handle text session complete event from process pool."""
-        session_id = ev.session_id
-        session_info = self._text_sessions.pop(session_id, None)
-        if not session_info:
-            logger.warning(
-                "received text session complete for unknown session",
-                extra={"session_id": session_id},
-            )
+        if msg.type == "response":
+            assert isinstance(msg.data, agent_text.TextResponseEvent)
+            session_info.event_ch.send_nowait(msg.data)
             return
 
-        session_info.done_fut.set_result(ev)
+        assert isinstance(msg.data, agent_text.TextSessionComplete)
+        session_info.done_fut.set_result(msg.data)
         session_info.event_ch.close()
-        if ev.session_state and self._session_cache:
-            result = self._session_cache.store(session_id, ev.session_state)
+        self._text_sessions.pop(session_id)
+
+        # save session state to cache
+        if msg.data.session_state and self._session_cache:
+            result = self._session_cache.store(session_id, msg.data.session_state)
             if inspect.isawaitable(result):
                 task = asyncio.ensure_future(result, loop=self._loop)
                 self._pending_cache_saves[session_id] = task
@@ -1560,7 +1557,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     session_info.done_fut.set_exception(
                         TextMessageError(
                             "process closed before text session completed",
-                            code=types.ERROR_PROCESS_CLOSED,
+                            code=agent_text.TME_PROCESS_CLOSED,
                         )
                     )
                 session_info.event_ch.close()

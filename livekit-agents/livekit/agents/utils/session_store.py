@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import apsw
 
-from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
 from ..log import logger
 from . import is_given
@@ -457,12 +457,12 @@ class SessionCache(ABC):
 
     @abstractmethod
     def resolve(
-        self, session_id: str, session_state: agent.AgentSessionState
-    ) -> agent.AgentSessionState | Awaitable[agent.AgentSessionState]: ...
+        self, session_id: str, session_state: agent_text.AgentSessionState
+    ) -> agent_text.AgentSessionState | Awaitable[agent_text.AgentSessionState]: ...
 
     @abstractmethod
     def store(
-        self, session_id: str, session_state: agent.AgentSessionState
+        self, session_id: str, session_state: agent_text.AgentSessionState
     ) -> None | Awaitable[None]: ...
 
     @abstractmethod
@@ -571,8 +571,8 @@ class EphemeralSessionCache(SessionCache):
         )
 
     def resolve(
-        self, session_id: str, session_state: agent.AgentSessionState
-    ) -> agent.AgentSessionState:
+        self, session_id: str, session_state: agent_text.AgentSessionState
+    ) -> agent_text.AgentSessionState:
         """Resolve session state by applying a snapshot or delta, returning a full snapshot."""
         entry = self._get_or_create(session_id)
         target_version = session_state.version
@@ -597,9 +597,9 @@ class EphemeralSessionCache(SessionCache):
             entry.sync_from_store(store)
 
         self._touch(session_id, entry)
-        return agent.AgentSessionState(version=target_version, snapshot=snapshot)
+        return agent_text.AgentSessionState(version=target_version, snapshot=snapshot)
 
-    def store(self, session_id: str, session_state: agent.AgentSessionState) -> None:
+    def store(self, session_id: str, session_state: agent_text.AgentSessionState) -> None:
         """Update a cached session with a snapshot or delta."""
         entry = self._get_or_create(session_id)
         data_kind = session_state.WhichOneof("data")

@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.protocol import agent_pb
 
 from .. import utils
 from ..log import logger
@@ -715,3 +716,173 @@ class _ReadOnlyChatContext(ChatContext):
     @property
     def readonly(self) -> bool:
         return True
+
+
+def chat_item_to_proto(item: ChatItem) -> agent_pb.agent_session.ChatContext.ChatItem:
+    """Convert a Pydantic ChatItem to a proto ChatContext.ChatItem."""
+    item_pb = agent_pb.agent_session.ChatContext.ChatItem()
+
+    if item.type == "message":
+        msg = item_pb.message
+        msg.id = item.id
+
+        role_map = {
+            "developer": agent_pb.agent_session.DEVELOPER,
+            "system": agent_pb.agent_session.SYSTEM,
+            "user": agent_pb.agent_session.USER,
+            "assistant": agent_pb.agent_session.ASSISTANT,
+        }
+        msg.role = role_map[item.role]
+
+        for content in item.content:
+            if isinstance(content, str):
+                content_pb = msg.content.add()
+                content_pb.text = content
+
+        msg.interrupted = item.interrupted
+
+        if item.transcript_confidence is not None:
+            msg.transcript_confidence = item.transcript_confidence
+
+        for key, value in item.extra.items():
+            msg.extra[key] = str(value)
+
+        metrics = item.metrics
+        if "started_speaking_at" in metrics:
+            msg.metrics.started_speaking_at.FromMilliseconds(
+                int(metrics["started_speaking_at"] * 1000)
+            )
+        if "stopped_speaking_at" in metrics:
+            msg.metrics.stopped_speaking_at.FromMilliseconds(
+                int(metrics["stopped_speaking_at"] * 1000)
+            )
+        if "transcription_delay" in metrics:
+            msg.metrics.transcription_delay = metrics["transcription_delay"]
+        if "end_of_turn_delay" in metrics:
+            msg.metrics.end_of_turn_delay = metrics["end_of_turn_delay"]
+        if "on_user_turn_completed_delay" in metrics:
+            msg.metrics.on_user_turn_completed_delay = metrics["on_user_turn_completed_delay"]
+        if "llm_node_ttft" in metrics:
+            msg.metrics.llm_node_ttft = metrics["llm_node_ttft"]
+        if "tts_node_ttfb" in metrics:
+            msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
+        if "e2e_latency" in metrics:
+            msg.metrics.e2e_latency = metrics["e2e_latency"]
+        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    elif item.type == "function_call":
+        fc = item_pb.function_call
+        fc.id = item.id
+        fc.call_id = item.call_id
+        fc.arguments = item.arguments
+        fc.name = item.name
+        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    elif item.type == "function_call_output":
+        fco = item_pb.function_call_output
+        fco.id = item.id
+        fco.name = item.name
+        fco.call_id = item.call_id
+        fco.output = item.output
+        fco.is_error = item.is_error
+        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    elif item.type == "agent_handoff":
+        ah = item_pb.agent_handoff
+        ah.id = item.id
+        if item.old_agent_id is not None:
+            ah.old_agent_id = item.old_agent_id
+        ah.new_agent_id = item.new_agent_id
+        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    return item_pb
+
+
+def chat_item_from_proto(item_pb: agent_pb.agent_session.ChatContext.ChatItem) -> ChatItem:
+    """Convert a proto ChatContext.ChatItem to a Pydantic ChatItem."""
+    from ..llm import AgentHandoff, ChatMessage, FunctionCall, FunctionCallOutput
+
+    which = item_pb.WhichOneof("item")
+
+    if which == "message":
+        msg = item_pb.message
+        role_map = {
+            agent_pb.agent_session.DEVELOPER: "developer",
+            agent_pb.agent_session.SYSTEM: "system",
+            agent_pb.agent_session.USER: "user",
+            agent_pb.agent_session.ASSISTANT: "assistant",
+        }
+
+        content: list[str] = []
+        for c in msg.content:
+            payload = c.WhichOneof("payload")
+            if payload == "text":
+                content.append(c.text)
+
+        kwargs: dict = {
+            "id": msg.id,
+            "role": role_map[msg.role],
+            "content": content,
+            "interrupted": msg.interrupted,
+            "extra": dict(msg.extra),
+            "created_at": msg.created_at.ToMilliseconds() / 1000.0,
+        }
+
+        if msg.HasField("transcript_confidence"):
+            kwargs["transcript_confidence"] = msg.transcript_confidence
+
+        metrics: dict = {}
+        m = msg.metrics
+        if m.started_speaking_at.seconds or m.started_speaking_at.nanos:
+            metrics["started_speaking_at"] = m.started_speaking_at.ToMilliseconds() / 1000.0
+        if m.stopped_speaking_at.seconds or m.stopped_speaking_at.nanos:
+            metrics["stopped_speaking_at"] = m.stopped_speaking_at.ToMilliseconds() / 1000.0
+        if m.HasField("transcription_delay"):
+            metrics["transcription_delay"] = m.transcription_delay
+        if m.HasField("end_of_turn_delay"):
+            metrics["end_of_turn_delay"] = m.end_of_turn_delay
+        if m.HasField("on_user_turn_completed_delay"):
+            metrics["on_user_turn_completed_delay"] = m.on_user_turn_completed_delay
+        if m.HasField("llm_node_ttft"):
+            metrics["llm_node_ttft"] = m.llm_node_ttft
+        if m.HasField("tts_node_ttfb"):
+            metrics["tts_node_ttfb"] = m.tts_node_ttfb
+        if m.HasField("e2e_latency"):
+            metrics["e2e_latency"] = m.e2e_latency
+        if metrics:
+            kwargs["metrics"] = metrics
+
+        return ChatMessage(**kwargs)
+
+    elif which == "function_call":
+        fc = item_pb.function_call
+        return FunctionCall(
+            id=fc.id,
+            call_id=fc.call_id,
+            arguments=fc.arguments,
+            name=fc.name,
+            created_at=fc.created_at.ToMilliseconds() / 1000.0,
+        )
+
+    elif which == "function_call_output":
+        fco = item_pb.function_call_output
+        return FunctionCallOutput(
+            id=fco.id,
+            name=fco.name,
+            call_id=fco.call_id,
+            output=fco.output,
+            is_error=fco.is_error,
+            created_at=fco.created_at.ToMilliseconds() / 1000.0,
+        )
+
+    elif which == "agent_handoff":
+        ah = item_pb.agent_handoff
+        return AgentHandoff(
+            id=ah.id,
+            old_agent_id=ah.old_agent_id if ah.HasField("old_agent_id") else None,
+            new_agent_id=ah.new_agent_id,
+            created_at=ah.created_at.ToMilliseconds() / 1000.0,
+        )
+
+    else:
+        raise ValueError(f"Unknown ChatItem oneof: {which}")

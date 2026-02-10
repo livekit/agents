@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from livekit.protocol.agent_pb import agent_text
 
 
 class AssignmentTimeoutError(Exception):
@@ -102,10 +102,22 @@ class CLIError(Exception):
 
 
 class TextMessageError(Exception):
-    def __init__(self, message: str, code: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        code: agent_text.TextMessageErrorCode = agent_text.TME_INTERNAL,
+    ) -> None:
         super().__init__(message)
         self._message = message
         self._code = code
 
-    def to_json(self) -> str:
-        return json.dumps({"message": self._message, "code": self._code})
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @property
+    def code(self) -> agent_text.TextMessageErrorCode:
+        return self._code
+
+    def to_proto(self) -> agent_text.TextMessageError:
+        return agent_text.TextMessageError(message=self._message, code=self._code)

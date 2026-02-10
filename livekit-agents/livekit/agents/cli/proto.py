@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
 from ..ipc import channel
 from ..job import JobAcceptArguments, RunningJobInfo
@@ -83,7 +84,7 @@ class ActiveJobsResponse:
             )
             has_text_request = channel.read_bool(b)
             if has_text_request:
-                text_request = agent.TextMessageRequest()
+                text_request = agent_text.TextMessageRequest()
                 text_request.ParseFromString(channel.read_bytes(b))
                 job_info.text_request = text_request
             self.jobs.append(job_info)

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import aiohttp.typedefs
 from aiohttp import web
+from google.protobuf.json_format import MessageToDict, ParseDict
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
-from . import llm, utils
+from . import utils
 from ._exceptions import TextMessageError
 from .log import logger
 from .utils.http_server import HttpServer
@@ -119,9 +119,9 @@ class AgentHttpServer(HttpServer):
             }
 
         Response (streaming NDJSON):
-            1. Session acknowledgment: {"type": "ack", "session_id": "...", "message_id": "..."}
-            2. Response events: {"type": "message|function_call|...", "data": {...}}
-            3. Completion: {"type": "complete", "session_state": {...}, "error": "..."}
+            1. Session acknowledgment: {"type": "session_started", "session_id": "...", "message_id": "..."}
+            2. Response events: {"type": "response", "message|function_call|function_call_output|agent_handoff": {...}}}
+            3. Completion: {"type": "complete", "session_state": {...}, "error": {"message": "...", "code": "..."}}
         """
         logger.info(f"handling text request: {request.method} {request.path}")
         endpoint, text_request = await self._parse_text_request(request)
@@ -140,66 +140,62 @@ class AgentHttpServer(HttpServer):
 
         try:
             session_info = await self._agent_server._launch_text_job(endpoint, text_request)
+            ack = agent_text.TextSessionStarted(
+                session_id=text_request.session_id,
+                message_id=text_request.message_id,
+            )
             ack_data = {
-                "type": "ack",
-                "session_id": text_request.session_id,
-                "message_id": text_request.message_id,
+                "type": "session_started",
+                **MessageToDict(ack, preserving_proto_field_name=True),
             }
             await response.write(json.dumps(ack_data).encode() + b"\n")
 
             # stream response events
             async for ev in session_info.event_ch:
-                event_data = {
-                    "type": ev.event_type,
-                    "data": json.loads(ev.data) if ev.data else {},
+                resp_data = {
+                    "type": "response",
+                    **MessageToDict(ev.item, preserving_proto_field_name=True),
                 }
-                await response.write(json.dumps(event_data).encode() + b"\n")
+                await response.write(json.dumps(resp_data).encode() + b"\n")
 
             # final response
             complete = await session_info.done_fut
-            completion_data: dict[str, Any] = {"type": "complete"}
-
-            if complete.error:
-                completion_data["error"] = complete.error
-
-            elif complete.session_state:
-                completion_data["session_state"] = {
-                    "version": complete.session_state.version,
-                }
-                if complete.session_state.snapshot:
-                    completion_data["session_state"]["snapshot"] = base64.b64encode(
-                        complete.session_state.snapshot
-                    ).decode()
-                if complete.session_state.delta:
-                    completion_data["session_state"]["delta"] = base64.b64encode(
-                        complete.session_state.delta
-                    ).decode()
-
-            await response.write(json.dumps(completion_data).encode() + b"\n")
         except TextMessageError as e:
-            error_data = {"type": "complete", "error": e.to_json()}
+            complete = agent_text.TextSessionComplete(
+                message_id=text_request.message_id,
+                error=e.to_proto(),
+            )
             logger.error(
                 "error processing text request",
-                extra={"session_id": text_request.session_id, **error_data},
+                extra={
+                    "session_id": text_request.session_id,
+                    "error": e.message,
+                    "error_code": agent_text.TextMessageErrorCode.Name(e.code),
+                },
             )
-            with contextlib.suppress(Exception):
-                await response.write(json.dumps(error_data).encode() + b"\n")
         except Exception:
-            error_data = {"type": "complete", "error": TextMessageError("internal error").to_json()}
+            complete = agent_text.TextSessionComplete(
+                message_id=text_request.message_id,
+                error=TextMessageError("internal error").to_proto(),
+            )
             logger.exception(
                 "unexpected error processing text request",
                 extra={"session_id": text_request.session_id},
             )
-            with contextlib.suppress(Exception):
-                await response.write(json.dumps(error_data).encode() + b"\n")
         finally:
+            with contextlib.suppress(Exception):
+                complete_data = {
+                    "type": "complete",
+                    **MessageToDict(complete, preserving_proto_field_name=True),
+                }
+                await response.write(json.dumps(complete_data).encode() + b"\n")
             await response.write_eof()
 
         return response
 
     async def _parse_text_request(
         self, request: web.Request
-    ) -> tuple[str, agent.TextMessageRequest]:
+    ) -> tuple[str, agent_text.TextMessageRequest]:
         endpoint = request.match_info.get("endpoint", "")
         session_id = request.match_info.get("session_id")
         logger.info(f"parsing text request: {endpoint} {session_id}")
@@ -217,51 +213,33 @@ class AgentHttpServer(HttpServer):
                 content_type="application/json",
             ) from e
 
-        text = body.get("text")
-        if text is None:
+        if "text" not in body:
             raise web.HTTPBadRequest(
                 reason=json.dumps({"error": "Missing 'text' field"}),
                 content_type="application/json",
             )
 
-        if not session_id:
-            session_id = utils.shortuuid("text_session_")
-        message_id = utils.shortuuid("text_msg_")
+        if "message_id" not in body:
+            body["message_id"] = utils.shortuuid("text_msg_")
+        if "agent_name" not in body:
+            body["agent_name"] = self._agent_server._agent_name
+        body["session_id"] = session_id or utils.shortuuid("text_session_")
 
-        # create TextMessageRequest proto
-        text_request = agent.TextMessageRequest(
-            message_id=message_id,
-            session_id=session_id,
-            agent_name=self._agent_server._agent_name,
-            metadata=body.get("metadata"),
-            text=text,
-        )
-        if session_state_dict := body.get("session_state"):
-            session_state = agent.AgentSessionState(version=session_state_dict.get("version", 0))
-            if (snapshot := session_state_dict.get("snapshot")) is not None:
-                session_state.snapshot = base64.b64decode(snapshot)
-            if (delta := session_state_dict.get("delta")) is not None:
-                session_state.delta = base64.b64decode(delta)
-            text_request.session_state.CopyFrom(session_state)
+        try:
+            text_request = ParseDict(
+                body, agent_text.TextMessageRequest(), ignore_unknown_fields=True
+            )
+        except Exception as e:
+            raise web.HTTPBadRequest(
+                reason=json.dumps({"error": f"Invalid request body: {str(e)}"}),
+                content_type="application/json",
+            ) from e
+
         return endpoint, text_request
 
 
 class AgentHttpClient:
     """Client to interact with AgentHttpServer API."""
-
-    @dataclass
-    class TextSessionStarted:
-        session_id: str
-        message_id: str
-
-    @dataclass
-    class TextResponseEvent:
-        item: llm.ChatItem
-
-    @dataclass
-    class TextSessionComplete:
-        session_state: agent.AgentSessionState | None = None
-        error: str | None = None
 
     def __init__(
         self,
@@ -321,15 +299,19 @@ class AgentHttpClient:
             resp.raise_for_status()
             return await resp.json()  # type: ignore
 
-    async def send_text_stream(
+    async def send_text(
         self,
         text: str,
         *,
         endpoint: str = "",
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        session_state: agent.AgentSessionState | None = None,
-    ) -> AsyncIterator[TextSessionStarted | TextResponseEvent | TextSessionComplete]:
+        session_state: agent_text.AgentSessionState | None = None,
+    ) -> AsyncIterator[
+        agent_text.TextSessionStarted
+        | agent_text.TextResponseEvent
+        | agent_text.TextSessionComplete
+    ]:
         """Send a text message and stream responses as they arrive.
 
         Args:
@@ -358,15 +340,7 @@ class AgentHttpClient:
         if metadata:
             body["metadata"] = metadata
         if session_state:
-            body["session_state"] = {
-                "version": session_state.version,
-            }
-            if session_state.HasField("snapshot"):
-                body["session_state"]["snapshot"] = base64.b64encode(
-                    session_state.snapshot
-                ).decode()
-            if session_state.HasField("delta"):
-                body["session_state"]["delta"] = base64.b64encode(session_state.delta).decode()
+            body["session_state"] = MessageToDict(session_state, preserving_proto_field_name=True)
 
         async with self._session.post(url, json=body) as resp:
             resp.raise_for_status()
@@ -382,46 +356,12 @@ class AgentHttpClient:
                     logger.warning(f"Failed to parse NDJSON line: {e}")
                     continue
 
-                event_type = data.get("type")
-                if event_type == "ack":
-                    yield self.TextSessionStarted(
-                        session_id=data["session_id"],
-                        message_id=data["message_id"],
-                    )
+                event_type = data.pop("type", None)
+                if event_type == "session_started":
+                    yield ParseDict(data, agent_text.TextSessionStarted())
                 elif event_type == "complete":
-                    # parse completion
-                    error = data.get("error")
-                    session_state_data = data.get("session_state")
-
-                    parsed_state: agent.AgentSessionState | None = None
-                    if session_state_data:
-                        parsed_state = agent.AgentSessionState(
-                            version=session_state_data.get("version", 0)
-                        )
-                        if (snapshot := session_state_data.get("snapshot")) is not None:
-                            parsed_state.snapshot = base64.b64decode(snapshot)
-                        if (delta := session_state_data.get("delta")) is not None:
-                            parsed_state.delta = base64.b64decode(delta)
-
-                    yield self.TextSessionComplete(session_state=parsed_state, error=error)
+                    yield ParseDict(data, agent_text.TextSessionComplete())
+                elif event_type == "response":
+                    yield ParseDict({"item": data}, agent_text.TextResponseEvent())
                 else:
-                    data = data.get("data", {})
-                    ev: (
-                        llm.ChatMessage
-                        | llm.FunctionCall
-                        | llm.FunctionCallOutput
-                        | llm.AgentHandoff
-                    )
-                    if event_type == "message":
-                        ev = llm.ChatMessage.model_validate(data)
-                    elif event_type == "function_call":
-                        ev = llm.FunctionCall.model_validate(data)
-                    elif event_type == "function_call_output":
-                        ev = llm.FunctionCallOutput.model_validate(data)
-                    elif event_type == "agent_handoff":
-                        ev = llm.AgentHandoff.model_validate(data)
-                    else:
-                        logger.warning(f"unsupported event type: {event_type}")
-                        continue
-
-                    yield self.TextResponseEvent(item=ev)
+                    logger.warning(f"unknown event type: {event_type}")
