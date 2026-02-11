@@ -1179,12 +1179,6 @@ def _sms_text_mode(
     from ..llm.chat_context import chat_item_from_proto
     from ..utils.session_store import SessionStore
 
-    MSG_TYPE = (
-        agent_text.TextSessionStarted
-        | agent_text.TextResponseEvent
-        | agent_text.TextSessionComplete
-    )
-
     session_id: str | None = None
     target_version: int | None = None  # hot sync if version specified
     while True:
@@ -1221,14 +1215,14 @@ def _sms_text_mode(
         elif target_version is not None:
             session_state = agent_text.AgentSessionState(version=target_version)
 
-        response_queue = queue.Queue[MSG_TYPE | None]()
+        response_queue = queue.Queue[agent_text.TextMessageResponse | None]()
 
         def async_worker(
             session_id: str,
             user_text: str,
             user_endpoint: str,
             user_session_state: agent_text.AgentSessionState | None,
-            user_response_queue: queue.Queue[MSG_TYPE | None],
+            user_response_queue: queue.Queue[agent_text.TextMessageResponse | None],
         ) -> None:
             """Run async code in a separate thread with its own event loop."""
 
@@ -1255,7 +1249,7 @@ def _sms_text_mode(
         worker_thread.start()
 
         while True:
-            resp: MSG_TYPE | None = None
+            resp: agent_text.TextMessageResponse | None = None
             with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
                 while True:
                     try:
@@ -1267,31 +1261,33 @@ def _sms_text_mode(
             if resp is None:
                 break
 
-            if isinstance(resp, agent_text.TextSessionStarted):
+            if session_id is None and resp.session_id:
                 session_id = resp.session_id
 
-            elif isinstance(resp, agent_text.TextSessionComplete):
-                if resp.HasField("error"):
+            if resp.WhichOneof("event") == "complete":
+                if resp.complete.WhichOneof("result") == "error":
                     logger.error(
                         "error processing text",
                         extra={
                             "session_data_file": sess_data_file,
-                            "error": resp.error.message,
-                            "error_code": resp.error.code,
+                            "error": resp.complete.error.message,
+                            "error_code": resp.complete.error.code,
                         },
                     )
                     break
 
                 # save session state to file
-                if resp.HasField("session_state"):
-                    version = resp.session_state.version
-                    which_oneof = resp.session_state.WhichOneof("data")
+                else:
+                    version = resp.complete.session_state.version
+                    which_oneof = resp.complete.session_state.WhichOneof("data")
                     if which_oneof == "snapshot":
                         with open(sess_data_file, "wb") as wf:
-                            wf.write(resp.session_state.snapshot)
+                            wf.write(resp.complete.session_state.snapshot)
                     elif which_oneof == "delta":
                         with SessionStore(db_file=sess_data_file) as store:
-                            store.apply_changeset(resp.session_state.delta, version=version)
+                            store.apply_changeset(
+                                resp.complete.session_state.delta, version=version
+                            )
                     logger.debug(
                         "session state updated",
                         extra={"session_data_file": sess_data_file, "version": version},
@@ -1300,8 +1296,8 @@ def _sms_text_mode(
 
                 break
 
-            elif isinstance(resp, agent_text.TextResponseEvent):
-                _print_chat_item(c, chat_item_from_proto(resp.item))
+            else:
+                _print_chat_item(c, chat_item_from_proto(resp))
 
         worker_thread.join()
         # release the console for next run

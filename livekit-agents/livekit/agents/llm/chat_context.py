@@ -798,11 +798,17 @@ def chat_item_to_proto(item: ChatItem) -> agent_pb.agent_session.ChatContext.Cha
     return item_pb
 
 
-def chat_item_from_proto(item_pb: agent_pb.agent_session.ChatContext.ChatItem) -> ChatItem:
+def chat_item_from_proto(
+    item_pb: agent_pb.agent_session.ChatContext.ChatItem | agent_pb.agent_text.TextMessageResponse,
+) -> ChatItem:
     """Convert a proto ChatContext.ChatItem to a Pydantic ChatItem."""
     from ..llm import AgentHandoff, ChatMessage, FunctionCall, FunctionCallOutput
 
-    which = item_pb.WhichOneof("item")
+    which = (
+        item_pb.WhichOneof("item")
+        if isinstance(item_pb, agent_pb.agent_session.ChatContext.ChatItem)
+        else item_pb.WhichOneof("event")
+    )
 
     if which == "message":
         msg = item_pb.message

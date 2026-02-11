@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
@@ -107,21 +106,34 @@ class AgentHttpServer(HttpServer):
     async def _handle_text_request(self, request: web.Request) -> web.StreamResponse:
         """Handle POST /text/{endpoint}[/sessions/{session_id}]
 
-        Request body (JSON):
-            {
-                "text": "user message",
-                "metadata": {"key": "value"},  // optional
-                "session_state": {  // optional
-                    "version": 1,
-                    "snapshot": "base64...",
-                    "delta": "base64..."
+        Request body is a JSON object that is parsed as `agent_text.TextMessageRequest`:
+        ```json
+        {
+            "text": "user message",
+            "metadata": {"key": "value"},  // optional
+            "session_state": {  // optional
+                "version": 1,
+                "snapshot": "base64...",
+                "delta": "base64..."
+            }
+        }
+        ```
+
+        Response as streaming NDJSON of `agent_text.TextMessageResponse` events:
+        ```json
+        {
+            "session_id": "...",
+            "message_id": "...",
+            "message|function_call|function_call_output|agent_handoff": {...},
+            "complete": {
+                "session_state": {...},
+                "error": {
+                    "message": "...",
+                    "code": "..."
                 }
             }
-
-        Response (streaming NDJSON):
-            1. Session acknowledgment: {"type": "session_started", "session_id": "...", "message_id": "..."}
-            2. Response events: {"type": "response", "message|function_call|function_call_output|agent_handoff": {...}}}
-            3. Completion: {"type": "complete", "session_state": {...}, "error": {"message": "...", "code": "..."}}
+        }
+        ```
         """
         logger.info(f"handling text request: {request.method} {request.path}")
         endpoint, text_request = await self._parse_text_request(request)
@@ -138,33 +150,28 @@ class AgentHttpServer(HttpServer):
         )
         await response.prepare(request)
 
+        completed = False
+
+        async def _stream_message(msg: agent_text.TextMessageResponse) -> None:
+            nonlocal completed
+
+            msg_json = json.dumps(MessageToDict(msg, preserving_proto_field_name=True))
+            if completed:
+                logger.warning("received message after completion", extra={"message": msg_json})
+                return
+
+            await response.write(msg_json.encode() + b"\n")
+            if msg.WhichOneof("event") == "complete":
+                completed = True
+
         try:
             session_info = await self._agent_server._launch_text_job(endpoint, text_request)
-            ack = agent_text.TextSessionStarted(
-                session_id=text_request.session_id,
-                message_id=text_request.message_id,
-            )
-            ack_data = {
-                "type": "session_started",
-                **MessageToDict(ack, preserving_proto_field_name=True),
-            }
-            await response.write(json.dumps(ack_data).encode() + b"\n")
 
             # stream response events
             async for ev in session_info.event_ch:
-                resp_data = {
-                    "type": "response",
-                    **MessageToDict(ev.item, preserving_proto_field_name=True),
-                }
-                await response.write(json.dumps(resp_data).encode() + b"\n")
+                await _stream_message(ev)
 
-            # final response
-            complete = await session_info.done_fut
         except TextMessageError as e:
-            complete = agent_text.TextSessionComplete(
-                message_id=text_request.message_id,
-                error=e.to_proto(),
-            )
             logger.error(
                 "error processing text request",
                 extra={
@@ -173,22 +180,30 @@ class AgentHttpServer(HttpServer):
                     "error_code": agent_text.TextMessageErrorCode.Name(e.code),
                 },
             )
+            if not completed:
+                await _stream_message(
+                    agent_text.TextMessageResponse(
+                        session_id=text_request.session_id,
+                        message_id=text_request.message_id,
+                        complete=agent_text.TextMessageComplete(error=e.to_proto()),
+                    )
+                )
         except Exception:
-            complete = agent_text.TextSessionComplete(
-                message_id=text_request.message_id,
-                error=TextMessageError("internal error").to_proto(),
-            )
             logger.exception(
                 "unexpected error processing text request",
                 extra={"session_id": text_request.session_id},
             )
+            if not completed:
+                await _stream_message(
+                    agent_text.TextMessageResponse(
+                        session_id=text_request.session_id,
+                        message_id=text_request.message_id,
+                        complete=agent_text.TextMessageComplete(
+                            error=TextMessageError("internal error").to_proto()
+                        ),
+                    )
+                )
         finally:
-            with contextlib.suppress(Exception):
-                complete_data = {
-                    "type": "complete",
-                    **MessageToDict(complete, preserving_proto_field_name=True),
-                }
-                await response.write(json.dumps(complete_data).encode() + b"\n")
             await response.write_eof()
 
         return response
@@ -307,11 +322,7 @@ class AgentHttpClient:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         session_state: agent_text.AgentSessionState | None = None,
-    ) -> AsyncIterator[
-        agent_text.TextSessionStarted
-        | agent_text.TextResponseEvent
-        | agent_text.TextSessionComplete
-    ]:
+    ) -> AsyncIterator[agent_text.TextMessageResponse]:
         """Send a text message and stream responses as they arrive.
 
         Args:
@@ -322,9 +333,7 @@ class AgentHttpClient:
             session_state: Optional session state to restore
 
         Yields:
-            TextSessionAck: Initial acknowledgment
-            TextResponseEvent: Events as they arrive
-            TextSessionComplete: Final completion with session state or error
+            TextMessageResponse: Events as they arrive
 
         Raises:
             aiohttp.ClientError: If request fails
@@ -356,12 +365,4 @@ class AgentHttpClient:
                     logger.warning(f"Failed to parse NDJSON line: {e}")
                     continue
 
-                event_type = data.pop("type", None)
-                if event_type == "session_started":
-                    yield ParseDict(data, agent_text.TextSessionStarted())
-                elif event_type == "complete":
-                    yield ParseDict(data, agent_text.TextSessionComplete())
-                elif event_type == "response":
-                    yield ParseDict({"item": data}, agent_text.TextResponseEvent())
-                else:
-                    logger.warning(f"unknown event type: {event_type}")
+                yield ParseDict(data, agent_text.TextMessageResponse())

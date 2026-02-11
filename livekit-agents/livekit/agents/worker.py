@@ -110,7 +110,7 @@ class _EntrypointWrapper:
             except Exception as e:
                 exc = TextMessageError(
                     f"error in text handler: {str(e)}",
-                    code=agent_text.TME_TEXT_HANDLER_ERROR,
+                    code=agent_text.TEXT_HANDLER_ERROR,
                 )
                 logger.exception(
                     "error in text handler",
@@ -135,8 +135,8 @@ class _EntrypointWrapper:
 @dataclass
 class _TextSession:
     proc_id: str
-    event_ch: utils.aio.Chan[agent_text.TextResponseEvent]
-    done_fut: asyncio.Future[agent_text.TextSessionComplete]
+    message_id: str
+    event_ch: utils.aio.Chan[agent_text.TextMessageResponse]
 
 
 class ServerType(Enum):
@@ -1407,7 +1407,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 except Exception as e:
                     raise TextMessageError(
                         f"failed to resolve session state from cache with error: {str(e)}",
-                        code=agent_text.TME_SESSION_STATE_NOT_FOUND,
+                        code=agent_text.SESSION_STATE_NOT_FOUND,
                     ) from e
                 request.session_state.CopyFrom(session_state)
 
@@ -1440,8 +1440,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             session_info = _TextSession(
                 proc_id=proc_id,
-                event_ch=utils.aio.Chan[agent_text.TextResponseEvent](),
-                done_fut=asyncio.Future(),
+                message_id=request.message_id,
+                event_ch=utils.aio.Chan[agent_text.TextMessageResponse](),
             )
             self._text_sessions[session_id] = session_info
 
@@ -1528,23 +1528,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
             return
 
-        if msg.type == "response":
-            assert isinstance(msg.data, agent_text.TextResponseEvent)
-            session_info.event_ch.send_nowait(msg.data)
-            return
+        session_info.event_ch.send_nowait(msg.event)
 
-        assert isinstance(msg.data, agent_text.TextSessionComplete)
-        session_info.done_fut.set_result(msg.data)
-        session_info.event_ch.close()
-        self._text_sessions.pop(session_id)
+        if msg.event.WhichOneof("event") == "complete":
+            session_info.event_ch.close()
+            self._text_sessions.pop(session_id)
 
-        # save session state to cache
-        if msg.data.session_state and self._session_cache:
-            result = self._session_cache.store(session_id, msg.data.session_state)
-            if inspect.isawaitable(result):
-                task = asyncio.ensure_future(result, loop=self._loop)
-                self._pending_cache_saves[session_id] = task
-                task.add_done_callback(lambda _: self._pending_cache_saves.pop(session_id, None))
+            # save session state to cache
+            complete_type = msg.event.complete.WhichOneof("result")
+            if complete_type == "session_state" and self._session_cache:
+                result = self._session_cache.store(session_id, msg.event.complete.session_state)
+                if inspect.isawaitable(result):
+                    task = asyncio.ensure_future(result, loop=self._loop)
+                    self._pending_cache_saves[session_id] = task
+                    task.add_done_callback(
+                        lambda _: self._pending_cache_saves.pop(session_id, None)
+                    )
 
     def _on_process_closed(self, proc: ipc.job_executor.JobExecutor) -> None:
         """Clean up any text sessions on this process."""
@@ -1553,14 +1552,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         uncompleted_sessions: list[str] = []
         for session_id, session_info in self._text_sessions.items():
             if session_info.proc_id == proc_id:
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    session_info.done_fut.set_exception(
-                        TextMessageError(
-                            "process closed before text session completed",
-                            code=agent_text.TME_PROCESS_CLOSED,
+                if not session_info.event_ch.closed:
+                    error = TextMessageError(
+                        "process closed before text session completed",
+                        code=agent_text.PROCESS_CLOSED,
+                    )
+                    session_info.event_ch.send_nowait(
+                        agent_text.TextMessageResponse(
+                            session_id=session_id,
+                            message_id=session_info.message_id,
+                            complete=agent_text.TextMessageComplete(error=error.to_proto()),
                         )
                     )
-                session_info.event_ch.close()
+                    session_info.event_ch.close()
                 uncompleted_sessions.append(session_id)
 
         for session_id in uncompleted_sessions:

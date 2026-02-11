@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 from livekit.protocol import agent
 from livekit.protocol.agent_pb import agent_text
@@ -219,25 +219,20 @@ class DumpStackTraceRequest:
 
 @dataclass
 class TextResponse:
+    """sent by the subprocess to the main process to send a text response"""
+
     MSG_ID: ClassVar[int] = 10
-    type: Literal["response", "complete"] = "response"
     session_id: str = ""
-    data: agent_text.TextResponseEvent | agent_text.TextSessionComplete = field(init=False)
+    event: agent_text.TextMessageResponse = field(init=False)
 
     def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.type)
         channel.write_string(b, self.session_id)
-        channel.write_bytes(b, self.data.SerializeToString())
+        channel.write_bytes(b, self.event.SerializeToString())
 
     def read(self, b: io.BytesIO) -> None:
-        self.type = channel.read_string(b)  # type: ignore
         self.session_id = channel.read_string(b)
-        if self.type == "response":
-            self.data = agent_text.TextResponseEvent()
-            self.data.ParseFromString(channel.read_bytes(b))
-        elif self.type == "complete":
-            self.data = agent_text.TextSessionComplete()
-            self.data.ParseFromString(channel.read_bytes(b))
+        self.event = agent_text.TextMessageResponse()
+        self.event.ParseFromString(channel.read_bytes(b))
 
 
 IPC_MESSAGES = {

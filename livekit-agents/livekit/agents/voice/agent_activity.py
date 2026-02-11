@@ -526,8 +526,7 @@ class AgentActivity(RecognitionHooks):
 
         durable_tasks: list[DurableTask] = pickle.loads(durable_state)
         for task in durable_tasks:
-            num_steps = task.metadata.get("num_steps")
-            if not num_steps:
+            if task.metadata is None or (num_steps := task.metadata.get("num_steps")) is None:
                 # durable function not bound to a speech handle
                 self.durable_scheduler.execute(task)
                 continue
@@ -557,6 +556,8 @@ class AgentActivity(RecognitionHooks):
         self, task: DurableTask, speech_handle: SpeechHandle
     ) -> None:
         from .agent import ModelSettings
+
+        assert task.metadata is not None
 
         fnc_call_json = task.metadata.get("function_call")
         assert fnc_call_json is not None

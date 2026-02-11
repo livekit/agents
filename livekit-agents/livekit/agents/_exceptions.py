@@ -105,7 +105,7 @@ class TextMessageError(Exception):
     def __init__(
         self,
         message: str,
-        code: agent_text.TextMessageErrorCode = agent_text.TME_INTERNAL,
+        code: agent_text.TextMessageErrorCode = agent_text.INTERNAL_ERROR,
     ) -> None:
         super().__init__(message)
         self._message = message
