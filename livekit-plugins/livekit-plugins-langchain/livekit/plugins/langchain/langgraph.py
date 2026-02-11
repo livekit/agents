@@ -186,7 +186,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         skipped since ChatChunk only carries text.
         """
         if isinstance(data, FlushSentinel):
-            self._event_ch.send_nowait(data)
+            self._event_ch.send_nowait(data)  # type: ignore[arg-type]
             return
 
         content = _extract_custom_content(data)
@@ -242,7 +242,7 @@ def _extract_custom_content(value: Any) -> str | None:
     if isinstance(value, BaseMessage) and isinstance(value.content, str):
         return value.content
     if isinstance(value, dict) and isinstance(value.get("content"), str):
-        return value["content"]
+        return value["content"]  # type: ignore[no-any-return]
     return None
 
 

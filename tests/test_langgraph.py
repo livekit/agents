@@ -314,10 +314,12 @@ async def test_subgraph_messages_mode():
     chunk_sub = AIMessageChunk(content="sub", id="s1")
 
     # Exact shapes from LangGraph: (namespace_tuple, (message, metadata))
-    mock = MockGraph([
-        ((), (chunk_root, meta)),
-        (("node_2:abc123",), (chunk_sub, meta)),
-    ])
+    mock = MockGraph(
+        [
+            ((), (chunk_root, meta)),
+            (("node_2:abc123",), (chunk_sub, meta)),
+        ]
+    )
     adapter = LLMAdapter(mock, stream_mode="messages", subgraphs=True)
 
     chat_ctx = ChatContext()
@@ -333,11 +335,13 @@ async def test_subgraph_messages_mode():
 async def test_subgraph_custom_mode():
     """Test namespace stripping for custom mode with subgraphs=True."""
     # Exact shapes: (namespace_tuple, raw_value)
-    mock = MockGraph([
-        ((), "root_chunk"),
-        (("node_2:abc123",), "sub_chunk"),
-        (("node_2:abc123",), {"content": "sub_dict"}),
-    ])
+    mock = MockGraph(
+        [
+            ((), "root_chunk"),
+            (("node_2:abc123",), "sub_chunk"),
+            (("node_2:abc123",), {"content": "sub_dict"}),
+        ]
+    )
     adapter = LLMAdapter(mock, stream_mode="custom", subgraphs=True)
 
     chat_ctx = ChatContext()
@@ -357,12 +361,14 @@ async def test_subgraph_multi_mode():
     chunk = AIMessageChunk(content="msg", id="m1")
 
     # Exact shapes: (namespace_tuple, mode_string, data)
-    mock = MockGraph([
-        ((), "messages", (chunk, meta)),
-        ((), "custom", "custom_root"),
-        (("node_2:abc123",), "messages", (chunk, meta)),
-        (("node_2:abc123",), "custom", "custom_sub"),
-    ])
+    mock = MockGraph(
+        [
+            ((), "messages", (chunk, meta)),
+            ((), "custom", "custom_root"),
+            (("node_2:abc123",), "messages", (chunk, meta)),
+            (("node_2:abc123",), "custom", "custom_sub"),
+        ]
+    )
     adapter = LLMAdapter(mock, stream_mode=["messages", "custom"], subgraphs=True)
 
     chat_ctx = ChatContext()
@@ -401,11 +407,13 @@ async def test_flush_sentinel_custom_mode():
 async def test_flush_sentinel_multi_mode():
     """Test FlushSentinel passes through in multi stream mode."""
     sentinel = FlushSentinel()
-    mock = MockGraph([
-        ("custom", "before"),
-        ("custom", sentinel),
-        ("custom", "after"),
-    ])
+    mock = MockGraph(
+        [
+            ("custom", "before"),
+            ("custom", sentinel),
+            ("custom", "after"),
+        ]
+    )
     adapter = LLMAdapter(mock, stream_mode=["messages", "custom"])
 
     chat_ctx = ChatContext()
