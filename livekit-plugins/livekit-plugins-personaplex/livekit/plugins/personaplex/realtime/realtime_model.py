@@ -496,8 +496,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
             pcm_float = pcm_int16.astype(np.float32) / 32768.0
 
-            self._opus_writer.append_pcm(pcm_float)
-            opus_bytes = self._opus_writer.read_bytes()
+            # sphn >=0.2: append_pcm returns opus bytes directly
+            opus_bytes = self._opus_writer.append_pcm(pcm_float)
 
             if opus_bytes:
                 # Prepend audio message type
@@ -510,8 +510,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def _handle_audio_data(self, opus_payload: bytes) -> None:
         """Decode Opus audio from server and push to generation."""
         try:
-            self._opus_reader.append_bytes(opus_payload)
-            pcm_float = self._opus_reader.read_pcm()
+            # sphn >=0.2: append_bytes returns pcm directly
+            pcm_float = self._opus_reader.append_bytes(opus_payload)
 
             if pcm_float is None or len(pcm_float) == 0:
                 return
