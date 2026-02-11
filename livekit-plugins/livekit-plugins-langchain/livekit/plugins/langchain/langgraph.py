@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterable
 from typing import Any, Generic
 
 from langchain_core.messages import (
@@ -29,12 +30,13 @@ from langgraph.types import StreamMode
 from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ChatChunk, ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    FlushSentinel,
     NotGivenOr,
 )
 
@@ -122,6 +124,14 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         self._subgraphs = subgraphs
         self._stream_mode = stream_mode
 
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
+        async def _filtered(aiter: AsyncIterable) -> AsyncIterable[ChatChunk]:
+            async for ev in aiter:
+                if isinstance(ev, ChatChunk):
+                    yield ev
+
+        await super()._metrics_monitor_task(_filtered(event_aiter))
+
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
 
@@ -171,9 +181,14 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
 
         Custom mode emits raw values written by StreamWriter nodes — strings,
         dicts, BaseMessages, or arbitrary objects (e.g. FlushSentinel).
+        FlushSentinel is forwarded directly to trigger immediate TTS playback.
         We extract text content where possible; non-text values are silently
         skipped since ChatChunk only carries text.
         """
+        if isinstance(data, FlushSentinel):
+            self._event_ch.send_nowait(data)
+            return
+
         content = _extract_custom_content(data)
         if content:
             chunk = _to_chat_chunk(content)

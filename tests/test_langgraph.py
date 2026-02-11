@@ -8,16 +8,15 @@ from typing import Annotated
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import StreamWriter
 from typing_extensions import TypedDict
 
-from langchain_core.messages import AIMessageChunk
-
 from livekit.agents.llm import ChatContext
+from livekit.agents.types import FlushSentinel
 from livekit.plugins.langchain import LLMAdapter
 
 # --- State definitions ---
@@ -99,9 +98,19 @@ async def collect_chunks(stream) -> list[str]:
     """Collect all content chunks from a stream."""
     chunks = []
     async for chunk in stream:
+        if isinstance(chunk, FlushSentinel):
+            continue
         if chunk.delta and chunk.delta.content:
             chunks.append(chunk.delta.content)
     return chunks
+
+
+async def collect_raw_events(stream) -> list:
+    """Collect all raw events from a stream, including FlushSentinel."""
+    events = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 # --- Tests: messages mode ---
@@ -364,3 +373,65 @@ async def test_subgraph_multi_mode():
     assert "msg" in chunks
     assert "custom_root" in chunks
     assert "custom_sub" in chunks
+
+
+# --- Tests: FlushSentinel support ---
+
+
+@pytest.mark.asyncio
+async def test_flush_sentinel_custom_mode():
+    """Test FlushSentinel passes through in custom stream mode."""
+    sentinel = FlushSentinel()
+    mock = MockGraph(["chunk1", sentinel, "chunk2"])
+    adapter = LLMAdapter(mock, stream_mode="custom")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    events = await collect_raw_events(stream)
+
+    sentinels = [e for e in events if isinstance(e, FlushSentinel)]
+    text_chunks = [e.delta.content for e in events if not isinstance(e, FlushSentinel)]
+    assert len(sentinels) == 1
+    assert "chunk1" in text_chunks
+    assert "chunk2" in text_chunks
+
+
+@pytest.mark.asyncio
+async def test_flush_sentinel_multi_mode():
+    """Test FlushSentinel passes through in multi stream mode."""
+    sentinel = FlushSentinel()
+    mock = MockGraph([
+        ("custom", "before"),
+        ("custom", sentinel),
+        ("custom", "after"),
+    ])
+    adapter = LLMAdapter(mock, stream_mode=["messages", "custom"])
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    events = await collect_raw_events(stream)
+
+    sentinels = [e for e in events if isinstance(e, FlushSentinel)]
+    text_chunks = [e.delta.content for e in events if not isinstance(e, FlushSentinel)]
+    assert len(sentinels) == 1
+    assert "before" in text_chunks
+    assert "after" in text_chunks
+
+
+@pytest.mark.asyncio
+async def test_non_flush_custom_items_still_work():
+    """Test that non-FlushSentinel custom items are handled normally."""
+    mock = MockGraph(["text", {"content": "dict_val"}, 42])
+    adapter = LLMAdapter(mock, stream_mode="custom")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert "text" in chunks
+    assert "dict_val" in chunks
+    # 42 (non-text) should be silently skipped
+    assert len(chunks) == 2
