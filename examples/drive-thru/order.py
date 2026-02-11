@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import string
 from dataclasses import dataclass
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,9 +39,7 @@ class OrderedRegular(BaseModel):
     size: Literal["S", "M", "L"] | None = None
 
 
-OrderedItem = Annotated[
-    Union[OrderedCombo, OrderedHappy, OrderedRegular], Field(discriminator="type")
-]
+OrderedItem = Annotated[OrderedCombo | OrderedHappy | OrderedRegular, Field(discriminator="type")]
 
 
 @dataclass

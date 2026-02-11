@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 
 from openai.types import AudioModel
 
@@ -19,6 +19,8 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.2",
+    "gpt-5.2-chat-latest",
     "gpt-5.1",
     "gpt-5.1-chat-latest",
     "gpt-5",
@@ -289,8 +291,9 @@ XAIChatModels = Literal[
 ]
 
 
-def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
+def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-5.2",
         "gpt-5.1",
         "gpt-5",
         "gpt-5-mini",
@@ -303,7 +306,7 @@ class OpenRouterWebPlugin:
     """OpenRouter web search plugin configuration"""
 
     max_results: int = 5
-    search_prompt: Optional[str] = None
+    search_prompt: str | None = None
     id: str = "web"
 
 

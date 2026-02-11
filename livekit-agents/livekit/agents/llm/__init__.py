@@ -1,5 +1,6 @@
 from . import remote_chat_context, utils
 from .chat_context import (
+    AgentConfigUpdate,
     AgentHandoff,
     AudioContent,
     ChatContent,
@@ -17,6 +18,7 @@ from .llm import (
     LLM,
     ChatChunk,
     ChoiceDelta,
+    CollectedResponse,
     CompletionUsage,
     FunctionToolCall,
     LLMError,
@@ -37,20 +39,27 @@ from .realtime import (
 )
 from .tool_context import (
     FunctionTool,
+    ProviderTool,
     RawFunctionTool,
     StopResponse,
+    Tool,
     ToolChoice,
     ToolContext,
     ToolError,
+    Toolset,
     find_function_tools,
     function_tool,
     is_function_tool,
     is_raw_function_tool,
 )
+from .utils import FunctionCallResult, execute_function_call
 
 __all__ = [
     "LLM",
     "LLMStream",
+    "CollectedResponse",
+    "execute_function_call",
+    "FunctionCallResult",
     "ChatContext",
     "ChatRole",
     "ChatMessage",
@@ -59,6 +68,7 @@ __all__ = [
     "FunctionCallOutput",
     "AudioContent",
     "ImageContent",
+    "AgentConfigUpdate",
     "AgentHandoff",
     "MetricsReport",
     "ChatItem",
@@ -68,12 +78,15 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
+    "Tool",
+    "Toolset",
     "is_function_tool",
     "function_tool",
     "find_function_tools",
     "FunctionTool",
     "is_raw_function_tool",
     "RawFunctionTool",
+    "ProviderTool",
     "ToolContext",
     "ToolError",
     "StopResponse",

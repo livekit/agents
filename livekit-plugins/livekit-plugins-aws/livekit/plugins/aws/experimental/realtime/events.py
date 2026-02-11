@@ -1,28 +1,16 @@
 import json
 import uuid
-from typing import Any, Literal, Optional, Union, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from livekit.agents import llm
 
 from ...log import logger
+from .types import TURN_DETECTION
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
-VOICE_ID = Literal[
-    "matthew",
-    "tiffany",
-    "amy",
-    "ambre",
-    "florian",
-    "beatrice",
-    "lorenzo",
-    "greta",
-    "lennart",
-    "lupe",
-    "carlos",
-]
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
 STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
@@ -56,7 +44,7 @@ class AudioOutputConfiguration(BaseModel):
     sampleRateHertz: SAMPLE_RATE_HERTZ = Field(default=24_000)
     sampleSizeBits: SAMPLE_SIZE_BITS = 16
     channelCount: CHANNEL_COUNT = 1
-    voiceId: VOICE_ID = Field(...)
+    voiceId: str = Field(...)
     encoding: AUDIO_ENCODING = "base64"
     audioType: str = "SPEECH"
 
@@ -103,12 +91,13 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    toolChoice: Optional[dict[str, dict[str, str]]] = None
+    toolChoice: dict[str, dict[str, str]] | None = None
     tools: list[Tool]
 
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
+    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -222,19 +211,19 @@ class SessionEndEvent(BaseModel):
 
 
 class Event(BaseModel):
-    event: Union[
-        SessionStartEvent,
-        InputTextContentStartEvent,
-        InputAudioContentStartEvent,
-        InputToolContentStartEvent,
-        PromptStartEvent,
-        TextInputContentEvent,
-        AudioInputContentEvent,
-        ToolResultContentEvent,
-        InputContentEndEvent,
-        PromptEndEvent,
-        SessionEndEvent,
-    ]
+    event: (
+        SessionStartEvent
+        | InputTextContentStartEvent
+        | InputAudioContentStartEvent
+        | InputToolContentStartEvent
+        | PromptStartEvent
+        | TextInputContentEvent
+        | AudioInputContentEvent
+        | ToolResultContentEvent
+        | InputContentEndEvent
+        | PromptEndEvent
+        | SessionEndEvent
+    )
 
 
 class SonicEventBuilder:
@@ -307,30 +296,31 @@ class SonicEventBuilder:
 
     def create_prompt_start_block(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
         system_content: str,
         chat_ctx: llm.ChatContext,
-        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
+        tool_configuration: ToolConfiguration | dict[str, Any] | str | None = None,
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
-            self.create_session_start_event(max_tokens, top_p, temperature),
+            self.create_session_start_event(
+                max_tokens, top_p, temperature, endpointing_sensitivity
+            ),
             self.create_prompt_start_event(voice_id, sample_rate, tool_configuration),
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
 
         # note: tool call events are not supported yet
-        if chat_ctx.items:
+        messages = chat_ctx.messages()
+        if messages:
             logger.debug("initiating session with chat context")
-            for item in chat_ctx.items:
-                if item.type != "message":
-                    continue
-
-                if (role := item.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
+            for msg in messages:
+                if (role := msg.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
                     continue
 
                 ctx_content_name = str(uuid.uuid4())
@@ -338,7 +328,7 @@ class SonicEventBuilder:
                     self.create_text_content_block(
                         ctx_content_name,
                         cast(ROLE, role),
-                        "".join(c for c in item.content if isinstance(c, str)),
+                        "".join(c for c in msg.content if isinstance(c, str)),
                     )
                 )
 
@@ -349,6 +339,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(
@@ -357,7 +348,8 @@ class SonicEventBuilder:
                         maxTokens=max_tokens,
                         topP=top_p,
                         temperature=temperature,
-                    )
+                    ),
+                    endpointingSensitivity=endpointing_sensitivity,
                 )
             )
         )
@@ -391,6 +383,25 @@ class SonicEventBuilder:
                     promptName=self.prompt_name,
                     contentName=content_name,
                     role=role,
+                    textInputConfiguration=TextInputConfiguration(),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True, by_alias=True)
+
+    def create_text_content_start_event_interactive(
+        self,
+        content_name: str,
+        role: ROLE,
+    ) -> str:
+        """Create text content start event with interactive=True for Nova Sonic 2.0."""
+        event = Event(
+            event=InputTextContentStartEvent(
+                contentStart=InputTextContentStart(
+                    promptName=self.prompt_name,
+                    contentName=content_name,
+                    role=role,
+                    interactive=True,
                     textInputConfiguration=TextInputConfiguration(),
                 )
             )
@@ -450,7 +461,7 @@ class SonicEventBuilder:
     def create_tool_result_event(
         self,
         content_name: str,
-        content: Union[str, dict[str, Any]],
+        content: str | dict[str, Any],
     ) -> str:
         if isinstance(content, dict):
             content_str = json.dumps(content)
@@ -499,9 +510,9 @@ class SonicEventBuilder:
 
     def create_prompt_start_event(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
-        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
+        tool_configuration: ToolConfiguration | dict[str, Any] | str | None = None,
     ) -> str:
         if tool_configuration is None:
             tool_configuration = ToolConfiguration(tools=[])

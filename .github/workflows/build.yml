@@ -18,7 +18,7 @@ on:
       package:
         description: "Name of the package to build"
         required: true
-        default: "livekit-plugins-browser"
+        default: "livekit-agents"
       artifact_name:
         description: "Artifact name for the distribution package"
         required: true
@@ -27,7 +27,7 @@ on:
 jobs:
   build_plugins:
     runs-on: ubuntu-latest
-    if: inputs.package != 'livekit-plugins-browser' && inputs.package != 'livekit-blingfire'
+    if: inputs.package != 'livekit-blingfire' && inputs.package != 'livekit-durable'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -54,23 +54,31 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: dist/
 
-  build_browser:
-    if: inputs.package == 'livekit-plugins-browser'
+  build_durable:
+    if: inputs.package == 'livekit-durable'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-14] # TODO(theomonnom): other platforms
+        include:
+          - os: ubuntu-latest
+            archs: x86_64
+          - os: namespace-profile-default-arm64
+            archs: aarch64
+          - os: windows-latest
+            archs: AMD64
+          - os: macos-latest
+            archs: x86_64 arm64
 
     defaults:
       run:
-        working-directory: livekit-plugins/livekit-plugins-browser
+        working-directory: livekit-plugins/livekit-durable
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.11"
 
       - name: Install cibuildwheel
         run: |
@@ -80,15 +88,14 @@ jobs:
       - name: Build wheels
         run: cibuildwheel --output-dir dist
         env:
-          CIBW_SKIP: pp* cp313-*
           CIBW_BUILD_VERBOSITY: 3
+          CIBW_ARCHS: ${{ matrix.archs }}
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
-          path: livekit-plugins/livekit-plugins-browser/dist/
-
+          name: ${{ inputs.artifact_name }}-${{ matrix.os }}
+          path: livekit-plugins/livekit-durable/dist/
 
   build_blingfire:
     if: inputs.package == 'livekit-blingfire'
@@ -135,9 +142,9 @@ jobs:
           path: livekit-plugins/livekit-blingfire/dist/
 
   merge_artifacts:
-    if: inputs.package == 'livekit-blingfire'
+    if: ${{ always() && (inputs.package == 'livekit-blingfire' || inputs.package == 'livekit-durable') }}
     runs-on: ubuntu-latest
-    needs: build_blingfire
+    needs: [build_blingfire, build_durable]
     steps:
       - name: Download all platform wheels
         uses: actions/download-artifact@v4
@@ -146,8 +153,7 @@ jobs:
           path: all_dists
           merge-multiple: true
 
-      - name: List contents
-        run: ls -R all_dists
+      - run: ls -R all_dists
 
       - name: Upload unified wheel artifact
         uses: actions/upload-artifact@v4

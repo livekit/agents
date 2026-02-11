@@ -24,10 +24,10 @@ import multiprocessing as mp
 import os
 import sys
 import threading
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Generic, Literal, TypeVar, overload
+from typing import Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -51,7 +51,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
-from .types import NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -80,6 +80,7 @@ WorkerType = ServerType
 
 class _DefaultLoadCalc:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._m_avg = utils.MovingAverage(5)  # avg over 2.5
@@ -103,9 +104,11 @@ class _DefaultLoadCalc:
     @classmethod
     def get_load(cls, worker: AgentServer) -> float:
         if cls._instance is None:
-            cls._instance = _DefaultLoadCalc()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass
@@ -324,25 +327,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting, self._connection_failed = (
+            True,
+            False,
+            False,
+            False,
+        )
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
-
-    if sys.version_info < (3, 10):
-        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
-        def __getstate__(self) -> dict[str, Any]:
-            """Custom pickle support - exclude unpickleable asyncio objects."""
-            state = self.__dict__.copy()
-            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
-            state.pop("_lock", None)
-            return state
-
-        def __setstate__(self, state: dict[str, Any]) -> None:
-            """Restore state and recreate asyncio.Lock."""
-            self.__dict__.update(state)
-            # recreate the lock
-            self._lock = asyncio.Lock()
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -577,6 +570,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
                     return web.Response(status=503, text="inference process not running")
+
+                if self._connection_failed:
+                    return web.Response(status=503, text="failed to connect to livekit")
 
                 return web.Response(text="OK")
 
@@ -817,7 +813,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._update_worker_status()
 
             async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes:
+                for proc in self._proc_pool.processes.copy():
                     if proc.running_job:
                         await proc.join()
 
@@ -886,9 +882,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def aclose(self) -> None:
         async with self._lock:
-            if self._closed:
-                raise RuntimeError("cannot simulate job, the worker is closed")
-
             if self._closed:
                 if self._close_future is not None:
                     await self._close_future
@@ -1010,12 +1003,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._handle_register(msg.register)
                 self._connecting = False
 
+                # report all active jobs to the server after registration
+                await self._report_active_jobs()
+
                 await self._run_ws(ws)
             except Exception as e:
                 if self._closed:
                     break
 
                 if retry_count >= self._max_retry:
+                    self._connection_failed = True
                     raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
                     ) from None
@@ -1166,6 +1163,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_identity = args.identity
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
+            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                self._agent_name
+            )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)
@@ -1309,3 +1309,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
+
+    async def _report_active_jobs(self) -> None:
+        active_jobs = self.active_jobs
+        if not active_jobs:
+            return
+
+        job_ids = [job_info.job.id for job_info in active_jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        msg = agent.WorkerMessage(migrate_job=migrate_req)
+        await self._queue_msg(msg)
+
+        logger.debug(
+            "reported active jobs after registration",
+            extra={"job_count": len(active_jobs), "job_ids": job_ids},
+        )

@@ -32,10 +32,9 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import Gender, SpeechLanguages
+from .models import GeminiTTSModels, Gender, SpeechLanguages
 
 NUM_CHANNELS = 1
-DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 
@@ -65,7 +64,7 @@ class TTS(tts.TTS):
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
-        model_name: NotGivenOr[str] = NOT_GIVEN,
+        model_name: NotGivenOr[GeminiTTSModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
@@ -73,7 +72,7 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         volume_gain_db: float = 0.0,
         location: str = "global",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.OGG_OPUS,  # type: ignore
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -92,9 +91,9 @@ class TTS(tts.TTS):
         Args:
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
-            voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
-            model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts"). Enables Gemini TTS models with streaming support.
+            model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts", "chirp_3"). Default is "gemini-2.5-flash-tts" or "chirp_3" depending on the voice_name and voice_cloning_key.
             prompt (str, optional): Style prompt for Gemini TTS models. Controls tone, style, and speaking characteristics. Only applied to first input chunk in streaming mode.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
@@ -130,18 +129,39 @@ class TTS(tts.TTS):
         lang = language if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
 
+        if not is_given(model_name):
+            # chirp3 voice name format: <locale>-<model>-<voice>
+            # only chirp 3 model can support voice cloning
+            if not is_given(prompt) and (
+                is_given(voice_cloning_key)
+                or (is_given(voice_name) and "chirp" in voice_name.lower())
+            ):
+                model_name = "chirp_3"
+                logger.debug(
+                    f"using {model_name} model for voice {voice_name or voice_cloning_key}"
+                )
+            else:
+                model_name = "gemini-2.5-flash-tts"
+                logger.debug(f"using default {model_name} model")
+
         voice_params = texttospeech.VoiceSelectionParams(
             language_code=lang,
             ssml_gender=ssml_gender,
         )
-        if is_given(model_name):
+        if model_name != "chirp_3":  #  voice_params.model_name must not be set for Chirp 3
             voice_params.model_name = model_name
+
         if is_given(voice_cloning_key):
             voice_params.voice_clone = texttospeech.VoiceCloneParams(
                 voice_cloning_key=voice_cloning_key,
             )
         else:
-            voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
+            if is_given(voice_name):
+                voice_params.name = voice_name
+            elif model_name == "chirp_3":
+                voice_params.name = "en-US-Chirp3-HD-Charon"
+            else:
+                voice_params.name = "Charon"
 
         if not is_given(tokenizer):
             tokenizer = tokenize.blingfire.SentenceTokenizer()
@@ -160,7 +180,7 @@ class TTS(tts.TTS):
             custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
             use_markup=use_markup,
-            model_name=model_name if is_given(model_name) else None,
+            model_name=model_name,
             prompt=prompt if is_given(prompt) else None,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -285,6 +305,9 @@ class ChunkedStream(tts.ChunkedStream):
                     text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
                 )
 
+            if self._opts.prompt is not None:
+                tts_input.prompt = self._opts.prompt
+
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
                 input=tts_input,
                 voice=self._opts.voice,
@@ -310,7 +333,7 @@ class ChunkedStream(tts.ChunkedStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1) from e
+            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -419,7 +442,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1) from e
+            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
         finally:
             await input_gen.aclose()
 

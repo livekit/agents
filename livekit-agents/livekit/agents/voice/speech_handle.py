@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Generator, Sequence
-from typing import Any, Callable
+from collections.abc import Callable, Generator, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from opentelemetry import context as otel_context
 
 from .. import llm, utils
+from ..log import logger
+
+INTERRUPTION_TIMEOUT = 5.0  # seconds
+
+
+@dataclass
+class InputDetails:
+    modality: Literal["text", "audio"]
+
+
+DEFAULT_INPUT_DETAILS = InputDetails(modality="audio")
 
 
 class SpeechHandle:
@@ -18,9 +30,12 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, *, speech_id: str, allow_interruptions: bool) -> None:
+    def __init__(
+        self, *, speech_id: str, allow_interruptions: bool, input_details: InputDetails
+    ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -35,6 +50,8 @@ class SpeechHandle:
         self._num_steps = 1
         self._agent_turn_context: otel_context.Context | None = None
 
+        self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
+
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
 
@@ -46,10 +63,14 @@ class SpeechHandle:
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(allow_interruptions: bool = True) -> SpeechHandle:
+    def create(
+        allow_interruptions: bool = True,
+        input_details: InputDetails = DEFAULT_INPUT_DETAILS,
+    ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
+            input_details=input_details,
         )
 
     @property
@@ -59,6 +80,10 @@ class SpeechHandle:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def input_details(self) -> InputDetails:
+        return self._input_details
 
     @property
     def _generation_id(self) -> str:
@@ -162,18 +187,34 @@ class SpeechHandle:
         self._done_callbacks.discard(callback)
 
     async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future[Any]]) -> None:
-        fs: list[asyncio.Future[Any]] = [
-            asyncio.gather(*aw, return_exceptions=True),
-            self._interrupt_fut,
-        ]
-        await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
+        # wrap each future in shield so we don't cancel them when we cancel the gather future
+        gather_fut = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
+        fs: set[asyncio.Future[Any]] = {gather_fut, self._interrupt_fut}
+        _, pending = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
+        if gather_fut in pending:
+            with contextlib.suppress(asyncio.CancelledError):
+                gather_fut.cancel()
+                await gather_fut
 
     def _cancel(self) -> SpeechHandle:
         if self.done():
             return self
 
-        with contextlib.suppress(asyncio.InvalidStateError):
+        if not self._interrupt_fut.done():
             self._interrupt_fut.set_result(None)
+
+            def _on_timeout() -> None:
+                logger.error(
+                    "speech not done in time after interruption, cancelling the speech arbitrarily.",
+                    extra={"speech_id": self._id, "timeout": INTERRUPTION_TIMEOUT},
+                )
+                for task in self._tasks:
+                    task.cancel()
+                self._mark_done()
+
+            self._interrupt_timeout_handle = asyncio.get_event_loop().call_later(
+                INTERRUPTION_TIMEOUT, _on_timeout
+            )
 
         return self
 
@@ -223,6 +264,10 @@ class SpeechHandle:
             self._done_fut.set_result(None)
             if self._generations:
                 self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
+
+        if self._interrupt_timeout_handle is not None:
+            self._interrupt_timeout_handle.cancel()
+            self._interrupt_timeout_handle = None
 
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):

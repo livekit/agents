@@ -22,13 +22,7 @@ import aioboto3  # type: ignore
 from botocore.config import Config  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
-from livekit.agents.llm import (
-    ChatContext,
-    FunctionTool,
-    FunctionToolCall,
-    RawFunctionTool,
-    ToolChoice,
-)
+from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -38,9 +32,8 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import to_fnc_ctx
 
-DEFAULT_TEXT_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
 
 @dataclass
@@ -82,7 +75,7 @@ class LLM(llm.LLM):
 
         Args:
             model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
-                Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+                Defaults to 'amazon.nova-2-lite-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
@@ -133,7 +126,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -152,7 +145,7 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tools_list = to_fnc_ctx(tools)
+            tools_list = llm.ToolContext(tools).parse_function_tools("aws")
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 
@@ -216,7 +209,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -238,6 +231,9 @@ class LLMStream(llm.LLMStream):
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
                         f"aws bedrock llm: error generating content: {response}",
+                        status_code=response["ResponseMetadata"]["HTTPStatusCode"],
+                        # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
+                        # body=response,
                         retryable=False,
                         request_id=request_id,
                     )
@@ -256,10 +252,12 @@ class LLMStream(llm.LLMStream):
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
-            tool_use = chunk["contentBlockStart"]["start"]["toolUse"]
-            self._tool_call_id = tool_use["toolUseId"]
-            self._fnc_name = tool_use["name"]
-            self._fnc_raw_arguments = ""
+            start = chunk["contentBlockStart"]["start"]
+            if "toolUse" in start:
+                tool_use = start["toolUse"]
+                self._tool_call_id = tool_use["toolUseId"]
+                self._fnc_name = tool_use["name"]
+                self._fnc_raw_arguments = ""
 
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]

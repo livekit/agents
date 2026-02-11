@@ -28,14 +28,15 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
-    from aws_sdk_transcribe_streaming.config import Config  # type: ignore
-    from aws_sdk_transcribe_streaming.models import (  # type: ignore
+    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
+    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
         AudioStreamAudioEvent,
@@ -45,11 +46,16 @@ try:
         TranscriptEvent,
         TranscriptResultStream,
     )
-    from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-    from smithy_core.aio.interfaces.eventstream import (
-        EventPublisher,
-        EventReceiver,
+    from smithy_aws_core.identity import (
+        AWSCredentialsIdentity,
+        ContainerCredentialsResolver,
+        EnvironmentCredentialsResolver,
+        IMDSCredentialsResolver,
+        StaticCredentialsResolver,
     )
+    from smithy_core.aio.identity import ChainedIdentityResolver
+    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_http.aio.crt import AWSCRTHTTPClient
 
     _AWS_SDK_AVAILABLE = True
 except ImportError:
@@ -101,7 +107,14 @@ class STT(stt.STT):
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
+            )
+        )
 
         if not _AWS_SDK_AVAILABLE:
             raise ImportError(
@@ -180,17 +193,36 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
+        self._http_client = AWSCRTHTTPClient()
 
     async def _run(self) -> None:
         while True:
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
-                config_kwargs["aws_access_key_id"] = self._credentials.access_key_id
-                config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
-                config_kwargs["aws_session_token"] = self._credentials.session_token
+                # Use a credentials resolver for explicit credentials
+                # for some reason, Config with direct values doesn't work
+                class StaticCredsResolver:
+                    def __init__(self, creds: Credentials):
+                        self._identity = AWSCredentialsIdentity(
+                            access_key_id=creds.access_key_id,
+                            secret_access_key=creds.secret_access_key,
+                            session_token=creds.session_token,
+                        )
+
+                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+                        return self._identity
+
+                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
+                    self._credentials
+                )
             else:
-                config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
+                    resolvers=(
+                        StaticCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),
+                        ContainerCredentialsResolver(http_client=self._http_client),
+                        IMDSCredentialsResolver(http_client=self._http_client),
+                    )
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
@@ -214,6 +246,8 @@ class SpeechStream(stt.SpeechStream):
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
 
+            tasks: list[asyncio.Task[Any]] = []
+
             try:
                 stream = await client.start_stream_transcription(
                     input=StartStreamTranscriptionInput(**filtered_config)
@@ -233,13 +267,17 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
-                        # Send empty frame to close
-                        await audio_stream.send(
-                            AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                        )
                     finally:
-                        with contextlib.suppress(Exception):
-                            await audio_stream.close()
+                        # Send empty frame to close (required by AWS Transcribe)
+                        try:
+                            await audio_stream.send(
+                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                            )
+                        except Exception:
+                            pass
+                        finally:
+                            with contextlib.suppress(Exception):
+                                await audio_stream.close()
 
                 async def handle_transcript_events(
                     output_stream: EventReceiver[TranscriptResultStream],
@@ -248,6 +286,18 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                    except BadRequestException as e:
+                        if (
+                            e.message
+                            and "complete signal was sent without the preceding empty frame"
+                            in e.message
+                        ):
+                            # This can happen during cancellation if the empty frame wasn't sent in time
+                            logger.warning(
+                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
+                            )
+                        else:
+                            raise
                     except concurrent.futures.InvalidStateError:
                         logger.warning(
                             "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
@@ -271,14 +321,15 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise e
             finally:
-                # Close input stream first
-                await utils.aio.gracefully_cancel(tasks[0])
+                if tasks:
+                    # Close input stream first
+                    await utils.aio.gracefully_cancel(tasks[0])
 
-                # Wait for output stream to close cleanly
-                try:
-                    await asyncio.wait_for(tasks[1], timeout=3.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    await utils.aio.gracefully_cancel(tasks[1])
+                    # Wait for output stream to close cleanly
+                    try:
+                        await asyncio.wait_for(tasks[1], timeout=3.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        await utils.aio.gracefully_cancel(tasks[1])
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):
@@ -322,8 +373,20 @@ class SpeechStream(stt.SpeechStream):
 
         return stt.SpeechData(
             language=resp.language_code or self._opts.language,
-            start_time=resp.start_time if resp.start_time is not None else 0.0,
-            end_time=resp.end_time if resp.end_time is not None else 0.0,
+            start_time=(resp.start_time or 0.0) + self.start_time_offset,
+            end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            words=[
+                TimedString(
+                    text=item.content,
+                    start_time=item.start_time + self.start_time_offset,
+                    end_time=item.end_time + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=item.confidence or 0.0,
+                )
+                for item in resp.alternatives[0].items
+            ]
+            if resp.alternatives and resp.alternatives[0].items
+            else None,
         )

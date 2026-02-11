@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import aiohttp
 
@@ -51,6 +51,17 @@ _DefaultEncoding: TTSEncoding = "mp3_22050_32"
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
     split = output_format.split("_")  # e.g: mp3_44100
     return int(split[1])
+
+
+def _encoding_to_mimetype(encoding: TTSEncoding) -> str:
+    if encoding.startswith("mp3"):
+        return "audio/mp3"
+    elif encoding.startswith("opus"):
+        return "audio/opus"
+    elif encoding.startswith("pcm"):
+        return "audio/pcm"
+    else:
+        raise ValueError(f"Unsupported encoding: {encoding}")
 
 
 @dataclass
@@ -330,7 +341,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/mp3",
+                    mime_type=_encoding_to_mimetype(self._opts.encoding),
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -379,7 +390,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             stream=True,
-            mime_type="audio/mp3",
+            mime_type=_encoding_to_mimetype(self._opts.encoding),
         )
         output_emitter.start_segment(segment_id=self._context_id)
 
@@ -515,7 +526,7 @@ class _Connection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._is_current = True
         self._active_contexts: set[str] = set()
-        self._input_queue = utils.aio.Chan[Union[_SynthesizeContent, _CloseContext]]()
+        self._input_queue = utils.aio.Chan[_SynthesizeContent | _CloseContext]()
 
         self._context_data: dict[str, _StreamData] = {}
 
@@ -582,10 +593,6 @@ class _Connection:
 
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
-
-                    # If not current and this is a new context, ignore it
-                    if not self._is_current and is_new_context:
-                        continue
 
                     if is_new_context:
                         voice_settings = (
@@ -692,7 +699,7 @@ class _Connection:
                     if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
                         stream._text_buffer += "".join(chars)
                         # in case item in chars has multiple characters
-                        for char, start, dur in zip(chars, starts, durs):
+                        for char, start, dur in zip(chars, starts, durs, strict=False):
                             if len(char) > 1:
                                 stream._start_times_ms += [start] * (len(char) - 1)
                                 stream._durations_ms += [0] * (len(char) - 1)
@@ -851,10 +858,10 @@ def _to_timed_words(
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
     timed_words = []
-    _, start_indices, _ = zip(*words)
+    _, start_indices, _ = zip(*words, strict=False)
     end = 0
     # we don't know if the last word is complete, always leave it as remaining
-    for start, end in zip(start_indices[:-1], start_indices[1:]):
+    for start, end in zip(start_indices[:-1], start_indices[1:], strict=False):
         start_t = timestamps[start] / 1000
         end_t = timestamps[end] / 1000
         timed_words.append(

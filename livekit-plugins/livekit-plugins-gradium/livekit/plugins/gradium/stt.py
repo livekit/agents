@@ -85,6 +85,8 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
+                aligned_transcript=False,  # only chunk start times are available
+                offline_recognize=False,
             ),
         )
 
@@ -268,9 +270,9 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            buffered_text = []
+            buffered_text: list[str] = []
             speaking = False
-            remaining_vad_steps = False
+            remaining_vad_steps: int | None = None
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
@@ -286,7 +288,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws:
                         return
-                    raise APIStatusError("Gradium connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Gradium connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Gradium message type: %s", msg.type)
@@ -309,7 +315,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"],
+                                    start_time=data["start_s"] + self.start_time_offset,
                                 )
                             ],
                         )
@@ -379,9 +385,10 @@ class SpeechStream(stt.SpeechStream):
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
+                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
@@ -394,6 +401,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()
             finally:
                 if ws is not None:
                     await ws.close()

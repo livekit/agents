@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Union
 
 import numpy as np
 
@@ -59,7 +58,7 @@ class SpeakingRateStream:
         self._detector = detector
         self._opts = opts
 
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeakingRateStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | SpeakingRateStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeakingRateEvent]()
 
         self._task = asyncio.create_task(self._main_task())
@@ -84,7 +83,13 @@ class SpeakingRateStream:
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
                     frame = rtc.combine_audio_frames(inference_frames)
-                    frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
+                    frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
+                    np.divide(
+                        frame.data,
+                        np.iinfo(np.int16).max,
+                        out=frame_f32_data,
+                        dtype=np.float32,
+                    )
 
                     sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
                     pub_timestamp += frame.duration
@@ -124,6 +129,16 @@ class SpeakingRateStream:
                 )
                 continue
 
+            if input_frame.num_channels > 1:
+                data = np.array(input_frame.data, dtype=np.int16)
+                mono = data.reshape(-1, input_frame.num_channels).mean(axis=1).astype(np.int16)
+                input_frame = rtc.AudioFrame(
+                    data=mono.tobytes(),
+                    sample_rate=input_frame.sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_frame.samples_per_channel,
+                )
+
             if resampler is not None:
                 inference_frames.extend(resampler.push(input_frame))
             else:
@@ -155,13 +170,13 @@ class SpeakingRateStream:
                 # move the window forward by the hop size
                 pub_timestamp += self._opts.step_size
                 if len(inference_frame.data) - self._step_size_samples > 0:
-                    data = inference_frame.data[self._step_size_samples :]
+                    remaining = inference_frame.data[self._step_size_samples :]
                     inference_frames = [
                         rtc.AudioFrame(
-                            data=data,
+                            data=remaining,
                             sample_rate=inference_frame.sample_rate,
                             num_channels=1,
-                            samples_per_channel=len(data) // 2,
+                            samples_per_channel=len(remaining),
                         )
                     ]
 

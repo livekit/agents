@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pybind11
 import setuptools
 from setuptools import Extension
 from setuptools.command.build_ext import build_ext
@@ -45,9 +46,10 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG={extdir}",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE={extdir}",
-            f"-DPYTHON_EXECUTABLE={sys.executable}",
             "-DCMAKE_BUILD_TYPE=Release",
+            f"-DPython_EXECUTABLE={sys.executable}",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+            f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
         ]
 
         print(f"cmake_args: {cmake_args}")
@@ -84,8 +86,11 @@ setuptools.setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Programming Language :: Python :: 3 :: Only",
     ],
     keywords=["webrtc", "realtime", "audio", "video", "livekit"],
@@ -95,7 +100,7 @@ setuptools.setup(
     package_data={"livekit.blingfire": ["py.typed"]},
     cmdclass={"build_ext": CMakeBuild},
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.9.0",
+    python_requires=">=3.10.0,<3.15",
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

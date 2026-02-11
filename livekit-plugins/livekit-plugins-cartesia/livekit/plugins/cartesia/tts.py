@@ -21,7 +21,7 @@ import os
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Any, Union, cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -70,7 +70,7 @@ class _TTSOptions:
     volume: float | None
     word_timestamps: bool
     api_key: str
-    language: str
+    language: str | None
     base_url: str
     api_version: str
     pronunciation_dict_id: str | None
@@ -88,7 +88,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model: TTSModels | str = "sonic-2",
-        language: str = "en",
+        language: str | None = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
@@ -106,7 +106,7 @@ class TTS(tts.TTS):
         """
         Create a new instance of Cartesia TTS.
 
-        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
+        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the Cartesia API.
 
         Args:
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
@@ -178,12 +178,16 @@ class TTS(tts.TTS):
             self._stream_pacer = text_pacing
 
         if word_timestamps:
-            if "preview" not in self._opts.model and self._opts.language not in {
-                "en",
-                "de",
-                "es",
-                "fr",
-            }:
+            if "preview" not in self._opts.model and (
+                self._opts.language is not None
+                and self._opts.language
+                not in {
+                    "en",
+                    "de",
+                    "es",
+                    "fr",
+                }
+            ):
                 # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
                 logger.warning(
                     "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
@@ -229,7 +233,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
@@ -256,12 +260,12 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = cast(Union[str, list[float]], voice)
+            self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
-            self._opts.speed = cast(Union[TTSVoiceSpeed, float], speed)
+            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = cast(list[Union[TTSVoiceEmotion, str]], emotion)
+            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
         if is_given(volume):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
@@ -442,7 +446,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id},
                     )
                     raise APIStatusError(
-                        "Cartesia connection closed unexpectedly", request_id=request_id
+                        "Cartesia connection closed unexpectedly",
+                        request_id=request_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -465,7 +472,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif word_timestamps := data.get("word_timestamps"):
                     # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
-                        word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
+                        word_timestamps["words"],
+                        word_timestamps["start"],
+                        word_timestamps["end"],
+                        strict=False,
                     ):
                         if not sent_tokens or skip_aligning:
                             word = f"{word} "
@@ -517,9 +527,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                extra={"cartesia_context_id": cartesia_context_id, "error": e},
+                extra={"cartesia_context_id": cartesia_context_id},
             )
             raise APIConnectionError() from e
 

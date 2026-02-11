@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -44,8 +43,8 @@ class StoryData:
     # Shared data that's used by the storyteller agent.
     # This structure is passed as a parameter to function calls.
 
-    name: Optional[str] = None
-    location: Optional[str] = None
+    name: str | None = None
+    location: str | None = None
 
 
 class IntroAgent(Agent):
@@ -88,11 +87,11 @@ class IntroAgent(Agent):
         logger.info(
             "switching to the story agent with the provided user data: %s", context.userdata
         )
-        return story_agent, "Let's start the story!"
+        return story_agent
 
 
 class StoryAgent(Agent):
-    def __init__(self, name: str, location: str, *, chat_ctx: Optional[ChatContext] = None) -> None:
+    def __init__(self, name: str, location: str, *, chat_ctx: ChatContext | None = None) -> None:
         super().__init__(
             instructions=f"{common_instructions}. You should use the user's information in "
             "order to make the story personalized."
@@ -145,7 +144,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="echo"),
         userdata=StoryData(),
