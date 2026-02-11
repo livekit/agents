@@ -16,9 +16,16 @@ from __future__ import annotations
 
 from typing import Any, Generic
 
-from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    BaseMessageChunk,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
+from langgraph.types import StreamMode
 from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
@@ -31,6 +38,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 
+_SUPPORTED_MODES: set[StreamMode] = {"messages", "custom"}
+
 
 class LLMAdapter(llm.LLM, Generic[ContextT]):
     def __init__(
@@ -40,12 +49,20 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
+        stream_mode: StreamMode | list[StreamMode] = "messages",
     ) -> None:
         super().__init__()
+        modes = {stream_mode} if isinstance(stream_mode, str) else set(stream_mode)
+        unsupported = modes - _SUPPORTED_MODES
+        if unsupported:
+            raise ValueError(
+                f"Unsupported stream mode(s): {unsupported}. Only {_SUPPORTED_MODES} are supported."
+            )
         self._graph = graph
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
+        self._stream_mode = stream_mode
 
     @property
     def model(self) -> str:
@@ -75,6 +92,7 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
             config=self._config,
             context=self._context,
             subgraphs=self._subgraphs,
+            stream_mode=self._stream_mode,
         )
 
 
@@ -90,6 +108,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
+        stream_mode: StreamMode | list[StreamMode] = "messages",
     ):
         super().__init__(
             llm,
@@ -101,6 +120,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
+        self._stream_mode = stream_mode
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
@@ -112,24 +132,70 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 state,
                 self._config,
                 context=self._context,
-                stream_mode="messages",
+                stream_mode=self._stream_mode,
                 subgraphs=self._subgraphs,
             )
         except TypeError:
             aiter = self._graph.astream(
                 state,
                 self._config,
-                stream_mode="messages",
+                stream_mode=self._stream_mode,
             )
 
-        async for item in aiter:
-            token_like = _extract_message_chunk(item)
-            if token_like is None:
-                continue
+        multi_mode = isinstance(self._stream_mode, list)
 
-            chat_chunk = _to_chat_chunk(token_like)
-            if chat_chunk:
-                self._event_ch.send_nowait(chat_chunk)
+        async for item in aiter:
+            # Strip subgraph namespace prefix when present.
+            # With subgraphs=True, items are prefixed with a namespace tuple:
+            #   single-mode: (ns, data) -> data
+            #   multi-mode:  (ns, mode, data) -> (mode, data)
+            if self._subgraphs and isinstance(item, tuple) and isinstance(item[0], tuple):
+                item = item[1:]
+                if len(item) == 1:
+                    item = item[0]
+
+            # Extract mode tag in multi-mode; infer in single-mode.
+            if multi_mode and isinstance(item, tuple) and len(item) == 2:
+                mode, data = item
+            else:
+                mode = self._stream_mode if isinstance(self._stream_mode, str) else None
+                data = item
+
+            if mode == "messages":
+                self._send_message(data)
+            elif mode == "custom":
+                self._send_custom(data)
+
+    def _send_custom(self, data: Any) -> None:
+        """Handle custom stream mode items from StreamWriter.
+
+        Custom mode emits raw values written by StreamWriter nodes — strings,
+        dicts, BaseMessages, or arbitrary objects (e.g. FlushSentinel).
+        We extract text content where possible; non-text values are silently
+        skipped since ChatChunk only carries text.
+        """
+        content = _extract_custom_content(data)
+        if content:
+            chunk = _to_chat_chunk(content)
+            if chunk:
+                self._event_ch.send_nowait(chunk)
+
+    def _send_message(self, data: Any) -> None:
+        """Handle messages stream mode items.
+
+        Messages mode yields (message, metadata) tuples where the message is
+        typically a BaseMessageChunk from LLM streaming.
+        Also tolerates bare token-like values for robustness.
+        """
+        if isinstance(data, (BaseMessageChunk, str)):
+            token = data
+        elif isinstance(data, tuple) and len(data) == 2:
+            token, _meta = data
+        else:
+            return
+        chunk = _to_chat_chunk(token)
+        if chunk:
+            self._event_ch.send_nowait(chunk)
 
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
@@ -148,44 +214,20 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         return {"messages": messages}
 
 
-def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
+def _extract_custom_content(value: Any) -> str | None:
+    """Extract text from a custom stream value.
+
+    StreamWriter can emit arbitrary types. We recognize common text-carrying
+    shapes (str, BaseMessage, dict with "content" key) and return the text.
+    Returns None for non-text values (e.g. FlushSentinel, control objects)
+    so the caller can skip them — ChatChunk only carries text content.
     """
-    Normalize outputs from graph.astream(..., stream_mode='messages', [subgraphs]).
-
-    Expected shapes:
-      - (token, meta)
-      - (namespace, (token, meta))                  # with subgraphs=True
-      - (mode, (token, meta))                       # future-friendly
-      - (namespace, mode, (token, meta))            # future-friendly
-    Also tolerate direct token-like values for robustness.
-    """
-    # Already a token-like thing?
-    if isinstance(item, (BaseMessageChunk, str)):
-        return item
-
-    if not isinstance(item, tuple):
-        return None
-
-    # token is usually BaseMessageChunk, but could be a str
-    # (token, meta)
-    if len(item) == 2 and not isinstance(item[1], tuple):
-        token, _meta = item
-        return token  # type: ignore
-
-    # (namespace, (token, meta))  OR  (mode, (token, meta))
-    if len(item) == 2 and isinstance(item[1], tuple):
-        inner = item[1]
-        if len(inner) == 2:
-            token, _meta = inner
-            return token  # type: ignore
-
-    # (namespace, mode, (token, meta))
-    if len(item) == 3 and isinstance(item[2], tuple):
-        inner = item[2]
-        if len(inner) == 2:
-            token, _meta = inner
-            return token  # type: ignore
-
+    if isinstance(value, str):
+        return value
+    if isinstance(value, BaseMessage) and isinstance(value.content, str):
+        return value.content
+    if isinstance(value, dict) and isinstance(value.get("content"), str):
+        return value["content"]
     return None
 
 
@@ -196,7 +238,7 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     if isinstance(msg, str):
         content = msg
     elif isinstance(msg, BaseMessageChunk):
-        content = msg.text()
+        content = msg.text
         if getattr(msg, "id", None):
             message_id = msg.id  # type: ignore
 
