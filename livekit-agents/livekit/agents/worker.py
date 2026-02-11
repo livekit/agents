@@ -799,6 +799,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def active_jobs(self) -> list[RunningJobInfo]:
         return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
 
+    @property
+    def draining(self) -> bool:
+        return self._draining
+
     async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
         """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
 
@@ -1140,6 +1144,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
+
+        if self._draining:
+            availability_resp = agent.WorkerMessage()
+            availability_resp.availability.job_id = msg.job.id
+            availability_resp.availability.available = False
+            await self._queue_msg(availability_resp)
+            return
 
         answered = False
 
