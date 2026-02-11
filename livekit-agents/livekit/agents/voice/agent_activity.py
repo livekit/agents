@@ -595,7 +595,7 @@ class AgentActivity(RecognitionHooks):
 
             if not isinstance(e, StopResponse) and e is not exc:
                 logger.exception(
-                    "exception occurred while executing rehydrated rehydrated tool",
+                    "exception occurred while executing rehydrated tool",
                     extra={"function": fnc_call.name, "speech_id": speech_handle.id},
                 )
 
