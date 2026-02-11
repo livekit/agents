@@ -49,15 +49,16 @@ class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
-    speech_model: Literal["universal-streaming-english", "universal-streaming-multilingual"] = (
-        "universal-streaming-english"
-    )
+    speech_model: Literal[
+        "universal-streaming-english", "universal-streaming-multilingual", "u3-pro"
+    ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
+    prompt: NotGivenOr[str] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
 
 
@@ -69,7 +70,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
         model: Literal[
-            "universal-streaming-english", "universal-streaming-multilingual"
+            "universal-streaming-english", "universal-streaming-multilingual", "u3-pro"
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -77,6 +78,7 @@ class STT(stt.STT):
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
@@ -101,6 +103,19 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+        if is_given(prompt) and model != "u3-pro":
+            raise ValueError("The 'prompt' parameter is only supported with the 'u3-pro' model.")
+
+        if model == "u3-pro" and not is_given(prompt):
+            prompt = (
+                "You are an AI voice agent answering calls with humans for a defined task. "
+                "Be sure to hear all words the user speaks and transcribe verbatim, including "
+                "all disfluencies. Do not output anything during silence. "
+                "Punctuation rules: 1) Always include punctuation in output. "
+                "2) Use period/question mark ONLY for complete sentences. 3) Use comma for "
+                "mid-sentence pauses. 4) Use no punctuation for incomplete trailing speech."
+            )
+
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
@@ -127,6 +142,7 @@ class STT(stt.STT):
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
             keyterms_prompt=keyterms_prompt,
+            prompt=prompt,
             vad_threshold=vad_threshold,
         )
         self._session = http_session
@@ -180,6 +196,7 @@ class STT(stt.STT):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
@@ -192,6 +209,8 @@ class STT(stt.STT):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(prompt):
+            self._opts.prompt = prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
@@ -201,6 +220,7 @@ class STT(stt.STT):
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
                 min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
                 max_turn_silence=max_turn_silence,
+                prompt=prompt,
                 vad_threshold=vad_threshold,
             )
 
@@ -236,6 +256,7 @@ class SpeechStream(stt.SpeechStream):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
@@ -248,6 +269,8 @@ class SpeechStream(stt.SpeechStream):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(prompt):
+            self._opts.prompt = prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
@@ -373,6 +396,7 @@ class SpeechStream(stt.SpeechStream):
             else True
             if "multilingual" in self._opts.speech_model
             else False,
+            "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
             else None,
