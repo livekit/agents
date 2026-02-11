@@ -639,6 +639,9 @@ class ChatContext:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChatContext:
+        if "items" not in data:
+            raise ValueError("Missing 'items' key in chat context data")
+
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)

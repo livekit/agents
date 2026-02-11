@@ -70,19 +70,27 @@ class CGroupV2CPUMonitor(CPUMonitor):
         try:
             with open("/sys/fs/cgroup/cpu.max") as f:
                 data = f.read().strip().split()
-            quota = data[0]
-            period = int(data[1])
-        except FileNotFoundError:
+            if len(data) >= 2:
+                quota = data[0]
+                period = int(data[1])
+            else:
+                raise ValueError("Invalid cpu.max format")
+        except (FileNotFoundError, PermissionError, ValueError, OSError):
             quota = "max"
             period = 100000
         return quota, period
 
     def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat") as f:
-            for line in f:
-                if line.startswith("usage_usec"):
-                    return int(line.split()[1])
-        raise RuntimeError("Failed to read CPU usage")
+        try:
+            with open("/sys/fs/cgroup/cpu.stat") as f:
+                for line in f:
+                    if line.startswith("usage_usec"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            return int(parts[1])
+        except (FileNotFoundError, PermissionError, ValueError, OSError) as e:
+            raise RuntimeError(f"Failed to read CPU usage: {e}") from e
+        raise RuntimeError("Failed to read CPU usage: usage_usec not found")
 
 
 class CGroupV1CPUMonitor(CPUMonitor):
@@ -135,9 +143,7 @@ class CGroupV1CPUMonitor(CPUMonitor):
             try:
                 with open(p) as f:
                     return int(f.read().strip())
-            except FileNotFoundError:
-                continue
-            except ValueError:
+            except (FileNotFoundError, PermissionError, ValueError, OSError):
                 continue
         return None
 

@@ -595,6 +595,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("type") == "session.created":
                     pass
                 elif data.get("type") == "output_audio":
+                    if "audio" not in data:
+                        logger.warning("output_audio message missing 'audio' field")
+                        continue
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "done":

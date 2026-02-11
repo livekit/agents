@@ -969,8 +969,11 @@ class AudioEmitter:
                 if self._streaming
                 else f"lk_dump/{self._label}_{self._request_id}_{ts}.wav"
             )
-            with open(fname, "wb") as f:
-                f.write(rtc.combine_audio_frames(debug_frames).to_wav_bytes())
+            try:
+                with open(fname, "wb") as f:
+                    f.write(rtc.combine_audio_frames(debug_frames).to_wav_bytes())
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Failed to write debug audio file {fname}: {e}")
 
             debug_frames.clear()
 

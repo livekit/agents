@@ -37,5 +37,6 @@ class HttpServer:
 
     async def aclose(self) -> None:
         async with self._lock:
-            self._server.close()
-            await self._server.wait_closed()
+            if hasattr(self, "_server") and self._server is not None:
+                self._server.close()
+                await self._server.wait_closed()

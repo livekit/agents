@@ -173,15 +173,24 @@ async def audio_frames_from_file(
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
     async def file_reader() -> None:
-        async with aiofiles.open(file_path, mode="rb") as f:
-            while True:
-                chunk = await f.read(4096)
-                if not chunk:
-                    break
-
-                decoder.push(chunk)
-
-        decoder.end_input()
+        try:
+            async with aiofiles.open(file_path, mode="rb") as f:
+                while True:
+                    try:
+                        chunk = await f.read(4096)
+                        if not chunk:
+                            break
+                        decoder.push(chunk)
+                    except OSError as e:
+                        logger.error(f"File read error: {e}")
+                        break
+        except Exception as e:
+            logger.error(f"Failed to open audio file {file_path}: {e}")
+        finally:
+            try:
+                decoder.end_input()
+            except Exception:
+                pass  # Decoder might already be closed
 
     reader_task = asyncio.create_task(file_reader())
 
