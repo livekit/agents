@@ -1168,6 +1168,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
 
+            if self._draining:
+                availability_resp = agent.WorkerMessage()
+                availability_resp.availability.job_id = msg.job.id
+                availability_resp.availability.available = False
+                await self._queue_msg(availability_resp)
+                return
+
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = True
