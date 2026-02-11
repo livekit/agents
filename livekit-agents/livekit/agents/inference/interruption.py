@@ -657,6 +657,8 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     data_chan.send_nowait(inference_s16_data[:start_idx].copy())
                     accumulated_samples = 0
 
+            data_chan.close()
+
         @log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal overlap_speech_started
@@ -704,7 +706,6 @@ class InterruptionHttpStream(InterruptionStreamBase):
             await asyncio.gather(*tasks)
         finally:
             await aio.cancel_and_wait(*tasks)
-            data_chan.close()
 
     @log_exceptions(logger=logger)
     async def predict(self, waveform: np.ndarray) -> dict[str, Any]:
