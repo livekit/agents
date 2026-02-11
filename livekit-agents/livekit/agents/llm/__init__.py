@@ -18,6 +18,7 @@ from .llm import (
     LLM,
     ChatChunk,
     ChoiceDelta,
+    CollectedResponse,
     CompletionUsage,
     FunctionToolCall,
     LLMError,
@@ -51,10 +52,14 @@ from .tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
+from .utils import FunctionCallResult, execute_function_call
 
 __all__ = [
     "LLM",
     "LLMStream",
+    "CollectedResponse",
+    "execute_function_call",
+    "FunctionCallResult",
     "ChatContext",
     "ChatRole",
     "ChatMessage",

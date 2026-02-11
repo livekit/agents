@@ -71,7 +71,7 @@ class STT(stt.STT):
                 language=config.language,  # type: ignore
                 content=data,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
-                timestamp=True if "mansa" in model else None,
+                timestamp="word" if "mansa" in model else None,
             )
 
             return stt.SpeechEvent(

@@ -7,7 +7,7 @@ import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import Any, NamedTuple, Union, cast
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -40,7 +40,7 @@ class BuiltinAudioClip(enum.Enum):
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 
-AudioSource = Union[AsyncIterator[rtc.AudioFrame], str, BuiltinAudioClip]
+AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
 class AudioConfig(NamedTuple):
@@ -154,7 +154,7 @@ class BackgroundAudioPlayer:
         if isinstance(source, BuiltinAudioClip):
             return self._normalize_builtin_audio(source), 1.0
         elif isinstance(source, list):
-            selected = self._select_sound_from_list(cast(list[AudioConfig], source))
+            selected = self._select_sound_from_list(source)
             if selected is None:
                 return None
             return selected.source, selected.volume
@@ -268,9 +268,7 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(
-                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
-                )
+                normalized = self._normalize_sound_source(self._ambient_sound)
                 if normalized:
                     sound_source, volume = normalized
                     selected_sound = AudioConfig(sound_source, volume)
@@ -324,9 +322,7 @@ class BackgroundAudioPlayer:
                 return
 
             assert self._thinking_sound is not None
-            self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
-            )
+            self._thinking_handle = self.play(self._thinking_sound)
 
         elif self._thinking_handle:
             self._thinking_handle.stop()

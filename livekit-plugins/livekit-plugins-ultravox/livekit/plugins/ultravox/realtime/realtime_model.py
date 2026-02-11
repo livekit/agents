@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 import aiohttp
 
@@ -273,7 +273,7 @@ class RealtimeSession(
         self._realtime_model: RealtimeModel = realtime_model
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
+        self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
@@ -320,7 +320,7 @@ class RealtimeSession(
             # Close old channel before creating new one
             old_ch = self._msg_ch
             old_ch.close()
-            self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
+            self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
 
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -1137,9 +1137,6 @@ class RealtimeSession(
 
     def clear_audio(self) -> None:
         logger.warning("clear audio is not supported by Ultravox.")
-
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Ultravox.")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Resample audio frame to the required sample rate."""

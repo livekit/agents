@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -75,7 +76,7 @@ async def entrypoint(job: JobContext):
     stream.flush()
     stream.end_input()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
 
     async def _synth_task():
         async for ev in stream:

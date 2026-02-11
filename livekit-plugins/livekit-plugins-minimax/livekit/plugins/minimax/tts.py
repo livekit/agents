@@ -5,7 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 import aiohttp
 
@@ -309,7 +309,7 @@ class TTS(tts.TTS):
             self._opts.voice_id = voice
 
         if utils.is_given(emotion):
-            self._opts.emotion = cast(Optional[TTSEmotion], emotion)
+            self._opts.emotion = emotion
 
         if utils.is_given(speed):
             self._opts.speed = speed
@@ -336,7 +336,7 @@ class TTS(tts.TTS):
             self._opts.timbre = timbre
 
         if utils.is_given(language_boost):
-            self._opts.language_boost = cast(Optional[TTSLanguageBoost], language_boost)
+            self._opts.language_boost = language_boost
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -449,7 +449,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
                     )
                     logger.error(error_msg)
-                    raise APIStatusError(error_msg, request_id=current_trace_id)
+                    raise APIStatusError(
+                        error_msg,
+                        request_id=current_trace_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Minimax message type %s", msg.type)
@@ -478,6 +483,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIStatusError(
                         f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
                         request_id=error_trace_id,
+                        status_code=status_code,
                         body=data,
                     )
 

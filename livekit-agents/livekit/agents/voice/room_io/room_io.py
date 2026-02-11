@@ -12,6 +12,7 @@ from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_SIMULATOR,
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -75,7 +76,7 @@ class RoomIO:
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[Any] | asyncio.Future[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
@@ -210,6 +211,16 @@ class RoomIO:
 
         if self._audio_output:
             await self._audio_output.aclose()
+
+        if (task := self._delete_room_task) is not None:
+            try:
+                await asyncio.wait_for(task, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "automatic room deletion timed out",
+                    extra={"room": self._room.name},
+                )
+                self._tasks.add(task)
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)

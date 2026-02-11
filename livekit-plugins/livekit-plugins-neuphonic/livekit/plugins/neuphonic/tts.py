@@ -49,6 +49,7 @@ class _TTSOptions:
     voice_id: str
     speed: float | None
     api_key: str
+    jwt_token: str | None
     base_url: str
     word_tokenizer: tokenize.WordTokenizer
 
@@ -64,6 +65,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
+        jwt_token: str | None = None,
         lang_code: TTSLangCodes | str = "en",
         encoding: str = "pcm_linear",
         voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
@@ -111,6 +113,7 @@ class TTS(tts.TTS):
             voice_id=voice_id,
             speed=speed,
             api_key=neuphonic_api_key,
+            jwt_token=jwt_token,
             base_url=base_url,
             word_tokenizer=word_tokenizer,
         )
@@ -131,6 +134,8 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
+        if self._opts.jwt_token:
+            url += f"&jwt_token={self._opts.jwt_token}"
 
         headers = {API_AUTH_HEADER: self._opts.api_key}
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
@@ -378,7 +383,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("NeuPhonic websocket connection closed unexpectedly")
+                    raise APIStatusError(
+                        "NeuPhonic websocket connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:

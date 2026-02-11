@@ -21,7 +21,7 @@ import os
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Any, Union, cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -260,12 +260,12 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = cast(Union[str, list[float]], voice)
+            self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
-            self._opts.speed = cast(Union[TTSVoiceSpeed, float], speed)
+            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = cast(list[Union[TTSVoiceEmotion, str]], emotion)
+            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
         if is_given(volume):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
@@ -446,7 +446,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id},
                     )
                     raise APIStatusError(
-                        "Cartesia connection closed unexpectedly", request_id=request_id
+                        "Cartesia connection closed unexpectedly",
+                        request_id=request_id,
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -469,7 +472,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif word_timestamps := data.get("word_timestamps"):
                     # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
-                        word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
+                        word_timestamps["words"],
+                        word_timestamps["start"],
+                        word_timestamps["end"],
+                        strict=False,
                     ):
                         if not sent_tokens or skip_aligning:
                             word = f"{word} "
