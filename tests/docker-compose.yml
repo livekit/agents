@@ -33,6 +33,7 @@ services:
       - LIVEKIT_URL
       - LIVEKIT_API_KEY
       - LIVEKIT_API_SECRET
+      - DEEPDUB_API_KEY
       - DEEPGRAM_API_KEY
       - OPENAI_API_KEY
       - ELEVEN_API_KEY
@@ -65,6 +66,7 @@ services:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
       - "westus.tts.speech.microsoft.com:172.30.0.10"
       - "api.cartesia.ai:172.30.0.10"
+      - "wss.deepdub.ai:172.30.0.10"
       - "api.deepgram.com:172.30.0.10"
       - "api.elevenlabs.io:172.30.0.10"
       - "api.sws.speechify.com:172.30.0.10"
