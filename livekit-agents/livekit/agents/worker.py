@@ -1141,11 +1141,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def _is_available(self) -> bool:
+        if self._draining:
+            return False
+
+        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
+        return self._worker_load < load_threshold
+
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
-        if self._draining:
+        if not self._is_available():
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
@@ -1168,7 +1175,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
 
-            if self._draining:
+            if not self._is_available():
                 availability_resp = agent.WorkerMessage()
                 availability_resp.availability.job_id = msg.job.id
                 availability_resp.availability.available = False
