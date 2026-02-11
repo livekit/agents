@@ -8,7 +8,7 @@ import reprlib
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Self, TypeVar
 
 from livekit.agents.voice.agent import AgentTask
 from livekit.durable.function import DurableCoroutine, DurableGenerator, durable
@@ -135,11 +135,12 @@ class DurableTask:
     generator: DurableGenerator | bytes
     fnc_name: str
     next_value: EffectCall | None = None
-    metadata: dict[str, Any] | None = None
+    metadata: Any | None = None
     at_checkpoint: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
-        # pickle the generator separately, so we can unpickle it after the SpeechHandle is recreated
+        # pickle the generator separately, so if it failed to pickle, we can still restore the rest of the state
+        # and it needs to be unpickled after the SpeechHandle is recreated
         g = (
             pickle.dumps(self.generator)
             if not isinstance(self.generator, bytes)
@@ -152,6 +153,11 @@ class DurableTask:
             (g, self.fnc_name, self.next_value, self.metadata),
         )
 
+    def unpickle_generator(self) -> Self:
+        if isinstance(self.generator, bytes):
+            self.generator = pickle.loads(self.generator)
+        return self
+
 
 class DurableScheduler:
     def __init__(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
@@ -163,19 +169,13 @@ class DurableScheduler:
         self._ckpt_lock = asyncio.Lock()
 
     def execute(
-        self,
-        fnc: Callable[[], DurableCoroutine] | DurableTask,
-        *,
-        metadata: dict[str, Any] | None = None,
+        self, fnc: Callable[[], DurableCoroutine] | DurableTask, *, metadata: Any | None = None
     ) -> asyncio.Task[Any]:
         from livekit.agents.voice.agent import _pass_through_activity_task_info
 
         if isinstance(fnc, DurableTask):
-            task = fnc
-            if metadata is not None:
-                task.metadata = metadata
-            if isinstance(task.generator, bytes):
-                task.generator = pickle.loads(task.generator)
+            task = fnc.unpickle_generator()
+
         else:
             try:
                 if isinstance(fnc, functools.partial):

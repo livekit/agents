@@ -178,12 +178,22 @@ class TextMessageContext:
         return self._text_request.session_id
 
     @property
-    def session_data(self) -> _AgentSessionState | None:
+    def session_state(self) -> _AgentSessionState | None:
         from .utils.session_store import SessionStore
 
-        if self._session_state is None and self._session_snapshot:
-            with SessionStore(self._session_snapshot) as store:
-                self._session_state = store.export_state()
+        try:
+            if self._session_state is None and self._session_snapshot:
+                with SessionStore(self._session_snapshot) as store:
+                    self._session_state = store.export_state()
+        except Exception as e:
+            logger.exception(
+                "failed to export session state from snapshot",
+                extra={"session_id": self.session_id},
+            )
+            raise TextMessageError(
+                f"failed to export session state from snapshot with error: {str(e)}",
+                code=agent_text.INTERNAL_ERROR,
+            ) from e
 
         return self._session_state
 

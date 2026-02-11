@@ -97,9 +97,11 @@ class MyAgent(Agent):
                 "so there is no need to verify the email address with the user multiple times."
             )
             if self._text_mode
-            else ""
+            else "",
+            chat_ctx=self.chat_ctx.copy(
+                exclude_function_call=True, exclude_instructions=True, exclude_config_update=True
+            ),
         )
-        get_email_task.configure(llm="openai/gpt-4.1")
 
         email_result = await EffectCall(get_email_task)
         email_address = email_result.email_address
@@ -120,8 +122,8 @@ async def text_handler(ctx: TextMessageContext):
         llm="openai/gpt-4.1-mini",
         # state_passphrase="my-secret-passphrase",
     )
-    if ctx.session_data:
-        await session.rehydrate(ctx.session_data)
+    if ctx.session_state:
+        await session.rehydrate(ctx.session_state)
     else:
         await session.start(agent=MyAgent(text_mode=True))
 

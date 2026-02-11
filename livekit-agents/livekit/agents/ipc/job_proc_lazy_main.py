@@ -297,7 +297,7 @@ class _JobProc:
         )
 
         async def _warn_not_connected_task() -> None:
-            if self._job_ctx.is_fake_job():
+            if self._job_ctx.is_fake_job() or self._job_ctx.text_message_context is not None:
                 return
 
             await asyncio.sleep(10)
@@ -317,7 +317,7 @@ class _JobProc:
                     exc_info=t.exception(),
                 )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
-                if self._job_ctx.is_fake_job():
+                if self._job_ctx.is_fake_job() or self._job_ctx.text_message_context is not None:
                     return
 
                 logger.warning(

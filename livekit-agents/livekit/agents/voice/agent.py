@@ -99,6 +99,7 @@ class Agent:
         self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
         self._rehydrated = False
+        self._pending_durable_state: bytes | None = None
 
     def get_init_kwargs(self) -> dict[str, Any]:
         return {
@@ -479,7 +480,8 @@ class Agent:
 
     @staticmethod
     def _rehydrate(state: _AgentState) -> Agent:
-        from .agent_activity import AgentActivity
+        """Create the Agent instance from the saved state. Must be only called by `AgentSession.rehydrate()`"""
+
         from .agent_session import _AgentSessionContextVar
 
         agent: Agent = state.cls(**state.init_kwargs)
@@ -490,14 +492,9 @@ class Agent:
         if session:
             session._register_rehydrated_agent(agent)
 
-        agent._set_state(state)
+        agent._set_state(state)  # rehydrate the parent agent if it exists
         agent._rehydrated = True
-
-        if session:
-            # recreate an AgentActivity and restore the durable functions
-            agent_activity = AgentActivity(agent=agent, sess=session)
-            # TODO(long): failure handling for durable functions
-            agent_activity._rehydrate(state.durable_state)
+        agent._pending_durable_state = state.durable_state
 
         return agent
 
@@ -902,7 +899,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
             if run_state:
                 run_state._watch_handle(self._update_agent_task)
-                logger.info(f"watching update agent task: {self._update_agent_task.get_name()}")
 
     async def __await_impl(self) -> TaskResult_T:
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
@@ -1031,7 +1027,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 run_state._watch_handle(speech_handle)
 
             merged_chat_ctx = old_agent.chat_ctx.merge(
-                self.chat_ctx, exclude_function_call=True, exclude_instructions=True
+                self.chat_ctx,
+                exclude_function_call=True,
+                exclude_instructions=True,
+                exclude_config_update=True,
             )
             # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
             old_agent._chat_ctx.items[:] = merged_chat_ctx.items

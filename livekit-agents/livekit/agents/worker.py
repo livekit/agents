@@ -84,7 +84,27 @@ class _EntrypointWrapper:
         self._text_handler_fncs = text_handler_fncs
 
     async def __call__(self, ctx: JobContext) -> None:
-        if ctx.text_message_context is not None:
+        if ctx.text_message_context is None:
+            await self._handle_rtc_session(ctx)
+        else:
+            await self._handle_text_message(ctx)
+
+    async def _handle_rtc_session(self, ctx: JobContext) -> None:
+        if not self._entrypoint_fnc:
+            raise RuntimeError(
+                "No RTC session entrypoint has been registered.\n"
+                "Define one using the @server.rtc_session() decorator, for example:\n"
+                '    @server.rtc_session(agent_name="my_agent")\n'
+                "    async def my_agent(ctx: JobContext):\n"
+                "        ...\n"
+            )
+        await self._entrypoint_fnc(ctx)
+
+    async def _handle_text_message(self, ctx: JobContext) -> None:
+        assert ctx.text_message_context is not None
+
+        exc: TextMessageError | None = None
+        try:
             endpoint = ctx.text_message_context.endpoint
             if (text_handler_fnc := self._text_handler_fncs.get(endpoint)) is None:
                 raise RuntimeError(
@@ -95,41 +115,36 @@ class _EntrypointWrapper:
                     "        ...\n"
                 )
 
-            from .cli import AgentsConsole
-
-            c = AgentsConsole.get_instance()
-            if c.enabled:
-                c.acquire_io(loop=asyncio.get_running_loop(), session=None)
-
-            if self._entrypoint_fnc:
-                logger.info("SMS job detected, skipping RTC entrypoint")
-
-            exc: TextMessageError | None = None
+            await text_handler_fnc(ctx.text_message_context)
+        except TextMessageError as e:
+            exc = e
+        except Exception as e:
+            exc = TextMessageError(
+                f"error in text handler: {str(e)}",
+                code=agent_text.TEXT_HANDLER_ERROR,
+            )
+            logger.exception(
+                "error in text handler",
+                extra={"session_id": ctx.text_message_context.session_id},
+            )
+        finally:
             try:
-                await text_handler_fnc(ctx.text_message_context)
+                await ctx.text_message_context._complete(exc)
             except Exception as e:
-                exc = TextMessageError(
-                    f"error in text handler: {str(e)}",
-                    code=agent_text.TEXT_HANDLER_ERROR,
-                )
                 logger.exception(
-                    "error in text handler",
+                    "error occurred while completing text session",
                     extra={"session_id": ctx.text_message_context.session_id},
                 )
-            finally:
-                await ctx.text_message_context._complete(exc)
-                ctx.shutdown()  # job finished
-            return
+                if exc is None:
+                    # try again with an error message
+                    with contextlib.suppress(Exception):
+                        await ctx.text_message_context._complete(
+                            TextMessageError(
+                                f"error occurred while completing text session: {str(e)}",
+                            )
+                        )
 
-        if not self._entrypoint_fnc:
-            raise RuntimeError(
-                "No RTC session entrypoint has been registered.\n"
-                "Define one using the @server.rtc_session() decorator, for example:\n"
-                '    @server.rtc_session(agent_name="my_agent")\n'
-                "    async def my_agent(ctx: JobContext):\n"
-                "        ...\n"
-            )
-        await self._entrypoint_fnc(ctx)
+            ctx.shutdown()
 
 
 @dataclass

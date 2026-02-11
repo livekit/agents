@@ -63,6 +63,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _DurableExecutionMetadata,
     _TextOutput,
     _TTSGenerationData,
     make_tool_output,
@@ -515,65 +516,90 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    def _rehydrate(self, durable_state: bytes | None) -> None:
+    def rehydrate(self, durable_state: bytes | None) -> bool:
+        """
+        This method must only be called by `AgentSession.rehydrate()`.
+        It marks the activity as started and restores the durable functions.
+        Returns True if all the durable functions are restored successfully, False otherwise.
+        """
         self._started = True
         self._agent._activity = self
-
         self._durable_scheduler = DurableScheduler()
 
+        success = True
         if not durable_state:
-            return
+            return success
 
         durable_tasks: list[DurableTask] = pickle.loads(durable_state)
         for task in durable_tasks:
-            if task.metadata is None or (num_steps := task.metadata.get("num_steps")) is None:
-                # durable function not bound to a speech handle
-                self.durable_scheduler.execute(task)
+            if not isinstance(task.metadata, _DurableExecutionMetadata):
+                logger.error(f"invalid metadata type for durable function {task.fnc_name}")
+                success = False
                 continue
 
             # recreate the speech handle with the original number of steps
             speech_handle = SpeechHandle(
                 speech_id=utils.shortuuid("durable_speech_"),
-                allow_interruptions=task.metadata.get(
-                    "allow_interruptions", self.allow_interruptions
-                ),
-                input_details=task.metadata.get("input_details", DEFAULT_INPUT_DETAILS),
+                allow_interruptions=task.metadata.allow_interruptions,
+                input_details=task.metadata.input_details,
             )
-            speech_handle._num_steps = num_steps
-            for _ in range(num_steps):
+            speech_handle._num_steps = task.metadata.num_steps
+            for _ in range(speech_handle._num_steps):
                 speech_handle._authorize_generation()
                 speech_handle._mark_generation_done()
             speech_handle._clear_authorization()
 
+            # unpickle the generator and catch the exception if it fails
+            tk = _SpeechHandleContextVar.set(speech_handle)
+            exc: Exception | None = None
+            try:
+                task = task.unpickle_generator()
+            except Exception as e:
+                logger.exception(f"error rehydrating durable function {task.fnc_name}")
+                exc = e
+                success = False
+            finally:
+                _SpeechHandleContextVar.reset(tk)
+
             speech_task = self._create_speech_task(
-                self._resume_durable_function(task, speech_handle),
+                self._resume_durable_function(task, speech_handle, exc),
                 speech_handle=speech_handle,
                 name="AgentTask_replay_durable_function",
             )
             self._drain_blocked_tasks.append(speech_task)
 
+        return success
+
+    # @utils.log_exceptions(logger=logger)
     async def _resume_durable_function(
-        self, task: DurableTask, speech_handle: SpeechHandle
+        self, task: DurableTask, speech_handle: SpeechHandle, exc: Exception | None = None
     ) -> None:
         from .agent import ModelSettings
 
-        assert task.metadata is not None
-
-        fnc_call_json = task.metadata.get("function_call")
-        assert fnc_call_json is not None
-
-        fnc_call = llm.FunctionCall.model_validate_json(fnc_call_json)
-        if task.next_value is not None:
-            task.next_value._c_ctx = contextvars.copy_context()
-
-        exe_task = self.durable_scheduler.execute(task)
+        assert isinstance(task.metadata, _DurableExecutionMetadata)
+        fnc_call = llm.FunctionCall.model_validate_json(task.metadata.function_call)
         try:
-            val = await exe_task
+            if exc is not None:
+                # wait for the session to be started before schedule the tool response
+                await self._session._started_ev.wait()
+                raise exc
+
+            if task.next_value is not None:
+                task.next_value._c_ctx = contextvars.copy_context()
+
+            val = await self.durable_scheduler.execute(task)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-        # generate tool reply
+            if not isinstance(e, StopResponse) and e is not exc:
+                logger.exception(
+                    "exception occurred while executing rehydrated rehydrated tool",
+                    extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                )
+
+        # generate tool response
         if isinstance(self.llm, llm.LLM):
             self._on_pipeline_tool_execution_done(
                 tool_outputs=[tool_output],

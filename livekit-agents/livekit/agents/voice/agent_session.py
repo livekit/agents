@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import copy
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
@@ -304,7 +305,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
-        self._started = False
+        self._started_ev = asyncio.Event()
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
@@ -359,7 +360,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
-        self._rehydrated_agents: dict[str, Agent] = {}
+        self._rehydrated_agents = OrderedDict[str, Agent]()
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -441,6 +442,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
 
+    @property
+    def started(self) -> bool:
+        return self._started_ev.is_set()
+
+    @started.setter
+    def started(self, value: bool) -> None:
+        if value:
+            self._started_ev.set()
+        else:
+            self._started_ev.clear()
+
     def run(
         self,
         *,
@@ -509,7 +521,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             record: Whether to record the audio
         """
         async with self._lock:
-            if self._started:
+            if self.started:
                 return None
 
             self._started_at = time.time()
@@ -697,7 +709,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._forward_video_task(), name="_forward_video_task"
                 )
 
-            self._started = True
+            self.started = True
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -801,7 +813,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             otel_context.attach(self._root_span_context)
 
         async with self._lock:
-            if not self._started:
+            if not self.started:
                 return
 
             self._closing = True
@@ -858,7 +870,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._session_span.end()
                 self._session_span = None
 
-            self._started = False
+            self.started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
@@ -901,7 +913,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     async def rehydrate(self, state: _AgentSessionState) -> None:
-        if self._started:
+        if self.started:
             # TODO(long): allow rehydrating a session that has already started?
             raise RuntimeError("Cannot rehydrate session that has already started")
 
@@ -922,10 +934,39 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
         self._tools = valid_tools
 
-        # rehydrate agent recursively and register them to the session
         tk = _AgentSessionContextVar.set(self)
         try:
+            # rehydrate agent recursively and register them to the session
+            # the order of rehydration is from current to oldest
             agent = Agent._rehydrate(state.agent)
+
+            # restore the durable functions in the order of oldest to current
+            # if any Agent failed, discard the rest and use the failed one as the current agent
+            rehydrated_agents = list(self._rehydrated_agents.values())
+            assert rehydrated_agents[0] is agent
+
+            while rehydrated_agents:
+                agent = rehydrated_agents.pop(-1)  # oldest agent
+
+                if not agent._pending_durable_state:
+                    continue
+
+                activity = AgentActivity(agent=agent, sess=self)
+                success = activity.rehydrate(agent._pending_durable_state)
+                agent._pending_durable_state = None
+
+                if not success:
+                    # discard the rest and use the failed one as the current agent
+                    for stale_agent in rehydrated_agents:
+                        agent._chat_ctx.merge(
+                            stale_agent.chat_ctx,
+                            exclude_function_call=True,
+                            exclude_instructions=True,
+                            exclude_config_update=True,
+                        )
+                        self._rehydrated_agents.pop(stale_agent.id)
+                    break
+
         finally:
             _AgentSessionContextVar.reset(tk)
 
@@ -1107,7 +1148,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
 
-        if self._started:
+        if self.started:
             self._update_activity_atask = task = asyncio.create_task(
                 self._update_activity_task(self._update_activity_atask, self._agent),
                 name="_update_activity_task",
@@ -1382,7 +1423,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # -- User changed input/output streams/sinks --
 
     def _on_video_input_changed(self) -> None:
-        if not self._started:
+        if not self.started:
             return
 
         if self._forward_video_atask is not None:
@@ -1393,7 +1434,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_audio_input_changed(self) -> None:
-        if not self._started:
+        if not self.started:
             return
 
         if self._forward_audio_atask is not None:
@@ -1408,7 +1449,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_output_changed(self) -> None:
         if (
-            self._started
+            self.started
             and self._opts.resume_false_interruption
             and (audio_output := self.output.audio)
             and not audio_output.can_pause

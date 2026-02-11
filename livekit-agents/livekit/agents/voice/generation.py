@@ -28,7 +28,7 @@ from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
 from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
-from .speech_handle import SpeechHandle
+from .speech_handle import InputDetails, SpeechHandle
 from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
@@ -417,6 +417,16 @@ class _ToolOutput:
     first_tool_started_fut: asyncio.Future[None]
 
 
+@dataclass
+class _DurableExecutionMetadata:
+    """Metadata stored in durable states, must be picklable"""
+
+    num_steps: int
+    function_call: str  # json stringified function call
+    allow_interruptions: bool
+    input_details: InputDetails
+
+
 def perform_tool_executions(
     *,
     session: AgentSession,
@@ -615,12 +625,12 @@ async def _execute_tools_task(
                         if tool_flags & llm.ToolFlag.DURABLE:
                             val = await durable_scheduler.execute(
                                 function_callable,
-                                metadata={
-                                    "num_steps": speech_handle.num_steps,
-                                    "function_call": fnc_call.model_dump_json(),
-                                    "allow_interruptions": speech_handle.allow_interruptions,
-                                    "input_details": speech_handle.input_details,
-                                },
+                                metadata=_DurableExecutionMetadata(
+                                    num_steps=speech_handle.num_steps,
+                                    function_call=fnc_call.model_dump_json(),
+                                    allow_interruptions=speech_handle.allow_interruptions,
+                                    input_details=speech_handle.input_details,
+                                ),
                             )
                         else:
                             val = await function_callable()
