@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -34,6 +35,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         time_instructions = (
             ""
@@ -63,8 +65,12 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 "Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. "
                 "(before asking any questions or providing any answers.)\n"
                 "Don't invent dates, stick strictly to what the user said.\n"
-                "Call `confirm_dob` after the user confirmed the date of birth is correct.\n"
-                "When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.\n"
+                + (
+                    "Call `confirm_dob` after the user confirmed the date of birth is correct.\n"
+                    if require_confirmation is not False
+                    else ""
+                )
+                + "When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.\n"
                 "If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
@@ -81,6 +87,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         )
 
         self._include_time = include_time
+        self._require_confirmation = require_confirmation
         self._current_dob: date | None = None
         self._current_time: time | None = None
         self._dob_update_speech_handle: SpeechHandle | None = None
@@ -98,7 +105,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         month: int,
         day: int,
         ctx: RunContext,
-    ) -> str:
+    ) -> str | None:
         """Update the date of birth provided by the user.
 
         Args:
@@ -122,6 +129,16 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         self._current_dob = dob
 
+        if not self._confirmation_required(ctx):
+            if not self.done():
+                self.complete(
+                    GetDOBResult(
+                        date_of_birth=self._current_dob,
+                        time_of_birth=self._current_time,
+                    )
+                )
+            return None
+
         formatted_date = dob.strftime("%B %d, %Y")
         response = f"The date of birth has been updated to {formatted_date}"
 
@@ -142,7 +159,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         hour: int,
         minute: int,
         ctx: RunContext,
-    ) -> str:
+    ) -> str | None:
         """Update the time of birth provided by the user.
 
         Args:
@@ -157,6 +174,16 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             raise ToolError(f"Invalid time: {e}") from None
 
         self._current_time = birth_time
+
+        if not self._confirmation_required(ctx) and self._current_dob is not None:
+            if not self.done():
+                self.complete(
+                    GetDOBResult(
+                        date_of_birth=self._current_dob,
+                        time_of_birth=self._current_time,
+                    )
+                )
+            return None
 
         formatted_time = birth_time.strftime("%I:%M %p")
         response = f"The time of birth has been updated to {formatted_time}"
@@ -177,7 +204,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         """Call this tool when the user confirms that the date of birth is correct."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._dob_update_speech_handle:
+        if ctx.speech_handle == self._dob_update_speech_handle and self._confirmation_required(ctx):
             raise ToolError("error: the user must confirm the date of birth explicitly")
 
         if self._current_dob is None:
@@ -202,3 +229,8 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the date of birth: {reason}"))
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"

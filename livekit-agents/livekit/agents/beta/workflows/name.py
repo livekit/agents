@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -37,6 +38,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if not (first_name or middle_name or last_name):
             raise ValueError("At least one of first_name, middle_name, or last_name must be True")
@@ -44,6 +46,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._collect_last_name = last_name
         self._collect_middle_name = middle_name
         self._verify_spelling = verify_spelling
+        self._require_confirmation = require_confirmation
 
         self._requested_name_parts: list[
             str
@@ -85,8 +88,12 @@ class GetNameTask(AgentTask[GetNameResult]):
                 "Call `update_name` at the first opportunity whenever you form a new hypothesis about the name. "
                 "(before asking any questions or providing any answers.)\n"
                 "Don't invent names, stick strictly to what the user said.\n"
-                "Call `confirm_name` after the user confirmed the name is correct.\n"
-                "If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.\n"
+                + (
+                    "Call `confirm_name` after the user confirmed the name is correct.\n"
+                    if require_confirmation is not False
+                    else ""
+                )
+                + "If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
@@ -122,7 +129,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         middle_name: str,
         last_name: str,
         ctx: RunContext,
-    ) -> str:
+    ) -> str | None:
         """Update the name provided by the user.
 
         Args:
@@ -151,6 +158,17 @@ class GetNameTask(AgentTask[GetNameResult]):
             part for part in [self._first_name, self._middle_name, self._last_name] if part
         )
 
+        if not self._confirmation_required(ctx):
+            if not self.done():
+                self.complete(
+                    GetNameResult(
+                        first_name=self._first_name if self._collect_first_name else None,
+                        middle_name=self._middle_name if self._collect_middle_name else None,
+                        last_name=self._last_name if self._collect_last_name else None,
+                    )
+                )
+            return None
+
         if self._verify_spelling:
             return (
                 f"The name has been updated to {full_name}\n"
@@ -169,7 +187,9 @@ class GetNameTask(AgentTask[GetNameResult]):
         """Call this tool when the user confirms that the name is correct."""
         await ctx.wait_for_playout()
 
-        if ctx.speech_handle == self._name_update_speech_handle:
+        if ctx.speech_handle == self._name_update_speech_handle and self._confirmation_required(
+            ctx
+        ):
             raise ToolError("error: the user must confirm the name explicitly")
 
         if self._collect_first_name and not self._first_name:
@@ -201,3 +221,8 @@ class GetNameTask(AgentTask[GetNameResult]):
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the name: {reason}"))
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"

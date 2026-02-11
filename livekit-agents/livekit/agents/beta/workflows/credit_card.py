@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
@@ -49,14 +50,15 @@ class GetExpirationDateResult:
 
 
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-async def decline_card_capture(self, reason: str) -> None:
+async def decline_card_capture(context: RunContext, reason: str) -> None:
     """Handles the case when the user explicitly declines to provide a detail for their card information.
 
     Args:
         reason (str): A short explanation of why the user declined to provide card information
     """
-    if not self.done():
-        self.complete(ToolError(f"couldn't get the card details: {reason}"))
+    ...
+    # if not self.done():
+    #     self.complete(ToolError(f"couldn't get the card details: {reason}"))
 
 
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
@@ -71,18 +73,23 @@ async def restart_card_collection(self, reason: str) -> None:
 
 
 class GetCardNumberTask(AgentTask[GetCardNumberResult]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
-            instructions="""You are a single step in a broader process of collecting credit card information.
-            You are solely responsible for collecting the card number.
-            If the user refuses to provide a number, call decline_card_capture().
-            If the user wishes to start over the card collection process, call restart_card_collection().
-            Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-            Be sure to confirm the card number by reading it out digit-by-digit.
-            """,
+            instructions=(
+                "You are a single step in a broader process of collecting credit card information.\n"
+                "You are solely responsible for collecting the card number.\n"
+                "If the user refuses to provide a number, call decline_card_capture().\n"
+                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
+                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
+            ),
             tools=[decline_card_capture, restart_card_collection],
         )
         self._card_number = 0
+        self._require_confirmation = require_confirmation
         self._number_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
@@ -95,7 +102,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         self,
         context: RunContext,
         card_number: int,
-    ) -> None:
+    ) -> str | None:
         """Call to update the user's card number.
 
         Args:
@@ -108,9 +115,23 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         else:
             self._number_update_speech_handle = context.speech_handle
             self._card_number = card_number
+
+            if not self._confirmation_required(context):
+                if not self.validate_card_number(self._card_number):
+                    self.session.generate_reply(
+                        instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
+                    )
+                else:
+                    first_digit = str(self._card_number)[0]
+                    issuer = CardIssuersLookup.get(first_digit, "Other")
+                    if not self.done():
+                        self.complete(
+                            GetCardNumberResult(issuer=issuer, card_number=self._card_number)
+                        )
+                return None
+
             return (
                 f"The card number has been updated to {card_number}\n"
-                f"Repeat the card number digit-by-digit: {card_number}\n"
                 f"Prompt the user for confirmation, do not call `confirm_card_number` directly"
             )
 
@@ -122,7 +143,10 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         """Call after confirming the user's card number."""
         await context.wait_for_playout()
 
-        if context.speech_handle == self._number_update_speech_handle:
+        if (
+            context.speech_handle == self._number_update_speech_handle
+            and self._confirmation_required(context)
+        ):
             raise ToolError("error: the user must confirm the card number explicitly")
 
         if not self._card_number:
@@ -156,20 +180,30 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
         return total_sum % 10 == 0
 
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"
+
 
 class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
-            instructions="""You are a single step in a broader process of collecting credit card information.
-            You are solely responsible for collecting the user's card's security code.
-            If the user refuses to provide a code, call decline_card_capture().
-            If the user wishes to start over the card collection process, call restart_card_collection().
-            Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-            Be sure to confirm the security code by reading it out digit-by-digit.
-            """,
+            instructions=(
+                "You are a single step in a broader process of collecting credit card information.\n"
+                "You are solely responsible for collecting the user's card's security code.\n"
+                "If the user refuses to provide a code, call decline_card_capture().\n"
+                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
+                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
+            ),
             tools=[decline_card_capture, restart_card_collection],
         )
         self._security_code = 0
+        self._require_confirmation = require_confirmation
         self._security_code_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
@@ -197,7 +231,6 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             self._security_code = security_code
             return (
                 f"The security code has been updated to {security_code}\n"
-                f"Repeat the security code digit-by-digit: {security_code}\n"
                 f"Prompt the user for confirmation, do not call `confirm_security_code` directly"
             )
 
@@ -228,7 +261,6 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             If the user refuses to provide a date, call decline_card_capture().
             If the user wishes to start over the card collection process, call restart_card_collection().
             Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-            Be sure to confirm the expiration date by repeating the month and year back to the user.
             """,
             tools=[decline_card_capture, restart_card_collection],
         )
@@ -253,20 +285,19 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             expiration_month (int): The numerical expiration month of the card, example: '04' for April
             expiration_year (int): The numerical expiration year of the card shortened to the last two digits, for example, '35' for 2035
         """
-        if len(str(expiration_month)) != 2:
+        if not (1 <= expiration_month <= 12):
             self.session.generate_reply(
-                instructions="The expiration month has not been formatted correctly, ask the user to repeat the expiration month."
+                instructions="The expiration month is invalid, ask the user to repeat the expiration month."
             )
-        elif len(str(expiration_year)) != 2:
+        elif not (0 <= expiration_year <= 99):
             self.session.generate_reply(
-                instructions="The expiration year has not been formatted correctly, ask the user to repeat the expiration year."
+                instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
         else:
             self._date_update_speech_handle = context.speech_handle
-            self._expiration_date = str(expiration_month) + "/" + str(expiration_year)
+            self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
             return (
                 f"The expiration date has been updated to {self._expiration_date}\n"
-                f"Repeat the expiration date by stating the corresponding month and year: {self._expiration_date}\n"
                 f"Prompt the user for confirmation, do not call `confirm_expiration_date` directly"
             )
 
