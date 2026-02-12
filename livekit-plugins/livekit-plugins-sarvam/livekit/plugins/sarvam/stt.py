@@ -959,35 +959,42 @@ class SpeechStream(stt.SpeechStream):
             # silent transcript loss. This is needed because long TTS outputs
             # accumulate large audio buffers that Sarvam needs time to process.
             if self._audio_task in done and self._message_task not in done:
-                self._logger.info(
-                    "Audio task completed, waiting up to 30s for transcript",
-                    extra=self._build_log_context(),
-                )
-                try:
-                    await asyncio.wait([self._message_task], timeout=30.0)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    self._logger.exception(
-                        "Error while waiting for transcript task",
-                        extra=self._build_log_context(),
-                    )
-                if self._message_task.done():
-                    self._logger.info(
-                        "Transcript received from Sarvam",
-                        extra=self._build_log_context(),
-                    )
-                    exc = self._message_task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-                else:
+                audio_exc = self._audio_task.exception()
+                if audio_exc is not None:
                     self._logger.warning(
-                        "Transcript timeout (30s) — transcript may be lost",
+                        "Audio task failed, skipping transcript wait",
                         extra=self._build_log_context(),
                     )
+                else:
+                    self._logger.info(
+                        "Audio task completed, waiting up to 30s for transcript",
+                        extra=self._build_log_context(),
+                    )
+                    try:
+                        await asyncio.wait([self._message_task], timeout=30.0)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self._logger.exception(
+                            "Error while waiting for transcript task",
+                            extra=self._build_log_context(),
+                        )
+                    if self._message_task.done():
+                        self._logger.info(
+                            "Transcript received from Sarvam",
+                            extra=self._build_log_context(),
+                        )
+                        exc = self._message_task.exception()
+                        if exc is not None:
+                            if isinstance(exc, BaseException):
+                                raise exc
+                            else:
+                                raise RuntimeError(f"Task failed with non-BaseException: {exc}")
+                    else:
+                        self._logger.warning(
+                            "Transcript timeout (30s) — transcript may be lost",
+                            extra=self._build_log_context(),
+                        )
 
             # Cancel remaining tasks using LiveKit's utility
             remaining = [t for t in pending if not t.done()]
