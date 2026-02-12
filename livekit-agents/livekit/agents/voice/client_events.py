@@ -101,6 +101,8 @@ class ClientUserInterruptionEvent(BaseModel):
     type: Literal["user_interruption"] = "user_interruption"
     is_interruption: bool
     created_at: float
+    sent_at: float
+    overlap_speech_started_at: float | None
 
 
 ClientEvent = Annotated[
@@ -426,6 +428,8 @@ class ClientEventsHandler:
         client_event = ClientUserInterruptionEvent(
             is_interruption=event.is_interruption,
             created_at=event.timestamp,
+            overlap_speech_started_at=event.overlap_speech_started_at,
+            sent_at=time.time(),
         )
         self._stream_client_event(client_event)
 
