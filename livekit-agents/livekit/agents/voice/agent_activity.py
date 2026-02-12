@@ -586,8 +586,12 @@ class AgentActivity(RecognitionHooks):
         fnc_call = llm.FunctionCall.model_validate_json(task.metadata.function_call)
         reset_tool_timestamp = False
         try:
-            await self._activated_ev.wait()
             if exc:
+                # wait until the activity is resumed before raising the exception
+                # since there is no AgentTask running when rehydration failed
+                await self._activated_ev.wait()
+                if run_state := self._session._global_run_state:
+                    run_state._watch_handle(speech_handle)
                 raise exc
 
             if task.next_value is not None:
@@ -604,8 +608,6 @@ class AgentActivity(RecognitionHooks):
                 # and make the tool message at the end of the chat context
                 reset_tool_timestamp = True
                 tool_output.reply_required = False
-                if run_state := self._session._global_run_state:
-                    run_state._watch_handle(speech_handle)
 
             elif not isinstance(e, StopResponse):
                 logger.exception(
