@@ -188,9 +188,9 @@ class GetNameTask(AgentTask[GetNameResult]):
             f"do not call `confirm_name` directly"
         )
 
-    def _build_confirm_tool(self, *, first_name: str, middle_name: str, last_name: str):
-        # confirm tool is only injected after update_name is called,
-        # preventing the LLM from hallucinating a confirmation without user input
+    def _build_confirm_tool(
+        self, *, first_name: str, middle_name: str, last_name: str
+    ) -> llm.FunctionTool:
         @function_tool()
         async def confirm_name() -> None:
             """Call after the user confirms the name is correct."""

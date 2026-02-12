@@ -203,7 +203,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         return response
 
-    def _build_confirm_tool(self, *, dob: date | None):
+    def _build_confirm_tool(self, *, dob: date | None) -> llm.FunctionTool:
         # confirm tool is only injected after update_dob/update_time is called,
         # preventing the LLM from hallucinating a confirmation without user input
         captured_dob = dob

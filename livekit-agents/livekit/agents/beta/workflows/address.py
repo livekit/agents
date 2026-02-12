@@ -120,7 +120,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 
-    def _build_confirm_tool(self, *, address: str):
+    def _build_confirm_tool(self, *, address: str) -> llm.FunctionTool:
         # confirm tool is only injected after update_address is called,
         # preventing the LLM from hallucinating a confirmation without user input
         @function_tool()

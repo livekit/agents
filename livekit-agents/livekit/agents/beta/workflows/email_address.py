@@ -114,9 +114,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
-    def _build_confirm_tool(self, *, email: str):
-        # confirm tool is only injected after update_email_address is called,
-        # preventing the LLM from hallucinating a confirmation without user input
+    def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
         @function_tool()
         async def confirm_email_address() -> None:
             """Call after the user confirms the email address is correct."""

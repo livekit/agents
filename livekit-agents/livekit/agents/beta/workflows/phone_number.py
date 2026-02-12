@@ -112,9 +112,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             f"Prompt the user for confirmation, do not call `confirm_phone_number` directly"
         )
 
-    def _build_confirm_tool(self, *, phone_number: str):
-        # confirm tool is only injected after update_phone_number is called,
-        # preventing the LLM from hallucinating a confirmation without user input
+    def _build_confirm_tool(self, *, phone_number: str) -> llm.FunctionTool:
         @function_tool()
         async def confirm_phone_number() -> None:
             """Call after the user confirms the phone number is correct."""

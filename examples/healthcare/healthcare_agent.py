@@ -142,7 +142,6 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
         Args:
             insurance (str): The user's health insurance
         """
-        context.session.userdata.insurance = insurance
         self.complete(GetInsuranceResult(insurance=insurance))
 
 
@@ -276,7 +275,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
         return schedule_appointment
 
-    def _build_visit_reason_tool(self) -> FunctionTool | None:
+    def _build_visit_reason_tool(self) -> FunctionTool:
         @function_tool()
         async def confirm_visit_reason(visit_reason: str):
             """Call to record the user's reason for their appointment.
@@ -322,10 +321,10 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             current_tools.append(cancel_appt_tool)
             await self.update_tools(current_tools)
             await self.session.generate_reply(
-                instructions=f"The user has these outstanding appointments: {json.dumps(appointments)}, prompt them to choose one to modify."
+                instructions=f"The user has these outstanding appointments: {json.dumps(appointments, default=str)}, prompt them to choose one to modify."
             )
 
-    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> FunctionTool | None:
+    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> FunctionTool:
         @function_tool()
         async def confirm_appointment_selection(
             selected_appointment: Annotated[
@@ -474,8 +473,13 @@ class HealthcareAgent(Agent):
                 "phone_number": results.task_results["get_phone_number_task"].phone_number,
                 "insurance": results.task_results["get_insurance_task"].insurance,
             }
-            self.session.userdata.profile = profile
-            self._database.add_patient_record(info=profile)
+
+            if self._found_profile:
+                self._database.update_patient_record(patient_name, **profile)
+                self.session.userdata.profile = self._database.get_patient_by_name(patient_name)
+            else:
+                self.session.userdata.profile = profile
+                self._database.add_patient_record(info=profile)
 
     @function_tool()
     async def schedule_appointment(self):
@@ -523,9 +527,7 @@ class HealthcareAgent(Agent):
             self._database.add_appointment(
                 name=self.session.userdata.profile["name"], appointment=appointment
             )
-            confirmation_message += (
-                f" and a new appointment ({json.dumps(appointment)}) has been scheduled."
-            )
+            confirmation_message += f" and a new appointment ({json.dumps(appointment, default=str)}) has been scheduled."
 
         return confirmation_message
 

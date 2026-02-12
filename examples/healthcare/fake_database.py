@@ -18,7 +18,7 @@ class FakeDatabase:
                 "phone_number": "18005882300",
                 "insurance": "Aetna",
                 "outstanding_balance": round(random.uniform(20, 3000), 2),
-            }
+            },
         ]
         today = date.today()
         self._doctor_records = [

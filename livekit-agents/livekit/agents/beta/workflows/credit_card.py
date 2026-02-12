@@ -14,7 +14,7 @@ from .name import GetNameTask
 from .task_group import TaskGroup
 
 if TYPE_CHECKING:
-    from ...voice.agent_session import TurnDetectionMode
+    from ...voice.audio_recognition import TurnDetectionMode
 
 CardIssuersLookup = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
 
@@ -128,6 +128,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             self.session.generate_reply(
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
+            return
         else:
             self._card_number = card_number
 
@@ -181,7 +182,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
         return confirm_card_number
 
-    def validate_card_number(self, card_number):
+    def validate_card_number(self, card_number) -> bool:
         """Validates card number via the Luhn algorithm"""
         total_sum = 0
 
@@ -244,6 +245,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             self.session.generate_reply(
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
+            return
         else:
             self._security_code = security_code
 
@@ -262,7 +264,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 f"Do not repeat the security code back to the user, ask them to repeat themselves.\n"
             )
 
-    def _build_confirm_tool(self, *, security_code: int):
+    def _build_confirm_tool(self, *, security_code: int) -> llm.FunctionTool:
         @function_tool()
         async def confirm_security_code(repeated_security_code: int) -> None:
             """Call after the user repeats their security code for confirmation.
@@ -329,14 +331,17 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             self.session.generate_reply(
                 instructions="The expiration month is invalid, ask the user to repeat the expiration month."
             )
+            return
         elif not (0 <= expiration_year <= 99):
             self.session.generate_reply(
                 instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
+            return
         elif self._is_expired(expiration_month, expiration_year):
             self.session.generate_reply(
                 instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
             )
+            return
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -358,7 +363,9 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 f"Do not call `confirm_expiration_date` directly"
             )
 
-    def _build_confirm_tool(self, *, expiration_month: int, expiration_year: int):
+    def _build_confirm_tool(
+        self, *, expiration_month: int, expiration_year: int
+    ) -> llm.FunctionTool:
         expiration_date = self._expiration_date
 
         @function_tool()
@@ -403,7 +410,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         self,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
