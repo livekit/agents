@@ -106,16 +106,6 @@ class STT(stt.STT):
         if is_given(prompt) and model != "u3-pro":
             raise ValueError("The 'prompt' parameter is only supported with the 'u3-pro' model.")
 
-        if model == "u3-pro" and not is_given(prompt):
-            prompt = (
-                "You are an AI voice agent answering calls with humans for a defined task. "
-                "Be sure to hear all words the user speaks and transcribe verbatim, including "
-                "all disfluencies. Do not output anything during silence. "
-                "Punctuation rules: 1) Always include punctuation in output. "
-                "2) Use period/question mark ONLY for complete sentences. 3) Use comma for "
-                "mid-sentence pauses. 4) Use no punctuation for incomplete trailing speech."
-            )
-
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
