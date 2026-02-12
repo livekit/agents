@@ -109,6 +109,7 @@ class MyAgent(Agent):
         logger.info(f"User's email address: {email_address}")
 
         return "You are now registered for the weather event."
+        # context.session.say("You are now registered for the weather event.")
 
 
 server = AgentServer(port=PORT)
@@ -122,11 +123,16 @@ async def text_handler(ctx: TextMessageContext):
         llm="openai/gpt-4.1-mini",
         # state_passphrase="my-secret-passphrase",
     )
-    if ctx.session_state:
-        await session.rehydrate(ctx.session_state)
-    else:
-        await session.start(agent=MyAgent(text_mode=True))
 
+    start_result = await session.start(
+        agent=ctx.session_state if ctx.session_state else MyAgent(text_mode=True),
+        capture_run=True,
+        wait_run_state=False,
+    )
+    async for ev in start_result:
+        await ctx.send_response(ev)
+
+    logger.info(f"running session with text input: {ctx.text}")
     async for ev in session.run(user_input=ctx.text):
         await ctx.send_response(ev)
 

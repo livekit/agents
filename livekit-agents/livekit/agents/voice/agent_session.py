@@ -51,6 +51,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    StartedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -305,7 +306,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
-        self._started_ev = asyncio.Event()
+        self._started = False
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
@@ -442,17 +443,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
 
-    @property
-    def started(self) -> bool:
-        return self._started_ev.is_set()
-
-    @started.setter
-    def started(self, value: bool) -> None:
-        if value:
-            self._started_ev.set()
-        else:
-            self._started_ev.clear()
-
     def run(
         self,
         *,
@@ -471,9 +461,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @overload
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: Literal[True],
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         # deprecated
@@ -485,9 +476,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @overload
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: Literal[False] = False,
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         # deprecated
@@ -498,9 +490,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: bool = False,
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         # deprecated
@@ -515,16 +508,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
+            wait_run_state: Whether to wait for the run state to be done.
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio
         """
         async with self._lock:
-            if self.started:
+            if self._started:
                 return None
 
             self._started_at = time.time()
+
+            run_state: RunResult | None = None
+            if capture_run:
+                if self._global_run_state is not None and not self._global_run_state.done():
+                    raise RuntimeError("nested runs are not supported")
+
+                run_state = RunResult(output_type=None)
+                self._global_run_state = run_state
+
+            if isinstance(agent, _AgentSessionState):
+                agent = await self._rehydrate(agent)
 
             # configure observability first
             job_ctx: JobContext | None = None
@@ -668,14 +673,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                     self._job_context_cb_registered = True
 
-            run_state: RunResult | None = None
-            if capture_run:
-                if self._global_run_state is not None and not self._global_run_state.done():
-                    raise RuntimeError("nested runs are not supported")
-
-                run_state = RunResult(output_type=None)
-                self._global_run_state = run_state
-
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(
                 asyncio.create_task(
@@ -709,7 +706,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._forward_video_task(), name="_forward_video_task"
                 )
 
-            self.started = True
+            self._started = True
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -764,8 +761,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
                 )
 
+            self.emit("started", StartedEvent())
+
             if run_state:
-                await run_state
+                run_state._mark_done_if_needed(None)  # needed if it didn't watch any handles
+                if wait_run_state:
+                    await run_state
 
             return run_state
 
@@ -813,7 +814,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             otel_context.attach(self._root_span_context)
 
         async with self._lock:
-            if not self.started:
+            if not self._started:
                 return
 
             self._closing = True
@@ -870,7 +871,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._session_span.end()
                 self._session_span = None
 
-            self.started = False
+            self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
@@ -912,8 +913,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent=self._agent._get_state(),
         )
 
-    async def rehydrate(self, state: _AgentSessionState) -> None:
-        if self.started:
+    async def _rehydrate(self, state: _AgentSessionState) -> Agent:
+        if self._started:
             # TODO(long): allow rehydrating a session that has already started?
             raise RuntimeError("Cannot rehydrate session that has already started")
 
@@ -934,6 +935,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
         self._tools = valid_tools
 
+        rehydrated_agents: list[Agent] = []
         tk = _AgentSessionContextVar.set(self)
         try:
             # rehydrate agent recursively and register them to the session
@@ -955,8 +957,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 success = activity.rehydrate(agent._pending_durable_state)
                 agent._pending_durable_state = None
 
-                if not success:
-                    # discard the rest and use the failed one as the current agent
+                if not success and rehydrated_agents:
+                    # when durable function rehydration failed, the process is:
+                    # 1. simulate handoff: discard the rest agents and merge their chat context
+                    # 2. raise ToolError from the failed function when session is started
+                    # 3. `session.run` is called with the user input following the ToolError
                     for stale_agent in rehydrated_agents:
                         agent._chat_ctx.merge(
                             stale_agent.chat_ctx,
@@ -970,7 +975,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         finally:
             _AgentSessionContextVar.reset(tk)
 
-        await self.start(agent=agent)
+        if rehydrated_agents:  # True if durable function rehydration failed
+            run_state = self._global_run_state
+            agents_handoff_chain = rehydrated_agents + [agent]
+            for i in range(len(agents_handoff_chain) - 1):
+                old_agent = agents_handoff_chain[i]
+                new_agent = agents_handoff_chain[i + 1]
+                handoff_item = llm.AgentHandoff(
+                    old_agent_id=old_agent.id, new_agent_id=new_agent.id
+                )
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item, old_agent=old_agent, new_agent=new_agent
+                    )
+                self._chat_ctx.insert(handoff_item)
+
+        return agent
 
     def _register_rehydrated_agent(self, agent: Agent) -> None:
         if agent.id in self._rehydrated_agents:
@@ -1148,7 +1168,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
 
-        if self.started:
+        if self._started:
             self._update_activity_atask = task = asyncio.create_task(
                 self._update_activity_task(self._update_activity_atask, self._agent),
                 name="_update_activity_task",
@@ -1423,7 +1443,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # -- User changed input/output streams/sinks --
 
     def _on_video_input_changed(self) -> None:
-        if not self.started:
+        if not self._started:
             return
 
         if self._forward_video_atask is not None:
@@ -1434,7 +1454,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_audio_input_changed(self) -> None:
-        if not self.started:
+        if not self._started:
             return
 
         if self._forward_audio_atask is not None:
@@ -1449,7 +1469,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_output_changed(self) -> None:
         if (
-            self.started
+            self._started
             and self._opts.resume_false_interruption
             and (audio_output := self.output.audio)
             and not audio_output.can_pause

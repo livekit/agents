@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import heapq
 import json
 import pickle
@@ -22,6 +23,7 @@ from ..llm.tool_context import (
     FunctionToolInfo,
     RawFunctionToolInfo,
     StopResponse,
+    ToolError,
     ToolFlag,
     get_fnc_tool_names,
 )
@@ -58,6 +60,7 @@ from .events import (
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
+    StartedEvent,
     UserInputTranscribedEvent,
 )
 from .generation import (
@@ -549,20 +552,49 @@ class AgentActivity(RecognitionHooks):
                 speech_handle._mark_generation_done()
             speech_handle._clear_authorization()
 
-            # unpickle the generator and catch the exception if it fails
+            # unpickle the generator and catch the exception as a ToolError if it fails
+            tool_authorized_fut = asyncio.Future[None]()
+            exc: ToolError | None = None
             tk = _SpeechHandleContextVar.set(speech_handle)
-            exc: Exception | None = None
             try:
                 task = task.unpickle_generator()
-            except Exception as e:
+            except Exception:
                 logger.exception(f"error rehydrating durable function {task.fnc_name}")
-                exc = e
+
+                exc = ToolError(
+                    "An error occurred because the tool definition changed during execution, "
+                    "call the tool again if the conversation is not ended."
+                )
                 success = False
             finally:
                 _SpeechHandleContextVar.reset(tk)
 
+            def _on_session_started(
+                _: StartedEvent,
+                speech_handle: SpeechHandle,
+                tool_authorized_fut: asyncio.Future[None],
+                exc: ToolError | None,
+            ) -> None:
+                if exc:
+                    tool_authorized_fut.set_exception(exc)
+                else:
+                    tool_authorized_fut.set_result(None)
+
+                if run_state := self._session._global_run_state:
+                    run_state._watch_handle(speech_handle)
+
+            self._session.once(
+                "started",
+                functools.partial(
+                    _on_session_started,
+                    speech_handle=speech_handle,
+                    tool_authorized_fut=tool_authorized_fut,
+                    exc=exc,
+                ),
+            )
+
             speech_task = self._create_speech_task(
-                self._resume_durable_function(task, speech_handle, exc),
+                self._resume_durable_function(task, speech_handle, tool_authorized_fut),
                 speech_handle=speech_handle,
                 name="AgentTask_replay_durable_function",
             )
@@ -570,19 +602,20 @@ class AgentActivity(RecognitionHooks):
 
         return success
 
-    # @utils.log_exceptions(logger=logger)
+    @utils.log_exceptions(logger=logger)
     async def _resume_durable_function(
-        self, task: DurableTask, speech_handle: SpeechHandle, exc: Exception | None = None
+        self,
+        task: DurableTask,
+        speech_handle: SpeechHandle,
+        authorized_fut: asyncio.Future[None],
     ) -> None:
         from .agent import ModelSettings
 
         assert isinstance(task.metadata, _DurableExecutionMetadata)
         fnc_call = llm.FunctionCall.model_validate_json(task.metadata.function_call)
+        reset_tool_timestamp = False
         try:
-            if exc is not None:
-                # wait for the session to be started before schedule the tool response
-                await self._session._started_ev.wait()
-                raise exc
+            await authorized_fut  # wait for the session to be started
 
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
@@ -593,7 +626,13 @@ class AgentActivity(RecognitionHooks):
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-            if not isinstance(e, StopResponse) and e is not exc:
+            if e is authorized_fut.exception():
+                # disable the tool response if durable function unpickling failed
+                # and make the tool message at the end of the chat context
+                reset_tool_timestamp = True
+                tool_output.reply_required = False
+
+            elif not isinstance(e, StopResponse):
                 logger.exception(
                     "exception occurred while executing rehydrated tool",
                     extra={"function": fnc_call.name, "speech_id": speech_handle.id},
@@ -608,6 +647,7 @@ class AgentActivity(RecognitionHooks):
                 tools=self.tools,
                 model_settings=ModelSettings(tool_choice=self._tool_choice or NOT_GIVEN),
                 user_metrics=None,
+                reset_tool_timestamp=reset_tool_timestamp,
             )
         else:
             logger.error(f"durable function not supported for {self.llm}")
@@ -2297,6 +2337,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         user_metrics: llm.MetricsReport | None,
+        reset_tool_timestamp: bool = False,
     ) -> None:
         from .agent import ModelSettings
 
@@ -2346,6 +2387,10 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
+            if reset_tool_timestamp:
+                for msg in tool_messages:
+                    msg.created_at = time.time()
+
             if fnc_executed_ev._reply_required:
                 chat_ctx.items.extend(tool_messages)
 

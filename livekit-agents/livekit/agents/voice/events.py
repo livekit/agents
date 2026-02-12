@@ -109,6 +109,7 @@ EventTypes = Literal[
     "speech_created",
     "error",
     "close",
+    "started",
 ]
 
 UserState = Literal["speaking", "listening", "away"]
@@ -242,6 +243,11 @@ class CloseEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class StartedEvent(BaseModel):
+    type: Literal["started"] = "started"
+    created_at: float = Field(default_factory=time.time)
+
+
 AgentEvent = Annotated[
     UserInputTranscribedEvent
     | UserStateChangedEvent
@@ -252,6 +258,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ErrorEvent
-    | CloseEvent,
+    | CloseEvent
+    | StartedEvent,
     Field(discriminator="type"),
 ]
