@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
@@ -332,6 +333,10 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             self.session.generate_reply(
                 instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
+        elif self._is_expired(expiration_month, expiration_year):
+            self.session.generate_reply(
+                instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
+            )
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -380,6 +385,12 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 self.complete(GetExpirationDateResult(date=expiration_date))
 
         return confirm_expiration_date
+
+    @staticmethod
+    def _is_expired(month: int, year: int) -> bool:
+        today = date.today()
+        full_year = 2000 + year
+        return (full_year, month) < (today.year, today.month)
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

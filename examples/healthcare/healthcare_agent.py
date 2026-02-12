@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
-
+import random
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
 from openai import OpenAI
@@ -208,9 +208,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 instructions=f"Inform the user that {available_doctors} accepts their insurance and confirm if they would like to select that doctor."
             )
 
-    def _build_doctor_selection_tool(
-        self, *, available_doctors: list[str]
-    ) -> FunctionTool | None:
+    def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
         @function_tool()
         async def confirm_doctor_selection(
             selected_doctor: Annotated[
@@ -363,6 +361,14 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
         return confirm_appointment_selection
 
 
+async def end_call_callback(agent, ev) -> None:
+    if agent._oai_client is not None:
+        if agent._vector_store is not None:
+            agent._oai_client.vector_stores.delete(agent._vector_store.id)
+        if agent._file is not None:
+            agent._oai_client.files.delete(agent._file.id)
+
+
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
@@ -375,15 +381,21 @@ class HealthcareAgent(Agent):
                 EndCallTool(
                     end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
                     delete_room=True,
+                    on_tool_called=lambda event: end_call_callback(self, event),
                 ),
                 update_record,
                 transfer_to_human,
             ],
         )
         self._information_verified: bool = False
-        self._database = database
+        self._found_profile: bool = False
 
-    async def on_enter(self):
+        self._database = database
+        self._oai_client: OpenAI | None = None
+        self._vector_store = None
+        self._file = None
+
+    async def on_enter(self) -> None:
         await self.session.generate_reply(
             instructions="Greet the user and gather the reason for their call."
         )
@@ -394,6 +406,7 @@ class HealthcareAgent(Agent):
             existing_record = self._database.get_patient_by_name(patient_name)
             if existing_record:
                 logger.info(f"Found existing patient profile for {patient_name}")
+                self._found_profile = True
                 self.session.userdata.profile = existing_record
                 chat_ctx = task_group.chat_ctx.copy()
                 chat_ctx.add_message(
@@ -437,12 +450,12 @@ class HealthcareAgent(Agent):
                 description="Gathers the user's name",
             )
             task_group.add(
-                lambda: GetDOBTask(),
+                lambda: GetDOBTask(require_confirmation=(not self._found_profile)),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
             )
             task_group.add(
-                lambda: GetEmailTask(),
+                lambda: GetEmailTask(require_confirmation=(not self._found_profile)),
                 id="get_email_task",
                 description="Gathers the user's email",
             )
@@ -527,20 +540,21 @@ class HealthcareAgent(Agent):
             )
             return
 
-        client = OpenAI()
-        vector_store = client.vector_stores.create(name="lab_reports")
+        self._oai_client = OpenAI()
+        self._vector_store = self._oai_client.vector_stores.create(name="lab_reports")
         with open("mock_checkup_report.pdf", "rb") as f:
-            file = client.files.create(file=f, purpose="assistants")
-        client.vector_stores.files.create(vector_store_id=vector_store.id, file_id=file.id)
+            self._file = self._oai_client.files.create(file=f, purpose="assistants")
+        self._oai_client.vector_stores.files.create(
+            vector_store_id=self._vector_store.id, file_id=self._file.id
+        )
 
-        filesearch_tool = openai.tools.FileSearch(vector_store_ids=[vector_store.id])
+        filesearch_tool = openai.tools.FileSearch(vector_store_ids=[self._vector_store.id])
         current_tools = self.tools
         current_tools.append(filesearch_tool)
         await self.update_tools(current_tools)
-
-        # TODO delete upon exit
-        # client.vector_stores.delete(self._vector_store.id)
-        # client.files.delete(self._file.id)
+        await self.session.generate_reply(
+            instructions="You now are able to access the user's report, invite any queries regarding it."
+        )
 
     @function_tool()
     async def retrieve_available_doctors(self) -> None:
@@ -551,8 +565,31 @@ class HealthcareAgent(Agent):
 
     @function_tool()
     async def handle_billing(self):
-        """Call for any billing inquiries and if the user wants to pay their outstanding balance"""
-        results = await GetCreditCardTask()
+        """Call for any billing inquiries, like if the user wants to check their outstanding balance or if they want to pay a bill."""
+        await self.profile_authenticator()
+
+        balance = round(random.uniform(20, 3000), 2)
+
+        payment_proceeds_tool = self._build_payment_proceeds_tool(balance=balance)
+        current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
+        current_tools.append(payment_proceeds_tool)
+        await self.update_tools(current_tools)
+        await self.session.generate_reply(
+            instructions=f"Inform the patient that their balance is {balance} and ask if they would like to pay it in full now."
+        )
+
+    def _build_payment_proceeds_tool(self, *, balance: float) -> FunctionTool:
+        @function_tool()
+        async def confirm_payment_proceeds() -> None:
+            """Call to proceed with payment steps regarding the user's bill."""
+            result = await GetCreditCardTask()
+
+            last_four_digits = str(result.card_number)[-4:]
+            current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
+            await self.update_tools(current_tools)
+            return f"The payment method ending in {last_four_digits} has been successfully charged {balance}."
+
+        return confirm_payment_proceeds
 
 
 server = AgentServer()
