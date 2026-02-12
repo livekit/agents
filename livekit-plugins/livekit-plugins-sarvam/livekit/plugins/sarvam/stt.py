@@ -965,8 +965,13 @@ class SpeechStream(stt.SpeechStream):
                 )
                 try:
                     await asyncio.wait([self._message_task], timeout=30.0)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
-                    pass
+                    self._logger.exception(
+                        "Error while waiting for transcript task",
+                        extra=self._build_log_context(),
+                    )
                 if self._message_task.done():
                     self._logger.info(
                         "Transcript received from Sarvam",
@@ -977,9 +982,7 @@ class SpeechStream(stt.SpeechStream):
                         if isinstance(exc, BaseException):
                             raise exc
                         else:
-                            raise RuntimeError(
-                                f"Task failed with non-BaseException: {exc}"
-                            )
+                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
                 else:
                     self._logger.warning(
                         "Transcript timeout (30s) — transcript may be lost",
