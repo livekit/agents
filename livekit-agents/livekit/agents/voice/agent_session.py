@@ -950,8 +950,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             while rehydrated_agents:
                 agent = rehydrated_agents.pop(-1)  # oldest agent
 
-                if not agent._pending_durable_state:
-                    continue
+                # if not agent._pending_durable_state:
+                #     continue
 
                 activity = AgentActivity(agent=agent, sess=self)
                 success = activity.rehydrate(agent._pending_durable_state)

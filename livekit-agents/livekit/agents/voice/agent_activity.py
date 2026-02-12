@@ -577,11 +577,11 @@ class AgentActivity(RecognitionHooks):
             ) -> None:
                 if exc:
                     tool_authorized_fut.set_exception(exc)
+                    if run_state := self._session._global_run_state:
+                        run_state._watch_handle(speech_handle)
                 else:
                     tool_authorized_fut.set_result(None)
-
-                if run_state := self._session._global_run_state:
-                    run_state._watch_handle(speech_handle)
+                    # no need to watch if successful, AgentTask will add it to watch after complete
 
             self._session.once(
                 "started",
@@ -637,6 +637,9 @@ class AgentActivity(RecognitionHooks):
                     "exception occurred while executing rehydrated tool",
                     extra={"function": fnc_call.name, "speech_id": speech_handle.id},
                 )
+
+        if tool_output.fnc_call_out is not None:
+            speech_handle._item_added([tool_output.fnc_call_out])
 
         # generate tool response
         if isinstance(self.llm, llm.LLM):
