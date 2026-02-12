@@ -67,8 +67,8 @@ class FakeDatabase:
             doctor for doctor in self._doctor_records if insurance in doctor["accepted_insurances"]
         ]
 
-    def update_patient_record(self, name: str, **fields) -> bool:
-        record = self.get_patient_by_name(name)
+    def update_patient_record(self, patient_name: str, **fields) -> bool:
+        record = self.get_patient_by_name(patient_name)
         if record is None:
             return False
         record.update(fields)

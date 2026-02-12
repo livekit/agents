@@ -20,6 +20,8 @@ from livekit.agents import (
     RunContext,
     cli,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
     GetCreditCardTask,
@@ -34,7 +36,7 @@ from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
 
-load_dotenv()
+load_dotenv(".env.local")
 
 # to test out warm transfer, ensure the following variables/env vars are set
 SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")  # "ST_abcxyz"
@@ -387,7 +389,7 @@ class HealthcareAgent(Agent):
             ],
         )
         self._information_verified: bool = False
-        self._found_profile: bool = False
+        self._found_profile: NotGivenOr[bool] = NOT_GIVEN
 
         self._database = database
         self._oai_client: OpenAI | None = None
@@ -449,12 +451,16 @@ class HealthcareAgent(Agent):
                 description="Gathers the user's name",
             )
             task_group.add(
-                lambda: GetDOBTask(require_confirmation=(not self._found_profile)),
+                lambda: GetDOBTask(
+                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
+                ),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
             )
             task_group.add(
-                lambda: GetPhoneNumberTask(require_confirmation=(not self._found_profile)),
+                lambda: GetPhoneNumberTask(
+                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
+                ),
                 id="get_phone_number_task",
                 description="Gathers the user's phone number",
             )
@@ -498,7 +504,7 @@ class HealthcareAgent(Agent):
         )
 
         return "The appointment has been made, ask the user if they need assistance with anything else."
-
+    
     @function_tool()
     async def modify_appointment(
         self,
@@ -506,7 +512,7 @@ class HealthcareAgent(Agent):
             str,
             Field(
                 description="Available functions to modify an existing appointment",
-                json_schema_extra={"items": {"enum": ["reschedule", "cancel"]}},
+                json_schema_extra={"enum": ["reschedule", "cancel"]},
             ),
         ],
     ):
@@ -541,7 +547,7 @@ class HealthcareAgent(Agent):
                 "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
             )
             return
-
+        await self.session.generate_reply(instructions="Inform the user you are fetching their report.")
         self._oai_client = OpenAI()
         self._vector_store = self._oai_client.vector_stores.create(name="lab_reports")
         with open("mock_checkup_report.pdf", "rb") as f:
@@ -555,7 +561,7 @@ class HealthcareAgent(Agent):
         current_tools.append(filesearch_tool)
         await self.update_tools(current_tools)
         await self.session.generate_reply(
-            instructions="You now are able to access the user's report, invite any queries regarding it."
+            instructions="You now are able to access the user's report, invite any queries regarding it. Keep descriptions short and succinct unless requested otherwise."
         )
 
     @function_tool()

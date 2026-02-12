@@ -360,7 +360,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             return (
                 f"The expiration date has been updated to {self._expiration_date}\n"
                 f"Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
-                f"Do not call `confirm_expiration_date` directly"
+                # f"Do not call `confirm_expiration_date` directly"
             )
 
     def _build_confirm_tool(
@@ -393,8 +393,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
         return confirm_expiration_date
 
-    @staticmethod
-    def _is_expired(month: int, year: int) -> bool:
+    def _is_expired(self, month: int, year: int) -> bool:
         today = date.today()
         full_year = 2000 + year
         return (full_year, month) < (today.year, today.month)
