@@ -306,6 +306,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             return
 
         self._closed = True
+        self._closing = True
         self._msg_ch.close()
         self._session_should_close.set()
 
@@ -549,15 +550,11 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def _handle_text_token(self, payload: bytes) -> None:
         """Handle text token from server."""
         try:
-            text = payload.decode("utf-8")
+            # Filter special tokens by raw byte value (padding/EOS markers)
+            if len(payload) == 1 and payload[0] in _SPECIAL_TOKENS:
+                return
 
-            # Filter special tokens
-            try:
-                token_id = int(text)
-                if token_id in _SPECIAL_TOKENS:
-                    return
-            except ValueError:
-                pass  # Not a numeric token, process as text
+            text = payload.decode("utf-8")
 
             if not text:
                 return
