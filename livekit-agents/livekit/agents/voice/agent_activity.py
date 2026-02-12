@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import functools
 import heapq
 import json
 import pickle
@@ -60,7 +59,6 @@ from .events import (
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
-    StartedEvent,
     UserInputTranscribedEvent,
 )
 from .generation import (
@@ -122,6 +120,7 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._activated_ev = asyncio.Event()
         self._durable_scheduler: DurableScheduler | None = None
 
         self._current_speech: SpeechHandle | None = None
@@ -519,9 +518,9 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    def rehydrate(self, durable_state: bytes | None) -> bool:
+    def _rehydrate(self, durable_state: bytes | None) -> bool:
         """
-        This method must only be called by `AgentSession.rehydrate()`.
+        This method must only be called by `AgentSession._rehydrate()`.
         It marks the activity as started and restores the durable functions.
         Returns True if all the durable functions are restored successfully, False otherwise.
         """
@@ -553,7 +552,6 @@ class AgentActivity(RecognitionHooks):
             speech_handle._clear_authorization()
 
             # unpickle the generator and catch the exception as a ToolError if it fails
-            tool_authorized_fut = asyncio.Future[None]()
             exc: ToolError | None = None
             tk = _SpeechHandleContextVar.set(speech_handle)
             try:
@@ -569,32 +567,8 @@ class AgentActivity(RecognitionHooks):
             finally:
                 _SpeechHandleContextVar.reset(tk)
 
-            def _on_session_started(
-                _: StartedEvent,
-                speech_handle: SpeechHandle,
-                tool_authorized_fut: asyncio.Future[None],
-                exc: ToolError | None,
-            ) -> None:
-                if exc:
-                    tool_authorized_fut.set_exception(exc)
-                    if run_state := self._session._global_run_state:
-                        run_state._watch_handle(speech_handle)
-                else:
-                    tool_authorized_fut.set_result(None)
-                    # no need to watch if successful, AgentTask will add it to watch after complete
-
-            self._session.once(
-                "started",
-                functools.partial(
-                    _on_session_started,
-                    speech_handle=speech_handle,
-                    tool_authorized_fut=tool_authorized_fut,
-                    exc=exc,
-                ),
-            )
-
             speech_task = self._create_speech_task(
-                self._resume_durable_function(task, speech_handle, tool_authorized_fut),
+                self._resume_durable_function(task, speech_handle, exc),
                 speech_handle=speech_handle,
                 name="AgentTask_replay_durable_function",
             )
@@ -604,10 +578,7 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _resume_durable_function(
-        self,
-        task: DurableTask,
-        speech_handle: SpeechHandle,
-        authorized_fut: asyncio.Future[None],
+        self, task: DurableTask, speech_handle: SpeechHandle, exc: ToolError | None
     ) -> None:
         from .agent import ModelSettings
 
@@ -615,7 +586,9 @@ class AgentActivity(RecognitionHooks):
         fnc_call = llm.FunctionCall.model_validate_json(task.metadata.function_call)
         reset_tool_timestamp = False
         try:
-            await authorized_fut  # wait for the session to be started
+            await self._activated_ev.wait()
+            if exc:
+                raise exc
 
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
@@ -626,11 +599,13 @@ class AgentActivity(RecognitionHooks):
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-            if e is authorized_fut.exception():
+            if e is exc:
                 # disable the tool response if durable function unpickling failed
                 # and make the tool message at the end of the chat context
                 reset_tool_timestamp = True
                 tool_output.reply_required = False
+                if run_state := self._session._global_run_state:
+                    run_state._watch_handle(speech_handle)
 
             elif not isinstance(e, StopResponse):
                 logger.exception(
@@ -815,6 +790,7 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
+        self._activated_ev.clear()
 
     async def _resume_scheduling_task(self) -> None:
         assert self._lock.locked(), "_finalize_main_task should only be used when locked."
@@ -826,6 +802,7 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
+        self._activated_ev.set()
 
     async def resume(self) -> None:
         # `resume` must only be called by AgentSession
@@ -2384,7 +2361,7 @@ class AgentActivity(RecognitionHooks):
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
-            draining = self.scheduling_paused
+            draining = self._scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
@@ -2880,7 +2857,7 @@ class AgentActivity(RecognitionHooks):
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
-            draining = self.scheduling_paused
+            draining = self._scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True

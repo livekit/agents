@@ -51,7 +51,6 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
-    StartedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -761,8 +760,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
                 )
 
-            self.emit("started", StartedEvent())
-
             if run_state:
                 run_state._mark_done_if_needed(None)  # needed if it didn't watch any handles
                 if wait_run_state:
@@ -949,12 +946,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             while rehydrated_agents:
                 agent = rehydrated_agents.pop(-1)  # oldest agent
-
-                # if not agent._pending_durable_state:
-                #     continue
-
                 activity = AgentActivity(agent=agent, sess=self)
-                success = activity.rehydrate(agent._pending_durable_state)
+                success = activity._rehydrate(agent._pending_durable_state)
                 agent._pending_durable_state = None
 
                 if not success and rehydrated_agents:
@@ -973,6 +966,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     break
 
         finally:
+            # all states unpickled
             _AgentSessionContextVar.reset(tk)
 
         if rehydrated_agents:  # True if durable function rehydration failed
@@ -1042,7 +1036,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         run_state = self._global_run_state
-        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        activity = self._next_activity if self._activity._scheduling_paused else self._activity
 
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use say()")
@@ -1100,7 +1094,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         run_state = self._global_run_state
-        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        activity = self._next_activity if self._activity._scheduling_paused else self._activity
 
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use generate_reply()")

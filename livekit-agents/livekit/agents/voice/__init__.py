@@ -13,7 +13,6 @@ from .events import (
     MetricsCollectedEvent,
     RunContext,
     SpeechCreatedEvent,
-    StartedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "MetricsCollectedEvent",
     "ConversationItemAddedEvent",
     "SpeechCreatedEvent",
-    "StartedEvent",
     "ErrorEvent",
     "CloseEvent",
     "CloseReason",
