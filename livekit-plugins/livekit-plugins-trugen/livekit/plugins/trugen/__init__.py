@@ -1,3 +1,5 @@
+# Copyright 2023 LiveKit, Inc.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -10,34 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speechmatics STT plugin for LiveKit Agents
+"""TruGen.AI plugin for LiveKit Agents"""
 
-See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
-"""
-
-from speechmatics.voice import (
-    AdditionalVocabEntry,
-    AudioEncoding,
-    OperatingPoint,
-    SpeakerFocusMode,
-    SpeakerIdentifier,
-)
-
-from .stt import STT, SpeechStream, TurnDetectionMode
-from .tts import TTS
+from .avatar import AvatarSession, TrugenException
 from .version import __version__
 
 __all__ = [
-    "STT",
-    "TTS",
-    "TurnDetectionMode",
-    "SpeechStream",
-    "AdditionalVocabEntry",
-    "AudioEncoding",
-    "OperatingPoint",
-    "SpeakerFocusMode",
-    "SpeakerIdentifier",
-    "logger",
+    "AvatarSession",
+    "TrugenException",
     "__version__",
 ]
 
@@ -46,12 +28,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class SpeechmaticsPlugin(Plugin):
+class TrugenPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(SpeechmaticsPlugin())
+Plugin.register_plugin(TrugenPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

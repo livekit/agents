@@ -51,6 +51,7 @@ livekit-plugins-speechify = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
+livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
