@@ -24,19 +24,7 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import (
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
-    ToolChoice,
-    utils as llm_utils,
-)
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -61,6 +49,18 @@ def _is_gemini_3_flash_model(model: str) -> bool:
     return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
 
 
+def _requires_thought_signatures(model: str) -> bool:
+    """Check if model requires thought_signature handling for multi-turn function calling.
+
+    Gemini 2.5+ models require thought signatures to be stored from responses and
+    passed back in subsequent requests for proper multi-turn function calling.
+    """
+    if _is_gemini_3_model(model):
+        return True
+    model_lower = model.lower()
+    return "gemini-2.5" in model_lower or model_lower.startswith("gemini-2.5")
+
+
 @dataclass
 class _LLMOptions:
     model: ChatModels | str
@@ -75,6 +75,7 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
@@ -108,6 +109,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        retrieval_config: NotGivenOr[types.RetrievalConfigOrDict] = NOT_GIVEN,
         automatic_function_calling_config: NotGivenOr[
             types.AutomaticFunctionCallingConfigOrDict
         ] = NOT_GIVEN,
@@ -139,6 +141,7 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            retrieval_config (RetrievalConfigOrDict, optional): The retrieval configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
@@ -205,6 +208,7 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            retrieval_config=retrieval_config,
             automatic_function_calling_config=automatic_function_calling_config,
             http_options=http_options,
             seed=seed,
@@ -216,7 +220,7 @@ class LLM(llm.LLM):
             project=gcp_project,
             location=gcp_location,
         )
-        # Store thought_signatures for Gemini 3 multi-turn function calling
+        # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
 
     @property
@@ -234,7 +238,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -251,6 +255,12 @@ class LLM(llm.LLM):
         tool_choice = (
             cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
         )
+        retrieval_config = (
+            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
+        )
+        if isinstance(retrieval_config, dict):
+            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
             if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -258,41 +268,47 @@ class LLM(llm.LLM):
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=[tool_choice["function"]["name"]],
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "required":
                 tool_names = []
                 for tool in tools or []:
-                    if is_function_tool(tool):
-                        tool_names.append(get_function_info(tool).name)
-                    elif is_raw_function_tool(tool):
-                        tool_names.append(get_raw_function_info(tool).name)
+                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
+                        tool_names.append(tool.info.name)
 
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=tool_names or None,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "auto":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.AUTO,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "none":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.NONE,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
+        elif retrieval_config:
+            extra["tool_config"] = types.ToolConfig(
+                retrieval_config=retrieval_config,
+            )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
@@ -318,7 +334,7 @@ class LLM(llm.LLM):
 
             # Extract both parameters
             _budget = None
-            _level = None
+            _level: str | types.ThinkingLevel | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
@@ -376,29 +392,30 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM,
+        llm_v: LLM,
         *,
         client: Client,
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
-        self._llm: LLM = llm
+        self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
 
         try:
-            # Pass thought_signatures for Gemini 3 multi-turn function calling
+            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
             thought_sigs = (
-                self._llm._thought_signatures if _is_gemini_3_model(self._model) else None
+                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
             )
             turns_dict, extra_data = self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
@@ -498,7 +515,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=False if e.code != 429 else True,
+                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
@@ -530,9 +547,9 @@ class LLMStream(llm.LLMStream):
                 call_id=part.function_call.id or utils.shortuuid("function_call_"),
             )
 
-            # Store thought_signature for Gemini 3 multi-turn function calling
+            # Store thought_signature for Gemini 2.5+ multi-turn function calling
             if (
-                _is_gemini_3_model(self._model)
+                _requires_thought_signatures(self._model)
                 and hasattr(part, "thought_signature")
                 and part.thought_signature
             ):

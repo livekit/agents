@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo

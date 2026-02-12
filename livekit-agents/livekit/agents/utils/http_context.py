@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import aiohttp
 
 from ..log import logger
 
 _ClientFactory = Callable[[], aiohttp.ClientSession]
-_ContextVar = contextvars.ContextVar[Optional[_ClientFactory]]("agent_http_session")
+_ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
 
 
 def _new_session_ctx() -> _ClientFactory:
@@ -16,7 +16,7 @@ def _new_session_ctx() -> _ClientFactory:
 
     def _new_session() -> aiohttp.ClientSession:
         nonlocal g_session
-        if g_session is None:
+        if g_session is None or g_session.closed:
             logger.debug("http_session(): creating a new httpclient ctx")
 
             from ..job import get_job_context

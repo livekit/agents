@@ -10,7 +10,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Union, cast, overload
+from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -18,12 +18,6 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -290,7 +284,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else None,
-            tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
+            tracing=tracing if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -427,7 +421,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
+            self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -436,13 +430,13 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(speed):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = cast(Union[Tracing, None], tracing)
+            self._opts.tracing = tracing
 
         for sess in self._sessions:
             sess.update_options(
@@ -529,7 +523,7 @@ class RealtimeSessionBeta(
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModelBeta = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
+        self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
@@ -583,6 +577,7 @@ class RealtimeSessionBeta(
                 exclude_instructions=True,
                 exclude_empty_message=True,
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -923,7 +918,6 @@ class RealtimeSessionBeta(
         kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
-            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -940,7 +934,7 @@ class RealtimeSessionBeta(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
@@ -956,8 +950,8 @@ class RealtimeSessionBeta(
             kwargs["speed"] = speed
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
-            kwargs["tracing"] = cast(Union[Tracing, None], tracing)
+            self._realtime_model._opts.tracing = tracing
+            kwargs["tracing"] = tracing
 
         if kwargs:
             self.send_event(
@@ -1029,12 +1023,12 @@ class RealtimeSessionBeta(
 
         return events
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         async with self._update_fnc_ctx_lock:
             # beta API doesn't support ProviderTools
-            filtered_tools = [t for t in tools if not isinstance(t, llm.ProviderTool)]
+            filtered_tools = [
+                t for t in tools if isinstance(t, (llm.FunctionTool, llm.RawFunctionTool))
+            ]
             ev = self._create_tools_update_event(filtered_tools)
             self.send_event(ev)
 
@@ -1043,13 +1037,12 @@ class RealtimeSessionBeta(
             retained_tools = [
                 tool
                 for tool in tools
-                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
-                or (
-                    is_raw_function_tool(tool)
-                    and get_raw_function_info(tool).name in retained_tool_names
+                if (
+                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    and tool.info.name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)  # type: ignore
+            self._tools = llm.ToolContext(retained_tools)
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
@@ -1058,11 +1051,10 @@ class RealtimeSessionBeta(
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
-            if is_function_tool(tool):
+            if isinstance(tool, llm.FunctionTool):
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            elif is_raw_function_tool(tool):
-                tool_info = get_raw_function_info(tool)
-                tool_desc = tool_info.raw_schema
+            elif isinstance(tool, llm.RawFunctionTool):
+                tool_desc = tool.info.raw_schema
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
             else:
@@ -1177,6 +1169,7 @@ class RealtimeSessionBeta(
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
@@ -1476,7 +1469,7 @@ class RealtimeSessionBeta(
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            tokens_per_second=usage.get("output_tokens", 0) / duration,
+            tokens_per_second=usage.get("output_tokens", 0) / duration if duration > 0 else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),

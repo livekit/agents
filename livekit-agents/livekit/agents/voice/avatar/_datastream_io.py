@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
-from typing import Any, Callable, Union
+from typing import Any
 
 from livekit import rtc
 
@@ -134,6 +135,10 @@ class DataStreamAudioOutput(AudioOutput):
                 },
             )
             self._pushed_duration = 0.0
+            # Not ideal since frame isn't actually playing yet
+            # potentially we need another RPC for this
+            self.on_playback_started(created_at=time.time())
+
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
@@ -285,7 +290,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
-        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
+        self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
 
         self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False

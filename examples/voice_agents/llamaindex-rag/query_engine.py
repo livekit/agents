@@ -8,8 +8,17 @@ from llama_index.core import (
     load_index_from_storage,
 )
 
-from livekit.agents import Agent, AgentServer, AgentSession, AutoSubscribe, JobContext, cli, llm
-from livekit.plugins import deepgram, openai, silero
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    AutoSubscribe,
+    JobContext,
+    cli,
+    inference,
+    llm,
+)
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -51,9 +60,9 @@ async def entrypoint(ctx: JobContext):
             "responses, and avoiding usage of unpronouncable punctuation."
         ),
         vad=silero.VAD.load(),
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=openai.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         tools=[query_info],
     )
 

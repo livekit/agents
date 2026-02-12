@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Union
+from typing import Literal
 
 from livekit import rtc
 
@@ -16,34 +16,25 @@ from .agent import ModelSettings
 # TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame], ModelSettings],
-    Union[
-        Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]],
-        Awaitable[Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]]],
-    ],
+    AsyncIterable[stt.SpeechEvent | str]
+    | None
+    | Awaitable[AsyncIterable[stt.SpeechEvent | str] | None],
 ]
 LLMNode = Callable[
     [
         llm.ChatContext,
-        list[Union[llm.FunctionTool, llm.RawFunctionTool, llm.ProviderTool]],
+        list[llm.Tool],
         ModelSettings,
     ],
-    Union[
-        Optional[
-            Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
-        ],
-        Awaitable[
-            Optional[
-                Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
-            ]
-        ],
-    ],
+    AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+    | str
+    | llm.ChatChunk
+    | None
+    | Awaitable[AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | llm.ChatChunk | None],
 ]
 TTSNode = Callable[
     [AsyncIterable[str], ModelSettings],
-    Union[
-        Optional[AsyncIterable[rtc.AudioFrame]],
-        Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
-    ],
+    AsyncIterable[rtc.AudioFrame] | None | Awaitable[AsyncIterable[rtc.AudioFrame] | None],
 ]
 
 
@@ -127,11 +118,17 @@ class PlaybackFinishedEvent:
 
 
 @dataclass
+class PlaybackStartedEvent:
+    created_at: float
+    """The timestamp (time.time())when the playback started"""
+
+
+@dataclass
 class AudioOutputCapabilities:
     pause: bool
 
 
-class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
+class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started"]]):
     def __init__(
         self,
         *,
@@ -167,6 +164,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
                     synchronized_transcript=ev.synchronized_transcript,
                 ),
             )
+            self.next_in_chain.on(
+                "playback_started", lambda ev: self.on_playback_started(created_at=ev.created_at)
+            )
 
     @property
     def label(self) -> str:
@@ -175,6 +175,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     @property
     def next_in_chain(self) -> AudioOutput | None:
         return self.__next_in_chain
+
+    def on_playback_started(self, *, created_at: float) -> None:
+        self.emit("playback_started", PlaybackStartedEvent(created_at=created_at))
 
     def on_playback_finished(
         self,

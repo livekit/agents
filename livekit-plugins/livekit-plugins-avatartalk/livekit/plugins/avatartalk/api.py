@@ -29,13 +29,14 @@ class AvatarTalkAPI:
         self._api_key = avatartalk_api_key
         self._headers = {"Authorization": f"Bearer {self._api_key}"}
 
-    async def _request(self, method: str, path: str, **kwargs):
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.request(
                 method, f"{self._api_url}{path}", headers=self._headers, **kwargs
             ) as response:
                 if response.ok:
-                    return await response.json()
+                    result: dict[str, Any] = await response.json()
+                    return result
                 else:
                     r = await response.json()
                     raise AvatarTalkException(f"API request failed: {response.status} {r}")

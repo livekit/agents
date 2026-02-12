@@ -85,6 +85,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,  # only final transcripts
                 aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
@@ -289,7 +290,11 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws:
                         return
-                    raise APIStatusError("Baseten connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Baseten connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
@@ -302,21 +307,23 @@ class SpeechStream(stt.SpeechStream):
                     segments = data.get("segments", [])
                     text = data.get("transcript", "")
                     confidence = data.get("confidence", 0.0)
+
+                    # Note: Baseten uses 'start_time' and 'end_time' field names (with underscores)
                     timed_words = [
                         TimedString(
                             text=segment.get("text", ""),
-                            start_time=segment.get("start", 0.0) + self.start_time_offset,
-                            end_time=segment.get("end", 0.0) + self.start_time_offset,
+                            start_time=segment.get("start_time", 0.0) + self.start_time_offset,
+                            end_time=segment.get("end_time", 0.0) + self.start_time_offset,
                             start_time_offset=self.start_time_offset,
                         )
                         for segment in segments
                     ]
                     start_time = (
-                        next((s.get("start", 0.0) for s in segments), 0.0) + self.start_time_offset
-                    )
+                        segments[0].get("start_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
                     end_time = (
-                        next((s.get("end", 0.0) for s in segments), 0.0) + self.start_time_offset
-                    )
+                        segments[-1].get("end_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
 
                     if not is_final:
                         if text:
@@ -399,18 +406,20 @@ class SpeechStream(stt.SpeechStream):
         ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
 
         # Build and send the metadata payload as the first message
+        # Note: Baseten server expects 'vad_params' and 'streaming_whisper_params' field names
         metadata = {
-            "streaming_vad_config": {
+            "vad_params": {
                 "threshold": self._opts.vad_threshold,
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_params": {
+            "streaming_whisper_params": {
                 "encoding": self._opts.encoding,
                 "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
+                "audio_language": self._opts.language,
+                "show_word_timestamps": True,
             },
-            "whisper_params": {"audio_language": self._opts.language, "show_word_timestamps": True},
         }
 
         await ws.send_str(json.dumps(metadata))

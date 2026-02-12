@@ -6,7 +6,7 @@ import pickle
 import queue
 import sys
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .. import utils
 from ..utils.aio import duplex_unix
@@ -60,7 +60,7 @@ class LogQueueHandler(logging.Handler):
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
-        self._send_q = queue.SimpleQueue[Optional[bytes]]()
+        self._send_q = queue.SimpleQueue[bytes | None]()
         self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
         self._send_thread.start()
 

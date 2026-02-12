@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,6 +64,7 @@ class SpeechData:
 @dataclass
 class RecognitionUsage:
     audio_duration: float
+    """Incremental audio duration/usage in seconds"""
 
 
 @dataclass
@@ -80,6 +81,8 @@ class STTCapabilities:
     interim_results: bool
     diarization: bool = False
     aligned_transcript: Literal["word", "chunk", False] = False
+    offline_recognize: bool = True
+    """Whether the STT supports batch recognition via recognize() method"""
 
 
 class STTError(BaseModel):
@@ -96,7 +99,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -270,10 +273,11 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
         )
@@ -426,7 +430,9 @@ class RecognizeStream(ABC):
         await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
-            await self._metrics_task
+            await aio.cancel_and_wait(self._metrics_task)
+
+        await self._tee.aclose()
 
     async def __anext__(self) -> SpeechEvent:
         try:

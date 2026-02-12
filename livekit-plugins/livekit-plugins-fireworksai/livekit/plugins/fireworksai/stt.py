@@ -19,8 +19,8 @@ import dataclasses
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlencode
 
 import aiohttp
@@ -136,7 +136,10 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=False
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
             ),
         )
         if sample_rate != 16000:
@@ -168,6 +171,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "FireworksAI"
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -356,6 +367,8 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "Fireworks connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:

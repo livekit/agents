@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import NotRequired
@@ -20,9 +20,15 @@ from ._utils import create_access_token
 
 CartesiaModels = Literal[
     "cartesia",
-    "cartesia/sonic",
+    "cartesia/sonic-3",
     "cartesia/sonic-2",
     "cartesia/sonic-turbo",
+    "cartesia/sonic",
+]
+DeepgramModels = Literal[
+    "deepgram",
+    "deepgram/aura",
+    "deepgram/aura-2",
 ]
 ElevenlabsModels = Literal[
     "elevenlabs",
@@ -34,16 +40,18 @@ ElevenlabsModels = Literal[
 ]
 RimeModels = Literal[
     "rime",
-    "rime/mist",
-    "rime/mistv2",
     "rime/arcana",
+    "rime/mistv2",
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-1.5-max",
+    "inworld/inworld-tts-1.5-mini",
+    "inworld/inworld-tts-1-max",
     "inworld/inworld-tts-1",
 ]
 
-TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
+TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -79,7 +87,7 @@ class FallbackModel(TypedDict):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _normalize_fallback(
@@ -98,8 +106,13 @@ def _normalize_fallback(
 
 
 class CartesiaOptions(TypedDict, total=False):
-    duration: float  # max duration of audio in seconds
-    speed: Literal["slow", "normal", "fast"]  # default: not specified
+    emotion: str
+    speed: Literal["slow", "normal", "fast"]
+    volume: float
+
+
+class DeepgramOptions(TypedDict, total=False):
+    pass
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -152,6 +165,25 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: DeepgramModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -246,7 +278,12 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | ElevenlabsOptions | RimeOptions | InworldOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | ElevenlabsOptions
+            | RimeOptions
+            | InworldOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -254,7 +291,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model" format
+            model (TTSModels | str): TTS model to use, in "provider/model[:voice]" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -274,6 +311,13 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        # Parse voice from model string if provided: "provider/model:voice"
+        if isinstance(model, str):
+            parsed_model, parsed_voice = _parse_model_string(model)
+            model = parsed_model
+            if parsed_voice is not None and not is_given(voice):
+                voice = parsed_voice
 
         lk_base_url = (
             base_url
@@ -360,7 +404,8 @@ class TTS(tts.TTS):
         ws = None
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(f"{base_url}/tts", headers=headers), timeout
+                session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
+                timeout,
             )
         except (
             aiohttp.ClientConnectorError,
@@ -448,7 +493,7 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        raise NotImplementedError("ChunkedStream is not implemented")
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -502,6 +547,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
+                generation_config: dict[str, Any] = {}
+                if self._opts.voice:
+                    generation_config["voice"] = self._opts.voice
+                if self._opts.model:
+                    generation_config["model"] = self._opts.model
+                if self._opts.language:
+                    generation_config["language"] = self._opts.language
+                token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))

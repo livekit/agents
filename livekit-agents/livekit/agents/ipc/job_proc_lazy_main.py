@@ -17,9 +17,9 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from opentelemetry import trace
 
@@ -80,6 +80,7 @@ def proc_main(args: ProcStartArgs) -> None:
     try:
         client.initialize()
     except Exception:
+        log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
 
     client.run()
@@ -130,12 +131,17 @@ class _InfClient(InferenceExecutor):
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         request_id = shortuuid("inference_job_")
         fut = asyncio.Future[InferenceResponse]()
-
-        await self._client.send(
-            InferenceRequest(request_id=request_id, method=method, data=data),
-        )
-
         self._active_requests[request_id] = fut
+
+        try:
+            await self._client.send(
+                InferenceRequest(request_id=request_id, method=method, data=data),
+            )
+        except Exception:
+            if not fut.done():
+                fut.cancel()
+            self._active_requests.pop(request_id, None)
+            raise
 
         inf_resp = await fut
         if inf_resp.error:
@@ -353,6 +359,9 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
+
+        if tasks := self._job_ctx._pending_tasks:
+            await aio.cancel_and_wait(*tasks)
 
         self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()

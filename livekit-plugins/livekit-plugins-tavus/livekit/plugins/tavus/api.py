@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -31,7 +31,7 @@ class TavusAPI:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: Optional[aiohttp.ClientSession] = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         tavus_api_key = api_key or os.getenv("TAVUS_API_KEY")
         if tavus_api_key is None:
