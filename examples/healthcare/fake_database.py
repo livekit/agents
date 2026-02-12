@@ -6,10 +6,17 @@ class FakeDatabase:
     def __init__(self):
         self._patient_records = [
             {
-                "name": "Jane Doe",
-                "date_of_birth": date(2000, 1, 1),
+                "name": "Mary Jane",
+                "date_of_birth": date(2001, 6, 10),
                 "phone_number": "18005882300",
                 "insurance": "Anthem",
+                "outstanding_balance": round(random.uniform(20, 3000), 2),
+            },
+            {
+                "name": "Peter Parker",
+                "date_of_birth": date(2001, 8, 10),
+                "phone_number": "18005882300",
+                "insurance": "Aetna",
                 "outstanding_balance": round(random.uniform(20, 3000), 2),
             }
         ]
