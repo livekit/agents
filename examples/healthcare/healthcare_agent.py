@@ -24,8 +24,8 @@ from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
     GetCreditCardTask,
     GetDOBTask,
-    GetEmailTask,
     GetNameTask,
+    GetPhoneNumberTask,
     TaskGroup,
     WarmTransferTask,
 )
@@ -149,7 +149,7 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
 @function_tool()
 async def update_record(
     context: RunContext,
-    field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "email", "insurance"]})],
+    field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "phone", "insurance"]})],
 ):
     """Call when the user requests to modify information in their existing patient record.
 
@@ -161,7 +161,7 @@ async def update_record(
         return
     field_map = {
         "dob": (GetDOBTask, "date_of_birth"),
-        "email": (GetEmailTask, "email_address"),
+        "phone": (GetPhoneNumberTask, "phone_number"),
         "insurance": (GetInsuranceTask, "insurance"),
     }
 
@@ -171,7 +171,7 @@ async def update_record(
 
     name = context.session.userdata.profile["name"]
     updated = context.session.userdata.database.update_patient_record(name, **{attr: value})
-    if not updated:  # this will only execute in the main HealthcareAgent() flow
+    if not updated:
         return "No profile was found to update"
     return f"The user's {field} has been updated."
 
@@ -263,7 +263,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             Args:
                 appointment_time (str): The user's appointment time selection in ISO format
             """
-            self._appointment_time = appointment_time
+            self._appointment_time = datetime.fromisoformat(appointment_time)
 
             visit_reason_tool = self._build_visit_reason_tool()
             current_tools = [t for t in self.tools if t.id != "confirm_visit_reason"]
@@ -419,14 +419,14 @@ class HealthcareAgent(Agent):
                 self.session.userdata.profile = {}
 
         # each profile field is injected into the taskgroup context before the respective task is executed
-        if event.task_id == "get_dob_task" and self.session.userdata.profile["date_of_birth"]:
+        if event.task_id == "get_dob_task" and self._found_profile:
             chat_ctx = task_group.chat_ctx.copy()
             chat_ctx.add_message(
                 role="system",
-                content=f"This email has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['email']}",
+                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}",
             )
             await task_group.update_chat_ctx(chat_ctx)
-        if event.task_id == "get_email_task" and self.session.userdata.profile["email"]:
+        if event.task_id == "get_phone_number_task" and self._found_profile:
             chat_ctx = task_group.chat_ctx.copy()
             chat_ctx.add_message(
                 role="system",
@@ -455,9 +455,9 @@ class HealthcareAgent(Agent):
                 description="Gathers the user's date of birth",
             )
             task_group.add(
-                lambda: GetEmailTask(require_confirmation=(not self._found_profile)),
-                id="get_email_task",
-                description="Gathers the user's email",
+                lambda: GetPhoneNumberTask(require_confirmation=(not self._found_profile)),
+                id="get_phone_number_task",
+                description="Gathers the user's phone number",
             )
             task_group.add(
                 lambda: GetInsuranceTask(),
@@ -471,7 +471,7 @@ class HealthcareAgent(Agent):
             profile = {
                 "name": patient_name,
                 "date_of_birth": results.task_results["get_dob_task"].date_of_birth,
-                "email": results.task_results["get_email_task"].email_address,
+                "phone_number": results.task_results["get_phone_number_task"].phone_number,
                 "insurance": results.task_results["get_insurance_task"].insurance,
             }
             self.session.userdata.profile = profile

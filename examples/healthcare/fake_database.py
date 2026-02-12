@@ -8,7 +8,7 @@ class FakeDatabase:
             {
                 "name": "Jane Doe",
                 "date_of_birth": date(2000, 1, 1),
-                "email": "jane@gmail.com",
+                "phone_number": "18005882300",
                 "insurance": "Anthem",
                 "outstanding_balance": round(random.uniform(20, 3000), 2),
             }

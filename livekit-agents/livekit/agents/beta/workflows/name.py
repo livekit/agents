@@ -27,7 +27,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         first_name: bool = True,
         last_name: bool = False,
         middle_name: bool = False,
-        format: NotGivenOr[str] = NOT_GIVEN,
+        name_format: NotGivenOr[str] = NOT_GIVEN,
         verify_spelling: bool = False,
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
@@ -48,8 +48,8 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._verify_spelling = verify_spelling
         self._require_confirmation = require_confirmation
 
-        if is_given(format):
-            self._name_format = format
+        if is_given(name_format):
+            self._name_format = name_format
         else:
             parts = []
             if first_name:
