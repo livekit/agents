@@ -586,33 +586,41 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     and agent_speech_started
                 ):
                     self._user_speech_span = input_frame._user_speaking_span
-                    logger.debug("overlap speech started, starting interruption inference")
                     overlap_speech_started = True
                     accumulated_samples = 0
                     overlap_count += 1
-                    # include the audio prefix in the window
-                    agg = max if overlap_count > 1 else min
-                    shift_size = agg(
-                        start_idx,
-                        int(input_frame._speech_duration * self._sample_rate)
-                        + int(self._opts.audio_prefix_duration * self._sample_rate),
+                    # include the audio prefix in the window and
+                    # only shift (remove leading silence) when the first overlap speech started
+                    # otherwise, keep the existing data
+                    if overlap_count == 1:
+                        shift_size = min(
+                            start_idx,
+                            int(input_frame._speech_duration * self._sample_rate)
+                            + int(self._opts.audio_prefix_duration * self._sample_rate),
+                        )
+                        inference_s16_data[:shift_size] = inference_s16_data[
+                            start_idx - shift_size : start_idx
+                        ].copy()
+                        start_idx = shift_size
+                    logger.trace(
+                        "overlap speech started, starting interruption inference",
+                        extra={
+                            "overlap_count": overlap_count,
+                            "start_idx": start_idx,
+                        },
                     )
-                    inference_s16_data[:shift_size] = inference_s16_data[
-                        start_idx - shift_size : start_idx
-                    ].copy()
-                    start_idx = shift_size
                     cache.clear()
                     continue
 
                 if isinstance(input_frame, InterruptionStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
-                        logger.debug("overlap speech ended, stopping interruption inference")
+                        logger.trace("overlap speech ended, stopping interruption inference")
                         self._user_speech_span = None
                         _, last_entry = cache.pop(
                             lambda x: x.total_duration is not None and x.total_duration > 0
                         )
                         if last_entry is None:
-                            logger.debug("no request made for overlap speech")
+                            logger.trace("no request made for overlap speech")
                         entry = last_entry or _EMPTY_CACHE_ENTRY
                         ev = InterruptionEvent(
                             type="user_non_interruption_detected",
@@ -821,21 +829,20 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     overlap_speech_started = True
                     accumulated_samples = 0
                     overlap_count += 1
-                    agg = max if overlap_count > 1 else min
-                    shift_size = agg(
-                        start_idx,
-                        int(input_frame._speech_duration * self._sample_rate)
-                        + int(self._opts.audio_prefix_duration * self._sample_rate),
-                    )
-                    inference_s16_data[:shift_size] = inference_s16_data[
-                        start_idx - shift_size : start_idx
-                    ].copy()
-                    start_idx = shift_size
+                    if overlap_count == 1:
+                        shift_size = min(
+                            start_idx,
+                            int(input_frame._speech_duration * self._sample_rate)
+                            + int(self._opts.audio_prefix_duration * self._sample_rate),
+                        )
+                        inference_s16_data[:shift_size] = inference_s16_data[
+                            start_idx - shift_size : start_idx
+                        ].copy()
+                        start_idx = shift_size
                     logger.trace(
                         "overlap speech started, starting interruption inference",
                         extra={
                             "overlap_count": overlap_count,
-                            "shift_size": shift_size,
                             "start_idx": start_idx,
                         },
                     )
