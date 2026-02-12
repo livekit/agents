@@ -565,7 +565,10 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                     interim_results=self._config.interim_results,
-                    enable_voice_activity_events=self._config.enable_voice_activity_events,
+                    # Auto-enable voice activity events when voice_activity_timeout is specified,
+                    # as per Google API documentation requirements
+                    enable_voice_activity_events=self._config.enable_voice_activity_events
+                    or (voice_activity_timeout is not None),
                     voice_activity_timeout=voice_activity_timeout,
                 ),
             )
