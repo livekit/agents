@@ -360,6 +360,11 @@ class AudioRecognition:
         if self._agent_speaking:
             return True
 
+        # reset when the user starts speaking after the agent speech
+        if ev.type == stt.SpeechEventType.START_OF_SPEECH and not self._agent_speaking:
+            self._ignore_user_transcript_until = NOT_GIVEN
+            return False
+
         if not is_given(self._ignore_user_transcript_until):
             return False
         # sentinel events are always held until
@@ -376,8 +381,8 @@ class AudioRecognition:
             # 3. the event is for audio sent before the ignore_user_transcript_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
-            and ev.alternatives[0].end_time > 0
-            and ev.alternatives[0].end_time + self._input_started_at
+            and ev.alternatives[0].start_time > 0
+            and ev.alternatives[0].start_time + self._input_started_at
             < self._ignore_user_transcript_until
         ):
             return True

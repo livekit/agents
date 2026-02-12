@@ -400,12 +400,17 @@ class Agent:
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
                 _audio_input_started_at: float = (
-                    activity.session._recorder_io.recording_started_at
-                    if activity.session._recorder_io
-                    and activity.session._recorder_io.recording_started_at
-                    else activity.session._started_at
-                    if activity.session._started_at
-                    else time.time()
+                    activity._audio_recognition._input_started_at
+                    if activity._audio_recognition is not None
+                    and activity._audio_recognition._input_started_at is not None
+                    else (
+                        activity.session._recorder_io.recording_started_at
+                        if activity.session._recorder_io
+                        and activity.session._recorder_io.recording_started_at
+                        else activity.session._started_at
+                        if activity.session._started_at
+                        else time.time()
+                    )
                 )
                 stream.start_time_offset = time.time() - _audio_input_started_at
 
