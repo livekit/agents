@@ -593,7 +593,7 @@ async def _execute_tools_task(
                         bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
                         bound.apply_defaults()
 
-                        if asyncio.iscoroutinefunction(mock):
+                        if inspect.iscoroutinefunction(mock):
                             return await mock(*bound.args, **bound.kwargs)
                         else:
                             return mock(*bound.args, **bound.kwargs)
