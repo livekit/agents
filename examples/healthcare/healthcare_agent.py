@@ -20,8 +20,6 @@ from livekit.agents import (
     RunContext,
     cli,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
     GetCreditCardTask,
@@ -32,6 +30,8 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
@@ -326,37 +326,37 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                 instructions=f"The user has these outstanding appointments: {json.dumps(appointments, default=str)}, prompt them to choose one to modify."
             )
 
-    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> FunctionTool:
+    def _build_modify_appt_tool(self, *, available_appts: list[dict]) -> FunctionTool:
+        appt_by_time = {str(appt["appointment_time"]): appt for appt in available_appts}
+        appt_times = list(appt_by_time.keys())
+
         @function_tool()
         async def confirm_appointment_selection(
-            selected_appointment: Annotated[
+            selected_appointment_time: Annotated[
                 str,
                 Field(
-                    description="The names of the available appointments to cancel or reschedule",
-                    json_schema_extra={"items": {"enum": available_appts}},
+                    description="The appointment time to cancel or reschedule",
+                    json_schema_extra={"enum": appt_times},
                 ),
             ],
         ) -> None:
             """Call to confirm the user's appointment selection to either cancel or reschedule
 
             Args:
-                selected_appointment (str): The appointment the user selects for modification
+                selected_appointment_time (str): The appointment time the user selects
             """
-            self._selected_appointment = selected_appointment
-            self._database.cancel_appointment(self._patient_profile["name"], selected_appointment)
+            appointment = appt_by_time[selected_appointment_time]
+            self._selected_appointment = appointment
+            self._database.cancel_appointment(self._patient_profile["name"], appointment)
 
             if self._function == "cancel":
                 self.complete(
-                    ModifyAppointmentResult(
-                        new_appointment=None, old_appointment=selected_appointment
-                    )
+                    ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
                 result = await ScheduleAppointmentTask()
                 self.complete(
-                    ModifyAppointmentResult(
-                        new_appointment=result, old_appointment=selected_appointment
-                    )
+                    ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
 
         return confirm_appointment_selection
@@ -504,7 +504,7 @@ class HealthcareAgent(Agent):
         )
 
         return "The appointment has been made, ask the user if they need assistance with anything else."
-    
+
     @function_tool()
     async def modify_appointment(
         self,
@@ -547,7 +547,9 @@ class HealthcareAgent(Agent):
                 "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
             )
             return
-        await self.session.generate_reply(instructions="Inform the user you are fetching their report.")
+        await self.session.generate_reply(
+            instructions="Inform the user you are fetching their report."
+        )
         self._oai_client = OpenAI()
         self._vector_store = self._oai_client.vector_stores.create(name="lab_reports")
         with open("mock_checkup_report.pdf", "rb") as f:

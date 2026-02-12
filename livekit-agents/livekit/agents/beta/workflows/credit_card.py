@@ -24,7 +24,7 @@ class GetCreditCardResult:
     cardholder_name: str
     issuer: str
     card_number: int
-    security_code: int
+    security_code: str
     expiration_date: str
 
 
@@ -36,7 +36,7 @@ class GetCardNumberResult:
 
 @dataclass
 class GetSecurityCodeResult:
-    security_code: int
+    security_code: str
 
 
 @dataclass
@@ -222,7 +222,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
-        self._security_code = 0
+        self._security_code = ""
         self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
@@ -234,45 +234,46 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
     async def update_security_code(
         self,
         context: RunContext,
-        security_code: int,
+        security_code: str,
     ) -> str | None:
         """Call to update the card's security code.
 
         Args:
-            security_code (int): The card's security code.
+            security_code (str): The card's security code (3-4 digits, may have leading zeros).
         """
-        if len(str(security_code)) < 3 or len(str(security_code)) > 4:
+        stripped = security_code.strip()
+        if not stripped.isdigit() or not (3 <= len(stripped) <= 4):
             self.session.generate_reply(
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
             return
         else:
-            self._security_code = security_code
+            self._security_code = stripped
 
             if not self._confirmation_required(context):
                 if not self.done():
                     self.complete(GetSecurityCodeResult(security_code=self._security_code))
                 return None
 
-            confirm_tool = self._build_confirm_tool(security_code=security_code)
+            confirm_tool = self._build_confirm_tool(security_code=stripped)
             current_tools = [t for t in self.tools if t.id != "confirm_security_code"]
             current_tools.append(confirm_tool)
             await self.update_tools(current_tools)
 
             return (
-                f"The security code has been updated to {security_code}\n"
+                f"The security code has been updated to {stripped}\n"
                 f"Do not repeat the security code back to the user, ask them to repeat themselves.\n"
             )
 
-    def _build_confirm_tool(self, *, security_code: int) -> llm.FunctionTool:
+    def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_security_code(repeated_security_code: int) -> None:
+        async def confirm_security_code(repeated_security_code: str) -> None:
             """Call after the user repeats their security code for confirmation.
 
             Args:
-                repeated_security_code (int): The security code repeated by the user
+                repeated_security_code (str): The security code repeated by the user
             """
-            if repeated_security_code != security_code:
+            if repeated_security_code.strip() != security_code:
                 self.session.generate_reply(
                     instructions="The repeated security code does not match, ask the user to try again."
                 )
