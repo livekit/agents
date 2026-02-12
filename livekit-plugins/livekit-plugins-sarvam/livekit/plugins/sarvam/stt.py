@@ -972,6 +972,14 @@ class SpeechStream(stt.SpeechStream):
                         "Transcript received from Sarvam",
                         extra=self._build_log_context(),
                     )
+                    exc = self._message_task.exception()
+                    if exc is not None:
+                        if isinstance(exc, BaseException):
+                            raise exc
+                        else:
+                            raise RuntimeError(
+                                f"Task failed with non-BaseException: {exc}"
+                            )
                 else:
                     self._logger.warning(
                         "Transcript timeout (30s) — transcript may be lost",
