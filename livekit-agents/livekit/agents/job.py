@@ -412,12 +412,15 @@ class JobContext:
         """
         return await wait_for_participant(self._room, identity=identity, kind=kind)
 
+    ROOM_CONNECT_TIMEOUT = 90.0
+
     async def connect(
         self,
         *,
         e2ee: rtc.E2EEOptions | None = None,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Connect to the room. This method should be called only once.
 
@@ -425,6 +428,7 @@ class JobContext:
             e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
+            timeout: Maximum time in seconds to wait for the room connection. Defaults to ROOM_CONNECT_TIMEOUT (90s).
         """  # noqa: E501
         async with self._lock:
             if self._connected:
@@ -436,7 +440,18 @@ class JobContext:
                 rtc_config=rtc_config,
             )
 
-            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            connect_timeout = timeout if timeout is not None else self.ROOM_CONNECT_TIMEOUT
+            try:
+                await asyncio.wait_for(
+                    self._room.connect(self._info.url, self._info.token, options=room_options),
+                    timeout=connect_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "room connection timed out",
+                    extra={"timeout": connect_timeout},
+                )
+                raise
             self._on_connect()
             for p in self._room.remote_participants.values():
                 self._participant_available(p)
