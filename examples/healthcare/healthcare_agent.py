@@ -3,7 +3,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
@@ -195,7 +195,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         doctor_confirmation_tool = self._build_doctor_selection_tool(
             available_doctors=available_doctors
         )
-        current_tools = [t for t in self.tools if t.name != "confirm_doctor_selection"]
+        current_tools = [t for t in self.tools if t.id != "confirm_doctor_selection"]
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
 
@@ -210,7 +210,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
     def _build_doctor_selection_tool(
         self, *, available_doctors: list[str]
-    ) -> Optional[FunctionTool]:
+    ) -> FunctionTool | None:
         @function_tool()
         async def confirm_doctor_selection(
             selected_doctor: Annotated[
@@ -233,7 +233,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             schedule_appointment_tool = self._build_schedule_appointment_tool(
                 available_times=available_times
             )
-            current_tools = [t for t in self.tools if t.name != "schedule_appointment"]
+            current_tools = [t for t in self.tools if t.id != "schedule_appointment"]
             current_tools.append(schedule_appointment_tool)
             await self.update_tools(current_tools)
 
@@ -245,7 +245,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
     def _build_schedule_appointment_tool(
         self, *, available_times: list[dict]
-    ) -> Optional[FunctionTool]:
+    ) -> FunctionTool | None:
         iso_times = [
             datetime.combine(slot["date"], slot["time"]).isoformat() for slot in available_times
         ]
@@ -268,7 +268,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             self._appointment_time = appointment_time
 
             visit_reason_tool = self._build_visit_reason_tool()
-            current_tools = [t for t in self.tools if t.name != "confirm_visit_reason"]
+            current_tools = [t for t in self.tools if t.id != "confirm_visit_reason"]
             current_tools.append(visit_reason_tool)
             await self.update_tools(current_tools)
 
@@ -278,7 +278,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
         return schedule_appointment
 
-    def _build_visit_reason_tool(self) -> Optional[FunctionTool]:
+    def _build_visit_reason_tool(self) -> FunctionTool | None:
         @function_tool()
         async def confirm_visit_reason(visit_reason: str):
             """Call to record the user's reason for their appointment.
@@ -320,14 +320,14 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             return
         else:
             cancel_appt_tool = self._build_modify_appt_tool(available_appts=appointments)
-            current_tools = [t for t in self.tools if t.name != "confirm_appointment_selection"]
+            current_tools = [t for t in self.tools if t.id != "confirm_appointment_selection"]
             current_tools.append(cancel_appt_tool)
             await self.update_tools(current_tools)
             await self.session.generate_reply(
                 instructions=f"The user has these outstanding appointments: {json.dumps(appointments)}, prompt them to choose one to modify."
             )
 
-    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> Optional[FunctionTool]:
+    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> FunctionTool | None:
         @function_tool()
         async def confirm_appointment_selection(
             selected_appointment: Annotated[

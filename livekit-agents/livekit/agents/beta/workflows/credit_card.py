@@ -9,7 +9,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
 from .name import GetNameTask
 from .task_group import TaskGroup
 
@@ -29,11 +28,6 @@ class GetCreditCardResult:
 
 
 @dataclass
-class GetCardHolderNameResult:
-    full_name: str
-
-
-@dataclass
 class GetCardNumberResult:
     issuer: str
     card_number: int
@@ -49,6 +43,26 @@ class GetExpirationDateResult:
     date: str
 
 
+class CardCaptureDeclinedError(ToolError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"couldn't get the card details: {reason}")
+        self._reason = reason
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
+class CardCollectionRestartError(ToolError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"starting over: {reason}")
+        self._reason = reason
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
 async def decline_card_capture(context: RunContext, reason: str) -> None:
     """Handles the case when the user explicitly declines to provide a detail for their card information.
@@ -56,20 +70,21 @@ async def decline_card_capture(context: RunContext, reason: str) -> None:
     Args:
         reason (str): A short explanation of why the user declined to provide card information
     """
-    ...
-    # if not self.done():
-    #     self.complete(ToolError(f"couldn't get the card details: {reason}"))
+    task = context.session.current_agent
+    if isinstance(task, AgentTask) and not task.done():
+        task.complete(CardCaptureDeclinedError(reason))
 
 
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-async def restart_card_collection(self, reason: str) -> None:
+async def restart_card_collection(context: RunContext, reason: str) -> None:
     """Handles the case when the user wishes to start over the card information collection process and validate a new card.
 
     Args:
         reason (str): A short explanation of why the user wishes to start over
     """
-    if not self.done():
-        self.complete(ToolError(f"starting over: {reason}"))
+    task = context.session.current_agent
+    if isinstance(task, AgentTask) and not task.done():
+        task.complete(CardCollectionRestartError(reason))
 
 
 class GetCardNumberTask(AgentTask[GetCardNumberResult]):
@@ -85,16 +100,16 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 "If the user refuses to provide a number, call decline_card_capture().\n"
                 "If the user wishes to start over the card collection process, call restart_card_collection().\n"
                 "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
+                "Never repeat any sensitive information, such as the user's card number, back to the user.\n"
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
         self._card_number = 0
         self._require_confirmation = require_confirmation
-        self._number_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Collect the user's credit card number.",
+            instructions="Ask for the user's credit card number.",
         )
 
     @function_tool()
@@ -113,7 +128,6 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
         else:
-            self._number_update_speech_handle = context.speech_handle
             self._card_number = card_number
 
             if not self._confirmation_required(context):
@@ -130,38 +144,41 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                         )
                 return None
 
+            confirm_tool = self._build_confirm_tool(card_number=card_number)
+            current_tools = [t for t in self.tools if t.id != "confirm_card_number"]
+            current_tools.append(confirm_tool)
+            await self.update_tools(current_tools)
+
             return (
                 f"The card number has been updated to {card_number}\n"
-                f"Prompt the user for confirmation, do not call `confirm_card_number` directly"
+                f"Ask them to repeat the number, do not repeat the number back to them.\n"
             )
 
-    @function_tool()
-    async def confirm_card_number(
-        self,
-        context: RunContext,
-    ) -> None:
-        """Call after confirming the user's card number."""
-        await context.wait_for_playout()
+    def _build_confirm_tool(self, *, card_number: int):
+        @function_tool()
+        async def confirm_card_number(repeated_card_number: int) -> None:
+            """Call after the user repeats their card number for confirmation.
 
-        if (
-            context.speech_handle == self._number_update_speech_handle
-            and self._confirmation_required(context)
-        ):
-            raise ToolError("error: the user must confirm the card number explicitly")
+            Args:
+                repeated_card_number (int): The card number repeated by the user
+            """
+            if repeated_card_number != card_number:
+                self.session.generate_reply(
+                    instructions="The repeated card number does not match, ask the user to try again."
+                )
+                return
 
-        if not self._card_number:
-            raise ToolError(
-                "error: no card number was provided, `update_card_number` must be called prior"
-            )
+            if not self.validate_card_number(card_number):
+                self.session.generate_reply(
+                    instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
+                )
+            else:
+                first_digit = str(card_number)[0]
+                issuer = CardIssuersLookup.get(first_digit, "Other")
+                if not self.done():
+                    self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
 
-        if not self.validate_card_number(self._card_number):
-            self.session.generate_reply(
-                instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
-            )
-        else:
-            first_digit = str(self._card_number)[0]
-            issuer = CardIssuersLookup.get(first_digit, "Other")
-            self.complete(GetCardNumberResult(issuer=issuer, card_number=self._card_number))
+        return confirm_card_number
 
     def validate_card_number(self, card_number):
         """Validates card number via the Luhn algorithm"""
@@ -199,12 +216,12 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 "If the user refuses to provide a code, call decline_card_capture().\n"
                 "If the user wishes to start over the card collection process, call restart_card_collection().\n"
                 "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
+                "Never repeat any sensitive information, such as the user's security code, back to the user.\n"
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
         self._security_code = 0
         self._require_confirmation = require_confirmation
-        self._security_code_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -216,7 +233,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
         self,
         context: RunContext,
         security_code: int,
-    ) -> None:
+    ) -> str | None:
         """Call to update the card's security code.
 
         Args:
@@ -227,45 +244,67 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
         else:
-            self._security_code_update_speech_handle = context.speech_handle
             self._security_code = security_code
+
+            if not self._confirmation_required(context):
+                if not self.done():
+                    self.complete(GetSecurityCodeResult(security_code=self._security_code))
+                return None
+
+            confirm_tool = self._build_confirm_tool(security_code=security_code)
+            current_tools = [t for t in self.tools if t.id != "confirm_security_code"]
+            current_tools.append(confirm_tool)
+            await self.update_tools(current_tools)
+
             return (
                 f"The security code has been updated to {security_code}\n"
-                f"Prompt the user for confirmation, do not call `confirm_security_code` directly"
+                f"Do not repeat the security code back to the user, ask them to repeat themselves.\n"
             )
 
-    @function_tool()
-    async def confirm_security_code(
-        self,
-        context: RunContext,
-    ) -> None:
-        """Call after confirming the card's security code."""
-        await context.wait_for_playout()
+    def _build_confirm_tool(self, *, security_code: int):
+        @function_tool()
+        async def confirm_security_code(repeated_security_code: int) -> None:
+            """Call after the user repeats their security code for confirmation.
 
-        if context.speech_handle == self._security_code_update_speech_handle:
-            raise ToolError("error: the user must confirm the security code explicitly")
+            Args:
+                repeated_security_code (int): The security code repeated by the user
+            """
+            if repeated_security_code != security_code:
+                self.session.generate_reply(
+                    instructions="The repeated security code does not match, ask the user to try again."
+                )
+                return
 
-        if not self._security_code:
-            raise ToolError(
-                "error: no security code was provided, `update_security_code` must be called prior"
-            )
+            if not self.done():
+                self.complete(GetSecurityCodeResult(security_code=security_code))
 
-        self.complete(GetSecurityCodeResult(security_code=self._security_code))
+        return confirm_security_code
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"
 
 
 class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
-            instructions="""You are a single step in a broader process of collecting credit card information.
-            You are solely responsible for collecting the user's card's expiration date.
-            If the user refuses to provide a date, call decline_card_capture().
-            If the user wishes to start over the card collection process, call restart_card_collection().
-            Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-            """,
+            instructions=(
+                "You are a single step in a broader process of collecting credit card information.\n"
+                "You are solely responsible for collecting the user's card's expiration date.\n"
+                "If the user refuses to provide a date, call decline_card_capture().\n"
+                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
+                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
+                "Never repeat any sensitive information, such as the user's expiration date, back to the user.\n"
+            ),
             tools=[decline_card_capture, restart_card_collection],
         )
         self._expiration_date = ""
-        self._date_update_speech_handle: SpeechHandle | None = None
+        self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -278,7 +317,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         context: RunContext,
         expiration_month: int,
         expiration_year: int,
-    ) -> None:
+    ) -> str | None:
         """Call to update the card's expiration date. Collect both the numerical month and year.
 
         Args:
@@ -294,28 +333,58 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
         else:
-            self._date_update_speech_handle = context.speech_handle
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
+
+            if not self._confirmation_required(context):
+                if not self.done():
+                    self.complete(GetExpirationDateResult(date=self._expiration_date))
+                return None
+
+            confirm_tool = self._build_confirm_tool(
+                expiration_month=expiration_month, expiration_year=expiration_year
+            )
+            current_tools = [t for t in self.tools if t.id != "confirm_expiration_date"]
+            current_tools.append(confirm_tool)
+            await self.update_tools(current_tools)
+
             return (
                 f"The expiration date has been updated to {self._expiration_date}\n"
-                f"Prompt the user for confirmation, do not call `confirm_expiration_date` directly"
+                f"Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
+                f"Do not call `confirm_expiration_date` directly"
             )
 
-    @function_tool()
-    async def confirm_expiration_date(
-        self,
-        context: RunContext,
-    ) -> None:
-        """Call after confirming the user's card's expiration date."""
-        await context.wait_for_playout()
-        if context.speech_handle == self._date_update_speech_handle:
-            raise ToolError("error: the user must confirm the expiration date explicitly")
+    def _build_confirm_tool(self, *, expiration_month: int, expiration_year: int):
+        expiration_date = self._expiration_date
 
-        if not self._expiration_date:
-            raise ToolError(
-                "error: no expiration date was provided, `update_expiration_date` must be called before"
-            )
-        self.complete(GetExpirationDateResult(date=self._expiration_date))
+        @function_tool()
+        async def confirm_expiration_date(
+            repeated_expiration_month: int,
+            repeated_expiration_year: int,
+        ) -> None:
+            """Call after the user repeats their expiration date for confirmation.
+
+            Args:
+                repeated_expiration_month (int): The expiration month repeated by the user
+                repeated_expiration_year (int): The expiration year repeated by the user
+            """
+            if (
+                repeated_expiration_month != expiration_month
+                or repeated_expiration_year != expiration_year
+            ):
+                self.session.generate_reply(
+                    instructions="The repeated expiration date does not match, ask the user to try again."
+                )
+                return
+
+            if not self.done():
+                self.complete(GetExpirationDateResult(date=expiration_date))
+
+        return confirm_expiration_date
+
+    def _confirmation_required(self, ctx: RunContext) -> bool:
+        if is_given(self._require_confirmation):
+            return self._require_confirmation
+        return ctx.speech_handle.input_details.modality == "audio"
 
 
 class GetCreditCardTask(AgentTask[GetCreditCardResult]):
@@ -329,6 +398,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions="*none*",
@@ -341,6 +411,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             tts=tts,
             allow_interruptions=allow_interruptions,
         )
+        self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
         while not self.done():
@@ -349,22 +420,23 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 lambda: GetNameTask(
                     last_name=True,
                     extra_instructions="This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+                    require_confirmation=self._require_confirmation,
                 ),
                 id="cardholder_name_task",
                 description="Collects the cardholder's full name",
             )
             task_group.add(
-                lambda: GetCardNumberTask(),
+                lambda: GetCardNumberTask(require_confirmation=self._require_confirmation),
                 id="card_number_task",
                 description="Collects the user's card number",
             )
             task_group.add(
-                lambda: GetSecurityCodeTask(),
+                lambda: GetSecurityCodeTask(require_confirmation=self._require_confirmation),
                 id="security_code_task",
                 description="Collects the card's security code",
             )
             task_group.add(
-                lambda: GetExpirationDateTask(),
+                lambda: GetExpirationDateTask(require_confirmation=self._require_confirmation),
                 id="expiration_date_task",
                 description="Collects the card's expiration date",
             )
@@ -379,8 +451,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                     expiration_date=results.task_results["expiration_date_task"].date,
                 )
                 self.complete(result)
-            except ToolError as e:
-                if "starting over" in e.message:
-                    continue
-                else:
-                    self.complete(e)
+            except CardCollectionRestartError:
+                continue
+            except (CardCaptureDeclinedError, ToolError) as e:
+                self.complete(e)
