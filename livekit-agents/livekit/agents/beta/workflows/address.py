@@ -9,7 +9,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -81,7 +80,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         self._current_address = ""
         self._require_confirmation = require_confirmation
-        self._address_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their address.")
@@ -98,7 +96,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             locality (str): Dependent on country, may include fields like city, zip code, or province
             country (str): The country the user lives in spelled out fully
         """
-        self._address_update_speech_handle = ctx.speech_handle
         address_fields = (
             [street_address, unit_number, locality, country]
             if unit_number.strip()
@@ -112,29 +109,33 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 self.complete(GetAddressResult(address=self._current_address))
             return None
 
+        confirm_tool = self._build_confirm_tool(address=address)
+        current_tools = [t for t in self.tools if t.id != "confirm_address"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
+
         return (
             f"The address has been updated to {address}\n"
             f"Repeat the address field by field: {address_fields} if needed\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def confirm_address(self, ctx: RunContext) -> None:
-        """Call this tool when the user confirms that the address is correct."""
-        await ctx.wait_for_playout()
+    def _build_confirm_tool(self, *, address: str):
+        # confirm tool is only injected after update_address is called,
+        # preventing the LLM from hallucinating a confirmation without user input
+        @function_tool()
+        async def confirm_address() -> None:
+            """Call after the user confirms the address is correct."""
+            if address != self._current_address:
+                self.session.generate_reply(
+                    instructions="The address has changed since confirmation was requested, ask the user to confirm the updated address."
+                )
+                return
 
-        if ctx.speech_handle == self._address_update_speech_handle and self._confirmation_required(
-            ctx
-        ):
-            raise ToolError("error: the user must confirm the address explicitly")
+            if not self.done():
+                self.complete(GetAddressResult(address=address))
 
-        if not self._current_address:
-            raise ToolError(
-                "error: no address was provided, `update_address` must be called before"
-            )
-
-        if not self.done():
-            self.complete(GetAddressResult(address=self._current_address))
+        return confirm_address
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_address_capture(self, reason: str) -> None:

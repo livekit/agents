@@ -1,3 +1,4 @@
+import random
 from datetime import date, datetime, time, timedelta
 
 
@@ -9,6 +10,7 @@ class FakeDatabase:
                 "date_of_birth": date(2000, 1, 1),
                 "email": "jane@gmail.com",
                 "insurance": "Anthem",
+                "outstanding_balance": round(random.uniform(20, 3000), 2),
             }
         ]
         today = date.today()
@@ -104,7 +106,21 @@ class FakeDatabase:
         return True
 
     def add_patient_record(self, info: dict) -> None:
+        info.setdefault("outstanding_balance", round(random.uniform(20, 3000), 2))
         self._patient_records.append(info)
+
+    def get_outstanding_balance(self, name: str) -> float | None:
+        record = self.get_patient_by_name(name)
+        if record is None:
+            return None
+        return record.get("outstanding_balance", 0.0)
+
+    def apply_payment(self, name: str, amount: float) -> float | None:
+        record = self.get_patient_by_name(name)
+        if record is None:
+            return None
+        record["outstanding_balance"] = round(record.get("outstanding_balance", 0.0) - amount, 2)
+        return record["outstanding_balance"]
 
     def remove_doctor_availability(self, doctor_name: str, appointment_time: dict) -> None:
         for doctor in self._doctor_records:

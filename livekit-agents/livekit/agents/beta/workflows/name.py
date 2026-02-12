@@ -9,7 +9,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -28,6 +27,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         first_name: bool = True,
         last_name: bool = False,
         middle_name: bool = False,
+        format: NotGivenOr[str] = NOT_GIVEN,
         verify_spelling: bool = False,
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
@@ -48,15 +48,17 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._verify_spelling = verify_spelling
         self._require_confirmation = require_confirmation
 
-        self._requested_name_parts: list[
-            str
-        ] = []  # this builds a string to pass into the LLM instructions
-        if first_name:
-            self._requested_name_parts.append("first name")
-        if middle_name:
-            self._requested_name_parts.append("middle name")
-        if last_name:
-            self._requested_name_parts.append("last name")
+        if is_given(format):
+            self._name_format = format
+        else:
+            parts = []
+            if first_name:
+                parts.append("{first_name}")
+            if middle_name:
+                parts.append("{middle_name}")
+            if last_name:
+                parts.append("{last_name}")
+            self._name_format = " ".join(parts)
 
         spelling_instructions = (
             ""
@@ -71,7 +73,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         super().__init__(
             instructions=(
                 f"You are only a single step in a broader system, responsible solely for capturing the user's name.\n"
-                f"You need to collect the following name parts: {', '.join(self._requested_name_parts)}.\n"
+                f"You need to collect the name parts in this order: {self._name_format}.\n"
                 "Handle input as noisy voice transcription. Expect that users will say names aloud and may:\n"
                 "- Say their name followed by spelling: e.g., 'Michael m i c h a e l'\n"
                 "- Use phonetic alphabet: e.g., 'Mike as in Mike India Charlie Hotel Alpha Echo Lima'\n"
@@ -112,51 +114,46 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._middle_name: str = ""
         self._last_name: str = ""
 
-        self._name_update_speech_handle: SpeechHandle | None = None
-
     async def on_enter(self) -> None:
-        if len(self._requested_name_parts) == 1:
-            prompt = f"Ask the user to provide their {self._requested_name_parts[0]}."
-        else:
-            prompt = f"Ask the user to provide their {', '.join(self._requested_name_parts)}."
-
-        self.session.generate_reply(instructions=prompt)
+        self.session.generate_reply(
+            instructions=f"Ask the user to provide their name in this format: {self._name_format}."
+        )
 
     @function_tool()
     async def update_name(
         self,
         first_name: str,
-        middle_name: str,
-        last_name: str,
         ctx: RunContext,
+        middle_name: str | None = None,
+        last_name: str | None = None,
     ) -> str | None:
         """Update the name provided by the user.
 
         Args:
-            first_name: The user's first name. Use empty string if not collected or not applicable.
-            middle_name: The user's middle name. Use empty string if not collected or not applicable.
-            last_name: The user's last name. Use empty string if not collected or not applicable.
+            first_name: The user's first name.
+            middle_name: The user's middle name, if collected.
+            last_name: The user's last name, if collected.
         """
-        self._name_update_speech_handle = ctx.speech_handle
-
         errors: list[str] = []
-        if self._collect_first_name and not first_name.strip():
+        if self._collect_first_name and not (first_name and first_name.strip()):
             errors.append("first name is required but was not provided")
-        if self._collect_middle_name and not middle_name.strip():
+        if self._collect_middle_name and not (middle_name and middle_name.strip()):
             errors.append("middle name is required but was not provided")
-        if self._collect_last_name and not last_name.strip():
+        if self._collect_last_name and not (last_name and last_name.strip()):
             errors.append("last name is required but was not provided")
 
         if errors:
             raise ToolError(f"Incomplete name: {'; '.join(errors)}")
 
-        self._first_name = first_name.strip()
-        self._middle_name = middle_name.strip()
-        self._last_name = last_name.strip()
+        self._first_name = first_name.strip() if first_name else ""
+        self._middle_name = middle_name.strip() if middle_name else ""
+        self._last_name = last_name.strip() if last_name else ""
 
-        full_name = " ".join(
-            part for part in [self._first_name, self._middle_name, self._last_name] if part
-        )
+        full_name = self._name_format.format(
+            first_name=self._first_name,
+            middle_name=self._middle_name,
+            last_name=self._last_name,
+        ).strip()
 
         if not self._confirmation_required(ctx):
             if not self.done():
@@ -168,6 +165,15 @@ class GetNameTask(AgentTask[GetNameResult]):
                     )
                 )
             return None
+
+        confirm_tool = self._build_confirm_tool(
+            first_name=self._first_name,
+            middle_name=self._middle_name,
+            last_name=self._last_name,
+        )
+        current_tools = [t for t in self.tools if t.id != "confirm_name"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
 
         if self._verify_spelling:
             return (
@@ -182,35 +188,32 @@ class GetNameTask(AgentTask[GetNameResult]):
             f"do not call `confirm_name` directly"
         )
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def confirm_name(self, ctx: RunContext) -> None:
-        """Call this tool when the user confirms that the name is correct."""
-        await ctx.wait_for_playout()
-
-        if ctx.speech_handle == self._name_update_speech_handle and self._confirmation_required(
-            ctx
-        ):
-            raise ToolError("error: the user must confirm the name explicitly")
-
-        if self._collect_first_name and not self._first_name:
-            raise ToolError(
-                "error: first name was not provided, `update_name` must be called first"
-            )
-        if self._collect_middle_name and not self._middle_name:
-            raise ToolError(
-                "error: middle name was not provided, `update_name` must be called first"
-            )
-        if self._collect_last_name and not self._last_name:
-            raise ToolError("error: last name was not provided, `update_name` must be called first")
-
-        if not self.done():
-            self.complete(
-                GetNameResult(
-                    first_name=self._first_name if self._collect_first_name else None,
-                    middle_name=self._middle_name if self._collect_middle_name else None,
-                    last_name=self._last_name if self._collect_last_name else None,
+    def _build_confirm_tool(self, *, first_name: str, middle_name: str, last_name: str):
+        # confirm tool is only injected after update_name is called,
+        # preventing the LLM from hallucinating a confirmation without user input
+        @function_tool()
+        async def confirm_name() -> None:
+            """Call after the user confirms the name is correct."""
+            if (
+                first_name != self._first_name
+                or middle_name != self._middle_name
+                or last_name != self._last_name
+            ):
+                self.session.generate_reply(
+                    instructions="The name has changed since confirmation was requested, ask the user to confirm the updated name."
                 )
-            )
+                return
+
+            if not self.done():
+                self.complete(
+                    GetNameResult(
+                        first_name=self._first_name if self._collect_first_name else None,
+                        middle_name=self._middle_name if self._collect_middle_name else None,
+                        last_name=self._last_name if self._collect_last_name else None,
+                    )
+                )
+
+        return confirm_name
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_name_capture(self, reason: str) -> None:

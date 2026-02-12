@@ -10,7 +10,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -90,7 +89,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         self._require_confirmation = require_confirmation
         self._current_dob: date | None = None
         self._current_time: time | None = None
-        self._dob_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
         prompt = "Ask the user to provide their date of birth."
@@ -113,8 +111,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             month: The birth month (1-12)
             day: The birth day (1-31)
         """
-        self._dob_update_speech_handle = ctx.speech_handle
-
         try:
             dob = date(year, month, day)
         except ValueError as e:
@@ -138,6 +134,11 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                     )
                 )
             return None
+
+        confirm_tool = self._build_confirm_tool(dob=dob)
+        current_tools = [t for t in self.tools if t.id != "confirm_dob"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
 
         formatted_date = dob.strftime("%B %d, %Y")
         response = f"The date of birth has been updated to {formatted_date}"
@@ -166,8 +167,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             hour: The birth hour (0-23)
             minute: The birth minute (0-59)
         """
-        self._dob_update_speech_handle = ctx.speech_handle
-
         try:
             birth_time = time(hour, minute)
         except ValueError as e:
@@ -185,6 +184,11 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 )
             return None
 
+        confirm_tool = self._build_confirm_tool(dob=self._current_dob)
+        current_tools = [t for t in self.tools if t.id != "confirm_dob"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
+
         formatted_time = birth_time.strftime("%I:%M %p")
         response = f"The time of birth has been updated to {formatted_time}"
 
@@ -199,26 +203,36 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         return response
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def confirm_dob(self, ctx: RunContext) -> None:
-        """Call this tool when the user confirms that the date of birth is correct."""
-        await ctx.wait_for_playout()
+    def _build_confirm_tool(self, *, dob: date | None):
+        # confirm tool is only injected after update_dob/update_time is called,
+        # preventing the LLM from hallucinating a confirmation without user input
+        captured_dob = dob
+        captured_time = self._current_time
 
-        if ctx.speech_handle == self._dob_update_speech_handle and self._confirmation_required(ctx):
-            raise ToolError("error: the user must confirm the date of birth explicitly")
-
-        if self._current_dob is None:
-            raise ToolError(
-                "error: no date of birth was provided, `update_dob` must be called before"
-            )
-
-        if not self.done():
-            self.complete(
-                GetDOBResult(
-                    date_of_birth=self._current_dob,
-                    time_of_birth=self._current_time,
+        @function_tool()
+        async def confirm_dob() -> None:
+            """Call after the user confirms the date of birth is correct."""
+            if captured_dob != self._current_dob or captured_time != self._current_time:
+                self.session.generate_reply(
+                    instructions="The date of birth has changed since confirmation was requested, ask the user to confirm the updated date."
                 )
-            )
+                return
+
+            if self._current_dob is None:
+                self.session.generate_reply(
+                    instructions="No date of birth was provided yet, ask the user to provide it."
+                )
+                return
+
+            if not self.done():
+                self.complete(
+                    GetDOBResult(
+                        date_of_birth=self._current_dob,
+                        time_of_birth=self._current_time,
+                    )
+                )
+
+        return confirm_dob
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_dob_capture(self, reason: str) -> None:

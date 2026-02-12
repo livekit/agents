@@ -10,7 +10,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -80,9 +79,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         self._current_email = ""
         self._require_confirmation = require_confirmation
-        # speech_handle/turn used to update the email address.
-        # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
-        self._email_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide an email address.")
@@ -94,7 +90,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         Args:
             email: The email address provided by the user
         """
-        self._email_update_speech_handle = ctx.speech_handle
         email = email.strip()
 
         if not re.match(EMAIL_REGEX, email):
@@ -108,29 +103,33 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 self.complete(GetEmailResult(email_address=self._current_email))
             return None  # no need to continue the conversation
 
+        confirm_tool = self._build_confirm_tool(email=email)
+        current_tools = [t for t in self.tools if t.id != "confirm_email_address"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
+
         return (
             f"The email has been updated to {email}\n"
             f"Repeat the email character by character: {separated_email} if needed\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def confirm_email_address(self, ctx: RunContext) -> None:
-        """Validates/confirms the email address provided by the user."""
-        await ctx.wait_for_playout()
+    def _build_confirm_tool(self, *, email: str):
+        # confirm tool is only injected after update_email_address is called,
+        # preventing the LLM from hallucinating a confirmation without user input
+        @function_tool()
+        async def confirm_email_address() -> None:
+            """Call after the user confirms the email address is correct."""
+            if email != self._current_email:
+                self.session.generate_reply(
+                    instructions="The email has changed since confirmation was requested, ask the user to confirm the updated email."
+                )
+                return
 
-        if ctx.speech_handle == self._email_update_speech_handle and self._confirmation_required(
-            ctx
-        ):
-            raise ToolError("error: the user must confirm the email address explicitly")
+            if not self.done():
+                self.complete(GetEmailResult(email_address=email))
 
-        if not self._current_email.strip():
-            raise ToolError(
-                "error: no email address were provided, `update_email_address` must be called before"
-            )
-
-        if not self.done():
-            self.complete(GetEmailResult(email_address=self._current_email))
+        return confirm_email_address
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_email_capture(self, reason: str) -> None:

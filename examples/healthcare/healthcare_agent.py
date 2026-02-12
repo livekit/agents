@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
-import random
+
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
 from openai import OpenAI
@@ -568,26 +568,41 @@ class HealthcareAgent(Agent):
         """Call for any billing inquiries, like if the user wants to check their outstanding balance or if they want to pay a bill."""
         await self.profile_authenticator()
 
-        balance = round(random.uniform(20, 3000), 2)
+        name = self.session.userdata.profile["name"]
+        balance = self._database.get_outstanding_balance(name)
 
-        payment_proceeds_tool = self._build_payment_proceeds_tool(balance=balance)
+        payment_proceeds_tool = self._build_payment_proceeds_tool()
         current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
         current_tools.append(payment_proceeds_tool)
         await self.update_tools(current_tools)
         await self.session.generate_reply(
-            instructions=f"Inform the patient that their balance is {balance} and ask if they would like to pay it in full now."
+            instructions=f"Inform the patient that their outstanding balance is ${balance} and ask if they would like to pay it now."
         )
 
-    def _build_payment_proceeds_tool(self, *, balance: float) -> FunctionTool:
+    def _build_payment_proceeds_tool(self) -> FunctionTool:
         @function_tool()
-        async def confirm_payment_proceeds() -> None:
-            """Call to proceed with payment steps regarding the user's bill."""
+        async def confirm_payment_proceeds(amount: float) -> None:
+            """Call to proceed with payment steps regarding the user's bill.
+
+            Args:
+                amount (float): The dollar amount the user wishes to pay toward their balance.
+            """
+            name = self.session.userdata.profile["name"]
+            balance = self._database.get_outstanding_balance(name)
+
+            if amount <= 0:
+                return "The payment amount must be greater than zero."
+            if amount > balance:
+                return f"The payment amount exceeds the outstanding balance of ${balance}."
+
             result = await GetCreditCardTask()
 
             last_four_digits = str(result.card_number)[-4:]
+            remaining = self._database.apply_payment(name, amount)
+
             current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
             await self.update_tools(current_tools)
-            return f"The payment method ending in {last_four_digits} has been successfully charged {balance}."
+            return f"The payment method ending in {last_four_digits} has been successfully charged ${amount}. Remaining balance: ${remaining}."
 
         return confirm_payment_proceeds
 
