@@ -952,9 +952,36 @@ class SpeechStream(stt.SpeechStream):
                 self._reconnect_event.clear()
                 return
 
+            # Race condition fix: if audio task finished first,
+            # give message task up to 30s to receive the final transcript
+            # from Sarvam before cancelling it. Without this, FIRST_COMPLETED
+            # cancels the message task before the transcript arrives, causing
+            # silent transcript loss. This is needed because long TTS outputs
+            # accumulate large audio buffers that Sarvam needs time to process.
+            if self._audio_task in done and self._message_task not in done:
+                self._logger.info(
+                    "Audio task completed, waiting up to 30s for transcript",
+                    extra=self._build_log_context(),
+                )
+                try:
+                    await asyncio.wait([self._message_task], timeout=30.0)
+                except Exception:
+                    pass
+                if self._message_task.done():
+                    self._logger.info(
+                        "Transcript received from Sarvam",
+                        extra=self._build_log_context(),
+                    )
+                else:
+                    self._logger.warning(
+                        "Transcript timeout (30s) — transcript may be lost",
+                        extra=self._build_log_context(),
+                    )
+
             # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
+            remaining = [t for t in pending if not t.done()]
+            if remaining:
+                await utils.aio.cancel_and_wait(*remaining)
 
             # Check for exceptions in completed tasks
             for task in done:
