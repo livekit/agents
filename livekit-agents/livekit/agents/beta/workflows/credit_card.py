@@ -128,7 +128,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             self.session.generate_reply(
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
-            return
+            return None
         else:
             self._card_number = card_number
 
@@ -156,7 +156,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 f"Ask them to repeat the number, do not repeat the number back to them.\n"
             )
 
-    def _build_confirm_tool(self, *, card_number: int):
+    def _build_confirm_tool(self, *, card_number: int) -> llm.FunctionTool:
         @function_tool()
         async def confirm_card_number(repeated_card_number: int) -> None:
             """Call after the user repeats their card number for confirmation.
@@ -182,7 +182,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
         return confirm_card_number
 
-    def validate_card_number(self, card_number) -> bool:
+    def validate_card_number(self, card_number: int) -> bool:
         """Validates card number via the Luhn algorithm"""
         total_sum = 0
 
@@ -246,7 +246,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             self.session.generate_reply(
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
-            return
+            return None
         else:
             self._security_code = stripped
 
@@ -332,17 +332,17 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             self.session.generate_reply(
                 instructions="The expiration month is invalid, ask the user to repeat the expiration month."
             )
-            return
+            return None
         elif not (0 <= expiration_year <= 99):
             self.session.generate_reply(
                 instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
-            return
+            return None
         elif self._is_expired(expiration_month, expiration_year):
             self.session.generate_reply(
                 instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
             )
-            return
+            return None
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -422,7 +422,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             instructions="*none*",
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools,
+            tools=tools or [],
             stt=stt,
             vad=vad,
             llm=llm,
