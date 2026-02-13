@@ -933,7 +933,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def generate_reply(
         self,
         *,
-        user_input: NotGivenOr[str] = NOT_GIVEN,
+        user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -943,7 +943,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Generate a reply for the agent to speak to the user.
 
         Args:
-            user_input (NotGivenOr[str], optional): The user's input that may influence the reply,
+            user_input (NotGivenOr[str | llm.ChatMessage], optional): The user's input that may influence the reply,
                 such as answering a question.
             instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
@@ -961,8 +961,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
-            if is_given(user_input)
-            else NOT_GIVEN
+            if isinstance(user_input, str)
+            else user_input
         )
 
         run_state = self._global_run_state
