@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -38,7 +37,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 from mistralai import Mistral
-from mistralai.extra.realtime.connection import UnknownRealtimeEvent
+from mistralai.extra.realtime.connection import RealtimeConnection, UnknownRealtimeEvent
 from mistralai.extra.realtime.transcription import RealtimeTranscription
 from mistralai.models import AudioFormat
 from mistralai.models.realtimetranscriptionerror import RealtimeTranscriptionError
@@ -209,7 +208,7 @@ class STT(stt.STT):
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language if self._opts.language else None,
+                language=self._opts.language or None,
                 timestamp_granularities=None if self._opts.language else ["segment"],
             )
 
@@ -283,56 +282,37 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_duration = 0.0
         self._data_sent = False
         self._detected_language = self._opts.language or ""
+        self._request_id = ""
         self._last_final_text = ""
         self._last_final_time = 0.0
+        self._has_sent_final_for_turn = False
+        self._usage_emitted = False
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=self._opts.sample_rate)
 
-        async def audio_generator() -> AsyncIterator[bytes]:
-            samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    data_bytes = data.data.tobytes()
-                    self._audio_duration += len(data_bytes) / (
-                        self._opts.sample_rate * NUM_CHANNELS * 2
-                    )
-                    for frame in audio_bstream.write(data_bytes):
-                        yield frame.data.tobytes()
-                elif isinstance(data, self._FlushSentinel):
-                    for frame in audio_bstream.flush():
-                        yield frame.data.tobytes()
-                    self._pending_finalize = True
-                    self._flush_time = time.monotonic()
-
-            for frame in audio_bstream.flush():
-                yield frame.data.tobytes()
-
         try:
             realtime = RealtimeTranscription(self._client.sdk_configuration)
-
             finalize_task = asyncio.create_task(self._finalization_checker())
 
             try:
-                async for event in realtime.transcribe_stream(
-                    audio_stream=audio_generator(),
+                async with await realtime.connect(
                     model=self._opts.model,
                     audio_format=audio_format,
-                ):
-                    self._process_event(event)
+                ) as connection:
+                    self._request_id = connection.request_id or self._request_id
+                    send_task = asyncio.create_task(
+                        self._send_audio(connection)
+                    )
+                    try:
+                        async for event in connection.events():
+                            if self._process_event(event):
+                                break
+                    finally:
+                        await utils.aio.gracefully_cancel(send_task)
             finally:
-                finalize_task.cancel()
-                try:
-                    await finalize_task
-                except asyncio.CancelledError:
-                    pass
+                await utils.aio.gracefully_cancel(finalize_task)
 
             self._finalize_utterance(reason="stream_end")
             self._emit_usage_metrics()
@@ -350,6 +330,38 @@ class SpeechStream(stt.RecognizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(retryable=not self._data_sent) from e
+
+    async def _send_audio(self, connection: RealtimeConnection) -> None:
+        samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=NUM_CHANNELS,
+            samples_per_channel=samples_per_chunk,
+        )
+
+        async for data in self._input_ch:
+            if connection.is_closed:
+                break
+
+            if isinstance(data, rtc.AudioFrame):
+                data_bytes = data.data.tobytes()
+                bytes_per_second = self._opts.sample_rate * NUM_CHANNELS * 2
+                self._audio_duration += len(data_bytes) / bytes_per_second
+                for frame in audio_bstream.write(data_bytes):
+                    await connection.send_audio(frame.data.tobytes())
+            elif isinstance(data, self._FlushSentinel):
+                for frame in audio_bstream.flush():
+                    await connection.send_audio(frame.data.tobytes())
+                self._pending_finalize = True
+                self._flush_time = time.monotonic()
+
+        for frame in audio_bstream.flush():
+            if connection.is_closed:
+                break
+            await connection.send_audio(frame.data.tobytes())
+
+        if not connection.is_closed:
+            await connection.end_audio()
 
     async def _finalization_checker(self) -> None:
         check_interval = 0.05
@@ -371,11 +383,12 @@ class SpeechStream(stt.RecognizeStream):
                     self._finalize_utterance(reason="flush_timeout")
                     continue
 
-            if (
-                self._partial_text
+            idle_ready = (
+                self._speaking
                 and self._last_text_time > 0
                 and time_since_text >= idle_finalize_delay_s
-            ):
+            )
+            if idle_ready:
                 self._finalize_utterance(reason="idle_timeout")
 
     def _finalize_utterance(
@@ -386,24 +399,8 @@ class SpeechStream(stt.RecognizeStream):
         end_time: float = 0.0,
     ) -> None:
         text = self._partial_text.strip()
-        if text and not self._is_duplicate_final(text):
-            language = self._detected_language or self._opts.language or ""
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            text=text,
-                            language=language,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    ],
-                )
-            )
-            self._last_final_text = text
-            self._last_final_time = time.monotonic()
-            self._data_sent = True
+        if text:
+            self._emit_final_text(text, start_time=start_time, end_time=end_time)
 
         if self._speaking:
             self._speaking = False
@@ -413,45 +410,76 @@ class SpeechStream(stt.RecognizeStream):
         self._last_text_time = 0.0
         self._pending_finalize = False
 
-    def _emit_usage_metrics(self) -> None:
-        if self._audio_duration > 0:
+    def _emit_usage_metrics(self, audio_duration: float | None = None) -> None:
+        if self._usage_emitted:
+            return
+
+        duration = audio_duration if audio_duration is not None else self._audio_duration
+        if duration > 0:
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    recognition_usage=stt.RecognitionUsage(audio_duration=self._audio_duration),
+                    request_id=self._request_id,
+                    recognition_usage=stt.RecognitionUsage(audio_duration=duration),
                 )
             )
+            self._usage_emitted = True
 
-    def _process_event(self, event: Any) -> None:
+    @staticmethod
+    def _provider_audio_duration(
+        event: TranscriptionStreamDone,
+    ) -> float | None:
+        usage = getattr(event, "usage", None)
+        value = getattr(usage, "prompt_audio_seconds", None)
+        if value is None:
+            return None
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return None
+        return duration if duration > 0 else None
+
+    def _process_event(self, event: Any) -> bool:
         if isinstance(
             event,
             RealtimeTranscriptionSessionCreated | RealtimeTranscriptionSessionUpdated,
         ):
-            return
+            session = event.session
+            if session.request_id:
+                self._request_id = session.request_id
+            return False
 
         if isinstance(event, TranscriptionStreamLanguage):
             if event.audio_language:
                 self._detected_language = event.audio_language
-            return
+            return False
 
         if isinstance(event, TranscriptionStreamTextDelta):
             self._handle_interim_text(event.text)
-            return
+            return False
 
         if isinstance(event, TranscriptionStreamSegmentDelta):
-            self._handle_final_text(
+            self._handle_final_segment(
                 event.text,
                 start_time=event.start,
                 end_time=event.end,
             )
-            return
+            return False
 
         if isinstance(event, TranscriptionStreamDone):
-            if event.text:
-                self._handle_final_text(event.text)
-            else:
-                self._finalize_utterance(reason="transcription_done")
-            return
+            if event.language:
+                self._detected_language = event.language
+
+            done_text = event.text.strip()
+            if done_text:
+                if self._partial_text:
+                    self._partial_text = self._merge_partial_text(self._partial_text, done_text)
+                elif not self._is_redundant_done_text(done_text):
+                    self._partial_text = done_text
+
+            self._finalize_utterance(reason="transcription_done")
+            self._emit_usage_metrics(self._provider_audio_duration(event))
+            return True
 
         if isinstance(event, RealtimeTranscriptionError):
             error = event.error
@@ -471,9 +499,12 @@ class SpeechStream(stt.RecognizeStream):
                 event.error or "n/a",
             )
 
+        return False
+
     def _ensure_speaking(self) -> None:
         if not self._speaking:
             self._speaking = True
+            self._has_sent_final_for_turn = False
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
             self._data_sent = True
 
@@ -491,27 +522,69 @@ class SpeechStream(stt.RecognizeStream):
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    request_id=self._request_id,
                     alternatives=[stt.SpeechData(text=self._partial_text, language=language)],
                 )
             )
             self._data_sent = True
 
-    def _handle_final_text(
+    def _handle_final_segment(
+        self,
+        text: str,
+        *,
+        start_time: float | None = None,
+        end_time: float | None = None,
+    ) -> None:
+        clean_text = text.strip()
+        if not clean_text:
+            return
+
+        self._last_text_time = time.monotonic()
+        self._ensure_speaking()
+        self._partial_text = ""
+        start = (start_time or 0.0) + self.start_time_offset
+        end = (end_time or 0.0) + self.start_time_offset
+        self._emit_final_text(clean_text, start_time=start, end_time=end)
+
+    def _emit_final_text(
         self,
         text: str,
         *,
         start_time: float = 0.0,
         end_time: float = 0.0,
     ) -> None:
-        clean_text = text.strip()
-        if not clean_text:
-            self._finalize_utterance(reason="final_empty", start_time=start_time, end_time=end_time)
+        if not text or self._is_duplicate_final(text):
             return
 
-        self._last_text_time = time.monotonic()
-        self._ensure_speaking()
-        self._partial_text = self._merge_partial_text(self._partial_text, clean_text)
-        self._finalize_utterance(reason="segment", start_time=start_time, end_time=end_time)
+        language = self._detected_language or self._opts.language or ""
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=self._request_id,
+                alternatives=[
+                    stt.SpeechData(
+                        text=text,
+                        language=language,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                ],
+            )
+        )
+        self._last_final_text = text
+        self._last_final_time = time.monotonic()
+        self._has_sent_final_for_turn = True
+        self._data_sent = True
+
+    def _is_redundant_done_text(self, text: str) -> bool:
+        if not self._has_sent_final_for_turn or not self._last_final_text:
+            return False
+
+        return (
+            text == self._last_final_text
+            or text.endswith(self._last_final_text)
+            or self._last_final_text.endswith(text)
+        )
 
     def _is_duplicate_final(self, text: str) -> bool:
         if not self._last_final_text:
