@@ -302,9 +302,7 @@ class SpeechStream(stt.RecognizeStream):
                     audio_format=audio_format,
                 ) as connection:
                     self._request_id = connection.request_id or self._request_id
-                    send_task = asyncio.create_task(
-                        self._send_audio(connection)
-                    )
+                    send_task = asyncio.create_task(self._send_audio(connection))
                     try:
                         async for event in connection.events():
                             if self._process_event(event):
