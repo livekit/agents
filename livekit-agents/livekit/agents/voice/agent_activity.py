@@ -1258,7 +1258,16 @@ class AgentActivity(RecognitionHooks):
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(self) -> None:
+    def _interrupt_by_audio_activity(
+        self, *, ignore_user_transcript_until: float | None = None
+    ) -> None:
+        """
+        Interrupt the current speech or generation, and optionally ignore the user transcript until the given timestamp.
+
+        Args:
+            ignore_user_transcript_until: The timestamp until which the user transcript should be ignored.
+                If None, the user transcript will be ignored until the current time.
+        """
         if not self._interruption_by_audio_activity_enabled:
             return
 
@@ -1300,7 +1309,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self.interruption_enabled and self._audio_recognition:
                     self._audio_recognition.on_end_of_agent_speech(
-                        ignore_user_transcript_until=time.time()
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
                     )
                     self._restore_interruption_by_audio_activity()
             else:
@@ -1379,13 +1388,11 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.set()
 
     def on_interruption(self, ev: inference.InterruptionEvent) -> None:
-        # restore interruption by audio activity
+        # restore interruption by audio activity and then immediately interrupt
         self._restore_interruption_by_audio_activity()
-        self._interrupt_by_audio_activity()
-        if self._audio_recognition:
-            self._audio_recognition.on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
-            )
+        self._interrupt_by_audio_activity(
+            ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
+        )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:

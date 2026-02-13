@@ -754,6 +754,8 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     raise APIError(f"error during interruption prediction: {e}", body=msg) from e
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             raise APIError(f"interruption inference timeout: {e}") from e
+        except APIError as e:
+            raise e
         except Exception as e:
             raise APIError(f"error during interruption prediction: {e}") from e
 
