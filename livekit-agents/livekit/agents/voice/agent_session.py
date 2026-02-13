@@ -782,8 +782,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._closing = True
             self._cancel_user_away_timer()
 
-            top_activity = activity = self._activity
-            while activity is not None and not activity._closed:
+            activity = self._activity
+            while activity and isinstance(activity.agent, AgentTask):
+                # notify AgentTask to complete and wait it to resume the parent agent
+                activity._mark_draining()
+                await activity._closed_fut
+
+                if old_agent := activity.agent._old_agent:
+                    activity = old_agent._activity
+                else:
+                    activity = None
+                    break
+
+            if activity is not None:
                 activity._mark_draining()
                 if not drain:
                     try:
@@ -794,34 +805,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         pass
                 await activity.drain()
 
-                if activity is top_activity:
-                    # wait any uninterruptible speech to finish
-                    if activity.current_speech:
-                        await activity.current_speech
+                # wait any uninterruptible speech to finish
+                if activity.current_speech:
+                    await activity.current_speech
 
-                    # detach the inputs and outputs
-                    self.input.audio = None
-                    self.input.video = None
-                    self.output.audio = None
-                    self.output.transcription = None
+                # detach the inputs and outputs
+                self.input.audio = None
+                self.input.video = None
+                self.output.audio = None
+                self.output.transcription = None
 
-                    if (
-                        reason != CloseReason.ERROR
-                        and (audio_recognition := activity._audio_recognition) is not None
-                    ):
-                        # wait for the user transcript to be committed
-                        audio_recognition.commit_user_turn(
-                            audio_detached=True, transcript_timeout=2.0
-                        )
+                if (
+                    reason != CloseReason.ERROR
+                    and (audio_recognition := activity._audio_recognition) is not None
+                ):
+                    # wait for the user transcript to be committed
+                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
 
                 await activity.aclose()
-
-                # close the parent agent if the current one is an AgentTask
-                if isinstance(activity.agent, AgentTask) and activity.agent._old_agent:
-                    activity = activity.agent._old_agent._activity
-                else:
-                    break
-
             self._activity = None
 
             if self._agent_speaking_span:
@@ -1087,13 +1088,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 elif previous_activity == "pause":
                     await activity.pause(blocked_tasks=blocked_tasks or [])
 
-            if self._closing:
+            if self._closing and new_activity == "start":
+                # disallow starting a new activity when the session is closing
                 logger.warning(
                     f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
                 )
-                # new activity is not started yet, so no need to close it
-                # the pause activity will be closed in `_aclose_impl` since it belongs to an old agent of an AgentTask
                 self._next_activity = None
+                self._activity = None
                 return
 
             self._activity = self._next_activity

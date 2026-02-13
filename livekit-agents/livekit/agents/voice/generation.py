@@ -16,11 +16,11 @@ from livekit import rtc
 
 from .. import llm, utils
 from ..llm import (
-    AgentTaskCancelled,
     ChatChunk,
     ChatContext,
     StopResponse,
     ToolContext,
+    ToolError,
     utils as llm_utils,
 )
 from ..log import logger
@@ -609,11 +609,11 @@ async def _execute_tools_task(
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        if isinstance(e, AgentTaskCancelled):
+                        if isinstance(e, ToolError):
                             logger.warning(
-                                "AgentTask cancelled while executing tool",
+                                "ToolError occurred while executing tool: %s",
+                                e.message,
                                 extra={
-                                    "error": e.message,
                                     "function": fnc_call.name,
                                     "speech_id": speech_handle.id,
                                 },

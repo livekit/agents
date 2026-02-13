@@ -113,7 +113,7 @@ class AgentActivity(RecognitionHooks):
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
-        self._closed = False
+        self._closed_fut = asyncio.Future[None]()
         self._drain_fut = asyncio.Future[None]()
         self._scheduling_paused = True
 
@@ -773,10 +773,9 @@ class AgentActivity(RecognitionHooks):
         # `aclose` must only be called by AgentSession
 
         async with self._lock:
-            if self._closed:
+            if self._closed_fut.done():
                 return
 
-            self._closed = True
             self._cancel_preemptive_generation()
 
             # on_exit_task should be awaited in `drain`
@@ -789,6 +788,7 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             self._agent._activity = None
+            self._closed_fut.set_result(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:

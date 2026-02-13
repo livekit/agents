@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import AgentTaskCancelled, ChatContext, RealtimeModel, find_function_tools
+from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -795,7 +795,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         def _on_activity_draining(_: asyncio.Future[None], activity: AgentActivity) -> None:
             activity.interrupt(force=True)
             if not self.done():
-                self.complete(AgentTaskCancelled(f"activity of {activity.agent.id} is draining"))
+                self.complete(ToolError(f"activity of {activity.agent.id} is draining"))
 
         if self._activity:
             self._activity._drain_fut.add_done_callback(
@@ -803,9 +803,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
         elif not self.done():
             self.complete(
-                AgentTaskCancelled(
-                    f"activity doesn't start for {self.id}, likely due to session closing"
-                )
+                ToolError(f"activity doesn't start for {self.id}, likely due to session closing")
             )
 
         # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
