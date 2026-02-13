@@ -208,5 +208,4 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await decoder.aclose()
-
-        output_emitter.end_segment()
+            output_emitter.end_segment()
