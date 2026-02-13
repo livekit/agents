@@ -79,6 +79,8 @@ class STTOptions:
     min_confidence_threshold: float
     profanity_filter: bool
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
+    speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -135,6 +137,8 @@ class STT(stt.STT):
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -162,6 +166,8 @@ class STT(stt.STT):
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
+            speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
+            speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
         if not is_given(use_streaming):
@@ -217,6 +223,8 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
+            speech_start_timeout=speech_start_timeout,
+            speech_end_timeout=speech_end_timeout,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
@@ -398,6 +406,8 @@ class STT(stt.STT):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -425,6 +435,10 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(speech_start_timeout):
+            self._config.speech_start_timeout = speech_start_timeout
+        if is_given(speech_end_timeout):
+            self._config.speech_end_timeout = speech_end_timeout
 
         for stream in self._streams:
             stream.update_options(
@@ -436,6 +450,8 @@ class STT(stt.STT):
                 profanity_filter=profanity_filter,
                 model=model,
                 keywords=keywords,
+                speech_start_timeout=speech_start_timeout,
+                speech_end_timeout=speech_end_timeout,
             )
 
     async def aclose(self) -> None:
@@ -473,6 +489,8 @@ class SpeechStream(stt.SpeechStream):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -497,6 +515,10 @@ class SpeechStream(stt.SpeechStream):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(speech_start_timeout):
+            self._config.speech_start_timeout = speech_start_timeout
+        if is_given(speech_end_timeout):
+            self._config.speech_end_timeout = speech_end_timeout
 
         self._reconnect_event.set()
 
@@ -504,6 +526,25 @@ class SpeechStream(stt.SpeechStream):
         self,
     ) -> cloud_speech_v2.StreamingRecognitionConfig | cloud_speech_v1.StreamingRecognitionConfig:
         if self._config.version == 2:
+            # Build voice activity timeout if either timeout is specified
+            voice_activity_timeout = None
+            if is_given(self._config.speech_start_timeout) or is_given(
+                self._config.speech_end_timeout
+            ):
+                voice_activity_timeout = (
+                    cloud_speech_v2.StreamingRecognitionFeatures.VoiceActivityTimeout()
+                )
+                if is_given(self._config.speech_start_timeout):
+                    voice_activity_timeout.speech_start_timeout = Duration(
+                        seconds=int(self._config.speech_start_timeout),
+                        nanos=int((self._config.speech_start_timeout % 1) * 1e9),
+                    )
+                if is_given(self._config.speech_end_timeout):
+                    voice_activity_timeout.speech_end_timeout = Duration(
+                        seconds=int(self._config.speech_end_timeout),
+                        nanos=int((self._config.speech_end_timeout % 1) * 1e9),
+                    )
+
             return cloud_speech_v2.StreamingRecognitionConfig(
                 config=cloud_speech_v2.RecognitionConfig(
                     explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
@@ -524,7 +565,11 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                     interim_results=self._config.interim_results,
-                    enable_voice_activity_events=self._config.enable_voice_activity_events,
+                    # Auto-enable voice activity events when voice_activity_timeout is specified,
+                    # as per Google API documentation requirements
+                    enable_voice_activity_events=self._config.enable_voice_activity_events
+                    or (voice_activity_timeout is not None),
+                    voice_activity_timeout=voice_activity_timeout,
                 ),
             )
 
