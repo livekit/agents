@@ -174,7 +174,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Telnyx TTS WebSocket error: {ws.exception()}")
+                    logger.error("Telnyx TTS WebSocket error: %s", ws.exception())
                     break
 
             decoder.end_input()

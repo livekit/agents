@@ -224,7 +224,11 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
-                        logger.debug("Telnyx STT received: %s", data)
+                        logger.debug(
+                            "Telnyx STT received: is_final=%s, has_transcript=%s",
+                            data.get("is_final"),
+                            bool(data.get("transcript")),
+                        )
                         self._process_stream_event(data)
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
