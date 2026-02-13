@@ -88,7 +88,9 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> None:
+    def __init__(
+        self, *, tts: TTS, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._segments_ch = utils.aio.Chan[str]()
