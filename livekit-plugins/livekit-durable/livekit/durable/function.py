@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Coroutine, Generator
+from collections.abc import Callable, Coroutine, Generator, Iterator
 from types import (
     AsyncGeneratorType,
     CodeType,
@@ -14,7 +14,7 @@ from types import (
 )
 from typing import Any, TypeVar, cast
 
-import lk_durable as ext
+import lk_durable as ext  # type: ignore[import-not-found]
 
 from .registry import (
     RegisteredFunction,
@@ -39,7 +39,7 @@ class DurableFunction:
         self.__name__ = fn.__name__
         self.__qualname__ = fn.__qualname__
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         result = self.registered_fn.fn(*args, **kwargs)
 
         if isinstance(result, GeneratorType):
@@ -56,7 +56,7 @@ class DurableFunction:
     def __repr__(self) -> str:
         return f"DurableFunction({self.__qualname__})"
 
-    def unregister(self):
+    def unregister(self) -> None:
         unregister_function(self.registered_fn.key)
 
 
@@ -107,7 +107,7 @@ class Serializable:
         self.__name__ = registered_fn.fn.__name__
         self.__qualname__ = registered_fn.fn.__qualname__
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         g = self.g
         rfn = self.registered_fn
 
@@ -167,7 +167,7 @@ class Serializable:
         }
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         function_state = state["function"]
         frame_state = state["frame"]
 
@@ -251,20 +251,20 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
         return durable_coroutine_wrapper
 
     def send(self, send: _SendT) -> _YieldT:
-        return self.coroutine.send(send)
+        return self.coroutine.send(send)  # type: ignore[no-any-return]
 
-    def throw(
+    def throw(  # type: ignore[override]
         self,
         typ: type[BaseException],
         val: BaseException | object = None,
         tb: TracebackType | None = None,
     ) -> _YieldT:
-        return self.coroutine.throw(typ, val, tb)
+        return self.coroutine.throw(typ, val, tb)  # type: ignore[no-any-return]
 
     def close(self) -> None:
         self.coroutine.close()
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         Serializable.__setstate__(self, state)
         self.coroutine = cast(CoroutineType, self.g)
 
@@ -281,7 +281,7 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
         return self.coroutine.cr_code
 
     @property
-    def cr_frame(self) -> FrameType:
+    def cr_frame(self) -> FrameType | None:
         return self.coroutine.cr_frame
 
     @property
@@ -317,23 +317,23 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         return self
 
     def __next__(self) -> _YieldT:
-        return next(self.generator)
+        return next(self.generator)  # type: ignore[no-any-return]
 
     def send(self, send: _SendT) -> _YieldT:
-        return self.generator.send(send)
+        return self.generator.send(send)  # type: ignore[no-any-return, arg-type]
 
-    def throw(
+    def throw(  # type: ignore[override]
         self,
         typ: type[BaseException],
         val: BaseException | object = None,
         tb: TracebackType | None = None,
     ) -> _YieldT:
-        return self.generator.throw(typ, val, tb)
+        return self.generator.throw(typ, val, tb)  # type: ignore[no-any-return]
 
     def close(self) -> None:
         self.generator.close()
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         Serializable.__setstate__(self, state)
         self.generator = cast(GeneratorType, self.g)
 
@@ -354,7 +354,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         return self.generator.gi_frame
 
     @property
-    def gi_yieldfrom(self) -> GeneratorType | None:
+    def gi_yieldfrom(self) -> Iterator[Any] | None:
         return self.generator.gi_yieldfrom
 
     def __repr__(self) -> str:

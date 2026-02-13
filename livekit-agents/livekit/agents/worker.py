@@ -1204,15 +1204,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._tasks.add(user_task)
                     user_task.add_done_callback(self._tasks.discard)
 
-                # elif which == "text_request":
-                #     # TODO(long): do we want to support text request from ws?
-                #     user_task = self._loop.create_task(
-                #         self._handle_text_request(server_msg.text_request),
-                #         name="agent_text_request",
-                #     )
-                #     self._tasks.add(user_task)
-                #     user_task.add_done_callback(self._tasks.discard)
-
         tasks = [
             asyncio.create_task(_load_task()),
             asyncio.create_task(_send_task()),

@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from types import coroutine
 from typing import Any, Generic, Self, TypeVar
 
-from livekit.agents.voice.agent import AgentTask
-from livekit.durable.function import DurableCoroutine, DurableGenerator, durable
+from livekit.durable.function import DurableCoroutine, durable
+
+from .log import logger
+from .voice.agent import AgentTask
 
 
 @coroutine
@@ -87,7 +89,7 @@ class EffectCall(Generic[TaskResult_T]):
 
     def __await__(self) -> Generator[Any, Any, TaskResult_T]:
         self._c_ctx = contextvars.copy_context()
-        return yields(self)
+        return yields(self)  # type: ignore
 
     def _set_result(self, value: Any) -> None:
         self._c_result = value
@@ -132,7 +134,7 @@ class DurableInvalidStateError(RuntimeError):
 
 @dataclass
 class DurableTask:
-    generator: DurableGenerator | bytes
+    generator: Generator | bytes
     fnc_name: str
     next_value: EffectCall | None = None
     metadata: Any | None = None
@@ -225,7 +227,6 @@ class DurableScheduler:
         tasks = pickle.loads(states) if isinstance(states, bytes) else states
         exe_tasks = []
         for task in tasks:
-            print("restoring task", task)
             exe_tasks.append(self.execute(task))
         return exe_tasks
 
@@ -252,10 +253,7 @@ class DurableScheduler:
                 val = await exe_task
                 ec._set_result(val)
             except Exception as e:
-                # TODO: remove this after debugging
-                import traceback
-
-                traceback.print_exc()
+                logger.exception("error executing step of durable function")
                 ec._set_exception(e)
 
         g = task.generator

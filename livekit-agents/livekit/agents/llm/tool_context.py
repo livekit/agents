@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeGuard, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeGuard, TypeVar, cast, overload
 
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
@@ -163,7 +163,7 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
         self, func: Callable[_P, _R] | DurableFunction, info: _InfoT, instance: Any = None
     ) -> None:
         if isinstance(func, DurableFunction):
-            self._raw_func = func.registered_fn.fn
+            self._raw_func = cast(Callable[_P, _R], func.registered_fn.fn)
         else:
             self._raw_func = func
             if info.flags & ToolFlag.DURABLE:
