@@ -66,6 +66,9 @@ NUM_CHANNELS = 1
 Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"] | str
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
+
+DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
 
 @dataclass
@@ -79,6 +82,7 @@ class _TTSOptions:
     temperature: float
     timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
+    timestamp_transport_strategy: TimestampTransportStrategy = DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY
     buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
 
@@ -368,6 +372,7 @@ class _InworldConnection:
                             "temperature": opts.temperature,
                             "bufferCharThreshold": opts.buffer_char_threshold,
                             "maxBufferDelayMs": opts.max_buffer_delay_ms,
+                            "timestampTransportStrategy": opts.timestamp_transport_strategy,
                         },
                         "contextId": msg.context_id,
                     }
@@ -782,6 +787,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
@@ -813,6 +819,10 @@ class TTS(tts.TTS):
             text_normalization (str, optional): Controls text normalization. When "ON", numbers,
                 dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
                 text is read exactly as written. Defaults to automatic.
+            timestamp_transport_strategy (str, optional): Controls how timestamp info is
+                transported relative to audio data. "SYNC" returns timestamps in the same
+                message as audio data. "ASYNC" allows timestamps to return in trailing
+                messages after the audio data. Defaults to "ASYNC".
             buffer_char_threshold (int, optional): For streaming, the minimum number of characters
                 in the buffer that automatically triggers audio generation. Defaults to 1000.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
@@ -862,6 +872,11 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
+            timestamp_transport_strategy=cast(
+                TimestampTransportStrategy, timestamp_transport_strategy
+            )
+            if is_given(timestamp_transport_strategy)
+            else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
             if is_given(buffer_char_threshold)
             else DEFAULT_BUFFER_CHAR_THRESHOLD,
@@ -916,6 +931,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -933,6 +949,8 @@ class TTS(tts.TTS):
                 tokens to generate the response.
             timestamp_type (str, optional): Controls timestamp metadata ("WORD" or "CHARACTER").
             text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
+            timestamp_transport_strategy (str, optional): Controls timestamp transport strategy
+                ("SYNC" or "ASYNC").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
         """
@@ -954,6 +972,10 @@ class TTS(tts.TTS):
             self._opts.timestamp_type = cast(TimestampType, timestamp_type)
         if is_given(text_normalization):
             self._opts.text_normalization = cast(TextNormalization, text_normalization)
+        if is_given(timestamp_transport_strategy):
+            self._opts.timestamp_transport_strategy = cast(
+                TimestampTransportStrategy, timestamp_transport_strategy
+            )
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
@@ -1056,6 +1078,7 @@ class ChunkedStream(tts.ChunkedStream):
                 body_params["timestampType"] = self._opts.timestamp_type
             if utils.is_given(self._opts.text_normalization):
                 body_params["applyTextNormalization"] = self._opts.text_normalization
+            body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
             x_request_id = str(uuid.uuid4())
             async with self._tts._ensure_session().post(
@@ -1204,10 +1227,14 @@ def _parse_timestamp_info(
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        for word, start, end in zip(words, starts, ends, strict=False):
+        last_idx = len(words) - 1
+        for idx, (word, start, end) in enumerate(zip(words, starts, ends, strict=False)):
+            # Each word gets a trailing space so that when the synchronizer concatenates
+            # them via `pushed_text += text`, the transcript reads naturally.
+            text = f"{word} " if idx < last_idx else word
             timed_strings.append(
                 TimedString(
-                    word,
+                    text,
                     start_time=cumulative_time + start,
                     end_time=cumulative_time + end,
                 )
