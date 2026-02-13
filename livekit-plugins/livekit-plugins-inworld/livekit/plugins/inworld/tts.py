@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import time
+import uuid
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -45,6 +46,9 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
+from .version import __version__
+
+USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING = "OGG_OPUS"
@@ -230,10 +234,19 @@ class _InworldConnection:
                 return
 
             url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
+            request_id = str(uuid.uuid4())
             self._ws = await self._session.ws_connect(
-                url, headers={"Authorization": self._authorization}
+                url,
+                headers={
+                    "Authorization": self._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": request_id,
+                },
             )
-            logger.debug("Established Inworld TTS WebSocket connection (shared)")
+            logger.debug(
+                "Established Inworld TTS WebSocket connection (shared)",
+                extra={"request_id": request_id},
+            )
 
             self._send_task = asyncio.create_task(self._send_loop())
             self._recv_task = asyncio.create_task(self._recv_loop())
@@ -997,7 +1010,11 @@ class TTS(tts.TTS):
 
         async with self._ensure_session().get(
             url,
-            headers={"Authorization": self._authorization},
+            headers={
+                "Authorization": self._authorization,
+                "X-User-Agent": USER_AGENT,
+                "X-Request-Id": str(uuid.uuid4()),
+            },
             params=params,
         ) as resp:
             if not resp.ok:
@@ -1040,10 +1057,13 @@ class ChunkedStream(tts.ChunkedStream):
             if utils.is_given(self._opts.text_normalization):
                 body_params["applyTextNormalization"] = self._opts.text_normalization
 
+            x_request_id = str(uuid.uuid4())
             async with self._tts._ensure_session().post(
                 urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
                 headers={
                     "Authorization": self._tts._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": x_request_id,
                 },
                 json=body_params,
                 timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
@@ -1085,14 +1105,14 @@ class ChunkedStream(tts.ChunkedStream):
                         raise APIStatusError(
                             message=error.get("message"),
                             status_code=error.get("code"),
-                            request_id=request_id,
+                            request_id=x_request_id,
                             body=None,
                         )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message=e.message, status_code=e.status, request_id=x_request_id, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
