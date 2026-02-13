@@ -18,7 +18,7 @@ pip install livekit-plugins-turn-detector
 
 ### Multilingual model
 
-We've trained a multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish`
+We've trained a multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish, Hindi`
 
 The multilingual model requires ~400MB of RAM and completes inferences in ~25ms.
 
