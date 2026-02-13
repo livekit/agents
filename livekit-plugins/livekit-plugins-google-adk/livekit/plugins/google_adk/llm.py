@@ -77,8 +77,9 @@ class LLMAdapter(llm.LLM):
     def model(self) -> str:
         if self._model_name:
             return self._model_name
-        if isinstance(self._agent, LlmAgent) and self._agent.model:
-            return str(self._agent.model)
+        agent_model = getattr(self._agent, "model", None)
+        if agent_model:
+            return str(agent_model)
         return "adk-agent"
 
     @property
