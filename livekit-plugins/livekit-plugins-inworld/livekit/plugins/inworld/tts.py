@@ -108,6 +108,12 @@ class _ContextInfo:
     segment_started: bool = False
     created_at: float = field(default_factory=time.time)
     close_started_at: float | None = None
+    # Cumulative timestamp tracking for monotonic timestamps across generations.
+    # When auto_mode is enabled or flush_context() is called, the server resets
+    # timestamps to 0 after each generation. We add cumulative_time to maintain
+    # monotonically increasing timestamps within an agent turn.
+    cumulative_time: float = 0.0
+    generation_end_time: float = 0.0
 
 
 @dataclass
@@ -356,6 +362,8 @@ class _InworldConnection:
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    # Always enable auto_mode since we always use SentenceTokenizer
+                    pkt["create"]["autoMode"] = True
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -432,8 +440,43 @@ class _InworldConnection:
                             ctx.emitter.start_segment(segment_id=context_id)
                             ctx.segment_started = True
 
+                        # Adjust timestamps for cumulative offset
                         if timestamp_info := audio_chunk.get("timestampInfo"):
-                            timed_strings = _parse_timestamp_info(timestamp_info)
+                            if word_align := timestamp_info.get("wordAlignment"):
+                                raw_words = word_align.get("words", [])
+                                raw_starts = word_align.get("wordStartTimeSeconds", [])
+                                raw_ends = word_align.get("wordEndTimeSeconds", [])
+                                logger.debug(
+                                    "Raw timestamps from server",
+                                    extra={
+                                        "context_id": context_id,
+                                        "cumulative_offset": ctx.cumulative_time,
+                                        "raw_words": raw_words,
+                                        "raw_starts": raw_starts,
+                                        "raw_ends": raw_ends,
+                                    },
+                                )
+
+                            timed_strings = _parse_timestamp_info(
+                                timestamp_info, cumulative_time=ctx.cumulative_time
+                            )
+                            # Track generation end time from last word for cumulative offset
+                            if timed_strings:
+                                last_ts = timed_strings[-1]
+                                if utils.is_given(last_ts.end_time):
+                                    ctx.generation_end_time = last_ts.end_time
+
+                                logger.debug(
+                                    "Adjusted timestamps (with cumulative offset)",
+                                    extra={
+                                        "context_id": context_id,
+                                        "words": [str(ts) for ts in timed_strings],
+                                        "adjusted_starts": [ts.start_time for ts in timed_strings],
+                                        "adjusted_ends": [ts.end_time for ts in timed_strings],
+                                        "generation_end_time": ctx.generation_end_time,
+                                    },
+                                )
+
                             for ts in timed_strings:
                                 ctx.emitter.push_timed_transcript(ts)
 
@@ -442,6 +485,20 @@ class _InworldConnection:
                     continue
 
                 if "flushCompleted" in result:
+                    # Signals the end of a generation, subsequent timestampes from the server
+                    # will reset offset to 0. We need to update the cumulative time to the
+                    # generation end time to maintain monotonically increasing timestamps
+                    # within the agent turn.
+                    if ctx.generation_end_time > 0:
+                        logger.debug(
+                            "flushCompleted - updating cumulative time",
+                            extra={
+                                "context_id": context_id,
+                                "old_cumulative_time": ctx.cumulative_time,
+                                "new_cumulative_time": ctx.generation_end_time,
+                            },
+                        )
+                        ctx.cumulative_time = ctx.generation_end_time
                     continue
 
                 if "contextClosed" in result:
@@ -1081,7 +1138,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
-                connection.flush_context(context_id)
+            connection.flush_context(context_id)
             connection.close_context(context_id)
 
         tasks = [
@@ -1109,8 +1166,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
 
-def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
-    """Parse timestamp info from API response into TimedString objects."""
+def _parse_timestamp_info(
+    timestamp_info: dict[str, Any], cumulative_time: float = 0.0
+) -> list[TimedString]:
+    """Parse timestamp info from API response into TimedString objects.
+
+    Args:
+        timestamp_info: The timestamp info from the API response.
+        cumulative_time: Offset to add to all timestamps for monotonic ordering
+            across multiple generations within a single context.
+    """
     timed_strings: list[TimedString] = []
 
     # Handle word-level alignment
@@ -1120,7 +1185,13 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         ends = word_align.get("wordEndTimeSeconds", [])
 
         for word, start, end in zip(words, starts, ends, strict=False):
-            timed_strings.append(TimedString(word, start_time=start, end_time=end))
+            timed_strings.append(
+                TimedString(
+                    word,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     # Handle character-level alignment
     if char_align := timestamp_info.get("characterAlignment"):
@@ -1129,6 +1200,12 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         ends = char_align.get("characterEndTimeSeconds", [])
 
         for char, start, end in zip(chars, starts, ends, strict=False):
-            timed_strings.append(TimedString(char, start_time=start, end_time=end))
+            timed_strings.append(
+                TimedString(
+                    char,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     return timed_strings
