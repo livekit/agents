@@ -1,40 +1,55 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-try:
+if TYPE_CHECKING:
     from inferedge_moss import (
         AddDocumentsOptions,
         DocumentInfo,
         GetDocumentsOptions,
         IndexInfo,
-        MossClient as _InferEdgeMossClient,
+        MossClient as Client,
+        QueryOptions,
         SearchResult,
     )
-except ImportError:
-    _InferEdgeMossClient = None
+else:
+    try:
+        from inferedge_moss import (
+            AddDocumentsOptions,
+            DocumentInfo,
+            GetDocumentsOptions,
+            IndexInfo,
+            MossClient as Client,
+            QueryOptions,
+            SearchResult,
+        )
+    except ImportError:
+        Client = None  # type: ignore[misc, assignment]
 
-    class _MissingDependency:
-        def __init__(self, *_: Any, **__: Any) -> None:
-            raise RuntimeError(
-                "inferedge-moss is required to use moss integrations. Install it via `pip install inferedge-moss`."
-            )
+        class _MissingDependency:
+            def __init__(self, *_: Any, **__: Any) -> None:
+                raise RuntimeError(
+                    "inferedge-moss is required to use moss integrations. Install it via `pip install inferedge-moss`."
+                )
 
-    class DocumentInfo(_MissingDependency):
-        pass
+        class DocumentInfo(_MissingDependency):  # type: ignore[no-redef]
+            pass
 
-    class IndexInfo(_MissingDependency):
-        pass
+        class IndexInfo(_MissingDependency):  # type: ignore[no-redef]
+            pass
 
-    class SearchResult(_MissingDependency):
-        pass
+        class SearchResult(_MissingDependency):  # type: ignore[no-redef]
+            pass
 
-    class AddDocumentsOptions(_MissingDependency):
-        pass
+        class AddDocumentsOptions(_MissingDependency):  # type: ignore[no-redef]
+            pass
 
-    class GetDocumentsOptions(_MissingDependency):
-        pass
+        class GetDocumentsOptions(_MissingDependency):  # type: ignore[no-redef]
+            pass
+
+        class QueryOptions(_MissingDependency):  # type: ignore[no-redef]
+            pass
 
 
 from .log import logger
@@ -45,6 +60,7 @@ __all__ = [
     "GetDocumentsOptions",
     "IndexInfo",
     "MossClient",
+    "QueryOptions",
     "SearchResult",
 ]
 
@@ -57,25 +73,27 @@ class MossClient:
         project_id: str | None = None,
         project_key: str | None = None,
     ) -> None:
-        if _InferEdgeMossClient is None:
+        if Client is None:
             raise RuntimeError(
                 "inferedge-moss is required to use MossClient. Install it via `pip install inferedge-moss`."
             )
 
-        self._project_id = project_id or os.environ.get("MOSS_PROJECT_ID")
-        self._project_key = project_key or os.environ.get("MOSS_PROJECT_KEY")
+        project_id_value = project_id or os.environ.get("MOSS_PROJECT_ID")
+        project_key_value = project_key or os.environ.get("MOSS_PROJECT_KEY")
 
-        if not self._project_id:
+        if not project_id_value:
             raise ValueError(
                 "project_id must be provided or set through the MOSS_PROJECT_ID environment variable"
             )
 
-        if not self._project_key:
+        if not project_key_value:
             raise ValueError(
                 "project_key must be provided or set through the MOSS_PROJECT_KEY environment variable"
             )
 
-        self._client = _InferEdgeMossClient(self._project_id, self._project_key)
+        self._project_id: str = project_id_value
+        self._project_key: str = project_key_value
+        self._client = Client(self._project_id, self._project_key)
 
     @property
     def project_id(self) -> str:
@@ -98,7 +116,7 @@ class MossClient:
     # ---------- Index lifecycle ----------
 
     async def create_index(
-        self, index_name: str, documents: list[DocumentInfo], model_id: str
+        self, index_name: str, documents: list[DocumentInfo], model_id: str | None = None
     ) -> bool:
         """Create a new index and populate it with documents."""
 
@@ -175,26 +193,64 @@ class MossClient:
 
     # ---------- Index loading & querying ----------
 
-    async def load_index(self, index_name: str) -> str:
-        """Load an index from a local .moss file into memory."""
+    async def load_index(
+        self, index_name: str, auto_refresh: bool = False, polling_interval_in_seconds: int = 600
+    ) -> str:
+        """Load an index from a local .moss file into memory.
+
+        Args:
+            index_name: Name of the index to load
+            auto_refresh: Whether to automatically refresh the index from remote
+            polling_interval_in_seconds: Interval in seconds between auto-refresh polls
+        """
 
         logger.debug("loading moss index", extra={"index": index_name})
-        result = await self._client.load_index(index_name)
+        result = await self._client.load_index(  # type: ignore[call-arg]
+            index_name, auto_refresh, polling_interval_in_seconds
+        )
         if not isinstance(result, str):
             logger.debug("unexpected load_index return type", extra={"type": type(result).__name__})
         return result
 
+    async def unload_index(self, index_name: str) -> None:
+        """Unload an index from memory."""
+
+        logger.debug("unloading moss index", extra={"index": index_name})
+        await self._client.unload_index(index_name)  # type: ignore[attr-defined]
+
     async def query(
-        self, index_name: str, query: str, top_k: int = 5, *, auto_load: bool = True
+        self,
+        index_name: str,
+        query: str,
+        top_k: int = 5,
+        *,
+        auto_load: bool = True,
+        options: QueryOptions | None = None,
     ) -> SearchResult:
-        """Perform a semantic similarity search against the specified index."""
+        """Perform a semantic similarity search against the specified index.
+
+        Args:
+            index_name: Name of the index to query
+            query: Search query text
+            top_k: Number of results to return (default: 5). Ignored if options.top_k is set.
+            auto_load: Whether to automatically load the index if not already loaded
+            options: Query options for custom embeddings and advanced settings
+        """
         if auto_load:
             await self.load_index(index_name)
-        logger.debug("querying moss index", extra={"index": index_name, "top_k": top_k})
-        result = await self._client.query(index_name, query, top_k)
-        if not isinstance(result, SearchResult):
-            logger.debug("unexpected query return type", extra={"type": type(result).__name__})
-        return result
+
+        if options is None:
+            options = QueryOptions(top_k=top_k)
+
+        logger.debug("querying moss index", extra={"index": index_name, "query": query})
+
+        search_result = await self._client.query(index_name, query, options=options)
+
+        if not isinstance(search_result, SearchResult):
+            logger.debug(
+                "unexpected query return type", extra={"type": type(search_result).__name__}
+            )
+        return search_result
 
     def __repr__(self) -> str:
         return f"MossClient(project_id={self._project_id!r})"
