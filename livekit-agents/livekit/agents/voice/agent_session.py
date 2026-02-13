@@ -962,7 +962,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
             if isinstance(user_input, str)
-            else NOT_GIVEN
+            else user_input
         )
 
         run_state = self._global_run_state
