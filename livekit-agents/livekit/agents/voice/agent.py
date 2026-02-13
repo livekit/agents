@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -701,9 +700,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             return
         self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
-    async def wait_for_inactive(self) -> None:
-        await self.__inactive_ev.wait()
-
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
@@ -784,7 +780,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             old_allow_interruptions = speech_handle.allow_interruptions
             speech_handle.allow_interruptions = False
 
-        self.__inactive_ev.clear()
         blocked_tasks = [current_task]
         if (
             old_activity._on_enter_task
@@ -804,21 +799,30 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
-
-        if not self._activity and not self.done():
-            self.complete(
-                ToolError(f"activity doesn't start for {self.id}, likely due to session closing")
+        self.__inactive_ev.clear()
+        try:
+            await session._update_activity(
+                self, previous_activity="pause", blocked_tasks=blocked_tasks
             )
 
-        # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
-        run_state = session._global_run_state
-        if speech_handle and run_state and not run_state.done():
-            # make sure to not deadlock on the current speech handle
-            run_state._unwatch_handle(speech_handle)
-            # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
-            # so handles added inside the on_enter will make sure we're not completing the run_state too early.
-            run_state._mark_done_if_needed(None)
+            if not self._activity and not self.done():
+                self.complete(
+                    ToolError(
+                        f"activity doesn't start for {self.id}, likely due to session closing"
+                    )
+                )
+
+            # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
+            run_state = session._global_run_state
+            if speech_handle and run_state and not run_state.done():
+                # make sure to not deadlock on the current speech handle
+                run_state._unwatch_handle(speech_handle)
+                # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
+                # so handles added inside the on_enter will make sure we're not completing the run_state too early.
+                run_state._mark_done_if_needed(None)
+        except Exception:
+            self.__inactive_ev.set()
+            raise
 
         try:
             return await asyncio.shield(self.__fut)
@@ -854,6 +858,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
+
+    async def _wait_for_inactive(self) -> None:
+        await self.__inactive_ev.wait()
 
 
 @dataclass

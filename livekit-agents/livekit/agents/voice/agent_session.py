@@ -786,7 +786,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             while activity and isinstance(agent_task := activity.agent, AgentTask):
                 # notify AgentTask to complete and wait it to resume the parent agent
                 agent_task.cancel()
-                await agent_task.wait_for_inactive()
+                await agent_task._wait_for_inactive()
 
                 if old_agent := agent_task._old_agent:
                     activity = old_agent._activity
