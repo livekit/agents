@@ -783,19 +783,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
 
             activity = self._activity
-            while activity and isinstance(activity.agent, AgentTask):
+            while activity and isinstance(agent_task := activity.agent, AgentTask):
                 # notify AgentTask to complete and wait it to resume the parent agent
-                activity._mark_draining()
-                await activity._closed_fut
+                agent_task.cancel()
+                await agent_task.wait_for_inactive()
 
-                if old_agent := activity.agent._old_agent:
+                if old_agent := agent_task._old_agent:
                     activity = old_agent._activity
                 else:
-                    activity = None
                     break
 
             if activity is not None:
-                activity._mark_draining()
                 if not drain:
                     try:
                         # force interrupt speeches when closing the session

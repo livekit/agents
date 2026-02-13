@@ -611,7 +611,7 @@ async def _execute_tools_task(
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
-                                "ToolError occurred while executing tool: %s",
+                                "ToolError while executing tool: %s",
                                 e.message,
                                 extra={
                                     "function": fnc_call.name,

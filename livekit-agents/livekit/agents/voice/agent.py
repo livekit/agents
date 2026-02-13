@@ -686,10 +686,23 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
+        self.__inactive_ev = asyncio.Event()
+        self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
+
         self._old_agent: Agent | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
+
+    def cancel(self) -> None:
+        if self._activity:
+            self._activity.interrupt(force=True)
+        if self.__fut.done():
+            return
+        self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
+
+    async def wait_for_inactive(self) -> None:
+        await self.__inactive_ev.wait()
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
@@ -771,6 +784,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             old_allow_interruptions = speech_handle.allow_interruptions
             speech_handle.allow_interruptions = False
 
+        self.__inactive_ev.clear()
         blocked_tasks = [current_task]
         if (
             old_activity._on_enter_task
@@ -792,16 +806,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
 
-        def _on_activity_draining(_: asyncio.Future[None], activity: AgentActivity) -> None:
-            activity.interrupt(force=True)
-            if not self.done():
-                self.complete(ToolError(f"activity of {activity.agent.id} is draining"))
-
-        if self._activity:
-            self._activity._drain_fut.add_done_callback(
-                functools.partial(_on_activity_draining, activity=self._activity)
-            )
-        elif not self.done():
+        if not self._activity and not self.done():
             self.complete(
                 ToolError(f"activity doesn't start for {self.id}, likely due to session closing")
             )
@@ -845,6 +850,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 await session._update_activity(
                     old_agent, new_activity="resume", wait_on_enter=False
                 )
+            self.__inactive_ev.set()
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()

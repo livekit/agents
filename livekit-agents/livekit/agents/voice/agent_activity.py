@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import heapq
 import json
@@ -113,8 +112,7 @@ class AgentActivity(RecognitionHooks):
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
-        self._closed_fut = asyncio.Future[None]()
-        self._drain_fut = asyncio.Future[None]()
+        self._closed = False
         self._scheduling_paused = True
 
         self._current_speech: SpeechHandle | None = None
@@ -463,7 +461,6 @@ class AgentActivity(RecognitionHooks):
             if self._started:
                 return
 
-            self._drain_fut = asyncio.Future[None]()
             start_span = tracer.start_span(
                 "start_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
@@ -624,10 +621,6 @@ class AgentActivity(RecognitionHooks):
         )
         self._audio_recognition.start()
 
-    def _mark_draining(self) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
-            self._drain_fut.set_result(None)
-
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
         # `drain` must only be called by AgentSession
@@ -643,8 +636,6 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
-            self._mark_draining()
-
             if self._on_exit_task is None:
                 self._on_exit_task = task = self._create_speech_task(
                     _traceable_on_exit(), name="AgentTask_on_exit"
@@ -773,9 +764,10 @@ class AgentActivity(RecognitionHooks):
         # `aclose` must only be called by AgentSession
 
         async with self._lock:
-            if self._closed_fut.done():
+            if self._closed:
                 return
 
+            self._closed = True
             self._cancel_preemptive_generation()
 
             # on_exit_task should be awaited in `drain`
@@ -788,7 +780,6 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             self._agent._activity = None
-            self._closed_fut.set_result(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
