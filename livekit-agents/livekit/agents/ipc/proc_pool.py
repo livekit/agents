@@ -110,13 +110,9 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             task.add_done_callback(self._spawn_tasks.discard)
 
         if self._warmed_proc_queue.empty():
-            logger.info(
+            logger.warning(
                 "no warmed process available for job, waiting for one to be created",
-                extra={
-                    "job_id": info.job.id,
-                    "spawn_tasks": len(self._spawn_tasks),
-                    "jobs_waiting": self._jobs_waiting_for_process,
-                },
+                extra={"job_id": info.job.id},
             )
 
         proc = await self._warmed_proc_queue.get()
