@@ -119,14 +119,14 @@ def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:
     img = llm.utils.serialize_image(image)
     if img.external_url:
         return {
-            "type": "image_url",
+            "type": "input_image",
             "image_url": img.external_url,
             "detail": img.inference_detail,
         }
     assert img.data_bytes is not None
     b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
     return {
-        "type": "image_url",
+        "type": "input_image",
         "image_url": f"data:{img.mime_type};base64,{b64_data}",
         "detail": img.inference_detail,
     }
