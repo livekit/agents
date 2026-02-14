@@ -157,6 +157,15 @@ class SendMessageResponse(BaseModel):
     items: list[ChatItem]
 
 
+class GetRTCStatsRequest(BaseModel):
+    pass
+
+
+class GetRTCStatsResponse(BaseModel):
+    publisher_stats: list[dict[str, Any]]
+    subscriber_stats: list[dict[str, Any]]
+
+
 # Text stream request/response protocol (no size limit unlike RPC)
 class StreamRequest(BaseModel):
     """Request sent via text stream."""
@@ -343,6 +352,8 @@ class ClientEventsHandler:
                     response_payload = await self._stream_get_agent_info(request.payload)
                 elif request.method == "send_message":
                     response_payload = await self._stream_send_message(request.payload)
+                elif request.method == "get_rtc_stats":
+                    response_payload = await self._stream_get_rtc_stats(request.payload)
                 else:
                     response_payload = ""
                     error = f"Unknown method: {request.method}"
@@ -406,6 +417,17 @@ class ClientEventsHandler:
             items.append(event.item)
 
         response = SendMessageResponse(items=items)
+        return response.model_dump_json()
+
+    async def _stream_get_rtc_stats(self, payload: str) -> str:
+        """Handle get_rtc_stats via text stream."""
+        from google.protobuf.json_format import MessageToDict
+
+        rtc_stats = await self._room.get_rtc_stats()
+        response = GetRTCStatsResponse(
+            publisher_stats=[MessageToDict(s) for s in rtc_stats.publisher_stats],
+            subscriber_stats=[MessageToDict(s) for s in rtc_stats.subscriber_stats],
+        )
         return response.model_dump_json()
 
     def _register_event_handlers(self) -> None:
@@ -801,3 +823,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             timeout=response_timeout,
         )
         return SendMessageResponse.model_validate_json(response)
+
+    async def fetch_rtc_stats(self) -> GetRTCStatsResponse:
+        request = GetRTCStatsRequest()
+        response = await self._send_request(
+            method="get_rtc_stats",
+            payload=request.model_dump_json(),
+        )
+        return GetRTCStatsResponse.model_validate_json(response)
