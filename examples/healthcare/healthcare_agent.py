@@ -19,6 +19,7 @@ from livekit.agents import (
     JobContext,
     RunContext,
     cli,
+    llm,
 )
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
@@ -178,10 +179,14 @@ async def update_record(
 
 
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
-    def __init__(self):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="You will now assist the user with selecting a doctor and appointment time.",
+            instructions="""You will now assist the user with selecting a doctor and appointment time.
+            Do not be verbose and ask for any unnecessary information unless instructed to.
+            Avoid using special characters like bullet points, maintain a natural tone.
+            """,
             tools=[update_record, transfer_to_human],
+            chat_ctx=chat_ctx,
         )
         self._selected_doctor: str | None = None
         self._appointment_time: datetime | None = None
@@ -297,9 +302,12 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
 
 class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
-    def __init__(self, function: str):
+    def __init__(self, function: str, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="You will now assist the user with modifying their appointment.",
+            instructions="""You will now assist the user with modifying their appointment.
+            Do not be verbose and ask for any unnecessary information unless instructed to.
+            Avoid using special characters like bullet points, maintain a natural tone.""",
+            chat_ctx=chat_ctx,
             tools=[update_record, transfer_to_human],
         )
         self._function = function
@@ -354,7 +362,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                     ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
-                result = await ScheduleAppointmentTask()
+                result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
                 self.complete(
                     ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
@@ -412,7 +420,7 @@ class HealthcareAgent(Agent):
                 chat_ctx = task_group.chat_ctx.copy()
                 chat_ctx.add_message(
                     role="system",
-                    content=f"Alert the user that an existing patient record has been found. This birthday has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['date_of_birth']}",
+                    content=f"Alert the user that an existing patient record has been found. This birthday has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['date_of_birth']}. After confirming, call 'update_dob'.",
                 )
                 await task_group.update_chat_ctx(chat_ctx)
             elif not existing_record and self.session.userdata.profile:
@@ -424,14 +432,14 @@ class HealthcareAgent(Agent):
             chat_ctx = task_group.chat_ctx.copy()
             chat_ctx.add_message(
                 role="system",
-                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}",
+                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}. After confirming, call 'update_phone_numer'.",
             )
             await task_group.update_chat_ctx(chat_ctx)
         if event.task_id == "get_phone_number_task" and self._found_profile:
             chat_ctx = task_group.chat_ctx.copy()
             chat_ctx.add_message(
                 role="system",
-                content=f"This insurance has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['insurance']}",
+                content=f"This insurance has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['insurance']}. After confirming, call 'record_health_insurance'.",
             )
             await task_group.update_chat_ctx(chat_ctx)
 
@@ -491,7 +499,7 @@ class HealthcareAgent(Agent):
     async def schedule_appointment(self):
         """Call to schedule an appointment for the user. Do not ask for any information in advance."""
         await self.profile_authenticator()
-        result = await ScheduleAppointmentTask()
+        result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
 
         appointment = {
             "doctor_name": result.doctor_name,
@@ -519,7 +527,7 @@ class HealthcareAgent(Agent):
         """Call if the user requests to reschedule or cancel an existing appointment"""
         await self.profile_authenticator()
 
-        result = await ModifyAppointmentTask(function=function)
+        result = await ModifyAppointmentTask(function=function, chat_ctx=self.chat_ctx)
         confirmation_message = (
             f"Inform the user that the old appointment ({result.old_appointment}) has been canceled"
         )
@@ -559,7 +567,7 @@ class HealthcareAgent(Agent):
         )
 
         filesearch_tool = openai.tools.FileSearch(vector_store_ids=[self._vector_store.id])
-        current_tools = self.tools
+        current_tools = [t for t in self.tools if not isinstance(t, openai.tools.FileSearch)]
         current_tools.append(filesearch_tool)
         await self.update_tools(current_tools)
         await self.session.generate_reply(

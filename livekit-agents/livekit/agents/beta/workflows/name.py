@@ -73,7 +73,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         super().__init__(
             instructions=(
                 f"You are only a single step in a broader system, responsible solely for capturing the user's name.\n"
-                f"You need to collect the name parts in this order: {self._name_format}.\n"
+                f"You need to naturally collect the name parts in this order: {self._name_format}.\n"
                 "Handle input as noisy voice transcription. Expect that users will say names aloud and may:\n"
                 "- Say their name followed by spelling: e.g., 'Michael m i c h a e l'\n"
                 "- Use phonetic alphabet: e.g., 'Mike as in Mike India Charlie Hotel Alpha Echo Lima'\n"

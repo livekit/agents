@@ -183,7 +183,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         return confirm_card_number
 
     def validate_card_number(self, card_number: int) -> bool:
-        """Validates card number via the Luhn algorithm"""
+        """Validates card number via the Luhn algorithm and checks if positive"""
         total_sum = 0
 
         reversed_number = str(card_number)[::-1]
@@ -197,7 +197,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             else:
                 total_sum += int(digit)
 
-        return total_sum % 10 == 0
+        return (total_sum % 10 == 0) and (card_number > 0)
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
