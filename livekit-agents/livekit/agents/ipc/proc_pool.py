@@ -109,7 +109,12 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self._spawn_tasks.add(task)
             task.add_done_callback(self._spawn_tasks.discard)
 
-        proc = await self._warmed_proc_queue.get()
+        try:
+            proc = await self._warmed_proc_queue.get()
+        except BaseException:
+            self._jobs_waiting_for_process -= 1
+            raise
+
         self._jobs_waiting_for_process -= 1
 
         await proc.launch_job(info)
@@ -196,10 +201,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         try:
             while not self._closed:
                 current_pending = self._warmed_proc_queue.qsize() + len(self._spawn_tasks)
-                to_spawn = (
-                    min(self._target_idle_processes, self._default_num_idle_processes)
-                    - current_pending
+                needed = max(
+                    min(self._target_idle_processes, self._default_num_idle_processes),
+                    self._jobs_waiting_for_process,
                 )
+                to_spawn = needed - current_pending
 
                 for _ in range(to_spawn):
                     task = asyncio.create_task(self._proc_spawn_task())
