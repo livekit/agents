@@ -16,7 +16,7 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeo
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 CartesiaModels = Literal[
     "cartesia",
@@ -132,7 +132,6 @@ TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 24000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -319,11 +318,7 @@ class TTS(tts.TTS):
             if parsed_voice is not None and not is_given(voice):
                 voice = parsed_voice
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
