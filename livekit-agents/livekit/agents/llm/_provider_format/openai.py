@@ -115,6 +115,23 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
     }
 
 
+def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:
+    img = llm.utils.serialize_image(image)
+    if img.external_url:
+        return {
+            "type": "image_url",
+            "image_url": img.external_url,
+            "detail": img.inference_detail,
+        }
+    assert img.data_bytes is not None
+    b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
+    return {
+        "type": "image_url",
+        "image_url": f"data:{img.mime_type};base64,{b64_data}",
+        "detail": img.inference_detail,
+    }
+
+
 def to_responses_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], Literal[None]]:
@@ -153,30 +170,15 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                     text_content += "\n"
                 text_content += content
             elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
+                list_content.append(_to_responses_image_content(content))
 
         if not list_content:
             return {"role": msg.role, "content": text_content}
 
         if text_content:
-            list_content.append({"type": "text", "text": text_content})
+            list_content.append({"type": "input_text", "text": text_content})
 
         return {"role": msg.role, "content": list_content}
-
-    elif msg.type == "function_call":
-        return {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": msg.call_id,
-                    "type": "function",
-                    "function": {
-                        "name": msg.name,
-                        "arguments": msg.arguments,
-                    },
-                }
-            ],
-        }
 
     elif msg.type == "function_call_output":
         return {
