@@ -33,13 +33,13 @@ from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import Attributes, AttributeValue
 
 from livekit import api
-from livekit.protocol import agent_pb, metrics as proto_metrics
+from livekit.protocol import metrics as proto_metrics
 
 from ..log import logger
 from . import trace_types
 
 if TYPE_CHECKING:
-    from ..llm import ChatContext, ChatItem
+    from ..llm import ChatContext
     from ..observability import Tagger
     from ..voice.report import SessionReport
 
@@ -247,85 +247,6 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
-    item_pb = agent_pb.agent_session.ChatContext.ChatItem()
-
-    if item.type == "message":
-        msg = item_pb.message
-        msg.id = item.id
-
-        role_map = {
-            "developer": agent_pb.agent_session.DEVELOPER,
-            "system": agent_pb.agent_session.SYSTEM,
-            "user": agent_pb.agent_session.USER,
-            "assistant": agent_pb.agent_session.ASSISTANT,
-        }
-        msg.role = role_map[item.role]
-
-        for content in item.content:
-            if isinstance(content, str):
-                content_pb = msg.content.add()
-                content_pb.text = content
-
-        msg.interrupted = item.interrupted
-
-        if item.transcript_confidence is not None:
-            msg.transcript_confidence = item.transcript_confidence
-
-        for key, value in item.extra.items():
-            msg.extra[key] = str(value)
-
-        metrics = item.metrics
-        if "started_speaking_at" in metrics:
-            msg.metrics.started_speaking_at.FromMilliseconds(
-                int(metrics["started_speaking_at"] * 1000)
-            )
-        if "stopped_speaking_at" in metrics:
-            msg.metrics.stopped_speaking_at.FromMilliseconds(
-                int(metrics["stopped_speaking_at"] * 1000)
-            )
-        if "transcription_delay" in metrics:
-            msg.metrics.transcription_delay = metrics["transcription_delay"]
-        if "end_of_turn_delay" in metrics:
-            msg.metrics.end_of_turn_delay = metrics["end_of_turn_delay"]
-        if "on_user_turn_completed_delay" in metrics:
-            msg.metrics.on_user_turn_completed_delay = metrics["on_user_turn_completed_delay"]
-        if "llm_node_ttft" in metrics:
-            msg.metrics.llm_node_ttft = metrics["llm_node_ttft"]
-        if "tts_node_ttfb" in metrics:
-            msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
-        if "e2e_latency" in metrics:
-            msg.metrics.e2e_latency = metrics["e2e_latency"]
-        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "function_call":
-        fc = item_pb.function_call
-        fc.id = item.id
-        fc.call_id = item.call_id
-        fc.arguments = item.arguments
-        fc.name = item.name
-        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "function_call_output":
-        fco = item_pb.function_call_output
-        fco.id = item.id
-        fco.name = item.name
-        fco.call_id = item.call_id
-        fco.output = item.output
-        fco.is_error = item.is_error
-        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "agent_handoff":
-        ah = item_pb.agent_handoff
-        ah.id = item.id
-        if item.old_agent_id is not None:
-            ah.old_agent_id = item.old_agent_id
-        ah.new_agent_id = item.new_agent_id
-        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    return MessageToDict(item_pb)
-
-
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -334,6 +255,8 @@ async def _upload_session_report(
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
+    from ..llm.chat_context import chat_item_to_proto
+
     def _get_logger(name: str) -> Any:
         return get_logger_provider().get_logger(
             name=name,
@@ -374,7 +297,7 @@ async def _upload_session_report(
     )
 
     for item in report.chat_history.items:
-        item_log = _to_proto_chat_item(item)
+        item_log = MessageToDict(chat_item_to_proto(item))
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED
         severity_text: str = "unspecified"
 

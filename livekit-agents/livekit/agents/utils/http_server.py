@@ -37,5 +37,6 @@ class HttpServer:
 
     async def aclose(self) -> None:
         async with self._lock:
+            self._server.close_clients()
             self._server.close()
             await self._server.wait_closed()
