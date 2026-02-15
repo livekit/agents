@@ -1,7 +1,6 @@
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
-from typing_extensions import TypedDict
 
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -26,12 +25,6 @@ class EndpointingConfig(BaseModel):
 
     min_delay: NotGivenOr[float] = 0.5
     max_delay: NotGivenOr[float] = 3.0
-
-
-# INFO: This duplication is necessary to support dict autocompletion.
-class EndpointingConfigDict(TypedDict, total=False):
-    min_delay: NotGivenOr[float]
-    max_delay: NotGivenOr[float]
 
 
 class InterruptionConfig(BaseModel):
@@ -68,15 +61,6 @@ class InterruptionConfig(BaseModel):
     false_interruption_timeout: float | None = 2.0
 
 
-class InterruptionConfigDict(TypedDict, total=False):
-    mode: NotGivenOr[Literal["adaptive", "vad", False]]
-    discard_audio_if_uninterruptible: bool
-    min_duration: float
-    min_words: int
-    resume_false_interruption: bool
-    false_interruption_timeout: float | None
-
-
 class TurnHandlingConfig(BaseModel):
     """
     `TurnHandlingConfig` is the configuration for the turn handling system.
@@ -104,18 +88,8 @@ class TurnHandlingConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     turn_detection: Annotated[NotGivenOr[TurnDetectionMode | None], SkipValidation()] = NOT_GIVEN
-    endpointing: EndpointingConfig | EndpointingConfigDict = Field(
-        default_factory=EndpointingConfig
-    )
-    interruption: InterruptionConfig | InterruptionConfigDict = Field(
-        default_factory=InterruptionConfig
-    )
-
-    def model_post_init(self, __context: Any) -> None:
-        if isinstance(self.endpointing, dict):
-            self.endpointing = EndpointingConfig(**self.endpointing)
-        if isinstance(self.interruption, dict):
-            self.interruption = InterruptionConfig(**self.interruption)
+    endpointing: EndpointingConfig = Field(default_factory=EndpointingConfig)
+    interruption: InterruptionConfig = Field(default_factory=InterruptionConfig)
 
     @classmethod
     def migrate(
@@ -143,6 +117,7 @@ class TurnHandlingConfig(BaseModel):
 
         endpointing_kwargs = {}
         # allow not given values for agent to inherit from session
+        # AgentSession will always have a value while Agent may not have a value
         endpointing_kwargs["min_delay"] = min_endpointing_delay
         endpointing_kwargs["max_delay"] = max_endpointing_delay
 
@@ -172,15 +147,3 @@ class TurnHandlingConfig(BaseModel):
             kwargs["turn_detection"] = turn_detection
 
         return cls(**kwargs)
-
-    @property
-    def interruption_cfg(self) -> InterruptionConfig:
-        if isinstance(self.interruption, dict):
-            return InterruptionConfig(**self.interruption)
-        return self.interruption
-
-    @property
-    def endpointing_cfg(self) -> EndpointingConfig:
-        if isinstance(self.endpointing, dict):
-            return EndpointingConfig(**self.endpointing)
-        return self.endpointing
