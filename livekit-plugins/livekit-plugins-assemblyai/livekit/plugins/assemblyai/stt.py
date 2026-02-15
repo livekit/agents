@@ -103,6 +103,12 @@ class STT(stt.STT):
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
         self._api_key = assemblyai_api_key
+
+        # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
+        # designed to work with LK's end of turn models
+        if not is_given(min_end_of_turn_silence_when_confident):
+            min_end_of_turn_silence_when_confident = 100
+
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
