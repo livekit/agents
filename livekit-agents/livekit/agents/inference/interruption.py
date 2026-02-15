@@ -339,9 +339,11 @@ class InterruptionStreamBase(ABC):
             self,
             speech_duration: float | None = None,
             user_speaking_span: trace.Span | None = None,
+            started_at: float | None = None,
         ) -> None:
             self._speech_duration = speech_duration or 0.0
             self._user_speaking_span = user_speaking_span
+            self._started_at: float = started_at or (time.time() - self._speech_duration)
 
     class _OverlapSpeechEndedSentinel:
         pass
@@ -438,7 +440,7 @@ class InterruptionStreamBase(ABC):
 
         if not isinstance(frame, rtc.AudioFrame):
             if isinstance(frame, InterruptionStreamBase._OverlapSpeechStartedSentinel):
-                self._overlap_speech_started_at = time.time() - frame._speech_duration
+                self._overlap_speech_started_at = frame._started_at
             self._input_ch.send_nowait(frame)
             return
 

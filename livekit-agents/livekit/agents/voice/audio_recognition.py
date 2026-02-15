@@ -229,6 +229,7 @@ class AudioRecognition:
         self,
         speech_duration: float | None = None,
         user_speaking_span: trace.Span | None = None,
+        started_at: float | None = None,
     ) -> None:
         """Start interruption inference when agent is speaking and overlap speech starts."""
         if (
@@ -240,7 +241,7 @@ class AudioRecognition:
         if self._agent_speaking:
             self._interruption_ch.send_nowait(
                 InterruptionStreamBase._OverlapSpeechStartedSentinel(
-                    speech_duration, user_speaking_span
+                    speech_duration, user_speaking_span, started_at
                 )
             )
 
