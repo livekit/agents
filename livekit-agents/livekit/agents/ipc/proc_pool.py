@@ -63,6 +63,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
         self._executors: list[JobExecutor] = []
         self._spawn_tasks: set[asyncio.Task[None]] = set()
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._started = False
         self._closed = False
@@ -130,10 +131,12 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 return
             except Exception:
                 logger.warning(
-                    "failed to launch job on process, closing process",
+                    "failed to launch job on process, retrying with another",
                     extra={"job_id": info.job.id, "attempt": attempt + 1},
                 )
-                await proc.aclose()
+                close_task = asyncio.create_task(proc.aclose())
+                self._close_tasks.add(close_task)
+                close_task.add_done_callback(self._close_tasks.discard)
                 if attempt == MAX_ATTEMPTS - 1:
                     raise
                 proc = await self._wait_for_proc(info.job.id)
@@ -234,4 +237,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
             await asyncio.gather(*self._spawn_tasks)
+            await asyncio.gather(*self._close_tasks)
             await asyncio.gather(*self._monitor_tasks)
