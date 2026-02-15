@@ -1119,7 +1119,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent)
+        # If the target agent has an existing activity (was paused), resume it
+        # Otherwise, start a new activity
+        if agent._activity is not None:
+            await self._update_activity(agent, new_activity="resume")
+        else:
+            await self._update_activity(agent)
 
     def _on_error(
         self,
