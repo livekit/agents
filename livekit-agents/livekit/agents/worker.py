@@ -816,8 +816,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._draining = True
             await self._update_worker_status()
 
-            async def _join_jobs() -> None:
-                # loop to catch jobs that start after the initial snapshot
+            async def _drain() -> None:
+                # wait for in-flight availability tasks to finish launching their jobs
+                await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
+                # then wait for the launched jobs to complete
                 while True:
                     procs = [p for p in self._proc_pool.processes if p.running_job]
                     if not procs:
@@ -826,11 +829,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         await proc.join()
 
             if timeout:
-                await asyncio.wait_for(
-                    _join_jobs(), timeout
-                )  # raises asyncio.TimeoutError on timeout
+                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
             else:
-                await _join_jobs()
+                await _drain()
 
     @utils.log_exceptions(logger=logger)
     async def simulate_job(
