@@ -100,23 +100,25 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         self._jobs_waiting_for_process += 1
-        if (
-            self._warmed_proc_queue.empty()
-            and len(self._spawn_tasks) < self._jobs_waiting_for_process
-        ):
-            # spawn a new process if there are no idle processes
-            task = asyncio.create_task(self._proc_spawn_task())
-            self._spawn_tasks.add(task)
-            task.add_done_callback(self._spawn_tasks.discard)
+        try:
+            if (
+                self._warmed_proc_queue.empty()
+                and len(self._spawn_tasks) < self._jobs_waiting_for_process
+            ):
+                # spawn a new process if there are no idle processes
+                task = asyncio.create_task(self._proc_spawn_task())
+                self._spawn_tasks.add(task)
+                task.add_done_callback(self._spawn_tasks.discard)
 
-        if self._warmed_proc_queue.empty():
-            logger.warning(
-                "no warmed process available for job, waiting for one to be created",
-                extra={"job_id": info.job.id},
-            )
+            if self._warmed_proc_queue.empty():
+                logger.warning(
+                    "no warmed process available for job, waiting for one to be created",
+                    extra={"job_id": info.job.id},
+                )
 
-        proc = await self._warmed_proc_queue.get()
-        self._jobs_waiting_for_process -= 1
+            proc = await self._warmed_proc_queue.get()
+        finally:
+            self._jobs_waiting_for_process -= 1
 
         await proc.launch_job(info)
         self.emit("process_job_launched", proc)
