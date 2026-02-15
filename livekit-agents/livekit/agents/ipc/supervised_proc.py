@@ -149,19 +149,26 @@ class SupervisedProc(ABC):
             mp_pch, mp_cch = socket.socketpair()
             mp_log_pch, mp_log_cch = socket.socketpair()
 
-            self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+            try:
+                self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
 
-            log_pch = duplex_unix._Duplex.open(mp_log_pch)
-            log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
-            log_listener.start()
+                log_pch = duplex_unix._Duplex.open(mp_log_pch)
+                log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
+                log_listener.start()
 
-            self._proc = self._create_process(mp_cch, mp_log_cch)
+                self._proc = self._create_process(mp_cch, mp_log_cch)
 
-            # the signal handler isn't directly run when starting the process
-            # using pthread_sigmask to avoid annoying cancellation errors when pressing
-            # CTRL-C in bad timings
-            with _mask_ctrl_c():
-                await self._loop.run_in_executor(None, self._proc.start)
+                # the signal handler isn't directly run when starting the process
+                # using pthread_sigmask to avoid annoying cancellation errors when pressing
+                # CTRL-C in bad timings
+                with _mask_ctrl_c():
+                    await self._loop.run_in_executor(None, self._proc.start)
+            except Exception:
+                mp_pch.close()
+                mp_cch.close()
+                mp_log_pch.close()
+                mp_log_cch.close()
+                raise
 
             mp_log_cch.close()
             mp_cch.close()
