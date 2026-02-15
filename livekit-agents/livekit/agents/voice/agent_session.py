@@ -26,7 +26,7 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
-from ..metrics import ModelUsage, ModelUsageCollector
+from ..metrics import AgentSessionUsage, ModelUsageCollector
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -130,11 +130,6 @@ class VoiceActivityVideoSampler:
             return True
 
         return False
-
-
-@dataclass
-class AgentSessionUsage:
-    model_usage: list[ModelUsage]
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]

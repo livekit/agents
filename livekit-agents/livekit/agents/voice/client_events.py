@@ -21,7 +21,7 @@ from ..llm import (
     Toolset,
 )
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import AgentMetrics, AgentSessionUsage
 from ..types import (
     RPC_GET_AGENT_INFO,
     RPC_GET_CHAT_HISTORY,
@@ -102,7 +102,14 @@ class ClientUserInterruptionEvent(BaseModel):
     is_interruption: bool
     created_at: float
     sent_at: float
+    detection_delay: float
     overlap_speech_started_at: float | None
+
+
+class ClientSessionUsageEvent(BaseModel):
+    type: Literal["session_usage"] = "session_usage"
+    usage: AgentSessionUsage
+    created_at: float
 
 
 ClientEvent = Annotated[
@@ -113,7 +120,8 @@ ClientEvent = Annotated[
     | ClientFunctionToolsExecutedEvent
     | ClientMetricsCollectedEvent
     | ClientErrorEvent
-    | ClientUserInterruptionEvent,
+    | ClientUserInterruptionEvent
+    | ClientSessionUsageEvent,
     Field(discriminator="type"),
 ]
 
@@ -164,6 +172,15 @@ class GetRTCStatsRequest(BaseModel):
 class GetRTCStatsResponse(BaseModel):
     publisher_stats: list[dict[str, Any]]
     subscriber_stats: list[dict[str, Any]]
+
+
+class GetSessionUsageRequest(BaseModel):
+    pass
+
+
+class GetSessionUsageResponse(BaseModel):
+    usage: AgentSessionUsage
+    created_at: float
 
 
 # Text stream request/response protocol (no size limit unlike RPC)
@@ -354,6 +371,8 @@ class ClientEventsHandler:
                     response_payload = await self._stream_send_message(request.payload)
                 elif request.method == "get_rtc_stats":
                     response_payload = await self._stream_get_rtc_stats(request.payload)
+                elif request.method == "get_session_usage":
+                    response_payload = await self._stream_get_session_usage(request.payload)
                 else:
                     response_payload = ""
                     error = f"Unknown method: {request.method}"
@@ -430,6 +449,13 @@ class ClientEventsHandler:
         )
         return response.model_dump_json()
 
+    async def _stream_get_session_usage(self, payload: str) -> str:
+        response = GetSessionUsageResponse(
+            usage=self._session.usage,
+            created_at=time.time(),
+        )
+        return response.model_dump_json()
+
     def _register_event_handlers(self) -> None:
         if self._event_handlers_registered:
             return
@@ -451,6 +477,7 @@ class ClientEventsHandler:
             is_interruption=event.is_interruption,
             created_at=event.timestamp,
             overlap_speech_started_at=event.overlap_speech_started_at,
+            detection_delay=event.detection_delay,
             sent_at=time.time(),
         )
         self._stream_client_event(client_event)
@@ -502,11 +529,17 @@ class ClientEventsHandler:
         if event.metrics is None:
             return
 
-        client_event = ClientMetricsCollectedEvent(
+        metrics_event = ClientMetricsCollectedEvent(
             metrics=event.metrics,
             created_at=event.created_at,
         )
-        self._stream_client_event(client_event)
+        self._stream_client_event(metrics_event)
+
+        usage_event = ClientSessionUsageEvent(
+            usage=self._session.usage,
+            created_at=time.time(),
+        )
+        self._stream_client_event(usage_event)
 
     def _on_error(self, event: ErrorEvent) -> None:
         client_event = ClientErrorEvent(
@@ -638,6 +671,7 @@ RemoteSessionEventTypes = Literal[
     "function_tools_executed",
     "metrics_collected",
     "user_interruption",
+    "session_usage",
     "error",
 ]
 
@@ -831,3 +865,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             payload=request.model_dump_json(),
         )
         return GetRTCStatsResponse.model_validate_json(response)
+
+    async def fetch_session_usage(self) -> GetSessionUsageResponse:
+        request = GetSessionUsageRequest()
+        response = await self._send_request(
+            method="get_session_usage",
+            payload=request.model_dump_json(),
+        )
+        return GetSessionUsageResponse.model_validate_json(response)
