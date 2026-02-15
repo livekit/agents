@@ -181,7 +181,9 @@ async def test_chunked_generation_does_not_block_event_loop(pocket_plugin: Any) 
 
     ticker_task = asyncio.create_task(ticker())
     try:
-        chunked_events = await asyncio.wait_for(_collect_events(tts_v.synthesize("hola")), timeout=5.0)
+        chunked_events = await asyncio.wait_for(
+            _collect_events(tts_v.synthesize("hola")), timeout=5.0
+        )
         assert chunked_events
     finally:
         done.set()
