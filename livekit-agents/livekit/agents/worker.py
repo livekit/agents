@@ -596,14 +596,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._load_task: asyncio.Task[None] | None = None
 
             if not self._ws_url:
-                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+                raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
 
             if not self._api_key:
-                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+                raise ValueError("api_key is required, or set LIVEKIT_API_KEY environment variable")
 
             if not self._api_secret:
                 raise ValueError(
-                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                    "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
                 )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None

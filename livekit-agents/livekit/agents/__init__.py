@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    create_api_error_from_http,
 )
 from .job import (
     AutoSubscribe,
@@ -175,6 +176,7 @@ __all__ = [
     "APIError",
     "APIStatusError",
     "APITimeoutError",
+    "create_api_error_from_http",
     "APIConnectOptions",
     "NotGiven",
     "NOT_GIVEN",

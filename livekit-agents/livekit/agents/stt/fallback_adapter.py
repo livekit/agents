@@ -192,6 +192,7 @@ class FallbackAdapter(
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
                 except Exception:
+                    logger.debug(f"{stt.label} recovery attempt failed", exc_info=True)
                     return
 
             stt_status.recovering_synthesize_task = asyncio.create_task(_recover_stt_task(stt))

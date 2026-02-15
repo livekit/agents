@@ -855,7 +855,10 @@ class TTS(tts.TTS):
 
         key = api_key if is_given(api_key) else os.getenv("INWORLD_API_KEY")
         if not key:
-            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
+            raise ValueError(
+                "Inworld API key is required, either as argument or set"
+                " INWORLD_API_KEY environment variable"
+            )
 
         self._authorization = f"Basic {key}"
         self._base_url = base_url

@@ -98,7 +98,10 @@ class LLM(llm.LLM):
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
-            raise ValueError("Anthropic API key is required")
+            raise ValueError(
+                "Anthropic API key is required, either as argument or set"
+                " ANTHROPIC_API_KEY environment variable"
+            )
 
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,

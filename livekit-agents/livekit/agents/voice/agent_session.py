@@ -23,6 +23,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 
 from .. import cli, inference, llm, stt, tts, utils, vad
+from .._exceptions import APIError
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
@@ -1137,7 +1138,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
 
-        logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
+        if isinstance(error.error, APIError):
+            logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
+        else:
+            logger.error(
+                "AgentSession is closing due to unrecoverable error",
+                exc_info=error.error,
+            )
 
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None

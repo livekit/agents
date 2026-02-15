@@ -25,6 +25,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
     tts,
     utils,
 )
@@ -241,12 +242,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
+            raise create_api_error_from_http(e.message, status=e.status) from e
         except Exception as e:
             if isinstance(e, (APIStatusError, APIConnectionError, APITimeoutError)):
                 raise

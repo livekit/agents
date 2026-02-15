@@ -233,8 +233,7 @@ class LLMStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
-                        exc_info=e,
+                        f"failed to generate LLM completion: {e}, retrying in {retry_interval}s",  # noqa: E501
                         extra={
                             "llm": self._llm._label,
                             "attempt": i + 1,

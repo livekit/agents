@@ -1397,7 +1397,7 @@ def _run_console(
             console_worker.shutdown()
             console_worker.join()
 
-    except CLIError as e:
+    except (CLIError, ValueError) as e:
         c.print(" ")
         c.print(f"[error]{e}")
         c.print(" ")
@@ -1748,7 +1748,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         except KeyboardInterrupt:
             logger.warning("exiting forcefully")
             os._exit(1)
-        except CLIError as e:
+        except (CLIError, ValueError) as e:
             c.print(" ")
             c.print(f"[error]{e}")
             c.print(" ")
