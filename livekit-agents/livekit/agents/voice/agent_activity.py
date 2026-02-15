@@ -1343,7 +1343,7 @@ class AgentActivity(RecognitionHooks):
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:
-            speech_end_time = speech_end_time - ev.silence_duration
+            speech_end_time = speech_end_time - ev.silence_duration - ev.inference_duration
         else:
             self._stt_eos_received = True
 

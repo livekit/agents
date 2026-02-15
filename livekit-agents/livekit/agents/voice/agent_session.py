@@ -1294,7 +1294,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
-        self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
+        self.emit(
+            "user_state_changed",
+            UserStateChangedEvent(
+                old_state=old_state,
+                new_state=state,
+                created_at=last_speaking_time or time.time(),
+            ),
+        )
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self.user_state == "away" and ev.is_final:
