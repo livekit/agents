@@ -149,6 +149,12 @@ class _InfClient(InferenceExecutor):
 
         return inf_resp.data
 
+    def close(self) -> None:
+        for fut in self._active_requests.values():
+            if not fut.done():
+                fut.cancel()
+        self._active_requests.clear()
+
     def _on_inference_response(self, resp: InferenceResponse) -> None:
         fut = self._active_requests.pop(resp.request_id, None)
         if fut is None:
@@ -229,10 +235,17 @@ class _JobProc:
                 if isinstance(msg, DumpStackTraceRequest):
                     _dump_stack_traces_impl()
 
-        read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
+            # unblock any pending do_inference() calls
+            self._inf_client.close()
 
-        await self._exit_proc_flag.wait()
-        await aio.cancel_and_wait(read_task)
+        read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
+        try:
+            await self._exit_proc_flag.wait()
+        finally:
+            # ensure cleanup on cancellation (e.g. parent channel closes)
+            if self._job_task is not None:
+                await aio.cancel_and_wait(self._job_task)
+            await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
         if msg.running_job.fake_job:
