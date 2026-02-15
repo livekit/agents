@@ -760,10 +760,6 @@ class AudioRecognition:
 
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
-        if self._input_started_at is not None:
-            ev.relative_start_time = (
-                time.time() - ev.speech_duration - ev.inference_duration - self._input_started_at
-            )
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             with trace.use_span(
                 self._ensure_user_turn_span(
