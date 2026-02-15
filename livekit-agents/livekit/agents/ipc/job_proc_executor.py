@@ -162,7 +162,13 @@ class ProcJobExecutor(SupervisedProc):
 
         start_req = proto.StartJobRequest()
         start_req.running_job = info
-        await channel.asend_message(self._pch, start_req)
+        try:
+            await channel.asend_message(self._pch, start_req)
+        except Exception:
+            self._running_job = None
+            self._job_status = None
+            metrics.job_ended()
+            raise
 
     def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()

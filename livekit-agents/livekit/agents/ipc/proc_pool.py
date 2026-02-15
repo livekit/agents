@@ -63,6 +63,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
         self._executors: list[JobExecutor] = []
         self._spawn_tasks: set[asyncio.Task[None]] = set()
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._started = False
         self._closed = False
@@ -99,27 +100,45 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         await aio.cancel_and_wait(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
-        self._jobs_waiting_for_process += 1
-        if (
-            self._warmed_proc_queue.empty()
-            and len(self._spawn_tasks) < self._jobs_waiting_for_process
-        ):
-            # spawn a new process if there are no idle processes
-            task = asyncio.create_task(self._proc_spawn_task())
-            self._spawn_tasks.add(task)
-            task.add_done_callback(self._spawn_tasks.discard)
+        MAX_ATTEMPTS = 3
 
-        if self._warmed_proc_queue.empty():
-            logger.warning(
-                "no warmed process available for job, waiting for one to be created",
-                extra={"job_id": info.job.id},
-            )
+        async def _wait_for_proc() -> JobExecutor:
+            self._jobs_waiting_for_process += 1
+            try:
+                if (
+                    self._warmed_proc_queue.empty()
+                    and len(self._spawn_tasks) < self._jobs_waiting_for_process
+                ):
+                    task = asyncio.create_task(self._proc_spawn_task())
+                    self._spawn_tasks.add(task)
+                    task.add_done_callback(self._spawn_tasks.discard)
 
-        proc = await self._warmed_proc_queue.get()
-        self._jobs_waiting_for_process -= 1
+                if self._warmed_proc_queue.empty():
+                    logger.warning(
+                        "no warmed process available for job, waiting for one to be created",
+                        extra={"job_id": info.job.id},
+                    )
 
-        await proc.launch_job(info)
-        self.emit("process_job_launched", proc)
+                return await self._warmed_proc_queue.get()
+            finally:
+                self._jobs_waiting_for_process -= 1
+
+        for attempt in range(MAX_ATTEMPTS):
+            proc = await _wait_for_proc()
+            try:
+                await proc.launch_job(info)
+                self.emit("process_job_launched", proc)
+                return
+            except Exception:
+                logger.warning(
+                    "failed to launch job on process, retrying with another",
+                    extra={"job_id": info.job.id, "attempt": attempt + 1},
+                )
+                close_task = asyncio.create_task(proc.aclose())
+                self._close_tasks.add(close_task)
+                close_task.add_done_callback(self._close_tasks.discard)
+                if attempt == MAX_ATTEMPTS - 1:
+                    raise
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
@@ -217,4 +236,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
             await asyncio.gather(*self._spawn_tasks)
+            await asyncio.gather(*self._close_tasks)
             await asyncio.gather(*self._monitor_tasks)
