@@ -1195,6 +1195,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             try:
                 await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
             except asyncio.TimeoutError:
+                self._pending_assignments.pop(job_req.id, None)
                 logger.warning(
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req, "agent_name": self._agent_name},
