@@ -379,11 +379,14 @@ class ChatContext:
 
         new_items = self._items[-max_items:]
         # chat_ctx shouldn't start with function_call or function_call_output
-        while new_items and new_items[0].type in [
+        start = 0
+        while start < len(new_items) and new_items[start].type in [
             "function_call",
             "function_call_output",
         ]:
-            new_items.pop(0)
+            start += 1
+        if start > 0:
+            new_items = new_items[start:]
 
         if instructions:
             new_items.insert(0, instructions)

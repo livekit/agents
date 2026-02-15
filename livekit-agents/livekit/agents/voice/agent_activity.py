@@ -1080,9 +1080,9 @@ class AgentActivity(RecognitionHooks):
                     continue
                 self._current_speech = speech
                 if self.min_consecutive_speech_delay > 0.0:
-                    await asyncio.sleep(
-                        self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
-                    )
+                    delay = self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
                     # check again if speech is done after sleep delay
                     if speech.done():
                         # skip done speech (interrupted during delay)
@@ -1093,7 +1093,7 @@ class AgentActivity(RecognitionHooks):
                 self._current_speech = None
                 last_playout_ts = time.time()
 
-            # if we're draining/pasuing and there are no more speech tasks, we can exit.
+            # if we're draining/pausing and there are no more speech tasks, we can exit.
             # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)  # noqa: E501
 
             blocked_handles: list[SpeechHandle] = []
