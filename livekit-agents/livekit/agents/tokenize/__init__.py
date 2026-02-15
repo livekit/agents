@@ -1,4 +1,4 @@
-from . import basic, blingfire, utils
+from . import basic, blingfire, clause, utils
 from .token_stream import BufferedSentenceStream, BufferedWordStream
 from .tokenizer import (
     SentenceStream,
@@ -18,6 +18,7 @@ __all__ = [
     "BufferedWordStream",
     "basic",
     "blingfire",
+    "clause",
     "utils",
 ]
 

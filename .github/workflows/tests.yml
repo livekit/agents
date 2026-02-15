@@ -50,6 +50,15 @@ jobs:
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
           tests/test_tools.py
+          tests/test_clause_tokenizer.py
+          tests/test_connection_pool.py
+          tests/test_debounce.py
+          tests/test_ipc.py
+          tests/test_ivr_activity.py
+          tests/test_speaker_id_grouping.py
+          tests/test_google_thought_signatures.py
+          tests/test_inference_stt_fallback.py
+          tests/test_inference_tts_fallback.py
 
   evaluation:
     # don't run tests for PRs on forks
