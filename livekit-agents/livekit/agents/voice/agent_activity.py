@@ -781,10 +781,13 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = bool(
+        should_discard = (
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
+        ) or (
+            self._session.agent_state == "speaking"
+            and self._session._echo_guard_remaining_duration > 0
         )
 
         if not should_discard:
@@ -1223,6 +1226,10 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
+        if self._session._echo_guard_remaining_duration > 0:
+            # disable interruption from audio activity while echo guard is active
+            return
+
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 

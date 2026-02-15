@@ -89,6 +89,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    echo_guard_duration: float | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -158,6 +159,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        echo_guard_duration: float | None = None,
         ivr_detection: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -246,6 +248,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            echo_guard_duration (float, optional): The duration in seconds that the agent
+                will ignore user's audio interruptions after the agent starts speaking.
+                This is useful to prevent the agent from being interrupted by echo before AEC is ready.
+                Default ``None``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -291,6 +297,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            echo_guard_duration=echo_guard_duration,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -315,6 +322,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
         self._tts_error_counts = 0
+
+        # echo guard: disable interruptions while AEC warms up
+        self._echo_guard_remaining_duration = echo_guard_duration or 0.0
+        self._echo_guard_timer: asyncio.TimerHandle | None = None
+        self._echo_guard_speaking_start: float | None = None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -787,6 +799,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._closing = True
             self._cancel_user_away_timer()
+            self._cancel_echo_guard_timer()
+            self._on_echo_guard_expired()  # always clear echo guard when closing the session
 
             if self._activity is not None:
                 if not drain:
@@ -1192,6 +1206,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
+    def _on_echo_guard_expired(self) -> None:
+        if self._echo_guard_remaining_duration > 0:
+            logger.debug("echo guard expired, re-enabling interruptions")
+
+        self._echo_guard_remaining_duration = 0.0
+        self._echo_guard_timer = None
+        self._echo_guard_speaking_start = None
+
+    def _cancel_echo_guard_timer(self) -> None:
+        if self._echo_guard_timer is not None:
+            self._echo_guard_timer.cancel()
+            self._echo_guard_timer = None
+
+        if self._echo_guard_speaking_start is not None:
+            elapsed = time.time() - self._echo_guard_speaking_start
+            self._echo_guard_remaining_duration = max(
+                0.0, self._echo_guard_remaining_duration - elapsed
+            )
+            self._echo_guard_speaking_start = None
+
     def _update_agent_state(
         self,
         state: AgentState,
@@ -1222,6 +1256,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
+
+        # echo guard: disable interruptions while AEC warms up
+        if state == "speaking" and self._echo_guard_remaining_duration > 0:
+            self._echo_guard_speaking_start = time.time()
+            self._echo_guard_timer = self._loop.call_later(
+                self._echo_guard_remaining_duration, self._on_echo_guard_expired
+            )
+            logger.debug(
+                "echo guard active, disabling interruptions for %.2fs",
+                self._echo_guard_remaining_duration,
+            )
+
+        if self._agent_state == "speaking" and state != "speaking":
+            self._cancel_echo_guard_timer()
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
