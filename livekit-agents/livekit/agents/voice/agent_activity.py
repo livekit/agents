@@ -1393,6 +1393,11 @@ class AgentActivity(RecognitionHooks):
         self._interrupt_by_audio_activity(
             ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
         )
+        # flush held transcripts again if possible
+        if self._audio_recognition:
+            self._audio_recognition.on_end_of_agent_speech(
+                ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
+            )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
