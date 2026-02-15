@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, overload
+from typing import Any, Awaitable, Callable, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import NotRequired
@@ -52,6 +52,9 @@ InworldModels = Literal[
 ]
 
 TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
+
+# Handler for xAI function tool calls: async def handler(name, arguments_json) -> result_json
+FunctionCallHandler = Callable[[str, str], Awaitable[str]]
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -148,6 +151,7 @@ class _TTSOptions:
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
+    function_call_handler: FunctionCallHandler | None = None
 
 
 class TTS(tts.TTS):
@@ -167,6 +171,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -186,6 +191,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -205,6 +211,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -224,6 +231,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[RimeOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -243,6 +251,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -262,6 +271,7 @@ class TTS(tts.TTS):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         pass
 
@@ -287,6 +297,7 @@ class TTS(tts.TTS):
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        function_call_handler: FunctionCallHandler | None = None,
     ) -> None:
         """Livekit Cloud Inference TTS
 
@@ -304,6 +315,9 @@ class TTS(tts.TTS):
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
+            function_call_handler (FunctionCallHandler, optional): Async callback for xAI function
+                tool calls. Signature: async def handler(name: str, arguments: str) -> str.
+                Called when the model invokes a custom function tool. Return JSON string result.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         super().__init__(
@@ -361,6 +375,7 @@ class TTS(tts.TTS):
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
+            function_call_handler=function_call_handler,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -597,6 +612,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
+                elif data.get("type") == "function_call":
+                    handler = self._opts.function_call_handler
+                    if handler is None:
+                        logger.warning(
+                            "received function_call but no function_call_handler configured: %s",
+                            data.get("name"),
+                        )
+                        continue
+                    try:
+                        result = await handler(
+                            data.get("name", ""),
+                            data.get("arguments", "{}"),
+                        )
+                    except Exception:
+                        logger.exception("function_call_handler raised an exception")
+                        result = json.dumps({"error": "handler exception"})
+                    await ws.send_str(json.dumps({
+                        "type": "function_call_output",
+                        "call_id": data.get("call_id", ""),
+                        "output": result,
+                    }))
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
