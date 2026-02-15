@@ -185,7 +185,9 @@ class TTS(tts.TTS):
                             f"Pocket TTS synthesis timed out after {conn_options.timeout}s"
                         )
                     try:
-                        item = await asyncio.wait_for(asyncio.to_thread(items.get), timeout=remaining)
+                        item = await asyncio.wait_for(
+                            asyncio.to_thread(items.get), timeout=remaining
+                        )
                     except asyncio.TimeoutError as e:
                         raise APITimeoutError(
                             f"Pocket TTS synthesis timed out after {conn_options.timeout}s"
@@ -248,7 +250,11 @@ class PocketChunkedStream(tts.ChunkedStream):
             stream=False,
         )
 
-        first_chunk_ttfb, generation_duration, audio_duration = await pocket_tts._push_generated_audio(
+        (
+            first_chunk_ttfb,
+            generation_duration,
+            audio_duration,
+        ) = await pocket_tts._push_generated_audio(
             text=self._input_text,
             conn_options=self._conn_options,
             output_emitter=output_emitter,
@@ -305,7 +311,11 @@ class PocketSynthesizeStream(tts.SynthesizeStream):
     async def _synthesize_segment(self, text: str, output_emitter: tts.AudioEmitter) -> None:
         self._mark_started()
         pocket_tts = cast(TTS, self._tts)
-        first_chunk_ttfb, generation_duration, audio_duration = await pocket_tts._push_generated_audio(
+        (
+            first_chunk_ttfb,
+            generation_duration,
+            audio_duration,
+        ) = await pocket_tts._push_generated_audio(
             text=text,
             conn_options=self._conn_options,
             output_emitter=output_emitter,
