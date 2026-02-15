@@ -98,37 +98,45 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._closed = True
         await aio.cancel_and_wait(self._main_atask)
 
-    async def launch_job(self, info: RunningJobInfo) -> None:
+    async def _wait_for_proc(self, job_id: str) -> JobExecutor:
         self._jobs_waiting_for_process += 1
-        if (
-            self._warmed_proc_queue.empty()
-            and len(self._spawn_tasks) < self._jobs_waiting_for_process
-        ):
-            # spawn a new process if there are no idle processes
-            task = asyncio.create_task(self._proc_spawn_task())
-            self._spawn_tasks.add(task)
-            task.add_done_callback(self._spawn_tasks.discard)
-
-        if self._warmed_proc_queue.empty():
-            logger.warning(
-                "no warmed process available for job, waiting for one to be created",
-                extra={"job_id": info.job.id},
-            )
-
-        proc = await self._warmed_proc_queue.get()
-        self._jobs_waiting_for_process -= 1
-
         try:
-            await proc.launch_job(info)
-        except Exception:
-            logger.exception(
-                "failed to launch job on process, closing process",
-                extra={"job_id": info.job.id},
-            )
-            await proc.aclose()
-            raise
+            if (
+                self._warmed_proc_queue.empty()
+                and len(self._spawn_tasks) < self._jobs_waiting_for_process
+            ):
+                task = asyncio.create_task(self._proc_spawn_task())
+                self._spawn_tasks.add(task)
+                task.add_done_callback(self._spawn_tasks.discard)
 
-        self.emit("process_job_launched", proc)
+            if self._warmed_proc_queue.empty():
+                logger.warning(
+                    "no warmed process available for job, waiting for one to be created",
+                    extra={"job_id": job_id},
+                )
+
+            return await self._warmed_proc_queue.get()
+        finally:
+            self._jobs_waiting_for_process -= 1
+
+    async def launch_job(self, info: RunningJobInfo) -> None:
+        MAX_ATTEMPTS = 3
+
+        proc = await self._wait_for_proc(info.job.id)
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                await proc.launch_job(info)
+                self.emit("process_job_launched", proc)
+                return
+            except Exception:
+                logger.warning(
+                    "failed to launch job on process, closing process",
+                    extra={"job_id": info.job.id, "attempt": attempt + 1},
+                )
+                await proc.aclose()
+                if attempt == MAX_ATTEMPTS - 1:
+                    raise
+                proc = await self._wait_for_proc(info.job.id)
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
