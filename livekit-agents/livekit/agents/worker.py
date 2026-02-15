@@ -681,7 +681,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._api = api.LiveKitAPI(
                 self._ws_url, self._api_key, self._api_secret, session=self._http_session
             )
-            self._close_future = asyncio.Future(loop=self._loop)
+            self._close_future = asyncio.Future()
 
             @utils.log_exceptions(logger=logger)
             async def _load_task() -> None:

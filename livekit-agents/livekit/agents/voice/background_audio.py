@@ -349,7 +349,7 @@ class BackgroundAudioPlayer:
 
                 if volume != 1.0:
                     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                    data *= 10 ** (np.log10(volume))
+                    data *= volume
                     np.clip(data, -32768, 32767, out=data)
                     yield rtc.AudioFrame(
                         data=data.astype(np.int16).tobytes(),
