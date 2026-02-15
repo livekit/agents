@@ -195,7 +195,7 @@ class STT(
                         f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
-                            "tts": self._label,
+                            "stt": self._label,
                             "attempt": i + 1,
                             "streamed": False,
                         },
@@ -333,7 +333,7 @@ class RecognizeStream(ABC):
                         f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
-                            "tts": self._stt._label,
+                            "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },
