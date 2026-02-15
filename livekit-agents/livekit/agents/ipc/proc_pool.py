@@ -165,25 +165,29 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")
 
         self._executors.append(proc)
-        async with self._init_sem:
-            if self._closed:
-                self._executors.remove(proc)
-                return
+        initialized = False
+        try:
+            async with self._init_sem:
+                if not self._closed:
+                    self.emit("process_created", proc)
+                    await proc.start()
+                    self.emit("process_started", proc)
+                    await proc.initialize()
+                    self.emit("process_ready", proc)
+                    self._warmed_proc_queue.put_nowait(proc)
+                    if self._warmed_proc_queue.qsize() >= self._default_num_idle_processes:
+                        self._idle_ready.set()
 
-            self.emit("process_created", proc)
-            await proc.start()
-            self.emit("process_started", proc)
-            try:
-                await proc.initialize()
-                # process where initialization times out will never fire "process_ready"
-                # neither be used to launch jobs
+                    initialized = True
+        except Exception:
+            logger.exception("error initializing process", extra=proc.logging_extra())
+        except asyncio.CancelledError:
+            pass
 
-                self.emit("process_ready", proc)
-                self._warmed_proc_queue.put_nowait(proc)
-                if self._warmed_proc_queue.qsize() >= self._default_num_idle_processes:
-                    self._idle_ready.set()
-            except Exception:
-                logger.exception("error initializing process", extra=proc.logging_extra())
+        if not initialized:
+            self._executors.remove(proc)
+            await proc.aclose()
+            return
 
         monitor_task = asyncio.create_task(self._monitor_process_task(proc))
         self._monitor_tasks.add(monitor_task)
@@ -215,6 +219,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
+            await aio.cancel_and_wait(*self._spawn_tasks)
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
-            await asyncio.gather(*self._spawn_tasks)
             await asyncio.gather(*self._monitor_tasks)
