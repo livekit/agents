@@ -118,7 +118,16 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         proc = await self._warmed_proc_queue.get()
         self._jobs_waiting_for_process -= 1
 
-        await proc.launch_job(info)
+        try:
+            await proc.launch_job(info)
+        except Exception:
+            logger.exception(
+                "failed to launch job on process, closing process",
+                extra={"job_id": info.job.id},
+            )
+            await proc.aclose()
+            raise
+
         self.emit("process_job_launched", proc)
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
