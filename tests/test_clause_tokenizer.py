@@ -105,7 +105,8 @@ FR_TEXT = (
 )
 
 FR_EXPECTED = [
-    "LiveKit est une plateforme pour l'audio et la vidéo en direct,",
+    "LiveKit est une plateforme pour l'audio",
+    "et la vidéo en direct,",
     "et elle prend en charge la communication en temps réel.",
     "M. Dupont a rejoint la réunion,",
     "mais Dr. Martin était en retard.",
@@ -133,7 +134,8 @@ IT_TEXT = (
 )
 
 IT_EXPECTED = [
-    "LiveKit è una piattaforma per audio e video in tempo reale,",
+    "LiveKit è una piattaforma per audio",
+    "e video in tempo reale,",
     "e supporta la comunicazione in diretta.",
     "Dott. Rossi ha partecipato alla riunione,",
     "ma Prof. Bianchi era in ritardo.",

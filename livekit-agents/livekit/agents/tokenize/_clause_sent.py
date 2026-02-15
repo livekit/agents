@@ -429,7 +429,7 @@ def _find_split_positions(
     if profile.conjunctions:
         sorted_conjs = sorted(profile.conjunctions, key=len, reverse=True)
         conj_alts = "|".join(re.escape(c) for c in sorted_conjs)
-        conj_pattern = r"(?<=\s)(" + conj_alts + r")(?=\s)"
+        conj_pattern = r"(?<=\s)(" + conj_alts + r")\b"
         for m in re.finditer(conj_pattern, text, re.IGNORECASE):
             if m.start() not in protected:
                 positions.append(m.start())
@@ -440,6 +440,14 @@ def _find_split_positions(
 # ---------------------------------------------------------------------------
 # Core split function
 # ---------------------------------------------------------------------------
+
+
+def _is_sentence_boundary(text: str, pos: int) -> bool:
+    """Check if *pos* follows sentence-ending punctuation (. ! ?)."""
+    i = pos - 1
+    while i >= 0 and text[i].isspace():
+        i -= 1
+    return i >= 0 and text[i] in ".!?"
 
 
 def split_clauses(
@@ -487,6 +495,12 @@ def split_clauses(
         if len(chunk) >= min_len:
             clauses.append((chunk, start, pos))
             start = pos
+        elif clauses and not _is_sentence_boundary(text, start):
+            # Short clause after a non-sentence boundary: merge backward
+            _, prev_start, _ = clauses.pop()
+            clauses.append((_fmt(text[prev_start:pos]), prev_start, pos))
+            start = pos
+        # else: merge forward (after sentence boundary or no previous clause)
 
     # Remaining text
     if start < len(text):
