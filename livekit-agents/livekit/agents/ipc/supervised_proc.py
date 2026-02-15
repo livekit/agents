@@ -149,6 +149,7 @@ class SupervisedProc(ABC):
             mp_pch, mp_cch = socket.socketpair()
             mp_log_pch, mp_log_cch = socket.socketpair()
 
+            sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
             try:
                 self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
 
@@ -164,10 +165,9 @@ class SupervisedProc(ABC):
                 with _mask_ctrl_c():
                     await self._loop.run_in_executor(None, self._proc.start)
             except Exception:
-                mp_pch.close()
-                mp_cch.close()
-                mp_log_pch.close()
-                mp_log_cch.close()
+                for s in sockets:
+                    with contextlib.suppress(OSError):
+                        s.close()
                 raise
 
             mp_log_cch.close()
