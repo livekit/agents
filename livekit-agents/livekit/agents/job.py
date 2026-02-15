@@ -615,7 +615,7 @@ class JobContext:
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(
-                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
+                lambda _, coro=coro, identity=p.identity: self._participant_tasks.pop((identity, coro))  # type: ignore  # noqa: E501
             )
 
     def token_claims(self) -> Claims:
