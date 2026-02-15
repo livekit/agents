@@ -472,11 +472,11 @@ def split_clauses(
     protected = _find_protected_positions(text, profile)
     positions = _find_split_positions(text, profile, protected)
 
-    if not positions:
-        return [(text, 0, len(text))]
-
     def _fmt(s: str) -> str:
         return s if retain_format else s.strip()
+
+    if not positions:
+        return [(_fmt(text), 0, len(text))]
 
     min_len = min_clause_len if min_clause_len is not None else profile.min_clause_len
     clauses: list[tuple[str, int, int]] = []
@@ -498,4 +498,4 @@ def split_clauses(
         else:
             clauses.append((remainder, start, len(text)))
 
-    return clauses if clauses else [(text, 0, len(text))]
+    return clauses if clauses else [(_fmt(text), 0, len(text))]
