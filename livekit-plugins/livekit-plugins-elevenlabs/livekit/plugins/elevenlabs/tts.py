@@ -134,7 +134,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
-            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional. If you pass a custom session, you are responsible for closing it.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
@@ -195,6 +195,7 @@ class TTS(tts.TTS):
             pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
         self._session = http_session
+        self._owns_session = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         self._current_connection: _Connection | None = None
@@ -211,6 +212,7 @@ class TTS(tts.TTS):
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
+            self._owns_session = True
         return self._session
 
     async def list_voices(self) -> list[Voice]:
@@ -301,6 +303,10 @@ class TTS(tts.TTS):
         if self._current_connection:
             await self._current_connection.aclose()
             self._current_connection = None
+
+        if self._session and self._owns_session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -553,7 +559,23 @@ class _Connection:
 
         url = _multi_stream_url(self._opts)
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
-        self._ws = await self._session.ws_connect(url, headers=headers)
+        heartbeat = max(10, min(30, self._opts.inactivity_timeout // 2))
+        try:
+            self._ws = await asyncio.wait_for(
+                self._session.ws_connect(url, headers=headers, heartbeat=heartbeat),
+                DEFAULT_API_CONNECT_OPTIONS.timeout,
+            )
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("timed out connecting to ElevenLabs websocket") from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError("failed to connect to ElevenLabs websocket") from e
 
         self._send_task = asyncio.create_task(self._send_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())
@@ -655,7 +677,17 @@ class _Connection:
                 ):
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        logger.warning("websocket closed unexpectedly")
+                        close_code = self._ws.close_code if self._ws else None
+                        close_reason = (
+                            self._ws.close_reason if self._ws and self._ws.close_reason else None
+                        )
+                        logger.warning(
+                            "websocket closed unexpectedly",
+                            extra={
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            },
+                        )
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
