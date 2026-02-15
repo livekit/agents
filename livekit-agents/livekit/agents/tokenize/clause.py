@@ -20,18 +20,27 @@ import functools
 from dataclasses import dataclass
 
 from . import _clause_sent, token_stream, tokenizer
-from ._clause_sent import ENGLISH, TURKISH, LanguageProfile
+from ._clause_sent import ENGLISH, FRENCH, GERMAN, ITALIAN, TURKISH, LanguageProfile
 
 __all__ = [
     "SentenceTokenizer",
     "LanguageProfile",
     "ENGLISH",
+    "FRENCH",
+    "GERMAN",
+    "ITALIAN",
     "TURKISH",
 ]
 
 _PROFILES: dict[str, LanguageProfile] = {
     "en": ENGLISH,
     "english": ENGLISH,
+    "fr": FRENCH,
+    "french": FRENCH,
+    "de": GERMAN,
+    "german": GERMAN,
+    "it": ITALIAN,
+    "italian": ITALIAN,
     "tr": TURKISH,
     "turkish": TURKISH,
 }

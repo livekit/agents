@@ -65,6 +65,90 @@ def test_turkish_clause_tokenizer():
 
 
 # ---------------------------------------------------------------------------
+# German clause tokenization
+# ---------------------------------------------------------------------------
+
+DE_TEXT = (
+    "LiveKit ist eine Plattform für Live-Audio und Video, "
+    "und es unterstützt Echtzeit-Kommunikation. "
+    "Dr. Müller nahm am Meeting teil, aber Prof. Schmidt kam zu spät. "
+    "Der Preis beträgt 1.250,75 Euro. "
+    "Jedoch funktionierte das System einwandfrei."
+)
+
+DE_EXPECTED = [
+    "LiveKit ist eine Plattform für Live-Audio und Video,",
+    "und es unterstützt Echtzeit-Kommunikation.",
+    "Dr. Müller nahm am Meeting teil,",
+    "aber Prof. Schmidt kam zu spät.",
+    "Der Preis beträgt 1.250,75 Euro.",
+    "Jedoch funktionierte das System einwandfrei.",
+]
+
+
+def test_german_clause_tokenizer():
+    tok = clause.SentenceTokenizer(language="de")
+    result = tok.tokenize(DE_TEXT)
+    assert result == DE_EXPECTED
+
+
+# ---------------------------------------------------------------------------
+# French clause tokenization
+# ---------------------------------------------------------------------------
+
+FR_TEXT = (
+    "LiveKit est une plateforme pour l'audio et la vidéo en direct, "
+    "et elle prend en charge la communication en temps réel. "
+    "M. Dupont a rejoint la réunion, mais Dr. Martin était en retard. "
+    "Le prix est de 1.250,75 euros. "
+    "Cependant le système a fonctionné parfaitement."
+)
+
+FR_EXPECTED = [
+    "LiveKit est une plateforme pour l'audio et la vidéo en direct,",
+    "et elle prend en charge la communication en temps réel.",
+    "M. Dupont a rejoint la réunion,",
+    "mais Dr. Martin était en retard.",
+    "Le prix est de 1.250,75 euros.",
+    "Cependant le système a fonctionné parfaitement.",
+]
+
+
+def test_french_clause_tokenizer():
+    tok = clause.SentenceTokenizer(language="fr")
+    result = tok.tokenize(FR_TEXT)
+    assert result == FR_EXPECTED
+
+
+# ---------------------------------------------------------------------------
+# Italian clause tokenization
+# ---------------------------------------------------------------------------
+
+IT_TEXT = (
+    "LiveKit è una piattaforma per audio e video in tempo reale, "
+    "e supporta la comunicazione in diretta. "
+    "Dott. Rossi ha partecipato alla riunione, ma Prof. Bianchi era in ritardo. "
+    "Il prezzo è di 1.250,75 euro. "
+    "Tuttavia il sistema ha funzionato perfettamente."
+)
+
+IT_EXPECTED = [
+    "LiveKit è una piattaforma per audio e video in tempo reale,",
+    "e supporta la comunicazione in diretta.",
+    "Dott. Rossi ha partecipato alla riunione,",
+    "ma Prof. Bianchi era in ritardo.",
+    "Il prezzo è di 1.250,75 euro.",
+    "Tuttavia il sistema ha funzionato perfettamente.",
+]
+
+
+def test_italian_clause_tokenizer():
+    tok = clause.SentenceTokenizer(language="it")
+    result = tok.tokenize(IT_TEXT)
+    assert result == IT_EXPECTED
+
+
+# ---------------------------------------------------------------------------
 # Protected positions: abbreviations, numbers, URLs, emails, quotes
 # ---------------------------------------------------------------------------
 
@@ -126,6 +210,27 @@ def test_time_not_split():
     result = tok.tokenize(text)
     found = any("14:30" in seg for seg in result)
     assert found, f"Time was split: {result}"
+
+
+def test_bare_domain_not_split():
+    """Periods in bare domain names (google.com) must not trigger a split."""
+    text = "Visit google.com or example.org for more information about the project."
+    tok = clause.SentenceTokenizer(language="en", min_clause_len=5)
+    result = tok.tokenize(text)
+    found_google = any("google.com" in seg for seg in result)
+    found_example = any("example.org" in seg for seg in result)
+    assert found_google, f"Bare domain was split: {result}"
+    assert found_example, f"Bare domain was split: {result}"
+
+
+def test_single_letter_abbreviation_not_split():
+    """Periods in single-letter abbreviations (J. K. Rowling) must not split."""
+    text = "The author J. K. Rowling wrote many books about the wizarding world."
+    tok = clause.SentenceTokenizer(language="en", min_clause_len=5)
+    result = tok.tokenize(text)
+    # "J." and "K." periods should not cause sentence splits
+    found = any("J. K. Rowling" in seg for seg in result)
+    assert found, f"Single-letter abbreviation was split: {result}"
 
 
 # ---------------------------------------------------------------------------

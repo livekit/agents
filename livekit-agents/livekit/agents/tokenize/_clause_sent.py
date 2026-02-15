@@ -110,6 +110,166 @@ TURKISH = LanguageProfile(
     min_clause_len=15,
 )
 
+GERMAN = LanguageProfile(
+    name="de",
+    conjunctions=(
+        "und",
+        "aber",
+        "oder",
+        "denn",
+        "weil",
+        "dass",
+        "obwohl",
+        "jedoch",
+        "sondern",
+        "deshalb",
+        "daher",
+        "trotzdem",
+        "außerdem",
+        "allerdings",
+        "dennoch",
+        "sofern",
+        "sobald",
+        "solange",
+        "bevor",
+        "nachdem",
+        "damit",
+        "also",
+    ),
+    abbreviations=(
+        "Dr.",
+        "Prof.",
+        "Hr.",
+        "Fr.",
+        "Nr.",
+        "Str.",
+        "bzw.",
+        "usw.",
+        "z.B.",
+        "d.h.",
+        "u.a.",
+        "o.g.",
+        "s.o.",
+        "s.u.",
+        "Mio.",
+        "Mrd.",
+        "ca.",
+        "evtl.",
+        "ggf.",
+        "inkl.",
+    ),
+    decimal_sep=",",
+    thousands_sep=".",
+    min_clause_len=15,
+)
+
+FRENCH = LanguageProfile(
+    name="fr",
+    conjunctions=(
+        "et",
+        "mais",
+        "ou",
+        "car",
+        "donc",
+        "or",
+        "ni",
+        "puis",
+        "parce que",
+        "puisque",
+        "cependant",
+        "pourtant",
+        "toutefois",
+        "néanmoins",
+        "alors",
+        "ensuite",
+        "lorsque",
+        "quand",
+        "tandis que",
+        "bien que",
+        "afin que",
+        "c'est pourquoi",
+        "en revanche",
+        "par conséquent",
+        "de plus",
+        "en effet",
+        "d'ailleurs",
+    ),
+    abbreviations=(
+        "M.",
+        "Mme.",
+        "Mlle.",
+        "Dr.",
+        "Prof.",
+        "Jr.",
+        "Sr.",
+        "av.",
+        "apr.",
+        "env.",
+        "éd.",
+        "ex.",
+        "fig.",
+        "vol.",
+        "no.",
+        "p.",
+        "pp.",
+        "etc.",
+        "c.-à-d.",
+    ),
+    decimal_sep=",",
+    thousands_sep=".",
+    min_clause_len=15,
+)
+
+ITALIAN = LanguageProfile(
+    name="it",
+    conjunctions=(
+        "e",
+        "ma",
+        "o",
+        "oppure",
+        "però",
+        "perché",
+        "poiché",
+        "quindi",
+        "dunque",
+        "inoltre",
+        "tuttavia",
+        "eppure",
+        "anzi",
+        "ovvero",
+        "pertanto",
+        "nonostante",
+        "sebbene",
+        "affinché",
+        "anche se",
+        "di conseguenza",
+        "in quanto",
+        "dal momento che",
+    ),
+    abbreviations=(
+        "Sig.",
+        "Sig.ra",
+        "Dott.",
+        "Dott.ssa",
+        "Prof.",
+        "Prof.ssa",
+        "Avv.",
+        "Ing.",
+        "Arch.",
+        "ecc.",
+        "es.",
+        "pag.",
+        "vol.",
+        "cap.",
+        "fig.",
+        "n.",
+        "p.",
+    ),
+    decimal_sep=",",
+    thousands_sep=".",
+    min_clause_len=15,
+)
+
 ENGLISH = LanguageProfile(
     name="en",
     conjunctions=(
@@ -178,6 +338,17 @@ _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 # Time colons: digit:digit
 _TIME_RE = re.compile(r"\d:\d")
 
+# Bare domain TLDs: word.com, word.net, etc. (without https://)
+_BARE_DOMAIN_RE = re.compile(
+    r"[a-zA-Z0-9-]+[.](?:com|net|org|io|gov|edu|me|co|info|dev|app|tr|uk|de|fr|it)\b",
+    re.IGNORECASE,
+)
+
+# Single-letter abbreviations: J. K. Rowling, Y. A.
+_SINGLE_LETTER_ABBR_RE = re.compile(
+    r"(?<!\w)[A-Za-z\u00c7\u011e\u0130\u00d6\u015e\u00dc\u00e7\u011f\u0131\u00f6\u015f\u00fc][.]"
+)
+
 
 # ---------------------------------------------------------------------------
 # Protected position detection
@@ -195,11 +366,13 @@ def _find_protected_positions(text: str, profile: LanguageProfile) -> set[int]:
     - All punctuation inside quoted text  ("no, not here")
     - All punctuation inside URLs  (https://example.com/path?q=1)
     - All punctuation inside email addresses  (user@example.com)
+    - Periods in bare domain names  (google.com, example.org)
+    - Periods in single-letter abbreviations  (J. K. Rowling)
     """
     protected: set[int] = set()
 
-    # --- Range-based protection (quotes, URLs, emails) ---
-    for pattern in (_QUOTED_RE, _URL_RE, _EMAIL_RE):
+    # --- Range-based protection (quotes, URLs, emails, bare domains) ---
+    for pattern in (_QUOTED_RE, _URL_RE, _EMAIL_RE, _BARE_DOMAIN_RE):
         for m in pattern.finditer(text):
             protected.update(range(m.start(), m.end()))
 
@@ -220,6 +393,10 @@ def _find_protected_positions(text: str, profile: LanguageProfile) -> set[int]:
     # Time colons: 14:30
     for m in _TIME_RE.finditer(text):
         protected.add(m.start() + 1)
+
+    # Single-letter abbreviations: J. K. Rowling, Y. A.
+    for m in _SINGLE_LETTER_ABBR_RE.finditer(text):
+        protected.add(m.end() - 1)
 
     return protected
 
