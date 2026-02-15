@@ -6,6 +6,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    InterruptionConfig,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
@@ -99,12 +100,12 @@ async def entrypoint(ctx: JobContext) -> None:
             # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
             # See more at https://docs.livekit.io/agents/build/turns
             turn_detection=MultilingualModel(),
-            interruption={
+            interruption=InterruptionConfig(
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
-                "resume_false_interruption": True,
-                "false_interruption_timeout": 1.0,
-            },
+                resume_false_interruption=True,
+                false_interruption_timeout=1.0,
+            ),
         ),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation

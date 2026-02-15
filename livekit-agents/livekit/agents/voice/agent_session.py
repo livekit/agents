@@ -26,7 +26,7 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
-from ..metrics import ModelUsage, ModelUsageCollector
+from ..metrics import AgentSessionUsage, ModelUsageCollector
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -130,11 +130,6 @@ class VoiceActivityVideoSampler:
             return True
 
         return False
-
-
-@dataclass
-class AgentSessionUsage:
-    model_usage: list[ModelUsage]
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
@@ -290,17 +285,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
-            allow_interruptions=turn_handling.interruption_cfg.mode is not False,
-            discard_audio_if_uninterruptible=turn_handling.interruption_cfg.discard_audio_if_uninterruptible,
-            min_interruption_duration=turn_handling.interruption_cfg.min_duration,
-            min_interruption_words=turn_handling.interruption_cfg.min_words,
-            min_endpointing_delay=turn_handling.endpointing_cfg.min_delay,  # type: ignore[arg-type]
-            max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,  # type: ignore[arg-type]
+            allow_interruptions=turn_handling.interruption.mode is not False,
+            discard_audio_if_uninterruptible=turn_handling.interruption.discard_audio_if_uninterruptible,
+            min_interruption_duration=turn_handling.interruption.min_duration,
+            min_interruption_words=turn_handling.interruption.min_words,
+            min_endpointing_delay=turn_handling.endpointing.min_delay,  # type: ignore[arg-type]
+            max_endpointing_delay=turn_handling.endpointing.max_delay,  # type: ignore[arg-type]
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             preemptive_generation=preemptive_generation,
-            false_interruption_timeout=turn_handling.interruption_cfg.false_interruption_timeout,
-            resume_false_interruption=turn_handling.interruption_cfg.resume_false_interruption,
+            false_interruption_timeout=turn_handling.interruption.false_interruption_timeout,
+            resume_false_interruption=turn_handling.interruption.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -329,7 +324,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._turn_detection = turn_handling.turn_detection or None
-        self._interruption_detection = turn_handling.interruption_cfg.mode
+        self._interruption_detection = turn_handling.interruption.mode
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
 

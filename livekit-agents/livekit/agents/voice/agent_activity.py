@@ -1192,6 +1192,7 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled and self._audio_recognition:
                 self._audio_recognition.on_start_of_overlap_speech(
                     speech_duration=0,
+                    started_at=time.time(),
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
@@ -1258,7 +1259,16 @@ class AgentActivity(RecognitionHooks):
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(self) -> None:
+    def _interrupt_by_audio_activity(
+        self, *, ignore_user_transcript_until: float | None = None
+    ) -> None:
+        """
+        Interrupt the current speech or generation, and optionally ignore the user transcript until the given timestamp.
+
+        Args:
+            ignore_user_transcript_until: The timestamp until which the user transcript should be ignored.
+                If None, the user transcript will be ignored until the current time.
+        """
         if not self._interruption_by_audio_activity_enabled:
             return
 
@@ -1300,7 +1310,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self.interruption_enabled and self._audio_recognition:
                     self._audio_recognition.on_end_of_agent_speech(
-                        ignore_user_transcript_until=time.time()
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
                     )
                     self._restore_interruption_by_audio_activity()
             else:
@@ -1314,12 +1324,13 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_start_time = time.time()
         if ev:
-            speech_start_time = speech_start_time - ev.speech_duration
+            speech_start_time = speech_start_time - ev.speech_duration - ev.inference_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self.interruption_enabled and self._audio_recognition:
             self._audio_recognition.on_start_of_overlap_speech(
                 speech_duration=ev.speech_duration if ev else None,
                 user_speaking_span=self._session._user_speaking_span,
+                started_at=speech_start_time,
             )
         self._user_silence_event.clear()
         self._stt_eos_received = False
@@ -1379,9 +1390,12 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.set()
 
     def on_interruption(self, ev: inference.InterruptionEvent) -> None:
-        # restore interruption by audio activity
+        # restore interruption by audio activity and then immediately interrupt
         self._restore_interruption_by_audio_activity()
-        self._interrupt_by_audio_activity()
+        self._interrupt_by_audio_activity(
+            ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
+        )
+        # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition.on_end_of_agent_speech(
                 ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp

@@ -8,6 +8,7 @@ from .base import (
     VADMetrics,
 )
 from .usage import (
+    AgentSessionUsage,
     LLMModelUsage,
     ModelUsage,
     ModelUsageCollector,
@@ -30,6 +31,7 @@ __all__ = [
     "TTSModelUsage",
     "STTModelUsage",
     "ModelUsage",
+    "AgentSessionUsage",
     "ModelUsageCollector",
     # Deprecated - use ModelUsageCollector and ModelUsage instead
     "UsageSummary",

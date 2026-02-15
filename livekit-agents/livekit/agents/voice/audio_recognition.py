@@ -229,6 +229,7 @@ class AudioRecognition:
         self,
         speech_duration: float | None = None,
         user_speaking_span: trace.Span | None = None,
+        started_at: float | None = None,
     ) -> None:
         """Start interruption inference when agent is speaking and overlap speech starts."""
         if (
@@ -240,7 +241,7 @@ class AudioRecognition:
         if self._agent_speaking:
             self._interruption_ch.send_nowait(
                 InterruptionStreamBase._OverlapSpeechStartedSentinel(
-                    speech_duration, user_speaking_span
+                    speech_duration, user_speaking_span, started_at
                 )
             )
 
@@ -391,7 +392,7 @@ class AudioRecognition:
 
     def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
         if self._input_started_at is None:
-            self._input_started_at = time.time()
+            self._input_started_at = time.time() - frame.duration
 
         self._sample_rate = frame.sample_rate
         if not skip_stt and self._stt_ch is not None:
@@ -762,7 +763,9 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             with trace.use_span(
-                self._ensure_user_turn_span(start_time=time.time() - ev.speech_duration)
+                self._ensure_user_turn_span(
+                    start_time=time.time() - ev.speech_duration - ev.inference_duration
+                )
             ):
                 self._hooks.on_start_of_speech(ev)
 
