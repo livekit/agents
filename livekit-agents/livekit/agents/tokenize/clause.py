@@ -82,13 +82,14 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         if isinstance(language, LanguageProfile):
             profile = language
         else:
-            profile = _PROFILES.get(language.lower())
-            if profile is None:
+            _prof = _PROFILES.get(language.lower())
+            if _prof is None:
                 raise ValueError(
                     f"unknown language {language!r}, "
                     f"available: {sorted(_PROFILES.keys())}. "
                     f"Pass a LanguageProfile instance for custom languages."
                 )
+            profile = _prof
 
         self._config = _TokenizerOptions(
             profile=profile,
