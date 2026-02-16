@@ -3,16 +3,19 @@
 Support for Chromium Embedded Framework (CEF).
 """
 
-import sys
-
 from livekit.agents import Plugin
+
+# Re-export from livekit-browser for convenience
+from livekit.browser import (  # type: ignore[import-untyped]
+    AudioData,
+    BrowserContext,
+    BrowserPage,
+    PaintData,
+)
 
 from .log import logger
 from .session import BrowserSession
 from .version import __version__
-
-# Re-export from livekit-browser for convenience
-from livekit.browser import BrowserContext, BrowserPage, AudioData, PaintData
 
 __all__ = [
     "AudioData",
@@ -24,7 +27,7 @@ __all__ = [
 
 
 class BrowserPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:

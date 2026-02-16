@@ -6,7 +6,6 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from livekit.plugins.browser import (
     AudioData,
     BrowserContext,
-    BrowserPage,
     BrowserSession,
     PaintData,
 )
