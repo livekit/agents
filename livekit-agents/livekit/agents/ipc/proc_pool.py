@@ -130,15 +130,20 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 self.emit("process_job_launched", proc)
                 return
             except Exception:
-                logger.warning(
-                    "failed to launch job on process, retrying with another",
-                    extra={"job_id": info.job.id, "attempt": attempt + 1},
-                )
                 close_task = asyncio.create_task(proc.aclose())
                 self._close_tasks.add(close_task)
                 close_task.add_done_callback(self._close_tasks.discard)
                 if attempt == MAX_ATTEMPTS - 1:
+                    logger.error(
+                        "failed to launch job on process after %d attempts",
+                        MAX_ATTEMPTS,
+                        extra={"job_id": info.job.id},
+                    )
                     raise
+                logger.warning(
+                    "failed to launch job on process, retrying with a new process",
+                    extra={"job_id": info.job.id, "attempt": attempt + 1},
+                )
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
