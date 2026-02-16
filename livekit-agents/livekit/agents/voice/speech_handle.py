@@ -185,7 +185,7 @@ class SpeechHandle:
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
         if self.done():
-            asyncio.get_event_loop().call_soon(callback, self)
+            asyncio.get_running_loop().call_soon(callback, self)
             return
 
         self._done_callbacks.add(callback)
