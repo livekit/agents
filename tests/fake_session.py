@@ -48,7 +48,7 @@ def create_session(
         interruption_dict["min_words"] = extra.pop("min_interruption_words")
     if "allow_interruptions" in extra:
         if extra.pop("allow_interruptions") is False:
-            interruption_dict["mode"] = False
+            interruption_dict["enabled"] = False
     if "resume_false_interruption" in extra:
         interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
 

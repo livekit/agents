@@ -292,11 +292,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
         interruption = _resolve_interruption(turn_handling.get("interruption"))
+        raw_turn_detection = turn_handling.get("turn_detection", None)
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
-            turn_handling=TurnHandlingConfig(endpointing=endpointing, interruption=interruption),
+            turn_handling=TurnHandlingConfig(
+                endpointing=endpointing,
+                interruption=interruption,
+                turn_detection=raw_turn_detection,
+            ),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             preemptive_generation=preemptive_generation,
@@ -327,7 +332,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
-        self._turn_detection = turn_handling.get("turn_detection") or None
+        self._turn_detection = raw_turn_detection
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []

@@ -2979,7 +2979,7 @@ class AgentActivity(RecognitionHooks):
             and self._agent.interruption_detection == "vad"
         ):
             return None
-        elif (
+        if (
             is_given(self._session.interruption_detection)
             and self._session.interruption_detection == "vad"
         ):

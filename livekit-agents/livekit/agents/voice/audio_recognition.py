@@ -782,7 +782,7 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
                 if self._speech_start_time is None:
-                    self._speech_start_time = time.time()
+                    self._speech_start_time = time.time() - ev.raw_accumulated_speech
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):

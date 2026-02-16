@@ -90,12 +90,9 @@ class Agent:
         self._tts = tts
         self._vad = vad
 
-        raw_interruption = turn_handling.get("interruption", NOT_GIVEN)
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
         self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
-        if isinstance(raw_interruption, bool):
-            self._allow_interruptions = raw_interruption
-        elif is_given(raw_interruption):
+        if is_given(raw_interruption := turn_handling.get("interruption", NOT_GIVEN)):
             if "enabled" in raw_interruption:
                 self._allow_interruptions = raw_interruption["enabled"]
             if "mode" in raw_interruption:
