@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-smallestai"
 dynamic = ["version"]
-description = "Agent Framework plugin for speech synthesis with the Smallest AI."
+description = "Agent Framework plugin for speech synthesis and speech-to-text with Smallest AI."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "smallestai", "multilingual", "tts"]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "smallestai", "multilingual", "tts", "stt", "speech-to-text", "transcription"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
