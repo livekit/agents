@@ -58,7 +58,7 @@ class ProcJobExecutor(SupervisedProc):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._inference_executor = inference_executor
-        self._inference_tasks: list[asyncio.Task[None]] = []
+        self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = shortuuid("PCEXEC_")
 
     @property
@@ -112,7 +112,9 @@ class ProcJobExecutor(SupervisedProc):
         try:
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
-                    self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                    task = asyncio.create_task(self._do_inference_task(msg))
+                    self._inference_tasks.add(task)
+                    task.add_done_callback(self._inference_tasks.discard)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 
