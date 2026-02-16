@@ -343,23 +343,24 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_channel,
             )
 
-            has_flushed = False
+            segment_flushed = False
             async for data in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
+                    # Flush local byte stream only. Do not send "end" on per-segment flush,
+                    # because Pulse treats it as end-of-input for the websocket session.
                     frames.extend(audio_bstream.flush())
-                    has_flushed = True
+                    segment_flushed = True
 
                 for frame in frames:
                     self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-                if has_flushed:
+                if segment_flushed:
                     self._audio_duration_collector.flush()
-                    await ws.send_str(SpeechStream._END_MSG)
-                    has_flushed = False
+                    segment_flushed = False
 
             self._audio_duration_collector.flush()
             closing_ws = True
@@ -403,6 +404,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                closing_ws = False
                 self._is_last_event.clear()
                 ws = await self._connect_ws()
                 tasks = [
