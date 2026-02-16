@@ -9,7 +9,7 @@ from ..utils import is_given
 from .audio_recognition import TurnDetectionMode
 
 
-class EndpointingConfig(TypedDict, total=False):
+class EndpointingOptions(TypedDict, total=False):
     """Configuration for endpointing.
 
     All keys are optional. Missing keys inherit from the session default
@@ -25,13 +25,13 @@ class EndpointingConfig(TypedDict, total=False):
     Defaults to ``3.0``."""
 
 
-_ENDPOINTING_DEFAULTS: EndpointingConfig = {
+_ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "min_delay": 0.5,
     "max_delay": 3.0,
 }
 
 
-class InterruptionConfig(TypedDict, total=False):
+class InterruptionOptions(TypedDict, total=False):
     """Configuration for interruption handling.
 
     All keys are optional. Missing keys inherit from the session default
@@ -64,7 +64,7 @@ class InterruptionConfig(TypedDict, total=False):
     classified as false. ``None`` disables. Defaults to ``2.0``."""
 
 
-_INTERRUPTION_DEFAULTS: InterruptionConfig = {
+_INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "enabled": True,
     "discard_audio_if_uninterruptible": True,
     "min_duration": 0.5,
@@ -74,7 +74,7 @@ _INTERRUPTION_DEFAULTS: InterruptionConfig = {
 }
 
 
-class TurnHandlingConfig(TypedDict, total=False):
+class TurnHandlingOptions(TypedDict, total=False):
     """Configuration for the turn handling system.
 
     Can be passed as a plain dict::
@@ -92,26 +92,26 @@ class TurnHandlingConfig(TypedDict, total=False):
     turn_detection: TurnDetectionMode | None
     """Strategy for deciding when the user has finished speaking.
     Absent means the session auto-selects."""
-    endpointing: EndpointingConfig
+    endpointing: EndpointingOptions
     """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
-    interruption: InterruptionConfig
+    interruption: InterruptionOptions
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
 
 
-def _resolve_endpointing(config: EndpointingConfig | None = None) -> EndpointingConfig:
+def _resolve_endpointing(config: EndpointingOptions | None = None) -> EndpointingOptions:
     """Fill in defaults for missing keys."""
     if config is None:
-        return EndpointingConfig(**_ENDPOINTING_DEFAULTS)
-    return EndpointingConfig(**{**_ENDPOINTING_DEFAULTS, **config})
+        return EndpointingOptions(**_ENDPOINTING_DEFAULTS)
+    return EndpointingOptions(**{**_ENDPOINTING_DEFAULTS, **config})
 
 
 def _resolve_interruption(
-    config: InterruptionConfig | None = None,
-) -> InterruptionConfig:
+    config: InterruptionOptions | None = None,
+) -> InterruptionOptions:
     """Fill in defaults for missing keys (``mode`` stays absent if not provided)."""
     if config is None:
-        return InterruptionConfig(**_INTERRUPTION_DEFAULTS)
-    return InterruptionConfig(**{**_INTERRUPTION_DEFAULTS, **config})
+        return InterruptionOptions(**_INTERRUPTION_DEFAULTS)
+    return InterruptionOptions(**{**_INTERRUPTION_DEFAULTS, **config})
 
 
 def _migrate_turn_handling(
@@ -125,15 +125,15 @@ def _migrate_turn_handling(
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
     agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-) -> TurnHandlingConfig:
-    """Build a TurnHandlingConfig from deprecated keyword arguments."""
+) -> TurnHandlingOptions:
+    """Build a TurnHandlingOptions from deprecated keyword arguments."""
     if is_given(agent_false_interruption_timeout):
         false_interruption_timeout = agent_false_interruption_timeout
 
-    result: TurnHandlingConfig = {}
+    result: TurnHandlingOptions = {}
 
     # endpointing — only include keys that were explicitly provided
-    endpointing: EndpointingConfig = {}
+    endpointing: EndpointingOptions = {}
     if is_given(min_endpointing_delay):
         endpointing["min_delay"] = min_endpointing_delay
     if is_given(max_endpointing_delay):
@@ -142,7 +142,7 @@ def _migrate_turn_handling(
         result["endpointing"] = endpointing
 
     # interruption — only include keys that were explicitly provided
-    interruption: InterruptionConfig = {}
+    interruption: InterruptionOptions = {}
     if allow_interruptions is False:
         interruption["enabled"] = False
     if is_given(discard_audio_if_uninterruptible):

@@ -9,10 +9,10 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentSession,
-    EndpointingConfig,
-    InterruptionConfig,
+    EndpointingOptions,
+    InterruptionOptions,
     NotGivenOr,
-    TurnHandlingConfig,
+    TurnHandlingOptions,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
@@ -62,12 +62,12 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        turn_handling=TurnHandlingConfig(
-            endpointing=EndpointingConfig(
+        turn_handling=TurnHandlingOptions(
+            endpointing=EndpointingOptions(
                 min_delay=0.5 / speed_factor,
                 max_delay=6.0 / speed_factor,
             ),
-            interruption=InterruptionConfig(**interruption_dict),
+            interruption=InterruptionOptions(**interruption_dict),
         ),
         **extra,
     )
