@@ -315,7 +315,8 @@ async def test_slow_initialization():
     @pool.on("process_closed")
     def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
         close_q.put_nowait(None)
-        pids.append(proc.pid)
+        if proc.pid is not None:
+            pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
 
     await pool.start()
@@ -323,8 +324,10 @@ async def test_slow_initialization():
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
 
-    # after initialization failure, warmup should be retried
+    # retry batch should also timeout and be killed
     await _wait_for_elements(start_q, num_idle_processes)
+    await _wait_for_elements(close_q, num_idle_processes)
+
     await pool.aclose()
 
     for pid in pids:

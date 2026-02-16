@@ -217,6 +217,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         if not initialized:
             self._executors.remove(proc)
             await proc.aclose()
+            self.emit("process_closed", proc)
             return
 
         monitor_task = asyncio.create_task(self._monitor_process_task(proc))
