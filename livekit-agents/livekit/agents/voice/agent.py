@@ -15,7 +15,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
-from .turn import TurnHandlingConfig
+from .turn import TurnHandlingConfig, _migrate_turn_handling
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -61,7 +61,7 @@ class Agent:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
         turn_handling = (
-            TurnHandlingConfig.migrate(
+            _migrate_turn_handling(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
                 turn_detection=turn_detection,
@@ -74,7 +74,7 @@ class Agent:
         self._instructions = instructions
         self._tools = [*tools, *find_function_tools(self)]
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
-        self._turn_detection = turn_handling.turn_detection
+        self._turn_detection = turn_handling.get("turn_detection", NOT_GIVEN)
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -90,14 +90,21 @@ class Agent:
         self._tts = tts
         self._vad = vad
 
-        self._interruption_detection = turn_handling.interruption.mode
+        raw_interruption = turn_handling.get("interruption", NOT_GIVEN)
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
-        if is_given(turn_handling.interruption.mode):
-            self._allow_interruptions = bool(turn_handling.interruption.mode)
+        self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
+        if isinstance(raw_interruption, bool):
+            self._allow_interruptions = raw_interruption
+        elif is_given(raw_interruption):
+            if "enabled" in raw_interruption:
+                self._allow_interruptions = raw_interruption["enabled"]
+            if "mode" in raw_interruption:
+                self._interruption_detection = raw_interruption["mode"]
+        endpointing = turn_handling.get("endpointing", {})
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
-        self._min_endpointing_delay = turn_handling.endpointing.min_delay
-        self._max_endpointing_delay = turn_handling.endpointing.max_delay
+        self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
+        self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -144,7 +151,7 @@ class Agent:
         return _ReadOnlyChatContext(self._chat_ctx.items)
 
     @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad", False]]:
+    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
 
     async def update_instructions(self, instructions: str) -> None:
@@ -698,7 +705,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
     ) -> None:
         tools = tools or []
         turn_handling = (
-            TurnHandlingConfig.migrate(
+            _migrate_turn_handling(
                 turn_detection=turn_detection,
                 allow_interruptions=allow_interruptions,
                 min_endpointing_delay=min_endpointing_delay,

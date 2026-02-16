@@ -59,7 +59,14 @@ from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
-from .turn import TurnHandlingConfig
+from .turn import (
+    EndpointingConfig,
+    InterruptionConfig,
+    TurnHandlingConfig,
+    _migrate_turn_handling,
+    _resolve_endpointing,
+    _resolve_interruption,
+)
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -78,21 +85,22 @@ class SessionConnectOptions:
 
 @dataclass
 class AgentSessionOptions:
-    allow_interruptions: bool
-    discard_audio_if_uninterruptible: bool
-    min_interruption_duration: float
-    min_interruption_words: int
-    min_endpointing_delay: float
-    max_endpointing_delay: float
+    turn_handling: TurnHandlingConfig
     max_tool_steps: int
     user_away_timeout: float | None
-    false_interruption_timeout: float | None
-    resume_false_interruption: bool
+    preemptive_generation: bool
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
-    preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+
+    @property
+    def endpointing(self) -> EndpointingConfig:
+        return self.turn_handling["endpointing"]
+
+    @property
+    def interruption(self) -> InterruptionConfig:
+        return self.turn_handling["interruption"]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -261,7 +269,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         turn_handling = (
-            TurnHandlingConfig.migrate(
+            _migrate_turn_handling(
                 # backward compatibility for deprecated parameters that had default values
                 min_endpointing_delay=min_endpointing_delay
                 if is_given(min_endpointing_delay)
@@ -282,20 +290,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else turn_handling
         )
 
+        endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
+        interruption = _resolve_interruption(turn_handling.get("interruption"))
+
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
-            allow_interruptions=turn_handling.interruption.mode is not False,
-            discard_audio_if_uninterruptible=turn_handling.interruption.discard_audio_if_uninterruptible,
-            min_interruption_duration=turn_handling.interruption.min_duration,
-            min_interruption_words=turn_handling.interruption.min_words,
-            min_endpointing_delay=turn_handling.endpointing.min_delay,  # type: ignore[arg-type]
-            max_endpointing_delay=turn_handling.endpointing.max_delay,  # type: ignore[arg-type]
+            turn_handling=TurnHandlingConfig(endpointing=endpointing, interruption=interruption),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             preemptive_generation=preemptive_generation,
-            false_interruption_timeout=turn_handling.interruption.false_interruption_timeout,
-            resume_false_interruption=turn_handling.interruption.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -323,8 +327,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
-        self._turn_detection = turn_handling.turn_detection or None
-        self._interruption_detection = turn_handling.interruption.mode
+        self._turn_detection = turn_handling.get("turn_detection") or None
+        self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
 
@@ -737,7 +741,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 " -> ".join([f"`{out.label}`" for out in audio_output]) or "(none)",
             )
             if (
-                self._opts.resume_false_interruption
+                self._opts.interruption["resume_false_interruption"]
                 and self.output.audio
                 and not self.output.audio.can_pause
             ):
@@ -907,9 +911,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 when the user has finished speaking. ``None`` reverts to automatic selection.
         """
         if is_given(min_endpointing_delay):
-            self._opts.min_endpointing_delay = min_endpointing_delay
+            self._opts.endpointing["min_delay"] = min_endpointing_delay
         if is_given(max_endpointing_delay):
-            self._opts.max_endpointing_delay = max_endpointing_delay
+            self._opts.endpointing["max_delay"] = max_endpointing_delay
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
@@ -1335,7 +1339,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._vad
 
     @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad", False]]:
+    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
 
     # -- User changed input/output streams/sinks --
@@ -1368,7 +1372,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_audio_output_changed(self) -> None:
         if (
             self._started
-            and self._opts.resume_false_interruption
+            and self._opts.interruption["resume_false_interruption"]
             and (audio_output := self.output.audio)
             and not audio_output.can_pause
         ):

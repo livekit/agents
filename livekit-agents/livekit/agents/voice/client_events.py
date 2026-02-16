@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import asdict
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -198,6 +197,19 @@ class StreamResponse(BaseModel):
     request_id: str
     payload: str  # JSON-encoded method-specific response
     error: str | None = None
+
+
+def _serialize_options(opts: Any) -> dict[str, Any]:
+    return {
+        "endpointing": dict(opts.endpointing),
+        "interruption": dict(opts.interruption),
+        "max_tool_steps": opts.max_tool_steps,
+        "user_away_timeout": opts.user_away_timeout,
+        "preemptive_generation": opts.preemptive_generation,
+        "min_consecutive_speech_delay": opts.min_consecutive_speech_delay,
+        "use_tts_aligned_transcript": opts.use_tts_aligned_transcript,
+        "ivr_detection": opts.ivr_detection,
+    }
 
 
 def _tool_names(tools: list[Any]) -> list[str]:
@@ -403,7 +415,7 @@ class ClientEventsHandler:
             agent_state=self._session.agent_state,
             user_state=self._session.user_state,
             agent_id=agent.id,
-            options=asdict(self._session.options),
+            options=_serialize_options(self._session.options),
             created_at=self._session._started_at or time.time(),
         )
         return response.model_dump_json()
@@ -599,7 +611,7 @@ class ClientEventsHandler:
             agent_state=self._session.agent_state,
             user_state=self._session.user_state,
             agent_id=agent.id,
-            options=asdict(self._session.options),
+            options=_serialize_options(self._session.options),
             created_at=self._session._started_at or time.time(),
         )
 
