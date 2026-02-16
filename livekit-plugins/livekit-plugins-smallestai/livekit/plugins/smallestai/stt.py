@@ -472,7 +472,7 @@ class SpeechStream(stt.SpeechStream):
             logger.debug("ignored unexpected SmallestAI STT event: %s", data)
             return
 
-        transcript = str(data.get("transcript", ""))
+        transcript = str(data.get("transcription") or "")
         is_final = bool(data.get("is_final", False))
         is_last = bool(data.get("is_last", False))
         request_id = str(data.get("request_id", self._request_id))
@@ -580,7 +580,7 @@ def _transcription_to_speech_event(
     default_language: str,
     word_timestamps: bool,
 ) -> stt.SpeechEvent:
-    transcript = str(data.get("transcript", ""))
+    transcript = str(data.get("transcription") or "")
     request_id = str(data.get("request_id", ""))
     speech_data = _build_speech_data(
         transcript=transcript,
