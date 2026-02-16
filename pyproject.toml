@@ -37,6 +37,7 @@ livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
+livekit-plugins-pocket = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-rtzr = { workspace = true }
@@ -157,6 +158,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "pocket_tts.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pocket_tts"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "livekit.plugins"
