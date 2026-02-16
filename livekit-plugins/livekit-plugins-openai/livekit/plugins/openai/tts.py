@@ -85,6 +85,12 @@ class TTS(tts.TTS):
             response_format=response_format if is_given(response_format) else "mp3",
         )
 
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
+
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
