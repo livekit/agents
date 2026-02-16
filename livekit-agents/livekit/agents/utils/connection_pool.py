@@ -72,7 +72,6 @@ class ConnectionPool(Generic[T]):
                 await self._maybe_close_connection(conn)
             except Exception as e:
                 logger.warning(f"error closing connection: {conn}", exc_info=e)
-        self._to_close.clear()
 
     @asynccontextmanager
     async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:
