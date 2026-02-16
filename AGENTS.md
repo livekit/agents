@@ -23,6 +23,7 @@ make check            # Run all checks (format-check, lint, type-check)
 uv run pytest                           # Run all tests
 uv run pytest tests/test_tools.py       # Run a single test file
 uv run pytest tests/test_tools.py -k "test_name"  # Run specific test
+cd tests && make unit-tests             # Run unit tests that doesn't require cloud accounts
 ```
 
 ### Running Agents

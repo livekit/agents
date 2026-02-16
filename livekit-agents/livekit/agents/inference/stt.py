@@ -14,7 +14,13 @@ from typing_extensions import Required
 from livekit import rtc
 
 from .. import stt, utils
-from .._exceptions import APIConnectionError, APIError, APIStatusError
+from .._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    create_api_error_from_http,
+)
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -367,7 +373,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError(
-            "LiveKit STT does not support batch recognition, use stream() instead"
+            "LiveKit Inference STT does not support batch recognition, use stream() instead"
         )
 
     def stream(
@@ -488,10 +494,12 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="LiveKit STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="LiveKit Inference STT connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected LiveKit STT message type %s", msg.type)
+                    logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
                     continue
 
                 data = json.loads(msg.data)
@@ -507,9 +515,11 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.closed":
                     pass
                 elif msg_type == "error":
-                    raise APIError(f"LiveKit STT returned error: {msg.data}")
+                    raise APIError(f"LiveKit Inference STT returned error: {msg.data}")
                 else:
-                    logger.warning("received unexpected message from LiveKit STT: %s", data)
+                    logger.warning(
+                        "received unexpected message from LiveKit Inference STT: %s", data
+                    )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -555,7 +565,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit STT WebSocket."""
+        """Connect to the LiveKit Inference STT WebSocket."""
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
@@ -596,22 +606,14 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            asyncio.TimeoutError,
-            aiohttp.ClientResponseError,
-        ) as e:
-            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
-            raise APIConnectionError("failed to connect to LiveKit STT") from e
-
-        try:
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
-        except Exception as e:
-            await ws.close()
-            raise APIConnectionError("failed to send session.create message to LiveKit STT") from e
-
+        except aiohttp.ClientResponseError as e:
+            raise create_api_error_from_http(e.message, status=e.status) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to LiveKit Inference STT") from e
         return ws
 
     def _process_transcript(self, data: dict, is_final: bool) -> None:

@@ -6,13 +6,13 @@ from pathlib import Path
 
 from ..llm import ChatContext
 from ..metrics import ModelUsage
-from .agent_session import AgentSessionOptions
+from .agent_session import AgentSessionOptions, RecordingOptions
 from .events import AgentEvent
 
 
 @dataclass
 class SessionReport:
-    enable_recording: bool
+    recording_options: RecordingOptions
     job_id: str
     room_id: str
     room: str

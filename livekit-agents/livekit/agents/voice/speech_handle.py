@@ -56,8 +56,11 @@ class SpeechHandle:
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
 
         def _on_done(_: asyncio.Future[None]) -> None:
-            for cb in self._done_callbacks:
-                cb(self)
+            for cb in list(self._done_callbacks):
+                try:
+                    cb(self)
+                except Exception as e:
+                    logger.warning(f"error in done_callback: {cb}", exc_info=e)
 
         self._done_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
@@ -181,6 +184,10 @@ class SpeechHandle:
         return _await_impl().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
+        if self.done():
+            asyncio.get_running_loop().call_soon(callback, self)
+            return
+
         self._done_callbacks.add(callback)
 
     def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
@@ -226,8 +233,11 @@ class SpeechHandle:
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
         for item in items:
-            for cb in self._item_added_callbacks:
-                cb(item)
+            for cb in list(self._item_added_callbacks):
+                try:
+                    cb(item)
+                except Exception as e:
+                    logger.warning(f"error in item_added_callback: {cb}", exc_info=e)
 
             self._chat_items.append(item)
 

@@ -12,7 +12,13 @@ import aiohttp
 from typing_extensions import NotRequired
 
 from .. import tokenize, tts, utils
-from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from .._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    create_api_error_from_http,
+)
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -402,14 +408,12 @@ class TTS(tts.TTS):
                 session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
                 timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            asyncio.TimeoutError,
-            aiohttp.ClientResponseError,
-        ) as e:
-            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
-            raise APIConnectionError("failed to connect to LiveKit TTS") from e
+        except aiohttp.ClientResponseError as e:
+            raise create_api_error_from_http(e.message, status=e.status) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("LiveKit Inference TTS connection timed out.") from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to LiveKit Inference TTS") from e
 
         params: dict[str, Any] = {
             "type": "session.create",
@@ -445,7 +449,9 @@ class TTS(tts.TTS):
             await ws.send_str(json.dumps(params))
         except Exception as e:
             await ws.close()
-            raise APIConnectionError("failed to send session.create message to LiveKit TTS") from e
+            raise APIConnectionError(
+                "failed to send session.create message to LiveKit Inference TTS"
+            ) from e
 
         return ws
 
@@ -596,7 +602,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
-                    raise APIError(f"LiveKit TTS returned error: {msg.data}")
+                    raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
                 else:
                     logger.warning("unexpected message %s", data)
 
@@ -619,9 +625,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
 
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
+
+        except APIError:
+            raise
 
         except Exception as e:
             raise APIConnectionError() from e

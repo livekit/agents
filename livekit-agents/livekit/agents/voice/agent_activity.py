@@ -193,13 +193,16 @@ class AgentActivity(RecognitionHooks):
         llm_model = self.llm
 
         if mode == "vad" and not vad_model:
-            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
+            logger.warning(
+                "turn_detection is set to 'vad', but no VAD model is provided. "
+                "Pass a VAD instance, e.g. Agent(vad=silero.VAD.load())"
+            )
             mode = None
 
         if mode == "stt" and not stt_model:
             logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided, "
-                "ignoring the turn_detection setting"
+                "turn_detection is set to 'stt', but no STT model is provided. "
+                "Pass an STT instance, e.g. Agent(stt=deepgram.STT())"
             )
             mode = None
 
@@ -671,7 +674,11 @@ class AgentActivity(RecognitionHooks):
 
             self._cancel_preemptive_generation()
 
-            await self._on_exit_task
+            try:
+                await self._on_exit_task
+            except Exception:
+                pass  # already logged by @log_exceptions
+
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(

@@ -130,6 +130,12 @@ class STT(stt.STT):
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
 
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
+
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,

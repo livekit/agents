@@ -28,6 +28,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
     tokenize,
     tts,
     utils,
@@ -101,7 +102,10 @@ class TTS(tts.TTS):
         )
         neuphonic_api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
         if not neuphonic_api_key:
-            raise ValueError("NEUPHONIC_API_KEY must be set")
+            raise ValueError(
+                "Neuphonic API key is required, either as argument or set"
+                " NEUPHONIC_API_KEY environment variable"
+            )
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -269,9 +273,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -346,11 +348,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
+            raise create_api_error_from_http(
+                e.message, status=e.status, request_id=request_id
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
