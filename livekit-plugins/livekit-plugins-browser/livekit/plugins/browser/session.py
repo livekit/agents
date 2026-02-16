@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import sys
 import time
-
-import logging
+from typing import Any
 
 from livekit import rtc
-from livekit.browser import AudioData, BrowserPage, PaintData
+from livekit.browser import AudioData, BrowserPage, PaintData  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -23,35 +23,35 @@ def _build_native_keycode_map() -> dict[int, int]:
     """
     if sys.platform == "darwin":
         return {
-            8: 51,     # Backspace
-            9: 48,     # Tab
-            13: 36,    # Enter/Return
-            27: 53,    # Escape
-            37: 123,   # Arrow Left
-            38: 126,   # Arrow Up
-            39: 124,   # Arrow Right
-            40: 125,   # Arrow Down
-            46: 117,   # Delete (forward)
-            33: 116,   # Page Up
-            34: 121,   # Page Down
-            35: 119,   # End
-            36: 115,   # Home
+            8: 51,  # Backspace
+            9: 48,  # Tab
+            13: 36,  # Enter/Return
+            27: 53,  # Escape
+            37: 123,  # Arrow Left
+            38: 126,  # Arrow Up
+            39: 124,  # Arrow Right
+            40: 125,  # Arrow Down
+            46: 117,  # Delete (forward)
+            33: 116,  # Page Up
+            34: 121,  # Page Down
+            35: 119,  # End
+            36: 115,  # Home
         }
     elif sys.platform == "linux":
         return {
-            8: 22,     # Backspace
-            9: 23,     # Tab
-            13: 36,    # Enter/Return
-            27: 9,     # Escape
-            37: 113,   # Arrow Left
-            38: 111,   # Arrow Up
-            39: 114,   # Arrow Right
-            40: 116,   # Arrow Down
-            46: 119,   # Delete (forward)
-            33: 112,   # Page Up
-            34: 117,   # Page Down
-            35: 115,   # End
-            36: 110,   # Home
+            8: 22,  # Backspace
+            9: 23,  # Tab
+            13: 36,  # Enter/Return
+            27: 9,  # Escape
+            37: 113,  # Arrow Left
+            38: 111,  # Arrow Up
+            39: 114,  # Arrow Right
+            40: 116,  # Arrow Down
+            46: 119,  # Delete (forward)
+            33: 112,  # Page Up
+            34: 117,  # Page Down
+            35: 115,  # End
+            36: 110,  # Home
         }
     else:
         # Windows — CEF primarily uses windows_key_code
@@ -71,12 +71,12 @@ class BrowserSession:
         self._audio_track: rtc.LocalAudioTrack | None = None
         self._started = False
         self._last_frame: rtc.VideoFrame | None = None
-        self._video_task: asyncio.Task | None = None
-        self._audio_init_task: asyncio.Task | None = None
-        self._audio_task: asyncio.Task | None = None
-        self._audio_queue: asyncio.Queue[tuple[rtc.AudioFrame, int]] | None = None
-        self._input_queue: asyncio.Queue | None = None
-        self._input_task: asyncio.Task | None = None
+        self._video_task: asyncio.Task[None] | None = None
+        self._audio_init_task: asyncio.Task[None] | None = None
+        self._audio_task: asyncio.Task[None] | None = None
+        self._audio_queue: asyncio.Queue[rtc.AudioFrame] | None = None
+        self._input_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
+        self._input_task: asyncio.Task[None] | None = None
 
         self._focus_identity: str | None = None
 
@@ -95,9 +95,7 @@ class BrowserSession:
 
         video_opts = rtc.TrackPublishOptions(
             source=rtc.TrackSource.SOURCE_SCREENSHARE,
-            video_encoding=rtc.VideoEncoding(
-                max_bitrate=8_000_000, max_framerate=opts.framerate
-            ),
+            video_encoding=rtc.VideoEncoding(max_bitrate=8_000_000, max_framerate=opts.framerate),
             simulcast=False,
         )
         self._page.on("paint", self._on_paint)
@@ -106,17 +104,16 @@ class BrowserSession:
 
         await self._room.local_participant.publish_track(self._video_track, video_opts)
 
-        self._video_task = asyncio.create_task(
-            self._video_loop(opts.framerate)
-        )
+        self._video_task = asyncio.create_task(self._video_loop(opts.framerate))
 
         # Single persistent task for sending input events to subprocess
-        self._input_queue = asyncio.Queue(maxsize=256)
         self._input_task = asyncio.create_task(self._input_sender_loop())
 
         # Register RPC methods for focus management
-        @self._room.local_participant.register_rpc_method("browser/request-focus")
-        async def _handle_request_focus(data: rtc.rpc.RpcInvocationData):
+        @self._room.local_participant.register_rpc_method("browser/request-focus")  # type: ignore[arg-type]
+        async def _handle_request_focus(
+            data: rtc.rpc.RpcInvocationData,
+        ) -> str:
             if self._focus_identity is None:
                 self._focus_identity = data.caller_identity
                 await self._page.send_focus_event(True)
@@ -124,8 +121,10 @@ class BrowserSession:
                 return json.dumps({"granted": True})
             return json.dumps({"granted": False, "holder": self._focus_identity})
 
-        @self._room.local_participant.register_rpc_method("browser/release-focus")
-        async def _handle_release_focus(data: rtc.rpc.RpcInvocationData):
+        @self._room.local_participant.register_rpc_method("browser/release-focus")  # type: ignore[arg-type]
+        async def _handle_release_focus(
+            data: rtc.rpc.RpcInvocationData,
+        ) -> str:
             if self._focus_identity == data.caller_identity:
                 self._focus_identity = None
                 await self._page.send_focus_event(False)
@@ -135,7 +134,7 @@ class BrowserSession:
 
         # Listen for input data from participants
         @self._room.on("data_received")
-        def _on_data_received(packet: rtc.DataPacket):
+        def _on_data_received(packet: rtc.DataPacket) -> None:
             if packet.topic != "browser-input":
                 return
             if packet.participant is None:
@@ -153,7 +152,7 @@ class BrowserSession:
 
         # Release focus when the holder disconnects
         @self._room.on("participant_disconnected")
-        def _on_participant_disconnected(participant: rtc.RemoteParticipant):
+        def _on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
             if participant.identity == self._focus_identity:
                 self._focus_identity = None
                 self._queue_input(self._page.send_focus_event(False))
@@ -161,7 +160,7 @@ class BrowserSession:
 
         self._on_participant_disconnected = _on_participant_disconnected
 
-    def _queue_input(self, coro) -> None:
+    def _queue_input(self, coro: Any) -> None:
         try:
             self._input_queue.put_nowait(coro)
         except asyncio.QueueFull:
@@ -175,23 +174,17 @@ class BrowserSession:
             except Exception:
                 pass
 
-    def _dispatch_input(self, evt: dict) -> None:
+    def _dispatch_input(self, evt: dict[str, Any]) -> None:
         t = evt.get("type")
         if t == "mousemove":
-            self._queue_input(
-                self._page.send_mouse_move(evt["x"], evt["y"])
-            )
+            self._queue_input(self._page.send_mouse_move(evt["x"], evt["y"]))
         elif t == "mousedown":
             self._queue_input(
-                self._page.send_mouse_click(
-                    evt["x"], evt["y"], evt.get("button", 0), False, 1
-                )
+                self._page.send_mouse_click(evt["x"], evt["y"], evt.get("button", 0), False, 1)
             )
         elif t == "mouseup":
             self._queue_input(
-                self._page.send_mouse_click(
-                    evt["x"], evt["y"], evt.get("button", 0), True, 1
-                )
+                self._page.send_mouse_click(evt["x"], evt["y"], evt.get("button", 0), True, 1)
             )
         elif t == "wheel":
             self._queue_input(
@@ -202,19 +195,11 @@ class BrowserSession:
         elif t == "keydown":
             wkc = evt["keyCode"]
             nkc = _NATIVE_KEY_CODES.get(wkc, 0)
-            self._queue_input(
-                self._page.send_key_event(
-                    0, evt.get("modifiers", 0), wkc, nkc, 0
-                )
-            )
+            self._queue_input(self._page.send_key_event(0, evt.get("modifiers", 0), wkc, nkc, 0))
         elif t == "keyup":
             wkc = evt["keyCode"]
             nkc = _NATIVE_KEY_CODES.get(wkc, 0)
-            self._queue_input(
-                self._page.send_key_event(
-                    2, evt.get("modifiers", 0), wkc, 0, 0
-                )
-            )
+            self._queue_input(self._page.send_key_event(2, evt.get("modifiers", 0), wkc, 0, 0))
         elif t == "char":
             wkc = evt["keyCode"]
             nkc = _NATIVE_KEY_CODES.get(wkc, 0)
@@ -252,6 +237,8 @@ class BrowserSession:
             self._audio_init_task = None
 
     async def _audio_loop(self) -> None:
+        assert self._audio_queue is not None
+        assert self._audio_source is not None
         while True:
             frame = await self._audio_queue.get()
             try:
@@ -277,31 +264,31 @@ class BrowserSession:
             pass
 
     _CEF_CURSOR_MAP: dict[int, str] = {
-        0: "default",       # CT_POINTER
-        1: "crosshair",     # CT_CROSS
-        2: "pointer",       # CT_HAND
-        3: "text",          # CT_IBEAM
-        4: "wait",          # CT_WAIT
-        5: "help",          # CT_HELP
-        6: "ew-resize",     # CT_EASTRESIZE
-        7: "ns-resize",     # CT_NORTHRESIZE
-        8: "nesw-resize",   # CT_NORTHEASTRESIZE
-        9: "nwse-resize",   # CT_NORTHWESTRESIZE
-        10: "ns-resize",    # CT_SOUTHRESIZE
+        0: "default",  # CT_POINTER
+        1: "crosshair",  # CT_CROSS
+        2: "pointer",  # CT_HAND
+        3: "text",  # CT_IBEAM
+        4: "wait",  # CT_WAIT
+        5: "help",  # CT_HELP
+        6: "ew-resize",  # CT_EASTRESIZE
+        7: "ns-resize",  # CT_NORTHRESIZE
+        8: "nesw-resize",  # CT_NORTHEASTRESIZE
+        9: "nwse-resize",  # CT_NORTHWESTRESIZE
+        10: "ns-resize",  # CT_SOUTHRESIZE
         11: "nwse-resize",  # CT_SOUTHEASTRESIZE
         12: "nesw-resize",  # CT_SOUTHWESTRESIZE
-        13: "ew-resize",    # CT_WESTRESIZE
-        14: "ns-resize",    # CT_NORTHSOUTHRESIZE
-        15: "ew-resize",    # CT_EASTWESTRESIZE
+        13: "ew-resize",  # CT_WESTRESIZE
+        14: "ns-resize",  # CT_NORTHSOUTHRESIZE
+        15: "ew-resize",  # CT_EASTWESTRESIZE
         16: "nesw-resize",  # CT_NORTHEASTSOUTHWESTRESIZE
         17: "nwse-resize",  # CT_NORTHWESTSOUTHEASTRESIZE
-        18: "ew-resize",    # CT_COLUMNRESIZE
-        19: "ns-resize",    # CT_ROWRESIZE
-        20: "move",         # CT_MIDDLEPANNING
+        18: "ew-resize",  # CT_COLUMNRESIZE
+        19: "ns-resize",  # CT_ROWRESIZE
+        20: "move",  # CT_MIDDLEPANNING
         28: "not-allowed",  # CT_NOTALLOWED
-        29: "grab",         # CT_GRAB
-        30: "grabbing",     # CT_GRABBING
-        32: "move",         # CT_MOVE
+        29: "grab",  # CT_GRAB
+        30: "grabbing",  # CT_GRABBING
+        32: "move",  # CT_MOVE
     }
 
     def _on_cursor(self, cursor_type: int) -> None:
@@ -321,11 +308,9 @@ class BrowserSession:
         loop = asyncio.get_event_loop()
         next_time = loop.time()
         while True:
-            if self._last_frame is not None:
+            if self._last_frame is not None and self._video_source is not None:
                 ts_us = time.monotonic_ns() // 1000
-                self._video_source.capture_frame(
-                    self._last_frame, timestamp_us=ts_us
-                )
+                self._video_source.capture_frame(self._last_frame, timestamp_us=ts_us)
             next_time += interval
             delay = next_time - loop.time()
             if delay > 0:
@@ -363,12 +348,8 @@ class BrowserSession:
 
         try:
             if self._video_track:
-                await self._room.local_participant.unpublish_track(
-                    self._video_track.sid
-                )
+                await self._room.local_participant.unpublish_track(self._video_track.sid)
             if self._audio_track:
-                await self._room.local_participant.unpublish_track(
-                    self._audio_track.sid
-                )
+                await self._room.local_participant.unpublish_track(self._audio_track.sid)
         except Exception:
             pass  # tracks may already be gone if room disconnected first
