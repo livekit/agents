@@ -480,7 +480,9 @@ class SpeechStream(stt.SpeechStream):
             logger.debug("ignored unexpected SmallestAI STT event: %s", data)
             return
 
-        transcript = str(data.get("transcription") or data.get("transcript") or data.get("text") or "")
+        transcript = str(
+            data.get("transcription") or data.get("transcript") or data.get("text") or ""
+        )
         is_final = bool(data.get("is_final", False))
         is_last = bool(data.get("is_last", False))
         request_id = str(data.get("request_id", self._request_id))
