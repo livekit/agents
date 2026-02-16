@@ -423,7 +423,10 @@ class SpeechStream(stt.SpeechStream):
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
-                    tasks_group.exception()
+                    try:
+                        tasks_group.exception()
+                    except asyncio.CancelledError:
+                        pass
             finally:
                 if ws is not None:
                     await ws.close()
