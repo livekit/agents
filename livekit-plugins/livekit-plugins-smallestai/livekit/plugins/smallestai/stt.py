@@ -161,19 +161,20 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
-        url = f"{config.base_url}/{config.model}/get_text"
-        params = {
-            "language": config.language,
-            "encoding": config.encoding,
-            "sample_rate": config.sample_rate,
-            "word_timestamps": str(config.word_timestamps).lower(),
-            "diarize": str(config.diarize).lower(),
-        }
+        query = urlencode(
+            {
+                "language": config.language,
+                "encoding": config.encoding,
+                "sample_rate": config.sample_rate,
+                "word_timestamps": str(config.word_timestamps).lower(),
+                "diarize": str(config.diarize).lower(),
+            }
+        )
+        url = f"{config.base_url}/{config.model}/get_text?{query}"
 
         try:
             async with self._ensure_session().post(
                 url=url,
-                params=params,
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
