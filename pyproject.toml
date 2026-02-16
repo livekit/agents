@@ -69,6 +69,7 @@ exclude = [
 dev = [
     "python-dotenv>=1.0.1",
     "mypy",
+    "scikit-learn",
     "pytest",
     "ruff",
     "pytest-asyncio>=0.25.3",
@@ -108,6 +109,7 @@ convention = "google"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--import-mode=importlib", "--ignore=examples"]
+pythonpath = ["."]
 
 
 [tool.mypy]

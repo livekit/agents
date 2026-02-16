@@ -38,7 +38,7 @@ from livekit.protocol import agent, models
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report
-from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
+from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
@@ -48,7 +48,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
-    from .voice.agent_session import AgentSession
+    from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
 
@@ -182,12 +182,53 @@ class JobContext:
         self._connected = False
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
+        self._recording_initialized = False
+        self._early_log_handler: _BufferingHandler | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
         for handler in root_logger.handlers:
             handler.addFilter(self._log_filter)
             self._handlers_with_filter.append(handler)
+
+    def _start_log_buffering(self) -> None:
+        """Start buffering logs early so crash logs can be uploaded."""
+        if self._info.fake_job or not self._info.job.enable_recording:
+            return
+        if not is_cloud(self._info.url):
+            return
+
+        self._early_log_handler = _BufferingHandler()
+        logging.getLogger().addHandler(self._early_log_handler)
+
+    def _stop_log_buffering(self) -> None:
+        """Remove the buffering handler without replaying."""
+        handler = self._early_log_handler
+        if handler is None:
+            return
+        logging.getLogger().removeHandler(handler)
+        self._early_log_handler = None
+
+    def _flush_early_log_buffer(self, *, replay: bool) -> None:
+        """Remove buffering handler and optionally replay records through OTLP."""
+        handler = self._early_log_handler
+        if handler is None:
+            return
+
+        logging.getLogger().removeHandler(handler)
+        self._early_log_handler = None
+
+        if not replay:
+            return
+
+        # find the OTLP LoggingHandler that _setup_cloud_tracer just added
+        from opentelemetry.sdk._logs import LoggingHandler
+
+        for h in logging.getLogger().handlers:
+            if isinstance(h, LoggingHandler):
+                for record in handler.buffer:
+                    h.emit(record)
+                break
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -215,7 +256,8 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        if report.enable_recording:
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        if (any(report.recording_options.values()) or has_evals) and is_cloud(self._info.url):
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
                 if not cloud_hostname:
@@ -230,7 +272,22 @@ class JobContext:
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
+        self._primary_agent_session = None
+
     def _on_cleanup(self) -> None:
+        # if session.start() was never reached and server wanted recording,
+        # set up OTLP now and flush buffered crash logs
+        if self._early_log_handler is not None and not self._recording_initialized:
+            try:
+                from .voice.agent_session import RecordingOptions
+
+                self.init_recording(
+                    RecordingOptions(audio=False, traces=False, logs=True, transcript=False)
+                )
+            except Exception:
+                logger.exception("failed to initialize crash log upload")
+                self._stop_log_buffering()
+
         self._tempdir.cleanup()
         _shutdown_telemetry()
 
@@ -280,7 +337,7 @@ class JobContext:
             )
 
         sr = SessionReport(
-            enable_recording=session._enable_recording,
+            recording_options=session._recording_options,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -586,10 +643,12 @@ class JobContext:
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
-    def init_recording(self) -> None:
-        if not is_cloud(self._info.url):
+    def init_recording(self, options: RecordingOptions) -> None:
+        if self._recording_initialized or not is_cloud(self._info.url):
+            self._stop_log_buffering()
             return
 
+        self._recording_initialized = True
         cloud_hostname = urlparse(self._info.url).hostname
         logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
         if cloud_hostname:
@@ -597,7 +656,13 @@ class JobContext:
                 room_id=self.job.room.sid,
                 job_id=self.job.id,
                 cloud_hostname=cloud_hostname,
+                enable_traces=options["traces"],
+                enable_logs=options["logs"],
             )
+            # init_recording is typically called during session.start(), at which point a bunch of
+            # the logs would have already been emitted. we want to capture all of the logs as it
+            # relates to the job
+            self._flush_early_log_buffer(replay=True)
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:

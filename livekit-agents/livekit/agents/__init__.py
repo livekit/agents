@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    create_api_error_from_http,
 )
 from .job import (
     AutoSubscribe,
@@ -79,6 +80,7 @@ from .voice import (
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    RecordingOptions,
     RunContext,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -167,6 +169,7 @@ __all__ = [
     "RunContext",
     "Plugin",
     "AgentSession",
+    "RecordingOptions",
     "AgentEvent",
     "ModelSettings",
     "Agent",
@@ -176,6 +179,7 @@ __all__ = [
     "APIError",
     "APIStatusError",
     "APITimeoutError",
+    "create_api_error_from_http",
     "APIConnectOptions",
     "NotGiven",
     "NOT_GIVEN",
