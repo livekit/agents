@@ -58,10 +58,17 @@ from mistralai.models.transcriptionstreamtextdelta import TranscriptionStreamTex
 from .log import logger
 from .models import STTModels
 
+# Voxtral recommended config (docs.mistral.ai/capabilities/audio_transcription):
+#   encoding: pcm_s16le, 16kHz mono, 100ms chunks
+#   model processes in 80ms token boundaries; 1 text token = 80ms audio
+#   server-side transcription_delay_ms: 480ms recommended (range: 80-2400, multiples of 80)
+#   not configurable from this plugin — uses Mistral API default
 DEFAULT_SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
-CHUNK_DURATION_MS = 50
-DEFAULT_FINALIZE_DELAY_MS = 100
+CHUNK_DURATION_MS = 100
+DEFAULT_FINALIZE_DELAY_MS = (
+    100  # client-side finalize delay, not the model's transcription_delay_ms
+)
 MIN_IDLE_FINALIZE_MS = 650
 
 
