@@ -194,7 +194,7 @@ class STT(
                     logger.warning(
                         f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._label,
+                            "stt": self._label,
                             "attempt": i + 1,
                             "streamed": False,
                         },
@@ -331,7 +331,7 @@ class RecognizeStream(ABC):
                     logger.warning(
                         f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._stt._label,
+                            "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },
