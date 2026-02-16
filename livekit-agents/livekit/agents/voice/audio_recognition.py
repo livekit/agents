@@ -245,7 +245,11 @@ class AudioRecognition:
                 )
             )
 
-    def on_end_of_overlap_speech(self, user_speaking_span: trace.Span | None = None) -> None:
+    def on_end_of_overlap_speech(
+        self,
+        user_speaking_span: trace.Span | None = None,
+        ended_at: float | None = None,
+    ) -> None:
         """End interruption inference when agent is speaking and overlap speech ends."""
         if (
             not self._interruption_enabled
@@ -265,7 +269,9 @@ class AudioRecognition:
             else:
                 user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
 
-        self._interruption_ch.send_nowait(InterruptionStreamBase._OverlapSpeechEndedSentinel())
+        self._interruption_ch.send_nowait(
+            InterruptionStreamBase._OverlapSpeechEndedSentinel(ended_at=ended_at)
+        )
 
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
         if (

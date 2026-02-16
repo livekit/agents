@@ -346,7 +346,8 @@ class InterruptionStreamBase(ABC):
             self._started_at: float = started_at or (time.time() - self._speech_duration)
 
     class _OverlapSpeechEndedSentinel:
-        pass
+        def __init__(self, ended_at: float | None = None) -> None:
+            self._ended_at = ended_at
 
     class _FlushSentinel:
         pass
@@ -626,7 +627,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         entry = last_entry or _EMPTY_CACHE_ENTRY
                         ev = InterruptionEvent(
                             type="user_non_interruption_detected",
-                            timestamp=time.time(),
+                            timestamp=input_frame._ended_at or time.time(),
                             is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=entry.speech_input,
@@ -865,7 +866,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         entry = last_entry or _EMPTY_CACHE_ENTRY
                         ev = InterruptionEvent(
                             type="user_non_interruption_detected",
-                            timestamp=time.time(),
+                            timestamp=input_frame._ended_at or time.time(),
                             is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=entry.speech_input,

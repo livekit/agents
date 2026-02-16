@@ -1351,7 +1351,9 @@ class AgentActivity(RecognitionHooks):
             self._stt_eos_received = True
 
         if self.interruption_enabled and self._audio_recognition:
-            self._audio_recognition.on_end_of_overlap_speech(self._session._user_speaking_span)
+            self._audio_recognition.on_end_of_overlap_speech(
+                self._session._user_speaking_span, ended_at=speech_end_time
+            )
 
         self._session._update_user_state(
             "listening",
