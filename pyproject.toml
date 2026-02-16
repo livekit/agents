@@ -69,6 +69,7 @@ exclude = [
 dev = [
     "python-dotenv>=1.0.1",
     "mypy",
+    "scikit-learn",
     "pytest",
     "ruff",
     "pytest-asyncio>=0.25.3",

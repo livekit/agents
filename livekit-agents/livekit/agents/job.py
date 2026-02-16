@@ -48,7 +48,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
-    from .voice.agent_session import AgentSession
+    from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
 
@@ -182,6 +182,7 @@ class JobContext:
         self._connected = False
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
+        self._recording_initialized = False
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -215,7 +216,8 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        if report.enable_recording:
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        if (any(report.recording_options.values()) or has_evals) and is_cloud(self._info.url):
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
                 if not cloud_hostname:
@@ -229,6 +231,8 @@ class JobContext:
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
+
+        self._primary_agent_session = None
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
@@ -280,7 +284,7 @@ class JobContext:
             )
 
         sr = SessionReport(
-            enable_recording=session._enable_recording,
+            recording_options=session._recording_options,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -585,10 +589,11 @@ class JobContext:
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
-    def init_recording(self) -> None:
-        if not is_cloud(self._info.url):
+    def init_recording(self, options: RecordingOptions) -> None:
+        if self._recording_initialized or not is_cloud(self._info.url):
             return
 
+        self._recording_initialized = True
         cloud_hostname = urlparse(self._info.url).hostname
         logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
         if cloud_hostname:
@@ -596,6 +601,8 @@ class JobContext:
                 room_id=self.job.room.sid,
                 job_id=self.job.id,
                 cloud_hostname=cloud_hostname,
+                enable_traces=options["traces"],
+                enable_logs=options["logs"],
             )
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:

@@ -90,7 +90,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
         if self._default_num_idle_processes > 0:
             # wait for the idle processes to be warmed up (by the main task)
-            await self._idle_ready.wait()
+            # use a timeout so start() doesn't block forever if initialization fails
+            try:
+                await asyncio.wait_for(
+                    self._idle_ready.wait(),
+                    timeout=self._initialize_timeout + 2,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("timed out waiting for idle processes to initialize")
 
     async def aclose(self) -> None:
         if not self._started:
