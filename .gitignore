@@ -177,8 +177,3 @@ docs/
 
 # Examples for development
 examples/dev/*
-
-# Browser plugin build artifacts
-livekit-plugins/livekit-plugins-browser/build_test/
-livekit-plugins/livekit-plugins-browser/imgui.ini
-livekit-plugins/livekit-plugins-browser/livekit/plugins/browser/resources/lkcef_app.app/

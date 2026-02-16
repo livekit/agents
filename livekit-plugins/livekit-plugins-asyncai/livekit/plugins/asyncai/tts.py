@@ -110,7 +110,10 @@ class TTS(tts.TTS):
         )
         async_api_key = api_key or os.environ.get("ASYNCAI_API_KEY")
         if not async_api_key:
-            raise ValueError("ASYNCAI_API_KEY must be set")
+            raise ValueError(
+                "AsyncAI API key is required, either as argument or set"
+                " ASYNCAI_API_KEY environment variable"
+            )
 
         self._opts = _TTSOptions(
             model=model,

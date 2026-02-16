@@ -1397,7 +1397,7 @@ def _run_console(
             console_worker.shutdown()
             console_worker.join()
 
-    except CLIError as e:
+    except (CLIError, ValueError) as e:
         c.print(" ")
         c.print(f"[error]{e}")
         c.print(" ")
@@ -1468,19 +1468,18 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     finally:
         if jupyter:
             loop.close()  # close can only be called from the main thread
-            return  # noqa: B012
+        else:
+            with contextlib.suppress(_ExitCli):
+                try:
+                    tasks = asyncio.all_tasks(loop)
+                    for task in tasks:
+                        task.cancel()
 
-        with contextlib.suppress(_ExitCli):
-            try:
-                tasks = asyncio.all_tasks(loop)
-                for task in tasks:
-                    task.cancel()
-
-                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            finally:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
-                loop.close()
+                    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                finally:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                    loop.run_until_complete(loop.shutdown_default_executor())
+                    loop.close()
 
 
 class LogLevel(str, enum.Enum):
@@ -1650,7 +1649,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
         main_file = pathlib.Path(sys.argv[0]).parent
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         watch_server = WatchServer(_run_worker, server, main_file, args, loop=loop)
@@ -1665,9 +1664,6 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             await watch_server.run()
 
         try:
-            loop = asyncio.get_event_loop()
-            asyncio.set_event_loop(loop)
-
             loop.run_until_complete(_run_loop())
         except _ExitCli:
             raise typer.Exit() from None
@@ -1718,7 +1714,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         c = AgentsConsole.get_instance()
         _configure_logger(c, log_level.value)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         _task: asyncio.Task | None = None
 
         @server.once("worker_started")
@@ -1751,7 +1748,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         except KeyboardInterrupt:
             logger.warning("exiting forcefully")
             os._exit(1)
-        except CLIError as e:
+        except (CLIError, ValueError) as e:
             c.print(" ")
             c.print(f"[error]{e}")
             c.print(" ")

@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Generic, TypeVar
 
+from ..log import logger
 from . import aio
 
 T = TypeVar("T")
@@ -65,9 +66,12 @@ class ConnectionPool(Generic[T]):
 
     async def _drain_to_close(self) -> None:
         """Drain and close all the connections queued for closing."""
-        for conn in list(self._to_close):
-            await self._maybe_close_connection(conn)
-        self._to_close.clear()
+        while self._to_close:
+            conn = self._to_close.pop()
+            try:
+                await self._maybe_close_connection(conn)
+            except Exception as e:
+                logger.warning(f"error closing connection: {conn}", exc_info=e)
 
     @asynccontextmanager
     async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:

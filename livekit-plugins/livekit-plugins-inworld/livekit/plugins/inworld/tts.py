@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import time
+import uuid
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -45,6 +46,9 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
+from .version import __version__
+
+USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING = "OGG_OPUS"
@@ -62,6 +66,9 @@ NUM_CHANNELS = 1
 Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"] | str
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
+
+DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
 
 @dataclass
@@ -75,6 +82,7 @@ class _TTSOptions:
     temperature: float
     timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
+    timestamp_transport_strategy: TimestampTransportStrategy = DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY
     buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
 
@@ -108,6 +116,12 @@ class _ContextInfo:
     segment_started: bool = False
     created_at: float = field(default_factory=time.time)
     close_started_at: float | None = None
+    # Cumulative timestamp tracking for monotonic timestamps across generations.
+    # When auto_mode is enabled or flush_context() is called, the server resets
+    # timestamps to 0 after each generation. We add cumulative_time to maintain
+    # monotonically increasing timestamps within an agent turn.
+    cumulative_time: float = 0.0
+    generation_end_time: float = 0.0
 
 
 @dataclass
@@ -224,10 +238,19 @@ class _InworldConnection:
                 return
 
             url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
+            request_id = str(uuid.uuid4())
             self._ws = await self._session.ws_connect(
-                url, headers={"Authorization": self._authorization}
+                url,
+                headers={
+                    "Authorization": self._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": request_id,
+                },
             )
-            logger.debug("Established Inworld TTS WebSocket connection (shared)")
+            logger.debug(
+                "Established Inworld TTS WebSocket connection (shared)",
+                extra={"request_id": request_id},
+            )
 
             self._send_task = asyncio.create_task(self._send_loop())
             self._recv_task = asyncio.create_task(self._recv_loop())
@@ -349,6 +372,7 @@ class _InworldConnection:
                             "temperature": opts.temperature,
                             "bufferCharThreshold": opts.buffer_char_threshold,
                             "maxBufferDelayMs": opts.max_buffer_delay_ms,
+                            "timestampTransportStrategy": opts.timestamp_transport_strategy,
                         },
                         "contextId": msg.context_id,
                     }
@@ -356,6 +380,8 @@ class _InworldConnection:
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    # Always enable auto_mode since we always use SentenceTokenizer
+                    pkt["create"]["autoMode"] = True
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -432,8 +458,43 @@ class _InworldConnection:
                             ctx.emitter.start_segment(segment_id=context_id)
                             ctx.segment_started = True
 
+                        # Adjust timestamps for cumulative offset
                         if timestamp_info := audio_chunk.get("timestampInfo"):
-                            timed_strings = _parse_timestamp_info(timestamp_info)
+                            if word_align := timestamp_info.get("wordAlignment"):
+                                raw_words = word_align.get("words", [])
+                                raw_starts = word_align.get("wordStartTimeSeconds", [])
+                                raw_ends = word_align.get("wordEndTimeSeconds", [])
+                                logger.debug(
+                                    "Raw timestamps from server",
+                                    extra={
+                                        "context_id": context_id,
+                                        "cumulative_offset": ctx.cumulative_time,
+                                        "raw_words": raw_words,
+                                        "raw_starts": raw_starts,
+                                        "raw_ends": raw_ends,
+                                    },
+                                )
+
+                            timed_strings = _parse_timestamp_info(
+                                timestamp_info, cumulative_time=ctx.cumulative_time
+                            )
+                            # Track generation end time from last word for cumulative offset
+                            if timed_strings:
+                                last_ts = timed_strings[-1]
+                                if utils.is_given(last_ts.end_time):
+                                    ctx.generation_end_time = last_ts.end_time
+
+                                logger.debug(
+                                    "Adjusted timestamps (with cumulative offset)",
+                                    extra={
+                                        "context_id": context_id,
+                                        "words": [str(ts) for ts in timed_strings],
+                                        "adjusted_starts": [ts.start_time for ts in timed_strings],
+                                        "adjusted_ends": [ts.end_time for ts in timed_strings],
+                                        "generation_end_time": ctx.generation_end_time,
+                                    },
+                                )
+
                             for ts in timed_strings:
                                 ctx.emitter.push_timed_transcript(ts)
 
@@ -442,6 +503,20 @@ class _InworldConnection:
                     continue
 
                 if "flushCompleted" in result:
+                    # Signals the end of a generation, subsequent timestampes from the server
+                    # will reset offset to 0. We need to update the cumulative time to the
+                    # generation end time to maintain monotonically increasing timestamps
+                    # within the agent turn.
+                    if ctx.generation_end_time > 0:
+                        logger.debug(
+                            "flushCompleted - updating cumulative time",
+                            extra={
+                                "context_id": context_id,
+                                "old_cumulative_time": ctx.cumulative_time,
+                                "new_cumulative_time": ctx.generation_end_time,
+                            },
+                        )
+                        ctx.cumulative_time = ctx.generation_end_time
                     continue
 
                 if "contextClosed" in result:
@@ -712,6 +787,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
@@ -743,6 +819,10 @@ class TTS(tts.TTS):
             text_normalization (str, optional): Controls text normalization. When "ON", numbers,
                 dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
                 text is read exactly as written. Defaults to automatic.
+            timestamp_transport_strategy (str, optional): Controls how timestamp info is
+                transported relative to audio data. "SYNC" returns timestamps in the same
+                message as audio data. "ASYNC" allows timestamps to return in trailing
+                messages after the audio data. Defaults to "ASYNC".
             buffer_char_threshold (int, optional): For streaming, the minimum number of characters
                 in the buffer that automatically triggers audio generation. Defaults to 1000.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
@@ -775,7 +855,10 @@ class TTS(tts.TTS):
 
         key = api_key if is_given(api_key) else os.getenv("INWORLD_API_KEY")
         if not key:
-            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
+            raise ValueError(
+                "Inworld API key is required, either as argument or set"
+                " INWORLD_API_KEY environment variable"
+            )
 
         self._authorization = f"Basic {key}"
         self._base_url = base_url
@@ -792,6 +875,11 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
+            timestamp_transport_strategy=cast(
+                TimestampTransportStrategy, timestamp_transport_strategy
+            )
+            if is_given(timestamp_transport_strategy)
+            else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
             if is_given(buffer_char_threshold)
             else DEFAULT_BUFFER_CHAR_THRESHOLD,
@@ -846,6 +934,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -863,6 +952,8 @@ class TTS(tts.TTS):
                 tokens to generate the response.
             timestamp_type (str, optional): Controls timestamp metadata ("WORD" or "CHARACTER").
             text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
+            timestamp_transport_strategy (str, optional): Controls timestamp transport strategy
+                ("SYNC" or "ASYNC").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
         """
@@ -884,6 +975,10 @@ class TTS(tts.TTS):
             self._opts.timestamp_type = cast(TimestampType, timestamp_type)
         if is_given(text_normalization):
             self._opts.text_normalization = cast(TextNormalization, text_normalization)
+        if is_given(timestamp_transport_strategy):
+            self._opts.timestamp_transport_strategy = cast(
+                TimestampTransportStrategy, timestamp_transport_strategy
+            )
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
@@ -940,7 +1035,11 @@ class TTS(tts.TTS):
 
         async with self._ensure_session().get(
             url,
-            headers={"Authorization": self._authorization},
+            headers={
+                "Authorization": self._authorization,
+                "X-User-Agent": USER_AGENT,
+                "X-Request-Id": str(uuid.uuid4()),
+            },
             params=params,
         ) as resp:
             if not resp.ok:
@@ -982,11 +1081,15 @@ class ChunkedStream(tts.ChunkedStream):
                 body_params["timestampType"] = self._opts.timestamp_type
             if utils.is_given(self._opts.text_normalization):
                 body_params["applyTextNormalization"] = self._opts.text_normalization
+            body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
+            x_request_id = str(uuid.uuid4())
             async with self._tts._ensure_session().post(
                 urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
                 headers={
                     "Authorization": self._tts._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": x_request_id,
                 },
                 json=body_params,
                 timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
@@ -1028,14 +1131,14 @@ class ChunkedStream(tts.ChunkedStream):
                         raise APIStatusError(
                             message=error.get("message"),
                             status_code=error.get("code"),
-                            request_id=request_id,
+                            request_id=x_request_id,
                             body=None,
                         )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message=e.message, status_code=e.status, request_id=x_request_id, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
@@ -1081,7 +1184,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
-                connection.flush_context(context_id)
+            connection.flush_context(context_id)
             connection.close_context(context_id)
 
         tasks = [
@@ -1109,8 +1212,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
 
-def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
-    """Parse timestamp info from API response into TimedString objects."""
+def _parse_timestamp_info(
+    timestamp_info: dict[str, Any], cumulative_time: float = 0.0
+) -> list[TimedString]:
+    """Parse timestamp info from API response into TimedString objects.
+
+    Args:
+        timestamp_info: The timestamp info from the API response.
+        cumulative_time: Offset to add to all timestamps for monotonic ordering
+            across multiple generations within a single context.
+    """
     timed_strings: list[TimedString] = []
 
     # Handle word-level alignment
@@ -1119,8 +1230,18 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        for word, start, end in zip(words, starts, ends, strict=False):
-            timed_strings.append(TimedString(word, start_time=start, end_time=end))
+        last_idx = len(words) - 1
+        for idx, (word, start, end) in enumerate(zip(words, starts, ends, strict=False)):
+            # Each word gets a trailing space so that when the synchronizer concatenates
+            # them via `pushed_text += text`, the transcript reads naturally.
+            text = f"{word} " if idx < last_idx else word
+            timed_strings.append(
+                TimedString(
+                    text,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     # Handle character-level alignment
     if char_align := timestamp_info.get("characterAlignment"):
@@ -1129,6 +1250,12 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         ends = char_align.get("characterEndTimeSeconds", [])
 
         for char, start, end in zip(chars, starts, ends, strict=False):
-            timed_strings.append(TimedString(char, start_time=start, end_time=end))
+            timed_strings.append(
+                TimedString(
+                    char,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     return timed_strings

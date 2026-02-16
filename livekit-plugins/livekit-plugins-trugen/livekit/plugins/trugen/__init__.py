@@ -12,26 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Browser plugin for LiveKit Agents
+"""TruGen.AI plugin for LiveKit Agents"""
 
-Support for Chromium Embedded Framework (CEF).
-"""
+from .avatar import AvatarSession, TrugenException
+from .version import __version__
+
+__all__ = [
+    "AvatarSession",
+    "TrugenException",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
 from .log import logger
-from .proc import BrowserContext, BrowserPage
-from .version import __version__
-
-__all__ = ["BrowserContext", "BrowserPage"]
 
 
-class BrowserPlugin(Plugin):
-    def __init__(self):
+class TrugenPlugin(Plugin):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(BrowserPlugin())
+Plugin.register_plugin(TrugenPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

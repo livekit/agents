@@ -148,6 +148,12 @@ class LLM(llm.LLM):
             extra_headers=extra_headers,
             extra_query=extra_query,
         )
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
+
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
         self._owns_client = client is None
