@@ -242,6 +242,8 @@ class STT(stt.STT):
         if is_given(language):
             self._opts.language = language
         if is_given(sample_rate):
+            self._needed_sr = sample_rate
+            self._resampler = None
             self._opts.sample_rate = sample_rate
         if is_given(encoding):
             self._opts.encoding = encoding
