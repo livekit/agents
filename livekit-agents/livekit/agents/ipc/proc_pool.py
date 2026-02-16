@@ -244,4 +244,5 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         except asyncio.CancelledError:
             await aio.cancel_and_wait(*self._spawn_tasks)
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
+            await asyncio.gather(*self._close_tasks)
             await asyncio.gather(*self._monitor_tasks)
