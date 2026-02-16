@@ -519,7 +519,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
-            self._tasks = set[asyncio.Task[Any]]()
+            self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
@@ -656,8 +656,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
-                self._tasks.add(t)
-                t.add_done_callback(self._tasks.discard)
+                self._job_lifecycle_tasks.add(t)
+                t.add_done_callback(self._job_lifecycle_tasks.discard)
 
             await self._http_server.start()
             logger.info(
@@ -816,17 +816,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._draining = True
             await self._update_worker_status()
 
-            async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes.copy():
-                    if proc.running_job:
+            async def _drain() -> None:
+                # wait for in-flight availability tasks to finish launching their jobs
+                await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
+                # then wait for the launched jobs to complete
+                while True:
+                    procs = [p for p in self._proc_pool.processes if p.running_job]
+                    if not procs:
+                        break
+                    for proc in procs:
                         await proc.join()
 
             if timeout:
-                await asyncio.wait_for(
-                    _join_jobs(), timeout
-                )  # raises asyncio.TimeoutError on timeout
+                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
             else:
-                await _join_jobs()
+                await _drain()
 
     @utils.log_exceptions(logger=logger)
     async def simulate_job(
@@ -906,6 +911,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
 
+            # let in-flight availability tasks finish launching their jobs
+            # before closing the proc pool (they accepted before shutdown)
+            await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
             await self._proc_pool.aclose()
 
             if self._inference_executor is not None:
@@ -918,8 +927,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await self._prometheus_server.aclose()
 
             await self._api.aclose()  # type: ignore
-
-            await asyncio.gather(*self._tasks, return_exceptions=True)
 
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
@@ -1083,8 +1090,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         self._handle_termination(server_msg.termination),
                         name="agent_job_termination",
                     )
-                    self._tasks.add(user_task)
-                    user_task.add_done_callback(self._tasks.discard)
+                    self._job_lifecycle_tasks.add(user_task)
+                    user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
         tasks = [
             asyncio.create_task(_load_task()),
@@ -1138,8 +1145,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         task = self._loop.create_task(self._answer_availability(msg))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._job_lifecycle_tasks.add(task)
+        task.add_done_callback(self._job_lifecycle_tasks.discard)
 
     def _is_available(self) -> bool:
         if self._draining:
@@ -1247,8 +1254,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
-        self._tasks.add(user_task)
-        user_task.add_done_callback(self._tasks.discard)
+        self._job_lifecycle_tasks.add(user_task)
+        user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
         logger.debug(
