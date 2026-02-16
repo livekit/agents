@@ -1,5 +1,6 @@
 from .interruption import (
     AdaptiveInterruptionDetector,
+    InterruptionDataFrameType,
     InterruptionDetectionError,
     InterruptionEvent,
 )
@@ -18,4 +19,5 @@ __all__ = [
     "AdaptiveInterruptionDetector",
     "InterruptionEvent",
     "InterruptionDetectionError",
+    "InterruptionDataFrameType",
 ]

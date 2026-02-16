@@ -1198,7 +1198,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_user_state("speaking")
             if self.interruption_enabled and self._audio_recognition:
                 self._audio_recognition.on_start_of_overlap_speech(
-                    speech_duration=0,
+                    speech_duration=0.0,
                     started_at=time.time(),
                     user_speaking_span=self._session._user_speaking_span,
                 )
@@ -1215,7 +1215,10 @@ class AgentActivity(RecognitionHooks):
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None:
             if self.interruption_enabled and self._audio_recognition:
-                self._audio_recognition.on_end_of_overlap_speech(self._session._user_speaking_span)
+                self._audio_recognition.on_end_of_overlap_speech(
+                    ended_at=time.time(),
+                    user_speaking_span=self._session._user_speaking_span,
+                )
 
             self._session._update_user_state("listening")
 
@@ -1338,9 +1341,9 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self.interruption_enabled and self._audio_recognition:
             self._audio_recognition.on_start_of_overlap_speech(
-                speech_duration=ev.speech_duration if ev else None,
-                user_speaking_span=self._session._user_speaking_span,
+                speech_duration=ev.speech_duration if ev else 0.0,
                 started_at=speech_start_time,
+                user_speaking_span=self._session._user_speaking_span,
             )
         self._user_silence_event.clear()
         self._stt_eos_received = False
@@ -1359,7 +1362,7 @@ class AgentActivity(RecognitionHooks):
 
         if self.interruption_enabled and self._audio_recognition:
             self._audio_recognition.on_end_of_overlap_speech(
-                self._session._user_speaking_span, ended_at=speech_end_time
+                ended_at=speech_end_time, user_speaking_span=self._session._user_speaking_span
             )
 
         self._session._update_user_state(
