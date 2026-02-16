@@ -102,13 +102,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     async def launch_job(self, info: RunningJobInfo) -> None:
         MAX_ATTEMPTS = 3
 
-        async def _wait_for_proc() -> JobExecutor:
+        for attempt in range(MAX_ATTEMPTS):
             self._jobs_waiting_for_process += 1
             try:
                 if (
                     self._warmed_proc_queue.empty()
                     and len(self._spawn_tasks) < self._jobs_waiting_for_process
                 ):
+                    # spawn a new process if there are no idle processes
                     task = asyncio.create_task(self._proc_spawn_task())
                     self._spawn_tasks.add(task)
                     task.add_done_callback(self._spawn_tasks.discard)
@@ -119,12 +120,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                         extra={"job_id": info.job.id},
                     )
 
-                return await self._warmed_proc_queue.get()
+                proc = await self._warmed_proc_queue.get()
             finally:
                 self._jobs_waiting_for_process -= 1
 
-        for attempt in range(MAX_ATTEMPTS):
-            proc = await _wait_for_proc()
             try:
                 await proc.launch_job(info)
                 self.emit("process_job_launched", proc)
