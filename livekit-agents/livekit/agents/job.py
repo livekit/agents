@@ -38,23 +38,12 @@ from livekit.protocol import agent, models
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report
-from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
+from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
-
-
-class _BufferingHandler(logging.Handler):
-    """Buffers log records in memory for later replay through OTLP."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.buffer: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.buffer.append(record)
 
 
 if TYPE_CHECKING:
@@ -669,6 +658,9 @@ class JobContext:
                 enable_traces=options["traces"],
                 enable_logs=options["logs"],
             )
+            # init_recording is typically called during session.start(), at which point a bunch of
+            # the logs would have already been emitted. we want to capture all of the logs as it
+            # relates to the job
             self._flush_early_log_buffer(replay=True)
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:

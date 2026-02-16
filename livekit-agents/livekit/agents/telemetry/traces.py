@@ -99,6 +99,17 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
+class _BufferingHandler(logging.Handler):
+    """Buffers log records in memory for later replay through OTLP."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.buffer: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.buffer.append(record)
+
+
 def set_tracer_provider(
     tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
