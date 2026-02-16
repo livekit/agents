@@ -219,6 +219,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(language=language)
+        _validate_stream_encoding(config.encoding)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -279,6 +280,7 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
     ) -> None:
+        _validate_stream_encoding(opts.encoding)
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
@@ -306,6 +308,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         if is_given(encoding):
+            _validate_stream_encoding(encoding)
             self._opts.encoding = encoding
         if is_given(word_timestamps):
             self._opts.word_timestamps = word_timestamps
@@ -572,6 +575,14 @@ def _safe_float(value: object, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _validate_stream_encoding(encoding: STTEncoding | str) -> None:
+    if encoding != "linear16":
+        raise ValueError(
+            "SmallestAI streaming STT currently supports only 'linear16' encoding. "
+            "Transcoding for other encodings is not implemented."
+        )
 
 
 def _transcription_to_speech_event(
