@@ -1230,7 +1230,7 @@ def handle_deprecation(
 ) -> Literal["adaptive", "vad", False]:
     if is_given(allow_interruptions):
         warnings.warn(
-            "`allow_interruptions` is deprecated, use `interruption_handling` instead",
+            "`allow_interruptions` is deprecated and will be removed in v2.0, use `interruption_handling` instead",
             DeprecationWarning,
             stacklevel=2,
         )

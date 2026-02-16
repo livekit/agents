@@ -156,7 +156,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "min_interruption_words": "Use turn_handling=TurnHandlingConfig(...) instead",
             "turn_detection": "Use turn_handling=TurnHandlingConfig(...) instead",
             "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
-        }
+        },
+        target_version="v2.0",
     )
     def __init__(
         self,
