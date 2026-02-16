@@ -535,8 +535,10 @@ def _build_speech_data(
                 continue
 
             w_text = str(word.get("text") or word.get("word") or "")
-            w_start = float(word.get("start", word.get("start_time", 0.0))) + start_time_offset
-            w_end = float(word.get("end", word.get("end_time", w_start))) + start_time_offset
+            w_start = (
+                _safe_float(word.get("start", word.get("start_time")), 0.0) + start_time_offset
+            )
+            w_end = _safe_float(word.get("end", word.get("end_time")), w_start) + start_time_offset
             typed_words.append(
                 TimedString(
                     text=w_text,
@@ -560,6 +562,16 @@ def _build_speech_data(
         end_time=end_time,
         words=typed_words,
     )
+
+
+def _safe_float(value: object, default: float) -> float:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _transcription_to_speech_event(
