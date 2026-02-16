@@ -9,7 +9,7 @@ import time
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter_ns
 from typing import Any, Literal, TypeAlias
@@ -88,7 +88,7 @@ class InterruptionOptions:
 class InterruptionCacheEntry:
     """Typed cache entry for interruption inference results."""
 
-    created_at: int = Field(default_factory=lambda: int(time.time()))
+    created_at: int = field(default_factory=lambda: int(time.time()))
     speech_input: npt.NDArray[np.int16] | None = None
     total_duration: float | None = None
     prediction_duration: float | None = None
