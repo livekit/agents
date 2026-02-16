@@ -376,7 +376,7 @@ async def _upload_session_report(
     chat_logger = _get_logger("chat_history")
     recording_options = report.recording_options
 
-    if any(vars(recording_options).values()):
+    if any(recording_options.values()):
         _log(
             chat_logger,
             body="session report",
@@ -388,7 +388,7 @@ async def _upload_session_report(
             },
         )
 
-    if recording_options.transcript:
+    if recording_options["transcript"]:
         for item in report.chat_history.items:
             item_log = _to_proto_chat_item(item)
             severity: SeverityNumber = SeverityNumber.UNSPECIFIED
@@ -435,11 +435,11 @@ async def _upload_session_report(
         )
 
     has_audio = (
-        recording_options.audio
+        recording_options["audio"]
         and report.audio_recording_path
         and report.audio_recording_started_at
     )
-    if not recording_options.transcript and not has_audio:
+    if not recording_options["transcript"] and not has_audio:
         return
 
     # emit recording
@@ -463,7 +463,7 @@ async def _upload_session_report(
     part.headers["Content-Type"] = "application/protobuf"
     part.headers["Content-Length"] = str(len(header_bytes))
 
-    if recording_options.transcript:
+    if recording_options["transcript"]:
         chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
         part = mp.append(chat_history_json)
         part.set_content_disposition("form-data", name="chat_history", filename="chat_history.json")

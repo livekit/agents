@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from dataclasses import astuple
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +10,11 @@ import pytest
 
 from livekit.agents import Agent, AgentSession
 from livekit.agents.telemetry.traces import _upload_session_report
-from livekit.agents.voice.agent_session import RecordingOptions
+from livekit.agents.voice.agent_session import (
+    _RECORDING_ALL_OFF,
+    _RECORDING_ALL_ON,
+    RecordingOptions,
+)
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
@@ -86,7 +89,7 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
     """Create a minimal mock SessionReport for upload tests."""
     report = MagicMock()
-    report.recording_options = recording_options or RecordingOptions()
+    report.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     report.job_id = "job-1"
     report.room_id = "room-1"
     report.room = "test-room"
@@ -170,25 +173,25 @@ def _get_multipart_part_names(mp_writer: aiohttp.MultipartWriter) -> list[str]:
 # Group 1: RecordingOptions normalization (no JobContext)
 # ---------------------------------------------------------------------------
 
-_ALL_TRUE = (True, True, True, True)
-_ALL_FALSE = (False, False, False, False)
-
 
 @pytest.mark.parametrize(
     "record, expected",
     [
-        pytest.param(True, _ALL_TRUE, id="record=True"),
-        pytest.param(False, _ALL_FALSE, id="record=False"),
-        pytest.param(RecordingOptions(audio=False), (False, True, True, True), id="partial"),
+        pytest.param(True, _RECORDING_ALL_ON, id="record=True"),
+        pytest.param(False, _RECORDING_ALL_OFF, id="record=False"),
+        pytest.param(
+            {"audio": False},
+            {"audio": False, "traces": True, "logs": True, "transcript": True},
+            id="partial",
+        ),
     ],
 )
 async def test_record_normalization(
-    record: bool | RecordingOptions, expected: tuple[bool, ...]
+    record: bool | RecordingOptions, expected: RecordingOptions
 ) -> None:
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=record)
-    opts = session._recording_options
-    assert astuple(opts) == expected
+    assert session._recording_options == expected
     await _cleanup(session)
 
 
@@ -196,7 +199,7 @@ async def test_record_not_given_without_job_ctx() -> None:
     """When record is omitted and no JobContext is available, all options should be False."""
     session = _create_simple_session()
     await session.start(SimpleAgent())
-    assert astuple(session._recording_options) == _ALL_FALSE
+    assert session._recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -209,12 +212,19 @@ async def test_init_recording_called_with_options() -> None:
     """init_recording should be called with the correct RecordingOptions."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
-    custom = RecordingOptions(audio=True, traces=True, logs=False, transcript=True)
+    custom: RecordingOptions = {"audio": True, "traces": True, "logs": False, "transcript": True}
 
     with _patch_job_ctx(mock_ctx, patch_recorder=True):
         await session.start(SimpleAgent(), record=custom)
 
-    mock_ctx.init_recording.assert_called_once_with(custom)
+    # _resolve_recording_options merges with defaults, so the result should match
+    mock_ctx.init_recording.assert_called_once()
+    assert mock_ctx.init_recording.call_args[0][0] == {
+        "audio": True,
+        "traces": True,
+        "logs": False,
+        "transcript": True,
+    }
     await _cleanup(session)
 
 
@@ -227,7 +237,7 @@ async def test_init_recording_called_even_when_all_false() -> None:
         await session.start(SimpleAgent(), record=False)
 
     mock_ctx.init_recording.assert_called_once()
-    assert astuple(mock_ctx.init_recording.call_args[0][0]) == _ALL_FALSE
+    assert mock_ctx.init_recording.call_args[0][0] == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -240,7 +250,7 @@ async def test_init_recording_defers_to_job_enable_recording() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert astuple(mock_ctx.init_recording.call_args[0][0]) == _ALL_TRUE
+    assert mock_ctx.init_recording.call_args[0][0] == _RECORDING_ALL_ON
     await _cleanup(session)
 
 
@@ -253,7 +263,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert astuple(session._recording_options) == _ALL_FALSE
+    assert session._recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -265,7 +275,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
 async def test_upload_returns_early_when_none() -> None:
     """When all options are False, no HTTP request and no session report log should be made."""
     report = _make_mock_report(
-        RecordingOptions(audio=False, traces=False, logs=False, transcript=False)
+        {"audio": False, "traces": False, "logs": False, "transcript": False}
     )
     mock_http = MagicMock(spec=aiohttp.ClientSession)
     mock_http.post = MagicMock()
@@ -280,9 +290,7 @@ async def test_upload_returns_early_when_none() -> None:
 
 async def test_upload_transcript_only() -> None:
     """When transcript=True and audio=False, upload should include header + chat_history."""
-    report = _make_mock_report(
-        RecordingOptions(audio=False, traces=False, logs=False, transcript=True)
-    )
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     mock_http = _make_mock_http()
 
     with _patch_upload_deps():
@@ -298,9 +306,7 @@ async def test_upload_transcript_only() -> None:
 
 async def test_upload_session_report_sent_without_transcript() -> None:
     """Session report log should be emitted even when transcript=False, if other options are on."""
-    report = _make_mock_report(
-        RecordingOptions(audio=True, traces=True, logs=False, transcript=False)
-    )
+    report = _make_mock_report({"audio": True, "traces": True, "logs": False, "transcript": False})
     mock_http = _make_mock_http()
 
     with _patch_upload_deps() as mock_logger:
@@ -313,9 +319,7 @@ async def test_upload_session_report_sent_without_transcript() -> None:
 
 async def test_upload_audio_only_no_file() -> None:
     """When transcript=False, audio=True but no audio file exists, no upload is made."""
-    report = _make_mock_report(
-        RecordingOptions(audio=True, traces=False, logs=False, transcript=False)
-    )
+    report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
     report.audio_recording_path = None
     mock_http = _make_mock_http()
 
@@ -327,9 +331,7 @@ async def test_upload_audio_only_no_file() -> None:
 
 async def test_upload_evaluations_emitted_without_logs() -> None:
     """Evaluations should be emitted even when logs=False, as long as something is recorded."""
-    report = _make_mock_report(
-        RecordingOptions(audio=True, traces=False, logs=False, transcript=False)
-    )
+    report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
     tagger = _make_mock_tagger(
         evaluations=[{"name": "test-eval", "verdict": "pass"}],
         outcome_reason="all good",
@@ -396,7 +398,7 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
     mock_ctx = _make_mock_job_ctx()
 
     with _patch_job_ctx(mock_ctx):
-        await session.start(SimpleAgent(), record=RecordingOptions(audio=False))
+        await session.start(SimpleAgent(), record={"audio": False})
 
     assert session._recorder_io is None
     await _cleanup(session)

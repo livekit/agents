@@ -19,6 +19,7 @@ from typing import (
 )
 
 from opentelemetry import context as otel_context, trace
+from typing_extensions import TypedDict
 
 from livekit import rtc
 
@@ -63,32 +64,48 @@ if TYPE_CHECKING:
     from .transcription.filters import TextTransforms
 
 
-@dataclass
-class RecordingOptions:
+class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
-    All fields default to ``True`` so that ``RecordingOptions(logs=False)``
+    All keys default to ``True`` when not specified, so ``{"logs": False}``
     means "record everything except logs."
 
     Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
 
     * ``record=True``  → all on (backward compatible)
     * ``record=False`` → all off (backward compatible)
-    * ``record=RecordingOptions(audio=True, traces=False)`` → granular
+    * ``record={"audio": True, "traces": False}`` → granular
     """
 
-    audio: bool = True
-    """Record session audio."""
-    traces: bool = True
-    """Export OpenTelemetry trace spans."""
-    logs: bool = True
-    """Export OpenTelemetry logs."""
-    transcript: bool = True
-    """Upload the conversation transcript (chat history)."""
+    audio: bool
+    """Record session audio. Defaults to ``True``."""
+    traces: bool
+    """Export OpenTelemetry trace spans. Defaults to ``True``."""
+    logs: bool
+    """Export OpenTelemetry logs. Defaults to ``True``."""
+    transcript: bool
+    """Upload the conversation transcript (chat history). Defaults to ``True``."""
 
-    @property
-    def enabled(self) -> bool:
-        return self.audio or self.traces or self.logs or self.transcript
+
+_RECORDING_ALL_ON: RecordingOptions = {
+    "audio": True,
+    "traces": True,
+    "logs": True,
+    "transcript": True,
+}
+_RECORDING_ALL_OFF: RecordingOptions = {
+    "audio": False,
+    "traces": False,
+    "logs": False,
+    "transcript": False,
+}
+
+
+def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOptions:
+    if isinstance(record, bool):
+        defaults = _RECORDING_ALL_ON if record else _RECORDING_ALL_OFF
+        return RecordingOptions(**defaults)
+    return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
 @dataclass
@@ -385,9 +402,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
-        self._recording_options = RecordingOptions(
-            audio=False, traces=False, logs=False, transcript=False
-        )
+        self._recording_options: RecordingOptions = _RECORDING_ALL_OFF.copy()
         self._started_at: float | None = None
 
         # ivr activity
@@ -538,14 +553,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if not is_given(record):
                     record = False
 
-            if isinstance(record, RecordingOptions):
-                self._recording_options = record
-            else:
-                # some type checkers due to inability to resolve NOT_GIVEN & is_given checks above
-                record = bool(record)
-                self._recording_options = RecordingOptions(
-                    audio=record, traces=record, logs=record, transcript=record
-                )
+            self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
 
             if job_ctx:
                 job_ctx.init_recording(self._recording_options)
@@ -631,7 +639,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
-                    if self._recording_options.audio or (c.enabled and c.record):
+                    if self._recording_options["audio"] or (c.enabled and c.record):
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
@@ -646,7 +654,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if job_ctx._primary_agent_session is None:
                     job_ctx._primary_agent_session = self
-                elif self._recording_options.enabled:
+                elif any(self._recording_options.values()):
                     raise RuntimeError(
                         "Only one `AgentSession` can be the primary at a time. "
                         "If you want to ignore primary designation, use session.start(record=False)."
