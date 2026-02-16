@@ -99,6 +99,17 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
+class _BufferingHandler(logging.Handler):
+    """Buffers log records in memory for later replay through OTLP."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.buffer: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.buffer.append(record)
+
+
 def set_tracer_provider(
     tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
@@ -503,7 +514,12 @@ def _shutdown_telemetry() -> None:
         tracer_provider.shutdown()
 
     if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
-        # force_flush will cause deadlock when new logs from OTLPLogExporter are emitted
-        # logger_provider.force_flush()
-        logger.debug("shutting down telemetry logger provider")
+        # remove the OTLP LoggingHandler before flushing to avoid deadlock —
+        # force_flush triggers log export which emits new logs back through the handler
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            if isinstance(h, LoggingHandler):
+                root.removeHandler(h)
+
+        logger_provider.force_flush()
         logger_provider.shutdown()  # type: ignore

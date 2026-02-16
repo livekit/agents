@@ -109,6 +109,7 @@ convention = "google"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--import-mode=importlib", "--ignore=examples"]
+pythonpath = ["."]
 
 
 [tool.mypy]

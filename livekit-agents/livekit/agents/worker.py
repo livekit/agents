@@ -1193,10 +1193,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
-            await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()
             self._pending_assignments[job_req.id] = wait_assignment
+            await self._queue_msg(availability_resp)
 
             # the job was accepted by the user, wait for the server assignment
             try:
