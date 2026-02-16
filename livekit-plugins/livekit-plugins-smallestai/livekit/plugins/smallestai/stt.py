@@ -535,10 +535,10 @@ def _build_speech_data(
                 continue
 
             w_text = str(word.get("text") or word.get("word") or "")
-            w_start = (
-                _safe_float(word.get("start", word.get("start_time")), 0.0) + start_time_offset
-            )
-            w_end = _safe_float(word.get("end", word.get("end_time")), w_start) + start_time_offset
+            raw_start = _safe_float(word.get("start", word.get("start_time")), 0.0)
+            raw_end = _safe_float(word.get("end", word.get("end_time")), raw_start)
+            w_start = raw_start + start_time_offset
+            w_end = raw_end + start_time_offset
             typed_words.append(
                 TimedString(
                     text=w_text,
