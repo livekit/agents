@@ -48,9 +48,9 @@ class FallbackAdapterTester(FallbackAdapter):
 
     def availability_changed_ch(
         self,
-        tts: STT,
+        stt: STT,
     ) -> utils.aio.ChanReceiver[AvailabilityChangedEvent]:
-        return self._availability_changed_ch[id(tts)]
+        return self._availability_changed_ch[id(stt)]
 
 
 async def test_stt_fallback() -> None:

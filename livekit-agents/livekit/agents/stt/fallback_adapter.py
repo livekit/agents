@@ -297,7 +297,7 @@ class FallbackRecognizeStream(RecognizeStream):
                             stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             stream.flush()
-                    except RuntimeError:
+                    except Exception:
                         pass
 
                 if main_stream is not None:
