@@ -200,6 +200,12 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
+        if not self._opts.api_key:
+            raise ValueError(
+                "Neuphonic API key is required, either as argument or set"
+                " NEUPHONIC_API_KEY environment variable"
+            )
+
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
