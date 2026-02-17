@@ -613,9 +613,7 @@ class InterruptionStreamBase(ABC):
                     self._accumulated_samples = 0
                     self._overlap_speech_started_at = None
                     # we don't clear the cache here since responses might be in flight
-                case rtc.AudioFrame() if (
-                    self._agent_speech_started and self._overlap_speech_started
-                ):
+                case rtc.AudioFrame() if self._agent_speech_started:
                     samples_written = self._audio_buffer.push_frame(input_frame)
                     self._accumulated_samples += samples_written
                     if (
