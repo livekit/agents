@@ -29,7 +29,7 @@ dependencies = [
     "typer>=0.15.1",
     "click~=8.1",
     "certifi>=2025.6.15",
-    "livekit==1.1.1",
+    "livekit==1.1.2",
     "livekit-api>=1.0.7,<2",
     "livekit-protocol>=1.1,<2",
     "livekit-blingfire~=1.1,<2",
