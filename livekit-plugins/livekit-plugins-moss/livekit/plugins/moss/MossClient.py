@@ -212,7 +212,6 @@ class MossClient:
             raise TypeError("moss.load_index returned an unexpected type")
         return result
 
-
     async def query(
         self,
         index_name: str,
