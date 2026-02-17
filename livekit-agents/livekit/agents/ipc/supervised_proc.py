@@ -11,9 +11,10 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
+from types import FrameType
 from typing import Any
 
 import psutil
@@ -26,7 +27,7 @@ from . import channel, proto
 from .log_queue import LogQueueListener
 
 _mask_ctrl_c_refcount = 0
-_mask_ctrl_c_original: signal.Handlers = signal.SIG_DFL
+_mask_ctrl_c_original: Callable[[int, FrameType | None], Any] | int | None = signal.SIG_DFL
 
 
 @contextlib.contextmanager
