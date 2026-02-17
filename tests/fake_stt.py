@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from livekit import rtc
 from livekit.agents import NOT_GIVEN, NotGivenOr, utils
 from livekit.agents.stt import (
     STT,
@@ -48,6 +49,7 @@ class FakeSTT(STT):
         fake_transcript: str | None = None,
         fake_timeout: float | None = None,
         fake_user_speeches: list[FakeUserSpeech] | None = None,
+        fake_require_audio: bool = False,
     ) -> None:
         super().__init__(
             capabilities=STTCapabilities(streaming=True, interim_results=False),
@@ -56,6 +58,7 @@ class FakeSTT(STT):
         self._fake_exception = fake_exception
         self._fake_transcript = fake_transcript
         self._fake_timeout = fake_timeout
+        self._fake_require_audio = fake_require_audio
 
         if fake_user_speeches is not None:
             fake_user_speeches = sorted(fake_user_speeches, key=lambda x: x.start_time)
@@ -175,13 +178,23 @@ class FakeRecognizeStream(RecognizeStream):
         if self._stt._fake_timeout is not None:
             await asyncio.sleep(self._stt._fake_timeout)
 
-        if self._stt._fake_transcript is not None:
-            self.send_fake_transcript(self._stt._fake_transcript)
+        if self._stt._fake_require_audio:
+            got_audio = False
+            async for data in self._input_ch:
+                if isinstance(data, rtc.AudioFrame):
+                    got_audio = True
+                elif isinstance(data, self._FlushSentinel) and got_audio:
+                    if self._stt._fake_transcript is not None:
+                        self.send_fake_transcript(self._stt._fake_transcript)
+                    got_audio = False
+        else:
+            if self._stt._fake_transcript is not None:
+                self.send_fake_transcript(self._stt._fake_transcript)
 
-        await self._fake_user_speech_task()
+            await self._fake_user_speech_task()
 
-        async for _ in self._input_ch:
-            pass
+            async for _ in self._input_ch:
+                pass
 
         if self._stt._fake_exception is not None:
             raise self._stt._fake_exception

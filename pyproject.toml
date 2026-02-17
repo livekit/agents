@@ -48,6 +48,7 @@ livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-simplismart = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
+livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
@@ -77,6 +78,7 @@ dev = [
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
+    "playwright>=1.58.0",
 ]
 docs = ["pdoc3", "setuptools"]
 
