@@ -679,7 +679,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     probabilities=resp.probabilities,
                     is_interruption=resp.is_bargein,
                 )
-                if entry.is_interruption:
+                if entry.is_interruption and self._overlap_speech_started:
                     logger.debug("user interruption detected")
                     if self._user_speech_span:
                         self._update_user_speech_span(self._user_speech_span, entry)
