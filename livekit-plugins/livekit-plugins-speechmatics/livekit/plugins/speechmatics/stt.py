@@ -60,7 +60,11 @@ class TurnDetectionMode(str, Enum):
     voice activity detection or `TurnDetectionMode.SMART_TURN` for more advanced ML-based
     endpointing.
 
-    The default is `ADAPTIVE` which uses voice activity detection to determine end of speech.
+    The `TurnDetectionMode.FIXED` mode uses a fixed amount of silence, as determined by the
+    `end_of_utterance_silence_trigger` parameter.
+
+    The default is `TurnDetectionMode.ADAPTIVE` which uses voice activity detection to determine
+    end of speech.
     """
 
     EXTERNAL = "external"
