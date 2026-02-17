@@ -145,7 +145,7 @@ class TTS(tts.TTS):
         if self._opts.api_key:
             headers = {API_AUTH_HEADER: self._opts.api_key}
         else:
-            headers = {}
+            headers = None
 
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
 
