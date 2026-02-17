@@ -352,13 +352,13 @@ class _JobProc:
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()
 
-        await self._job_ctx._on_session_end()
-
         if self._session_end_fnc:
             try:
                 await self._session_end_fnc(self._job_ctx)
             except Exception:
                 logger.exception("error while executing the on_session_end callback")
+
+        await self._job_ctx._on_session_end()
 
         logger.debug(
             "shutting down job task",
