@@ -89,6 +89,7 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
             api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
+            jwt_token (str, optional): The NeuPhonic JWT token.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
             tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
@@ -101,7 +102,7 @@ class TTS(tts.TTS):
             num_channels=1,
         )
         neuphonic_api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
-        if not neuphonic_api_key:
+        if not neuphonic_api_key and not jwt_token:
             raise ValueError(
                 "Neuphonic API key is required, either as argument or set"
                 " NEUPHONIC_API_KEY environment variable"
