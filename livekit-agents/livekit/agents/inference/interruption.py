@@ -12,13 +12,13 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter_ns
-from typing import Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 import aiohttp
 import numpy as np
 import numpy.typing as npt
 from opentelemetry import trace
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from livekit import rtc
 
@@ -55,13 +55,13 @@ _FRAMES_PER_SECOND = 40
 class InterruptionDetectionError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["interruption_detection_error"] = "interruption_detection_error"
-    timestamp: float
+    timestamp: float = Field(default_factory=time.time)
     label: str
     error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
-@dataclass
+@dataclass(slots=True, kw_only=True)
 class InterruptionOptions:
     sample_rate: int
     """The sample rate of the audio frames, defaults to 16000Hz"""
@@ -84,11 +84,12 @@ class InterruptionOptions:
     """Whether to use the inference instead of the hosted API"""
 
 
-@dataclass
+@dataclass(slots=True, kw_only=True)
 class InterruptionCacheEntry:
     """Typed cache entry for interruption inference results."""
 
-    created_at: int = field(default_factory=lambda: int(time.time()))
+    created_at: int = field(default_factory=time.perf_counter_ns)
+    """The timestamp when the cache entry was created, in nanoseconds. Used only for indexing and latency calculation."""
     speech_input: npt.NDArray[np.int16] | None = None
     total_duration: float | None = None
     prediction_duration: float | None = None
@@ -358,7 +359,6 @@ class AdaptiveInterruptionDetector(
         self.emit(
             "error",
             InterruptionDetectionError(
-                timestamp=time.time(),
                 label=self._label,
                 error=api_error,
                 recoverable=recoverable,
@@ -470,24 +470,12 @@ class InterruptionStreamBase(ABC):
                 raise
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._model.emit(
-            "error",
-            InterruptionDetectionError(
-                timestamp=time.time(),
-                label=self._model._label,
-                error=api_error,
-                recoverable=recoverable,
-            ),
-        )
+        self._model._emit_error(api_error, recoverable)
 
     def push_frame(self, frame: InterruptionDataFrameType) -> None:
         """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
-
-        if not isinstance(frame, rtc.AudioFrame):
-            if isinstance(frame, _OverlapSpeechStartedSentinel):
-                self._overlap_speech_started_at = frame._started_at
         self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
@@ -557,6 +545,7 @@ class InterruptionStreamBase(ABC):
 
         def _reset_state() -> None:
             self._agent_speech_started = False
+            self._overlap_speech_started = False
             self._overlap_count = 0
             self._accumulated_samples = 0
 
@@ -565,79 +554,89 @@ class InterruptionStreamBase(ABC):
             self._user_speech_span = None
 
         async for input_frame in self._input_ch:
-            if isinstance(input_frame, _FlushSentinel):
-                continue
-
-            # reset when agent starts or stops speaking
-            if isinstance(input_frame, (_AgentSpeechStartedSentinel, _AgentSpeechEndedSentinel)):
-                _reset_state()
-                self._agent_speech_started = bool(
-                    isinstance(input_frame, _AgentSpeechStartedSentinel)
-                )
-                continue
-
-            # start inferencing against the overlap speech
-            if (
-                isinstance(input_frame, _OverlapSpeechStartedSentinel)
-                and self._agent_speech_started
-            ):
-                self._user_speech_span = input_frame._user_speaking_span
-                self._overlap_speech_started = True
-                self._accumulated_samples = 0
-                self._overlap_count += 1
-                # include the audio prefix in the window and
-                # only shift (remove leading silence) when the first overlap speech started
-                # otherwise, keep the existing data
-                if self._overlap_count == 1:
-                    shift_size = (
-                        int(input_frame._speech_duration * self._sample_rate) + self._prefix_size
+            match input_frame:
+                case _FlushSentinel():
+                    continue
+                case _AgentSpeechStartedSentinel() | _AgentSpeechEndedSentinel():
+                    _reset_state()
+                    self._agent_speech_started = isinstance(
+                        input_frame, _AgentSpeechStartedSentinel
                     )
-                    self._audio_buffer.shift(shift_size)
-                logger.trace(
-                    "overlap speech started, starting interruption inference",
-                    extra={
-                        "overlap_count": self._overlap_count,
-                    },
-                )
-                self._cache.clear()
-                continue
-
-            if isinstance(input_frame, _OverlapSpeechEndedSentinel):
-                if self._overlap_speech_started and self._overlap_speech_started_at is not None:
-                    logger.trace("overlap speech ended, stopping interruption inference")
-                    self._user_speech_span = None
-                    _, last_entry = self._cache.pop_if(
-                        lambda entry: entry.total_duration is not None and entry.total_duration > 0
+                    continue
+                case _OverlapSpeechStartedSentinel() if self._agent_speech_started:
+                    self._overlap_speech_started_at = input_frame._started_at
+                    self._user_speech_span = input_frame._user_speaking_span
+                    self._overlap_speech_started = True
+                    self._accumulated_samples = 0
+                    self._overlap_count += 1
+                    # include the audio prefix in the window and
+                    # only shift (remove leading silence) when the first overlap speech started
+                    # otherwise, keep the existing data
+                    if self._overlap_count == 1:
+                        shift_size = (
+                            int(input_frame._speech_duration * self._sample_rate)
+                            + self._prefix_size
+                        )
+                        self._audio_buffer.shift(shift_size)
+                    logger.trace(
+                        "overlap speech started, starting interruption inference",
+                        extra={
+                            "overlap_count": self._overlap_count,
+                        },
                     )
-                    if last_entry is None:
-                        logger.trace("no request made for overlap speech")
-                    ev = InterruptionEvent.from_cache_entry(
-                        entry=last_entry or _EMPTY_CACHE_ENTRY,
-                        is_interruption=False,
-                        started_at=self._overlap_speech_started_at,
-                        ended_at=input_frame._ended_at,
-                    )
-                    self.send(ev)
+                    self._cache.clear()
+                    continue
+                case _OverlapSpeechEndedSentinel():
+                    if self._overlap_speech_started and self._overlap_speech_started_at is not None:
+                        logger.trace("overlap speech ended, stopping interruption inference")
+                        self._user_speech_span = None
+                        _, last_entry = self._cache.pop_if(
+                            lambda entry: (
+                                entry.total_duration is not None and entry.total_duration > 0
+                            )
+                        )
+                        if last_entry is None:
+                            logger.trace("no request made for overlap speech")
+                        ev = InterruptionEvent.from_cache_entry(
+                            entry=last_entry or _EMPTY_CACHE_ENTRY,
+                            is_interruption=False,
+                            started_at=self._overlap_speech_started_at,
+                            ended_at=input_frame._ended_at,
+                        )
+                        self.send(ev)
 
-                self._overlap_speech_started = False
-                self._accumulated_samples = 0
-                # we don't clear the cache here since responses might be in flight
-                continue
-
-            if not self._agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
-                continue
-
-            samples_written = self._audio_buffer.push_frame(input_frame)
-            self._accumulated_samples += samples_written
-            if self._accumulated_samples >= self._batch_size and self._overlap_speech_started:
-                output_ch.send_nowait(self._audio_buffer.read())
-                self._accumulated_samples = 0
+                    self._overlap_speech_started = False
+                    self._accumulated_samples = 0
+                    self._overlap_speech_started_at = None
+                    # we don't clear the cache here since responses might be in flight
+                case rtc.AudioFrame() if (
+                    self._agent_speech_started and self._overlap_speech_started
+                ):
+                    samples_written = self._audio_buffer.push_frame(input_frame)
+                    self._accumulated_samples += samples_written
+                    if (
+                        self._accumulated_samples >= self._batch_size
+                        and self._overlap_speech_started
+                    ):
+                        output_ch.send_nowait(self._audio_buffer.read())
+                        self._accumulated_samples = 0
 
         output_ch.close()
 
     def send(self, event: InterruptionEvent) -> None:
         self._event_ch.send_nowait(event)
         self._model.emit(event.type, event)
+
+
+# region: HTTP Stream
+
+
+class InterruptionResponse(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    created_at: int
+    is_bargein: bool
+    prediction_duration: float
+    probabilities: npt.NDArray[np.float32] = Field(..., exclude=True)
 
 
 class InterruptionHttpStream(InterruptionStreamBase):
@@ -663,18 +662,20 @@ class InterruptionHttpStream(InterruptionStreamBase):
         @log_exceptions(logger=logger)
         async def _send_task(input_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
             async for data in input_ch:
-                if self._overlap_speech_started_at is None or not self._overlap_speech_started:
+                if (
+                    overlap_speech_started_at := self._overlap_speech_started_at
+                ) is None or not self._overlap_speech_started:
                     continue
-                resp = await self.predict(data)
-                created_at = resp["created_at"]
+                resp: InterruptionResponse = await self.predict(data)
+                created_at = resp.created_at
                 self._cache[created_at] = entry = InterruptionCacheEntry(
                     created_at=created_at,
                     speech_input=data,
-                    prediction_duration=resp["prediction_duration"],
+                    prediction_duration=resp.prediction_duration,
                     total_duration=(time.perf_counter_ns() - created_at) / 1e9,
-                    detection_delay=time.time() - self._overlap_speech_started_at,
-                    probabilities=resp["probabilities"],
-                    is_interruption=resp["is_bargein"],
+                    detection_delay=time.time() - overlap_speech_started_at,
+                    probabilities=resp.probabilities,
+                    is_interruption=resp.is_bargein,
                 )
                 if entry.is_interruption:
                     logger.debug("user interruption detected")
@@ -684,7 +685,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     ev = InterruptionEvent.from_cache_entry(
                         entry=entry,
                         is_interruption=True,
-                        started_at=self._overlap_speech_started_at,
+                        started_at=overlap_speech_started_at,
                         ended_at=time.time(),
                     )
                     self.send(ev)
@@ -701,7 +702,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
             await aio.cancel_and_wait(*tasks)
 
     @log_exceptions(logger=logger)
-    async def predict(self, waveform: np.ndarray) -> dict[str, Any]:
+    async def predict(self, waveform: np.ndarray) -> InterruptionResponse:
         created_at = perf_counter_ns()
         try:
             async with self._session.post(
@@ -716,24 +717,25 @@ class InterruptionHttpStream(InterruptionStreamBase):
                 try:
                     resp.raise_for_status()
                     data: dict[str, Any] = await resp.json()
-                    # {
-                    #     "created_at": int,
-                    #     "is_bargein": bool,
-                    #     "probabilities": list[float], optional, will be converted to numpy array
-                    # }
-                    data["prediction_duration"] = (time.perf_counter_ns() - created_at) / 1e9
-                    data["probabilities"] = np.array(
-                        data.get("probabilities", []), dtype=np.float32
+                    result = InterruptionResponse.model_validate(
+                        data
+                        | {
+                            "prediction_duration": (time.perf_counter_ns() - created_at) / 1e9,
+                            "probabilities": np.array(
+                                data.get("probabilities", []), dtype=np.float32
+                            ),
+                        }
                     )
+
                     logger.trace(
                         "interruption inference done",
                         extra={
                             "created_at": created_at,
-                            "is_interruption": data["is_bargein"],
-                            "prediction_duration": data["prediction_duration"],
+                            "is_interruption": result.is_bargein,
+                            "prediction_duration": result.prediction_duration,
                         },
                     )
-                    return data
+                    return result
                 except Exception as e:
                     msg = await resp.text()
                     raise APIError(f"error during interruption prediction: {e}", body=msg) from e
@@ -745,8 +747,14 @@ class InterruptionHttpStream(InterruptionStreamBase):
             raise APIError(f"error during interruption prediction: {e}") from e
 
 
+# endregion
+
+
+# region: WebSocket Stream
+
+
+# region: WebSocket messages
 class InterruptionWSMessageType(str, Enum):
-    INPUT_AUDIO = "input_audio"
     SESSION_CREATE = "session.create"
     SESSION_CLOSE = "session.close"
     SESSION_CREATED = "session.created"
@@ -754,6 +762,78 @@ class InterruptionWSMessageType(str, Enum):
     INTERRUPTION_DETECTED = "bargein_detected"
     INFERENCE_DONE = "inference_done"
     ERROR = "error"
+
+
+class InterruptionWSSessionCreatedMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.SESSION_CREATED] = (
+        InterruptionWSMessageType.SESSION_CREATED
+    )
+
+
+class InterruptionWSSessionCreateSettings(BaseModel):
+    sample_rate: int
+    num_channels: int
+    threshold: float
+    min_frames: int
+    encoding: Literal["s16le"]
+
+
+class InterruptionWSSessionCreateMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.SESSION_CREATE] = (
+        InterruptionWSMessageType.SESSION_CREATE
+    )
+    settings: InterruptionWSSessionCreateSettings
+
+
+class InterruptionWSSessionCloseMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.SESSION_CLOSE] = InterruptionWSMessageType.SESSION_CLOSE
+
+
+class InterruptionWSSessionClosedMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.SESSION_CLOSED] = (
+        InterruptionWSMessageType.SESSION_CLOSED
+    )
+
+
+class InterruptionWSDetectedMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.INTERRUPTION_DETECTED] = (
+        InterruptionWSMessageType.INTERRUPTION_DETECTED
+    )
+    created_at: int
+    prediction_duration: float = Field(default=0.0)
+    probabilities: list[float] = Field(default_factory=list)
+
+
+class InterruptionWSInferenceDoneMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.INFERENCE_DONE] = (
+        InterruptionWSMessageType.INFERENCE_DONE
+    )
+    created_at: int
+    prediction_duration: float = Field(default=0.0)
+    probabilities: list[float] = Field(default_factory=list)
+
+
+class InterruptionWSErrorMessage(BaseModel):
+    type: Literal[InterruptionWSMessageType.ERROR] = InterruptionWSMessageType.ERROR
+    message: str
+    code: int
+    session_id: str
+
+
+AnyInterruptionWSMessage: TypeAlias = (
+    InterruptionWSSessionCreateMessage
+    | InterruptionWSSessionCreatedMessage
+    | InterruptionWSSessionCloseMessage
+    | InterruptionWSSessionClosedMessage
+    | InterruptionWSDetectedMessage
+    | InterruptionWSInferenceDoneMessage
+    | InterruptionWSErrorMessage
+)
+InterruptionWSMessage: TypeAdapter[AnyInterruptionWSMessage] = TypeAdapter(
+    Annotated[AnyInterruptionWSMessage, Field(discriminator="type")]
+)
+
+# endregion
 
 
 class InterruptionWebSocketStream(InterruptionStreamBase):
@@ -796,15 +876,18 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 )
 
             closing_ws = True
-            await ws.send_str(json.dumps({"type": InterruptionWSMessageType.SESSION_CLOSE.value}))
+            msg = InterruptionWSSessionCloseMessage(
+                type=InterruptionWSMessageType.SESSION_CLOSE,
+            )
+            await ws.send_str(msg.model_dump_json())
 
         @log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             while True:
-                msg = await ws.receive()
-                if msg.type in (
+                ws_msg = await ws.receive()
+                if ws_msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
@@ -812,39 +895,38 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     if closing_ws or self._session.closed:
                         return
                     raise APIStatusError(
-                        message=f"LiveKit Adaptive Interruption connection closed unexpectedly: {msg.data}",
+                        message=f"LiveKit Adaptive Interruption connection closed unexpectedly: {ws_msg.data}",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{ws_msg.data=} {ws_msg.extra=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if ws_msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(
-                        "unexpected LiveKit Adaptive Interruption message type %s", msg.type
+                        "unexpected LiveKit Adaptive Interruption message type %s", ws_msg.type
                     )
                     continue
 
-                data = json.loads(msg.data)
-                msg_type = data["type"]
+                data = json.loads(ws_msg.data)
+                msg: AnyInterruptionWSMessage = InterruptionWSMessage.validate_python(data)
 
-                match msg_type:
-                    case InterruptionWSMessageType.SESSION_CREATED:
+                match msg:
+                    case (
+                        InterruptionWSSessionCreatedMessage() | InterruptionWSSessionClosedMessage()
+                    ):
                         pass
-                    case InterruptionWSMessageType.INTERRUPTION_DETECTED:
-                        created_at = int(data["created_at"])
+                    case InterruptionWSDetectedMessage():
+                        created_at = msg.created_at
                         if (
-                            self._overlap_speech_started_at is not None
-                            and self._overlap_speech_started
-                        ):
+                            overlap_speech_started_at := self._overlap_speech_started_at
+                        ) is not None and self._overlap_speech_started:
                             entry = self._cache.set_or_update(
                                 created_at,
                                 lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
-                                probabilities=np.array(
-                                    data.get("probabilities", []), dtype=np.float32
-                                ),
+                                probabilities=np.array(msg.probabilities, dtype=np.float32),
                                 is_interruption=True,
-                                prediction_duration=data.get("prediction_duration", 0.0),
-                                detection_delay=time.time() - self._overlap_speech_started_at,
+                                prediction_duration=msg.prediction_duration,
+                                detection_delay=time.time() - overlap_speech_started_at,
                             )
                             if self._user_speech_span:
                                 self._update_user_speech_span(self._user_speech_span, entry)
@@ -861,25 +943,24 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             ev = InterruptionEvent.from_cache_entry(
                                 entry=entry,
                                 is_interruption=True,
-                                started_at=self._overlap_speech_started_at,
+                                started_at=overlap_speech_started_at,
                                 ended_at=time.time(),
                             )
                             self.send(ev)
                             self._overlap_speech_started = False
-
-                    case InterruptionWSMessageType.INFERENCE_DONE:
-                        created_at = int(data["created_at"])
-                        if self._overlap_speech_started_at is not None:
+                    case InterruptionWSInferenceDoneMessage():
+                        created_at = msg.created_at
+                        if (
+                            overlap_speech_started_at := self._overlap_speech_started_at
+                        ) is not None and self._overlap_speech_started:
                             entry = self._cache.set_or_update(
                                 created_at,
                                 lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
-                                prediction_duration=data.get("prediction_duration", 0.0),
-                                probabilities=np.array(
-                                    data.get("probabilities", []), dtype=np.float32
-                                ),
-                                is_interruption=data.get("is_bargein", False),
-                                detection_delay=time.time() - self._overlap_speech_started_at,
+                                prediction_duration=msg.prediction_duration,
+                                probabilities=np.array(msg.probabilities, dtype=np.float32),
+                                is_interruption=False,
+                                detection_delay=time.time() - overlap_speech_started_at,
                             )
                             logger.trace(
                                 "interruption inference done",
@@ -889,10 +970,11 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                                     "probability": entry.get_probability(),
                                 },
                             )
-                    case InterruptionWSMessageType.SESSION_CLOSED:
-                        pass
-                    case InterruptionWSMessageType.ERROR:
-                        raise APIError(f"LiveKit Adaptive Interruption returned error: {msg.data}")
+                    case InterruptionWSErrorMessage():
+                        raise APIError(
+                            f"LiveKit Adaptive Interruption returned error: {msg.code}",
+                            body=msg.message,
+                        )
                     case _:
                         logger.warning(
                             "received unexpected message from LiveKit Adaptive Interruption: %s",
@@ -947,15 +1029,13 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
     @log_exceptions(logger=logger)
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Adaptive Interruption WebSocket."""
-        params: dict[str, Any] = {
-            "settings": {
-                "sample_rate": self._opts.sample_rate,
-                "num_channels": 1,
-                "threshold": self._opts.threshold,
-                "min_frames": self._model._opts.min_frames,
-                "encoding": "s16le",
-            },
-        }
+        settings = InterruptionWSSessionCreateSettings(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            threshold=self._opts.threshold,
+            min_frames=self._model._opts.min_frames,
+            encoding="s16le",
+        )
 
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
@@ -980,8 +1060,11 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             raise APIConnectionError("failed to connect to LiveKit Adaptive Interruption") from e
 
         try:
-            params["type"] = InterruptionWSMessageType.SESSION_CREATE.value
-            await ws.send_str(json.dumps(params))
+            msg = InterruptionWSSessionCreateMessage(
+                type=InterruptionWSMessageType.SESSION_CREATE,
+                settings=settings,
+            )
+            await ws.send_str(msg.model_dump_json())
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
@@ -989,6 +1072,9 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             ) from e
 
         return ws
+
+
+# endregion
 
 
 def _estimate_probability(

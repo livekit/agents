@@ -25,6 +25,7 @@ class BoundedDict(OrderedDict[K, V]):
 
     def update_value(self, key: K, **kwargs: Any) -> V | None:
         """Update the value of a key with the given keyword arguments.
+        Only update the value if the field value is not None and the field exists on the value.
 
         Args:
             key: The key to update.
@@ -37,7 +38,9 @@ class BoundedDict(OrderedDict[K, V]):
         if value is None:
             return value
         for field_name, field_value in kwargs.items():
-            if field_value is not None and hasattr(value, field_name):
+            if field_value is None:
+                continue
+            if hasattr(value, field_name):
                 setattr(value, field_name, field_value)
             else:
                 logger.warning(
