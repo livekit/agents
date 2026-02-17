@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 from livekit import rtc
 
@@ -35,9 +35,7 @@ class TextInputEvent:
     participant: rtc.RemoteParticipant
 
 
-TextInputCallback = Callable[
-    ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
-]
+TextInputCallback = Callable[["AgentSession", TextInputEvent], Coroutine[None, None, None] | None]
 
 
 @dataclass
@@ -52,8 +50,8 @@ NoiseCancellationSelector: TypeAlias = Callable[
 ]
 
 
-def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
-    sess.interrupt()
+async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
+    await sess.interrupt()
     sess.generate_reply(user_input=ev.text)
 
 

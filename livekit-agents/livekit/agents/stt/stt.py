@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -99,7 +99,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -192,10 +192,9 @@ class STT(
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._label,
+                            "stt": self._label,
                             "attempt": i + 1,
                             "streamed": False,
                         },
@@ -273,7 +272,7 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
@@ -330,10 +329,9 @@ class RecognizeStream(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._stt._label,
+                            "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },

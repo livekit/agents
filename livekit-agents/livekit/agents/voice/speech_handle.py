@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Generator, Sequence
-from typing import Any, Callable
+from collections.abc import Callable, Generator, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from opentelemetry import context as otel_context
 
@@ -11,6 +12,14 @@ from .. import llm, utils
 from ..log import logger
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
+
+
+@dataclass
+class InputDetails:
+    modality: Literal["text", "audio"]
+
+
+DEFAULT_INPUT_DETAILS = InputDetails(modality="audio")
 
 
 class SpeechHandle:
@@ -21,9 +30,12 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, *, speech_id: str, allow_interruptions: bool) -> None:
+    def __init__(
+        self, *, speech_id: str, allow_interruptions: bool, input_details: InputDetails
+    ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -44,17 +56,24 @@ class SpeechHandle:
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
 
         def _on_done(_: asyncio.Future[None]) -> None:
-            for cb in self._done_callbacks:
-                cb(self)
+            for cb in list(self._done_callbacks):
+                try:
+                    cb(self)
+                except Exception as e:
+                    logger.warning(f"error in done_callback: {cb}", exc_info=e)
 
         self._done_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(allow_interruptions: bool = True) -> SpeechHandle:
+    def create(
+        allow_interruptions: bool = True,
+        input_details: InputDetails = DEFAULT_INPUT_DETAILS,
+    ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
+            input_details=input_details,
         )
 
     @property
@@ -64,6 +83,10 @@ class SpeechHandle:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def input_details(self) -> InputDetails:
+        return self._input_details
 
     @property
     def _generation_id(self) -> str:
@@ -161,6 +184,10 @@ class SpeechHandle:
         return _await_impl().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
+        if self.done():
+            asyncio.get_running_loop().call_soon(callback, self)
+            return
+
         self._done_callbacks.add(callback)
 
     def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
@@ -206,8 +233,11 @@ class SpeechHandle:
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
         for item in items:
-            for cb in self._item_added_callbacks:
-                cb(item)
+            for cb in list(self._item_added_callbacks):
+                try:
+                    cb(item)
+                except Exception as e:
+                    logger.warning(f"error in item_added_callback: {cb}", exc_info=e)
 
             self._chat_items.append(item)
 

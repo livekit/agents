@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union, cast
+from typing import Any, Literal, cast
 
 import httpx
-from typing_extensions import Literal
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
@@ -90,6 +89,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
         )
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -106,6 +106,10 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.close()
 
     @property
     def model(self) -> str:
@@ -200,13 +204,16 @@ class LLMStream(llm.LLMStream):
                 ),
             )
 
-            self._oai_stream = stream = await self._client.responses.create(
-                model=self._model,
-                tools=tool_schemas,
-                input=cast(Union[str, ResponseInputParam, openai.NotGiven], chat_ctx),
-                stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
-                **self._extra_kwargs,
+            self._oai_stream = stream = cast(
+                openai.AsyncStream[ResponseStreamEvent],
+                await self._client.responses.create(
+                    model=self._model,
+                    tools=tool_schemas,
+                    input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
+                    stream=True,
+                    timeout=httpx.Timeout(self._conn_options.timeout),
+                    **self._extra_kwargs,
+                ),
             )
 
             async with stream:

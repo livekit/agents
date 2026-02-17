@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import typing
-from typing import Callable, Union
+from collections.abc import Callable
 
 from ..utils import aio, shortuuid
 from .tokenizer import SentenceStream, TokenData, WordStream
 
 # Tokenizers can either provide us with a list of tokens or a list of tokens along with their start and end indices.  # noqa: E501
 # If the start and end indices are not available, we attempt to locate the token within the text using str.find.  # noqa: E501
-TokenizeCallable = Callable[[str], Union[list[str], list[tuple[str, int, int]]]]
+TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
 
 
 class BufferedTokenStream:

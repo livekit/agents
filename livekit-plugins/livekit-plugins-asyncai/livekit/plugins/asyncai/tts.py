@@ -22,7 +22,7 @@ import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Union, cast
+from typing import cast
 from urllib.parse import urlencode
 
 import aiohttp
@@ -110,7 +110,10 @@ class TTS(tts.TTS):
         )
         async_api_key = api_key or os.environ.get("ASYNCAI_API_KEY")
         if not async_api_key:
-            raise ValueError("ASYNCAI_API_KEY must be set")
+            raise ValueError(
+                "AsyncAI API key is required, either as argument or set"
+                " ASYNCAI_API_KEY environment variable"
+            )
 
         self._opts = _TTSOptions(
             model=model,
@@ -198,7 +201,7 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = cast(Union[str, list[float]], voice)
+            self._opts.voice = cast(str | list[float], voice)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
