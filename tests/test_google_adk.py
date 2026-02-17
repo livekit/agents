@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,9 +12,8 @@ from google.genai import types as genai_types
 
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.llm import ChatContext
-from livekit.agents.llm.chat_context import ChatMessage, FunctionCall, FunctionCallOutput
+from livekit.agents.llm.chat_context import FunctionCall, FunctionCallOutput
 from livekit.plugins.google_adk import ADKStream, LLMAdapter
-
 
 # --- Helpers ---
 
@@ -302,9 +302,7 @@ async def test_skips_non_message_items():
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="user", content="question")
     # Insert non-message items after the user message
-    chat_ctx.items.append(
-        FunctionCall(call_id="call_1", arguments='{"x": 1}', name="get_weather")
-    )
+    chat_ctx.items.append(FunctionCall(call_id="call_1", arguments='{"x": 1}', name="get_weather"))
     chat_ctx.items.append(
         FunctionCallOutput(call_id="call_1", output='{"temp": 72}', is_error=False)
     )
