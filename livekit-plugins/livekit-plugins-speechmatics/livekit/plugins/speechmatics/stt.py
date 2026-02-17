@@ -157,6 +157,8 @@ class STT(stt.STT):
                 turns. Use `EXTERNAL` when turn boundaries are controlled manually,
                 for example via an external VAD or the `finalize()` method. Use
                 `ADAPTIVE` for simple VAD or `SMART_TURN` for ML-based endpointing.
+                `FIXED` uses a fixed amount of silence, as determined by the
+                `end_of_utterance_silence_trigger` parameter.
                 Defaults to `TurnDetectionMode.ADAPTIVE`.
 
             operating_point: Operating point for transcription accuracy vs. latency
@@ -365,7 +367,7 @@ class STT(stt.STT):
         errors: list[str] = []
         opts = self._stt_options
 
-        # end_of_utterance_silence_trigger must be between 0 and 1
+        # end_of_utterance_silence_trigger must be between 0 and 2
         if opts.end_of_utterance_silence_trigger is not None and not (
             0 < opts.end_of_utterance_silence_trigger < 2
         ):
