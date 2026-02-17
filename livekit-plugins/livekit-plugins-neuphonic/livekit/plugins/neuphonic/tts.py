@@ -142,7 +142,11 @@ class TTS(tts.TTS):
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
 
-        headers = {API_AUTH_HEADER: self._opts.api_key}
+        if self._opts.api_key:
+            headers = {API_AUTH_HEADER: self._opts.api_key}
+        else:
+            headers = {}
+            
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
