@@ -25,33 +25,39 @@ from ..utils.aio import duplex_unix
 from . import channel, proto
 from .log_queue import LogQueueListener
 
+_mask_ctrl_c_refcount = 0
+_mask_ctrl_c_original: signal.Handlers = signal.SIG_DFL
+
 
 @contextlib.contextmanager
 def _mask_ctrl_c() -> Generator[None, None, None]:
-    """
-    POSIX: block SIGINT on this thread (defer delivery).
-    Windows/others: temporarily ignore SIGINT (best available), then restore.
-    Keep the critical section *tiny* (just around Process.start()).
+    """Temporarily ignore SIGINT so forked/spawned children inherit SIG_IGN.
 
-    On Windows, signal.signal() can only be called from the main thread.
-    If we're not in the main thread, skip the signal masking entirely.
+    Unlike pthread_sigmask (per-thread), signal.signal is process-wide and
+    SIG_IGN is preserved across exec() per POSIX — so children start with
+    SIGINT ignored regardless of which thread performs the fork.
+
+    Uses refcounting so concurrent async callers (e.g. proc pool warming
+    multiple processes) don't clobber each other's saved handler.
+
+    signal.signal() can only be called from the main thread.
+    Keep the critical section *tiny* (just around Process.start()).
     """
-    if hasattr(signal, "pthread_sigmask"):  # POSIX
-        signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGINT])
-        try:
-            yield
-        finally:
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGINT])
-    elif threading.current_thread() is threading.main_thread():
-        # Windows: signal.signal() only works in the main thread
-        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        try:
-            yield
-        finally:
-            signal.signal(signal.SIGINT, old)
-    else:
-        # Not in main thread on Windows, skip signal masking
+    global _mask_ctrl_c_refcount, _mask_ctrl_c_original
+
+    if threading.current_thread() is not threading.main_thread():
         yield
+        return
+
+    if _mask_ctrl_c_refcount == 0:
+        _mask_ctrl_c_original = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _mask_ctrl_c_refcount += 1
+    try:
+        yield
+    finally:
+        _mask_ctrl_c_refcount -= 1
+        if _mask_ctrl_c_refcount == 0:
+            signal.signal(signal.SIGINT, _mask_ctrl_c_original)
 
 
 @dataclass
@@ -159,9 +165,10 @@ class SupervisedProc(ABC):
 
                 self._proc = self._create_process(mp_cch, mp_log_cch)
 
-                # the signal handler isn't directly run when starting the process
-                # using pthread_sigmask to avoid annoying cancellation errors when pressing
-                # CTRL-C in bad timings
+                # Set SIG_IGN process-wide before forking so the child inherits it
+                # (SIG_IGN is preserved across exec per POSIX). This prevents
+                # KeyboardInterrupt during the child's bootstrap phase before
+                # it can install its own signal handlers.
                 with _mask_ctrl_c():
                     await self._loop.run_in_executor(None, self._proc.start)
             except Exception:
