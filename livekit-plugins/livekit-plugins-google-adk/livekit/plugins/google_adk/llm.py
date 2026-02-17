@@ -175,6 +175,7 @@ class ADKStream(llm.LLMStream):
         )
 
         retryable = True
+        has_emitted_partials = False
         try:
             async for event in self._runner.run_async(
                 user_id=user_id,
@@ -188,6 +189,7 @@ class ADKStream(llm.LLMStream):
                 if event.partial and event.content and event.content.parts:
                     for part in event.content.parts:
                         if part.text:
+                            has_emitted_partials = True
                             self._event_ch.send_nowait(
                                 llm.ChatChunk(
                                     id=request_id,
@@ -198,9 +200,9 @@ class ADKStream(llm.LLMStream):
                                 )
                             )
 
-                # Emit final response text
+                # Emit final response text (skip if partials already streamed)
                 elif event.is_final_response():
-                    if event.content and event.content.parts:
+                    if not has_emitted_partials and event.content and event.content.parts:
                         for part in event.content.parts:
                             if part.text:
                                 self._event_ch.send_nowait(

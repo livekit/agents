@@ -115,11 +115,10 @@ async def test_streaming_partials():
     stream = adapter.chat(chat_ctx=chat_ctx)
     chunks = await collect_text_chunks(stream)
 
-    # 2 partials + 1 final
-    assert len(chunks) == 3
+    # 2 partials only (final is skipped to avoid duplicate text)
+    assert len(chunks) == 2
     assert chunks[0] == "Hello "
     assert chunks[1] == "world"
-    assert chunks[2] == "Hello world"
 
 
 @pytest.mark.asyncio
