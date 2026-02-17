@@ -49,7 +49,7 @@ class _TTSOptions:
     sample_rate: int
     voice_id: str
     speed: float | None
-    api_key: str
+    api_key: str | None
     jwt_token: str | None
     base_url: str
     word_tokenizer: tokenize.WordTokenizer
