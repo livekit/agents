@@ -619,6 +619,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "received function_call but no function_call_handler configured: %s",
                             data.get("name"),
                         )
+                        await ws.send_str(json.dumps({
+                            "type": "function_call_output",
+                            "call_id": data.get("call_id", ""),
+                            "output": json.dumps({"error": "no function_call_handler configured"}),
+                        }))
                         continue
                     try:
                         result = await handler(
