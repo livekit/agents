@@ -146,7 +146,7 @@ class TTS(tts.TTS):
             headers = {API_AUTH_HEADER: self._opts.api_key}
         else:
             headers = {}
-            
+
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
