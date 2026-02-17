@@ -5,8 +5,9 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, Awaitable, Callable, Literal, TypedDict, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import NotRequired
@@ -619,11 +620,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "received function_call but no function_call_handler configured: %s",
                             data.get("name"),
                         )
-                        await ws.send_str(json.dumps({
-                            "type": "function_call_output",
-                            "call_id": data.get("call_id", ""),
-                            "output": json.dumps({"error": "no function_call_handler configured"}),
-                        }))
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "type": "function_call_output",
+                                    "call_id": data.get("call_id", ""),
+                                    "output": json.dumps(
+                                        {"error": "no function_call_handler configured"}
+                                    ),
+                                }
+                            )
+                        )
                         continue
                     try:
                         result = await handler(
@@ -633,11 +640,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     except Exception:
                         logger.exception("function_call_handler raised an exception")
                         result = json.dumps({"error": "handler exception"})
-                    await ws.send_str(json.dumps({
-                        "type": "function_call_output",
-                        "call_id": data.get("call_id", ""),
-                        "output": result,
-                    }))
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "type": "function_call_output",
+                                "call_id": data.get("call_id", ""),
+                                "output": result,
+                            }
+                        )
+                    )
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
