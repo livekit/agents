@@ -44,6 +44,7 @@ members = [
     "livekit-plugins-minimal",
     "livekit-plugins-minimax-ai",
     "livekit-plugins-mistralai",
+    "livekit-plugins-moss",
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
@@ -1358,6 +1359,42 @@ wheels = [
 ]
 
 [[package]]
+name = "inferedge-moss"
+version = "1.0.0b14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "inferedge-moss-core" },
+    { name = "numpy" },
+    { name = "onnxruntime", marker = "python_full_version < '3.14'" },
+    { name = "transformers" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/77/47c01fc024492af6cda2c68cd121cbcd9dbace8485889df7ef324f383a22/inferedge_moss-1.0.0b14.tar.gz", hash = "sha256:22dff791808af4b22bdcf59300c0a7f817e25815540fdaa8e980b4b79e4e9125", size = 30955, upload-time = "2026-02-09T01:54:54.197Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/8f/d81943260ba98f58514609880460fccb8651aed3b5c841a3130f54c5448a/inferedge_moss-1.0.0b14-py3-none-any.whl", hash = "sha256:bbc564aaaa1699900a57154114100ddef06a8d560791fb4a71c171ee62a4f7c5", size = 20296, upload-time = "2026-02-09T01:54:52.821Z" },
+]
+
+[[package]]
+name = "inferedge-moss-core"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/48/b8cf8627961e0ffec1154049012293d7fc1eb70be7869fb71486039f1af0/inferedge_moss_core-0.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:a3b6fdf7bfce3ea1923589500e8fbcfa515fcca8060a6314d976e2a3ffb9cdf4", size = 2803900, upload-time = "2026-02-09T01:44:11.786Z" },
+    { url = "https://files.pythonhosted.org/packages/87/cf/e03d8fbbd25aac4dcd0067b75094eaa4872cc30d6f002a450a9d95eeb48f/inferedge_moss_core-0.4.1-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:3d480c3e8931de9eee92f0767744e7a17bac481d1d18facf0f4ad0a75b4d1ba5", size = 5218280, upload-time = "2026-02-09T01:43:48.965Z" },
+    { url = "https://files.pythonhosted.org/packages/33/f9/e9f3ebf4ab5d5bcb7633835542b0f160c1e3e0261eb7c51987a4ef1d56b3/inferedge_moss_core-0.4.1-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:d91842ffaedd418a13f12b14f3ccf07ca0833a97301d193f1944646879f4e0b2", size = 5366043, upload-time = "2026-02-09T01:44:35.273Z" },
+    { url = "https://files.pythonhosted.org/packages/75/44/e3bb56284a7c4dd001ef2a0629d226b5dbe349fd37c91c1ccc52e4f4ff45/inferedge_moss_core-0.4.1-cp312-cp312-win_amd64.whl", hash = "sha256:6c244de2d178506306bea79b708a4e2d2b3faaac62f13615514580892614bc2b", size = 2566415, upload-time = "2026-02-09T01:46:48.813Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/fb/d1e551d62f7181730eba6c5fa0944db701135fdb61d2a0abd616efbfd5be/inferedge_moss_core-0.4.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:762fbdab99e1089930a76be2d35186bb6f16cc7f9e0b6d6268fecb6c3fd6c0b3", size = 2803775, upload-time = "2026-02-09T01:43:26.197Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/db/d025ebbcf8eeb58a2722e09691586b2ecf18996d8a382b7f29240ebd8fc7/inferedge_moss_core-0.4.1-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:f8bb33e42fd7e5fd8e512ed90a0e3895d6356de19acb0a99694d665d12d56da7", size = 5216967, upload-time = "2026-02-09T01:44:57.388Z" },
+    { url = "https://files.pythonhosted.org/packages/56/df/841079af46736e1c5dca5f55883bfc45d000629b17e5c9bec115b12d3ecd/inferedge_moss_core-0.4.1-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:4456bb54592d4c4aa6b7e19fb5239ef9a3201b3c0e1e47e1497b6e443fc7356e", size = 5365558, upload-time = "2026-02-09T01:44:35.736Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/22/224a2e7faa2e0e216f8a812b3fbbf96cbecbe11871401553975715004662/inferedge_moss_core-0.4.1-cp313-cp313-win_amd64.whl", hash = "sha256:59c1f6ac8c719b6a6537839272e53677fed188f479d731e0977d58f323efb35a", size = 2565641, upload-time = "2026-02-09T01:49:57.838Z" },
+    { url = "https://files.pythonhosted.org/packages/31/69/07ecc1b150b1a2a6dac1dd33e5c07dbe76c1ea6538209b78a3078ae8ae5f/inferedge_moss_core-0.4.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:6805b8206e514f372dde7d20ae51b8de12541740488eddd87c87926fbbeb4334", size = 2803462, upload-time = "2026-02-09T01:43:50.293Z" },
+    { url = "https://files.pythonhosted.org/packages/96/e5/11d636adf4ca8488bae42cc13e41fc6a9fabcea0facc4c3d8376ac28e40b/inferedge_moss_core-0.4.1-cp314-cp314-manylinux_2_34_aarch64.whl", hash = "sha256:daa2b7bb619ab50c6a2bf36d9ab49263fe02c64d758919829543214c5e96587e", size = 5219662, upload-time = "2026-02-09T01:45:14.036Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/8f/054e36adc19d680735ff57e7e63e4007af829905edffd9d914c70b9289e3/inferedge_moss_core-0.4.1-cp314-cp314-manylinux_2_34_x86_64.whl", hash = "sha256:e39ee267e633519e0f9622e5812527ccf46b80f18398fa89100b8e1439177e37", size = 5369766, upload-time = "2026-02-09T01:44:41.848Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/2e/d20fb28486a4cd57763155f443a76fedcd02319d77964c735a2ed86f49bc/inferedge_moss_core-0.4.1-cp314-cp314-win_amd64.whl", hash = "sha256:1b4555a46ac13bf23b632f458bf45c5ba75f6b41952d2c361e825749e31bda58", size = 2569005, upload-time = "2026-02-09T01:46:51.948Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2042,14 +2079,15 @@ wheels = [
 
 [[package]]
 name = "livekit-browser"
-version = "0.1.2"
+version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "livekit" },
+    { name = "livekit-agents" },
     { name = "numpy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/14/20753ed93a770fa84af29fcaae062846302e1d5597357074bad09dbc2cad/livekit_browser-0.1.2-py3-none-any.whl", hash = "sha256:27206445da76711bc4590f9e2d2b15dfd576afd30770d4ecb1d7918c21ae9612", size = 15369, upload-time = "2026-02-16T05:41:14.718Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/af/83ec6718f4ee00a130fb4e2fca196a69099aa4a73b932afd1ac3af5cf6c2/livekit_browser-0.1.4-py3-none-any.whl", hash = "sha256:9b22edf6b349ced35381cb6f775ac2680de4d896d3986689d9f4b886d21895e6", size = 14890, upload-time = "2026-02-17T03:27:31.882Z" },
 ]
 
 [[package]]
@@ -2214,7 +2252,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-browser", specifier = ">=0.1.0" },
+    { name = "livekit-browser", specifier = ">=0.1.4" },
 ]
 
 [[package]]
@@ -2502,6 +2540,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "mistralai", specifier = ">=1.9.11" },
+]
+
+[[package]]
+name = "livekit-plugins-moss"
+source = { editable = "livekit-plugins/livekit-plugins-moss" }
+dependencies = [
+    { name = "inferedge-moss" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "inferedge-moss", specifier = ">=1.0.0b14" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
