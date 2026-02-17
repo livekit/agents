@@ -104,7 +104,7 @@ class TTS(tts.TTS):
         neuphonic_api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
         if not neuphonic_api_key and not jwt_token:
             raise ValueError(
-                "Neuphonic API key is required, either as argument or set"
+                "Neuphonic API key or JWT token is required, either as argument or set"
                 " NEUPHONIC_API_KEY environment variable"
             )
 
