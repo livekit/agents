@@ -276,3 +276,6 @@ class AudioArrayBuffer:
     def reset(self) -> None:
         self._start_idx = 0
         self._buffer.fill(0)
+
+    def __len__(self) -> int:
+        return self._start_idx

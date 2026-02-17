@@ -573,9 +573,13 @@ class InterruptionStreamBase(ABC):
                     # only shift (remove leading silence) when the first overlap speech started
                     # otherwise, keep the existing data
                     if self._overlap_count == 1:
-                        shift_size = (
-                            int(input_frame._speech_duration * self._sample_rate)
-                            + self._prefix_size
+                        shift_size = max(
+                            0,
+                            len(self._audio_buffer)
+                            - (
+                                int(input_frame._speech_duration * self._sample_rate)
+                                + self._prefix_size
+                            ),
                         )
                         self._audio_buffer.shift(shift_size)
                     logger.trace(

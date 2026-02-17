@@ -106,7 +106,9 @@ unit-tests:
 		tests/test_transcription_filter.py \
 		tests/test_tools.py \
 		tests/test_aio_itertools.py \
-		tests/test_room.py
+		tests/test_room.py \
+		tests/test_utils/test_audio_array_buffer.py \
+		tests/test_utils/test_bounded_dict.py
 
 # ============================================
 # Development Workflows

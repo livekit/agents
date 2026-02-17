@@ -215,3 +215,31 @@ class TestPerformance:
 
         assert len(buf.read()) == sr * buf_s
         assert elapsed_ms < 100, f"took {elapsed_ms:.1f}ms, expected <100ms"
+
+
+class TestLen:
+    def test_empty(self) -> None:
+        buf = AudioArrayBuffer(buffer_size=10)
+        assert len(buf) == 0
+
+    def test_after_push(self) -> None:
+        buf = AudioArrayBuffer(buffer_size=10)
+        buf.push_frame(_frame([1, 2, 3]))
+        assert len(buf) == 3
+
+    def test_after_shift(self) -> None:
+        buf = AudioArrayBuffer(buffer_size=10)
+        buf.push_frame(_frame([1, 2, 3, 4, 5]))
+        buf.shift(2)
+        assert len(buf) == 3
+
+    def test_after_reset(self) -> None:
+        buf = AudioArrayBuffer(buffer_size=10)
+        buf.push_frame(_frame([1, 2, 3]))
+        buf.reset()
+        assert len(buf) == 0
+
+    def test_consistent_with_read(self) -> None:
+        buf = AudioArrayBuffer(buffer_size=10)
+        buf.push_frame(_frame([1, 2, 3, 4, 5]))
+        assert len(buf) == len(buf.read())
