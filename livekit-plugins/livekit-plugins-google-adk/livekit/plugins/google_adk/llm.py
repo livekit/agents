@@ -58,7 +58,7 @@ class LLMAdapter(llm.LLM):
         self._model_name = model_name
 
         if session_service is None:
-            session_service = InMemorySessionService()
+            session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
         self._session_service = session_service
 
         if runner is not None:

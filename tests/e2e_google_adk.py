@@ -89,9 +89,11 @@ async def run_smoke_test() -> None:
     print(f"  Time:     {elapsed:.2f}s")
 
     if usage_info:
-        print(f"  Tokens:   prompt={usage_info.prompt_tokens}, "
-              f"completion={usage_info.completion_tokens}, "
-              f"total={usage_info.total_tokens}")
+        print(
+            f"  Tokens:   prompt={usage_info.prompt_tokens}, "
+            f"completion={usage_info.completion_tokens}, "
+            f"total={usage_info.total_tokens}"
+        )
 
     # Validate
     passed = True
@@ -329,18 +331,10 @@ async def run_interactive() -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="E2E test for Google ADK LLMAdapter")
-    parser.add_argument(
-        "--smoke", action="store_true", help="Run automated smoke test"
-    )
-    parser.add_argument(
-        "--tool-test", action="store_true", help="Run tool calling test"
-    )
-    parser.add_argument(
-        "--session-test", action="store_true", help="Run session reuse test"
-    )
-    parser.add_argument(
-        "--all", action="store_true", help="Run all automated tests"
-    )
+    parser.add_argument("--smoke", action="store_true", help="Run automated smoke test")
+    parser.add_argument("--tool-test", action="store_true", help="Run tool calling test")
+    parser.add_argument("--session-test", action="store_true", help="Run session reuse test")
+    parser.add_argument("--all", action="store_true", help="Run all automated tests")
     args = parser.parse_args()
 
     check_api_key()
