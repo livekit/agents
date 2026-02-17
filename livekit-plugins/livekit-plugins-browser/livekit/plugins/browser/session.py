@@ -137,7 +137,7 @@ class BrowserSession:
         async def _handle_navigate(
             data: rtc.rpc.RpcInvocationData,
         ) -> str:
-            payload = json.loads(data.request_body)
+            payload = json.loads(data.payload)
             url = payload.get("url", "")
             if url:
                 self._queue_input(self._page.navigate(url))
