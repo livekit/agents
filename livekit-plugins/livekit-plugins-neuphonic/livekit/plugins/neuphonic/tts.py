@@ -233,9 +233,14 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            if self._opts.api_key:
+                headers = {API_AUTH_HEADER: self._opts.api_key}
+            else:
+                headers = None
+
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
-                headers={API_AUTH_HEADER: self._opts.api_key},
+                headers=headers,
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
