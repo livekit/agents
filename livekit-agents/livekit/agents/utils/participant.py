@@ -46,13 +46,13 @@ async def wait_for_agent(
         if isinstance(p, rtc.RemoteParticipant) and matches_agent(p) and not fut.done():
             fut.set_result(p)
 
-    def on_disconnected() -> None:
-        if not fut.done():
+    def on_connection_state_changed(state: int) -> None:
+        if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for agent participant"))
 
     room.on("participant_connected", on_participant_connected)
     room.on("participant_attributes_changed", on_attributes_changed)
-    room.on("disconnected", on_disconnected)
+    room.on("connection_state_changed", on_connection_state_changed)
 
     try:
         # Check existing participants
@@ -64,7 +64,7 @@ async def wait_for_agent(
     finally:
         room.off("participant_connected", on_participant_connected)
         room.off("participant_attributes_changed", on_attributes_changed)
-        room.off("disconnected", on_disconnected)
+        room.off("connection_state_changed", on_connection_state_changed)
 
 
 async def wait_for_participant(
@@ -97,12 +97,12 @@ async def wait_for_participant(
             if not fut.done():
                 fut.set_result(p)
 
-    def _on_disconnected() -> None:
-        if not fut.done():
+    def _on_connection_state_changed(state: int) -> None:
+        if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
     room.on("participant_connected", _on_participant_connected)
-    room.on("disconnected", _on_disconnected)
+    room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
         for p in room.remote_participants.values():
@@ -113,7 +113,7 @@ async def wait_for_participant(
         return await fut
     finally:
         room.off("participant_connected", _on_participant_connected)
-        room.off("disconnected", _on_disconnected)
+        room.off("connection_state_changed", _on_connection_state_changed)
 
 
 async def wait_for_track_publication(
@@ -149,13 +149,13 @@ async def wait_for_track_publication(
         if (identity is None or participant.identity == identity) and kind_match(publication.kind):
             fut.set_result(publication)
 
-    def _on_disconnected() -> None:
-        if not fut.done():
+    def _on_connection_state_changed(state: int) -> None:
+        if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for track publication"))
 
     # room.on("track_subscribed", _on_track_subscribed)
     room.on("track_published", _on_track_published)
-    room.on("disconnected", _on_disconnected)
+    room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
         for p in room.remote_participants.values():
@@ -167,4 +167,4 @@ async def wait_for_track_publication(
         return await fut
     finally:
         room.off("track_published", _on_track_published)
-        room.off("disconnected", _on_disconnected)
+        room.off("connection_state_changed", _on_connection_state_changed)
