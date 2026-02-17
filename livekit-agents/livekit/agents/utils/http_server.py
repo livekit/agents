@@ -38,4 +38,8 @@ class HttpServer:
     async def aclose(self) -> None:
         async with self._lock:
             self._server.close()
+            # This will close all persistent connections.
+            # The close_clients method is only available in Python versions >= 3.13
+            if hasattr(self._server, "close_clients"):
+                self._server.close_clients()
             await self._server.wait_closed()
