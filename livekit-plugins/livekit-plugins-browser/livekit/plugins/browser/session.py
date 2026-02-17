@@ -101,6 +101,7 @@ class BrowserSession:
         self._page.on("paint", self._on_paint)
         self._page.on("audio", self._on_audio)
         self._page.on("cursor_changed", self._on_cursor)
+        self._page.on("url_changed", self._on_url_changed)
 
         await self._room.local_participant.publish_track(self._video_track, video_opts)
 
@@ -131,6 +132,30 @@ class BrowserSession:
                 await self._broadcast_focus()
                 return json.dumps({"released": True})
             return json.dumps({"released": False})
+
+        @self._room.local_participant.register_rpc_method("browser/navigate")  # type: ignore[arg-type]
+        async def _handle_navigate(
+            data: rtc.rpc.RpcInvocationData,
+        ) -> str:
+            payload = json.loads(data.request_body)
+            url = payload.get("url", "")
+            if url:
+                self._queue_input(self._page.navigate(url))
+            return json.dumps({"status": "ok"})
+
+        @self._room.local_participant.register_rpc_method("browser/go-back")  # type: ignore[arg-type]
+        async def _handle_go_back(
+            data: rtc.rpc.RpcInvocationData,
+        ) -> str:
+            self._queue_input(self._page.go_back())
+            return json.dumps({"status": "ok"})
+
+        @self._room.local_participant.register_rpc_method("browser/go-forward")  # type: ignore[arg-type]
+        async def _handle_go_forward(
+            data: rtc.rpc.RpcInvocationData,
+        ) -> str:
+            self._queue_input(self._page.go_forward())
+            return json.dumps({"status": "ok"})
 
         # Listen for input data from participants
         @self._room.on("data_received")
@@ -291,6 +316,12 @@ class BrowserSession:
         32: "move",  # CT_MOVE
     }
 
+    def _on_url_changed(self, url: str) -> None:
+        payload = json.dumps({"url": url}).encode()
+        self._queue_input(
+            self._room.local_participant.publish_data(payload, reliable=True, topic="browser-url")
+        )
+
     def _on_cursor(self, cursor_type: int) -> None:
         css_cursor = self._CEF_CURSOR_MAP.get(cursor_type, "default")
         payload = json.dumps({"cursor": css_cursor}).encode()
@@ -325,6 +356,7 @@ class BrowserSession:
         self._page.off("paint", self._on_paint)
         self._page.off("audio", self._on_audio)
         self._page.off("cursor_changed", self._on_cursor)
+        self._page.off("url_changed", self._on_url_changed)
 
         if hasattr(self, "_on_data_received"):
             self._room.off("data_received", self._on_data_received)
