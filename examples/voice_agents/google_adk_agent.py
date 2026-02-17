@@ -40,7 +40,7 @@ def get_weather(city: str) -> dict:
 
 adk_agent = LlmAgent(
     name="assistant",
-    model="gemini-2.5-flash",
+    model="gemini-2.0-flash",
     instruction=(
         "You are a helpful voice assistant. Keep responses concise "
         "since your output will be spoken aloud via TTS."

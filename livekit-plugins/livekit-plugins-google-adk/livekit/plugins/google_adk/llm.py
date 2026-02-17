@@ -240,10 +240,22 @@ class ADKStream(llm.LLMStream):
 
 
 def _extract_latest_user_message(chat_ctx: ChatContext) -> str | None:
-    """Return the text of the most recent user message, or None."""
+    """Return the text of the most recent user message.
+
+    Falls back to the latest developer/system message when no user message
+    exists (e.g. ``generate_reply(instructions=...)`` without user input).
+    """
     for item in reversed(chat_ctx.items):
         if isinstance(item, ChatMessage) and item.role == "user":
             text = item.text_content
             if text:
                 return text
+
+    # fallback: use the latest developer/system message as the prompt
+    for item in reversed(chat_ctx.items):
+        if isinstance(item, ChatMessage) and item.role in ("developer", "system"):
+            text = item.text_content
+            if text:
+                return text
+
     return None
