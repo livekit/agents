@@ -44,7 +44,7 @@ async def lookup_weather(context: RunContext, location: str) -> str:
         location: The location they are asking for
     """
 
-    logger.info(f"Looking up weather for {location}")
+    logger.info("Looking up weather for %s", location)
 
     return "sunny with a temperature of 70 degrees."
 

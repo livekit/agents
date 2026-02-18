@@ -1,4 +1,4 @@
-# Copyright 2025 Hamming
+# Copyright 2025 Hamming, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from opentelemetry import metrics, trace
@@ -39,6 +39,9 @@ from .log import logger
 
 DEFAULT_BASE_URL = "https://app.hamming.ai"
 WORKSPACE_KEY_HEADER = "X-Workspace-Key"
+_OTLP_BASE_PATH = "/api/ingest/otlp/v1"
+
+_telemetry: HammingTelemetry | None = None
 
 
 @dataclass
@@ -51,21 +54,39 @@ class HammingTelemetry:
 
     def force_flush(self, timeout_ms: int = 5000) -> None:
         """Flush all pending telemetry data."""
-        if self.trace_provider:
-            self.trace_provider.force_flush(timeout_millis=timeout_ms)
-        if self.logger_provider:
-            self.logger_provider.force_flush(timeout_millis=timeout_ms)
-        if self.meter_provider:
-            self.meter_provider.force_flush(timeout_millis=timeout_ms)
+        errors: list[Exception] = []
+        for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
+            if provider:
+                try:
+                    provider.force_flush(timeout_millis=timeout_ms)
+                except Exception as e:
+                    logger.warning("Flush failed for %s: %s", type(provider).__name__, e)
+                    errors.append(e)
+        if errors:
+            raise errors[0]
 
     def shutdown(self) -> None:
         """Shutdown all providers."""
+        errors: list[Exception] = []
+        for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
+            if provider:
+                try:
+                    provider.shutdown()
+                except Exception as e:
+                    logger.warning("Shutdown failed for %s: %s", type(provider).__name__, e)
+                    errors.append(e)
+        if errors:
+            raise errors[0]
+
+    def __repr__(self) -> str:
+        signals = []
         if self.trace_provider:
-            self.trace_provider.shutdown()
+            signals.append("traces")
         if self.logger_provider:
-            self.logger_provider.shutdown()
+            signals.append("logs")
         if self.meter_provider:
-            self.meter_provider.shutdown()
+            signals.append("metrics")
+        return f"HammingTelemetry(signals=[{', '.join(signals)}])"
 
 
 def setup_hamming(
@@ -101,6 +122,11 @@ def setup_hamming(
     Raises:
         ValueError: If no API key is provided or found in environment.
     """
+    global _telemetry
+    if _telemetry is not None:
+        logger.warning("setup_hamming() already called; returning existing instance")
+        return _telemetry
+
     resolved_api_key = api_key or os.environ.get("HAMMING_API_KEY")
     if not resolved_api_key:
         raise ValueError(
@@ -120,11 +146,15 @@ def setup_hamming(
     if enable_traces:
         trace_provider = TracerProvider(resource=resource)
         trace_exporter = OTLPSpanExporter(
-            endpoint=f"{resolved_base_url}/api/ingest/otlp/v1/traces",
+            endpoint=f"{resolved_base_url}{_OTLP_BASE_PATH}/traces",
             headers=headers,
         )
         trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
 
+        # Set global OTel tracer so user spans also go to Hamming
+        trace.set_tracer_provider(trace_provider)
+
+        # Set LiveKit-specific tracer with metadata for span correlation
         from livekit.agents.telemetry import set_tracer_provider
 
         set_tracer_provider(trace_provider, metadata=metadata)
@@ -136,7 +166,7 @@ def setup_hamming(
     if enable_logs:
         log_provider = LoggerProvider(resource=resource)
         log_exporter = OTLPLogExporter(
-            endpoint=f"{resolved_base_url}/api/ingest/otlp/v1/logs",
+            endpoint=f"{resolved_base_url}{_OTLP_BASE_PATH}/logs",
             headers=headers,
         )
         log_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
@@ -151,7 +181,7 @@ def setup_hamming(
     # --- Metrics ---
     if enable_metrics:
         metric_exporter = OTLPMetricExporter(
-            endpoint=f"{resolved_base_url}/api/ingest/otlp/v1/metrics",
+            endpoint=f"{resolved_base_url}{_OTLP_BASE_PATH}/metrics",
             headers=headers,
         )
         metric_reader = PeriodicExportingMetricReader(
@@ -167,4 +197,5 @@ def setup_hamming(
         telemetry.meter_provider = meter_provider
         logger.info("Hamming metric export configured: %s", resolved_base_url)
 
+    _telemetry = telemetry
     return telemetry

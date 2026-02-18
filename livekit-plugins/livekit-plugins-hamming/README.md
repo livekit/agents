@@ -15,7 +15,7 @@ from livekit.plugins import hamming
 
 # In your entrypoint, before AgentSession.start():
 telemetry = hamming.setup_hamming(
-    api_key="ham_xxx",  # or set HAMMING_API_KEY env var
+    # Uses HAMMING_API_KEY env var by default
     metadata={"livekit.room_name": ctx.room.name},
 )
 
