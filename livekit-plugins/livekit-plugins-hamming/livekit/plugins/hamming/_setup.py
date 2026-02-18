@@ -53,7 +53,12 @@ class HammingTelemetry:
     meter_provider: MeterProvider | None = None
 
     def force_flush(self, timeout_ms: int = 5000) -> None:
-        """Flush all pending telemetry data."""
+        """Flush all pending telemetry data.
+
+        Attempts to flush all configured providers. If any provider fails,
+        the remaining providers are still flushed before the first error
+        is re-raised.
+        """
         errors: list[Exception] = []
         for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
             if provider:
@@ -66,7 +71,12 @@ class HammingTelemetry:
             raise errors[0]
 
     def shutdown(self) -> None:
-        """Shutdown all providers."""
+        """Shutdown all providers.
+
+        Attempts to shut down all configured providers. If any provider fails,
+        the remaining providers are still shut down before the first error
+        is re-raised.
+        """
         errors: list[Exception] = []
         for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
             if provider:
@@ -124,7 +134,10 @@ def setup_hamming(
     """
     global _telemetry
     if _telemetry is not None:
-        logger.warning("setup_hamming() already called; returning existing instance")
+        logger.warning(
+            "setup_hamming() already called; returning existing instance. "
+            "New parameters are ignored."
+        )
         return _telemetry
 
     resolved_api_key = api_key or os.environ.get("HAMMING_API_KEY")

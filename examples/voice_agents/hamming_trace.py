@@ -14,6 +14,7 @@ Environment variables:
     LIVEKIT_API_SECRET   Your LiveKit API secret
 """
 
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -76,9 +77,9 @@ async def entrypoint(ctx: JobContext):
         },
     )
 
-    # Flush telemetry on shutdown
+    # Flush telemetry on shutdown (use to_thread to avoid blocking the event loop)
     async def flush():
-        telemetry.force_flush()
+        await asyncio.to_thread(telemetry.force_flush)
 
     ctx.add_shutdown_callback(flush)
 

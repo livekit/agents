@@ -11,6 +11,7 @@ pip install livekit-plugins-hamming
 ## Quick Start
 
 ```python
+import asyncio
 from livekit.plugins import hamming
 
 # In your entrypoint, before AgentSession.start():
@@ -19,9 +20,9 @@ telemetry = hamming.setup_hamming(
     metadata={"livekit.room_name": ctx.room.name},
 )
 
-# Flush on shutdown
+# Flush on shutdown (non-blocking)
 async def flush():
-    telemetry.force_flush()
+    await asyncio.to_thread(telemetry.force_flush)
 ctx.add_shutdown_callback(flush)
 ```
 
