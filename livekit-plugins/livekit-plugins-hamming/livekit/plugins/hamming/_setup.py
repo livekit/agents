@@ -147,9 +147,9 @@ def setup_hamming(
             "Get your key from Settings > API Keys in your Hamming dashboard."
         )
 
-    resolved_base_url = (
-        base_url or os.environ.get("HAMMING_BASE_URL") or DEFAULT_BASE_URL
-    ).rstrip("/")
+    resolved_base_url = (base_url or os.environ.get("HAMMING_BASE_URL") or DEFAULT_BASE_URL).rstrip(
+        "/"
+    )
 
     headers = {WORKSPACE_KEY_HEADER: resolved_api_key}
     resource = Resource.create({"service.name": service_name})
