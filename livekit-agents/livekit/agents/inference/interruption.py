@@ -526,8 +526,10 @@ class InterruptionStreamBase(ABC):
         self._input_ch.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
-        await self._metrics_task
-        await self._tee_aiter.aclose()
+        try:
+            await self._metrics_task
+        finally:
+            await self._tee_aiter.aclose()
 
     async def __anext__(self) -> InterruptionEvent:
         try:
