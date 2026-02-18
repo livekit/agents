@@ -166,9 +166,12 @@ class InterruptionEvent(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Any:
         # remove numpy arrays from the model dump
-        self.speech_input = None
-        self.probabilities = None
-        serialized = handler(self)
+        data = self.speech_input, self.probabilities
+        self.speech_input, self.probabilities = None, None
+        try:
+            serialized = handler(self)
+        finally:
+            self.speech_input, self.probabilities = data
         return serialized
 
     @classmethod
