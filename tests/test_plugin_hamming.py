@@ -351,6 +351,65 @@ def test_force_flush_resilient_to_errors():
     mp.force_flush.assert_called_once()
 
 
+def test_force_flush_restores_log_handlers():
+    """force_flush should re-attach LoggingHandlers after flushing."""
+    from opentelemetry.sdk._logs import LoggingHandler
+
+    root_logger = logging.getLogger()
+    handler = LoggingHandler(level=logging.INFO, logger_provider=MagicMock())
+    root_logger.addHandler(handler)
+
+    try:
+        lp = MagicMock()
+        t = HammingTelemetry(logger_provider=lp)
+
+        t.force_flush()
+
+        # Handler should be back on the root logger
+        assert handler in root_logger.handlers
+    finally:
+        root_logger.removeHandler(handler)
+
+
+def test_force_flush_restores_handlers_on_error():
+    """Log handlers should be restored even if flush raises an error."""
+    from opentelemetry.sdk._logs import LoggingHandler
+
+    root_logger = logging.getLogger()
+    handler = LoggingHandler(level=logging.INFO, logger_provider=MagicMock())
+    root_logger.addHandler(handler)
+
+    try:
+        lp = MagicMock()
+        lp.force_flush.side_effect = RuntimeError("flush boom")
+        t = HammingTelemetry(logger_provider=lp)
+
+        with pytest.raises(RuntimeError, match="flush boom"):
+            t.force_flush()
+
+        # Handler must be restored despite the error
+        assert handler in root_logger.handlers
+    finally:
+        root_logger.removeHandler(handler)
+
+
+def test_shutdown_permanently_removes_log_handlers():
+    """shutdown should permanently remove LoggingHandlers (terminal operation)."""
+    from opentelemetry.sdk._logs import LoggingHandler
+
+    root_logger = logging.getLogger()
+    handler = LoggingHandler(level=logging.INFO, logger_provider=MagicMock())
+    root_logger.addHandler(handler)
+
+    lp = MagicMock()
+    t = HammingTelemetry(logger_provider=lp)
+
+    t.shutdown()
+
+    # Handler should NOT be on the root logger after shutdown
+    assert handler not in root_logger.handlers
+
+
 def test_shutdown_calls_all_providers():
     """shutdown should call shutdown on each configured provider."""
     tp = MagicMock()

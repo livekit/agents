@@ -52,48 +52,63 @@ class HammingTelemetry:
     logger_provider: LoggerProvider | None = None
     meter_provider: MeterProvider | None = None
 
-    def _remove_log_handlers(self) -> None:
-        """Remove OTel LoggingHandler from root logger to prevent deadlock.
+    @staticmethod
+    def _detach_log_handlers() -> list[LoggingHandler]:
+        """Remove OTel LoggingHandlers from root logger and return them.
 
         During flush/shutdown, the BatchLogRecordProcessor may emit logs that
-        feed back through the LoggingHandler into the provider mid-flush.
+        feed back through the LoggingHandler into the provider mid-flush,
+        causing a deadlock. Temporarily detaching the handlers prevents this.
         Follows the pattern from livekit-agents/livekit/agents/telemetry/traces.py.
         """
         root = logging.getLogger()
+        removed: list[LoggingHandler] = []
         for h in root.handlers[:]:
             if isinstance(h, LoggingHandler):
                 root.removeHandler(h)
+                removed.append(h)
+        return removed
 
     def force_flush(self, timeout_ms: int = 5000) -> None:
         """Flush all pending telemetry data.
 
-        Attempts to flush all configured providers. If any provider fails,
-        the remaining providers are still flushed before the first error
-        is re-raised.
+        Temporarily detaches OTel log handlers to prevent deadlock, flushes
+        all configured providers, then re-attaches the handlers so that
+        subsequent log export continues to work.
+
+        If any provider fails, the remaining providers are still flushed
+        before the first error is re-raised.
         """
+        removed_handlers: list[LoggingHandler] = []
         if self.logger_provider:
-            self._remove_log_handlers()
+            removed_handlers = self._detach_log_handlers()
 
         errors: list[Exception] = []
-        for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
-            if provider:
-                try:
-                    provider.force_flush(timeout_millis=timeout_ms)
-                except Exception as e:
-                    logger.warning("Flush failed for %s: %s", type(provider).__name__, e)
-                    errors.append(e)
+        try:
+            for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
+                if provider:
+                    try:
+                        provider.force_flush(timeout_millis=timeout_ms)
+                    except Exception as e:
+                        logger.warning("Flush failed for %s: %s", type(provider).__name__, e)
+                        errors.append(e)
+        finally:
+            # Re-attach handlers so log export continues working
+            root = logging.getLogger()
+            for h in removed_handlers:
+                root.addHandler(h)
         if errors:
             raise errors[0]
 
     def shutdown(self) -> None:
         """Shutdown all providers.
 
-        Attempts to shut down all configured providers. If any provider fails,
-        the remaining providers are still shut down before the first error
-        is re-raised.
+        Permanently removes OTel log handlers (shutdown is terminal) and shuts
+        down all configured providers. If any provider fails, the remaining
+        providers are still shut down before the first error is re-raised.
         """
         if self.logger_provider:
-            self._remove_log_handlers()
+            self._detach_log_handlers()
 
         errors: list[Exception] = []
         for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
