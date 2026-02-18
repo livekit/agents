@@ -1,6 +1,7 @@
 from .base import (
     AgentMetrics,
     EOUMetrics,
+    InterruptionMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
     STTMetrics,
@@ -9,6 +10,7 @@ from .base import (
 )
 from .usage import (
     AgentSessionUsage,
+    InterruptionModelUsage,
     LLMModelUsage,
     ModelUsage,
     ModelUsageCollector,
@@ -26,10 +28,12 @@ __all__ = [
     "STTMetrics",
     "TTSMetrics",
     "RealtimeModelMetrics",
+    "InterruptionMetrics",
     # New model usage classes
     "LLMModelUsage",
     "TTSModelUsage",
     "STTModelUsage",
+    "InterruptionModelUsage",
     "ModelUsage",
     "AgentSessionUsage",
     "ModelUsageCollector",

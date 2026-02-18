@@ -5,7 +5,14 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    InterruptionMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+)
 
 
 class _BaseModelUsage(BaseModel):
@@ -89,7 +96,19 @@ class STTModelUsage(_BaseModelUsage):
     """Duration of processed audio in seconds."""
 
 
-ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage
+class InterruptionModelUsage(_BaseModelUsage):
+    """Usage summary for interruption detection models."""
+
+    type: Literal["interruption_usage"] = "interruption_usage"
+    provider: str
+    """The provider name (e.g., 'livekit')."""
+    model: str
+    """The model name (e.g., 'adaptive')."""
+    total_requests: int = 0
+    """Total number of requests sent to the interruption detection model."""
+
+
+ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage
 """Union type for all model usage types."""
 
 
@@ -105,12 +124,14 @@ class ModelUsageCollector:
         self._llm_usage: dict[tuple[str, str], LLMModelUsage] = {}
         self._tts_usage: dict[tuple[str, str], TTSModelUsage] = {}
         self._stt_usage: dict[tuple[str, str], STTModelUsage] = {}
+        self._interruption_usage: dict[tuple[str, str], InterruptionModelUsage] = {}
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
 
     def _extract_provider_model(
-        self, metrics: LLMMetrics | STTMetrics | TTSMetrics | RealtimeModelMetrics
+        self,
+        metrics: LLMMetrics | STTMetrics | TTSMetrics | RealtimeModelMetrics | InterruptionMetrics,
     ) -> tuple[str, str]:
         """Extract provider and model from metrics metadata."""
         provider = ""
@@ -140,6 +161,13 @@ class ModelUsageCollector:
         if key not in self._stt_usage:
             self._stt_usage[key] = STTModelUsage(provider=provider, model=model)
         return self._stt_usage[key]
+
+    def _get_interruption_usage(self, provider: str, model: str) -> InterruptionModelUsage:
+        """Get or create an InterruptionModelUsage for the given provider/model combination."""
+        key = (provider, model)
+        if key not in self._interruption_usage:
+            self._interruption_usage[key] = InterruptionModelUsage(provider=provider, model=model)
+        return self._interruption_usage[key]
 
     def collect(self, metrics: AgentMetrics) -> None:
         if isinstance(metrics, LLMMetrics):
@@ -193,6 +221,10 @@ class ModelUsageCollector:
             stt_usage.input_tokens += metrics.input_tokens
             stt_usage.output_tokens += metrics.output_tokens
             stt_usage.audio_duration += metrics.audio_duration
+        elif isinstance(metrics, InterruptionMetrics):
+            provider, model = self._extract_provider_model(metrics)
+            interruption_usage = self._get_interruption_usage(provider, model)
+            interruption_usage.total_requests += metrics.num_requests
 
     def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""
@@ -200,4 +232,5 @@ class ModelUsageCollector:
         result.extend(u.model_copy(deep=True) for u in self._llm_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._tts_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._stt_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._interruption_usage.values())
         return result

@@ -3,7 +3,15 @@ from __future__ import annotations
 import logging
 
 from ..log import logger as default_logger
-from .base import AgentMetrics, EOUMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    EOUMetrics,
+    InterruptionMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+)
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:
@@ -81,5 +89,18 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra=metadata
             | {
                 "audio_duration": round(metrics.audio_duration, 2),
+            },
+        )
+    elif isinstance(metrics, InterruptionMetrics):
+        logger.info(
+            "Interruption metrics",
+            extra=metadata
+            | {
+                "total_duration": round(metrics.total_duration, 2),
+                "prediction_duration": round(metrics.prediction_duration, 2),
+                "detection_delay": round(metrics.detection_delay, 2),
+                "num_interruptions": metrics.num_interruptions,
+                "num_non_interruptions": metrics.num_non_interruptions,
+                "num_requests": metrics.num_requests,
             },
         )

@@ -17,7 +17,7 @@ __all__ = [
     "TTSModels",
     "LLMModels",
     "AdaptiveInterruptionDetector",
-    "InterruptionEvent",
     "InterruptionDetectionError",
+    "InterruptionEvent",
     "InterruptionDataFrameType",
 ]

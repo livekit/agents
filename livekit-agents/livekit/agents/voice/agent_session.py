@@ -857,7 +857,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         reason: CloseReason,
         drain: bool = False,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError
+        | None = None,
     ) -> None:
         if self._root_span_context:
             # make `activity.drain` and `on_exit` under the root span
@@ -1205,7 +1210,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_error(
         self,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError,
     ) -> None:
         if self._closing_task or error.recoverable:
             return

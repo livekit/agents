@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
-from ..inference.interruption import InterruptionEvent
+from ..inference.interruption import (
+    AdaptiveInterruptionDetector,
+    InterruptionDetectionError,
+    InterruptionEvent,
+)
 from ..llm import (
     LLM,
     ChatMessage,
@@ -207,8 +211,8 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | Any
-    source: LLM | STT | TTS | RealtimeModel | Any
+    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 
 
@@ -223,7 +227,9 @@ class CloseReason(str, Enum):
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | RealtimeModelError | None = None
+    error: (
+        LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None
+    ) = None
     reason: CloseReason
     created_at: float = Field(default_factory=time.time)
 

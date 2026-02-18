@@ -549,6 +549,16 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.vad, vad.VAD):
             self.vad.on("metrics_collected", self._on_metrics_collected)
 
+        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+            self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
+            self._interruption_detector.on("error", self._on_error)
+            self._interruption_detector.on(
+                "user_interruption_detected", self._on_overlap_speech_ended
+            )
+            self._interruption_detector.on(
+                "user_non_interruption_detected", self._on_overlap_speech_ended
+            )
+
         if self.mcp_servers:
 
             @utils.log_exceptions(logger=logger)
@@ -773,6 +783,16 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.vad, vad.VAD):
             self.vad.off("metrics_collected", self._on_metrics_collected)
+
+        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+            self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
+            self._interruption_detector.off("error", self._on_error)
+            self._interruption_detector.off(
+                "user_interruption_detected", self._on_overlap_speech_ended
+            )
+            self._interruption_detector.off(
+                "user_non_interruption_detected", self._on_overlap_speech_ended
+            )
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1176,7 +1196,12 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
-        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
+        self,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError,
     ) -> None:
         if isinstance(error, llm.LLMError):
             error_event = ErrorEvent(error=error, source=self.llm)
@@ -1190,8 +1215,17 @@ class AgentActivity(RecognitionHooks):
         elif isinstance(error, tts.TTSError):
             error_event = ErrorEvent(error=error, source=self.tts)
             self._session.emit("error", error_event)
+        elif isinstance(error, inference.InterruptionDetectionError):
+            error_event = ErrorEvent(error=error, source=self._interruption_detector)
+            self._session.emit("error", error_event)
 
         self._session._on_error(error)
+
+    def _on_overlap_speech_ended(self, ev: inference.InterruptionEvent) -> None:
+        if ev.is_interruption:
+            self._session.emit("user_interruption_detected", ev)
+        else:
+            self._session.emit("user_non_interruption_detected", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None:
@@ -3003,14 +3037,6 @@ class AgentActivity(RecognitionHooks):
             logger.warning("failed to create AdaptiveInterruptionDetector", extra={"error": str(e)})
             return None
 
-        detector.on(
-            "user_interruption_detected",
-            lambda ev: self._session.emit("user_interruption_detected", ev),
-        )
-        detector.on(
-            "user_non_interruption_detected",
-            lambda ev: self._session.emit("user_non_interruption_detected", ev),
-        )
         return detector
 
     @property

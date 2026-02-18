@@ -8,7 +8,7 @@ import struct
 import time
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter_ns
@@ -18,12 +18,21 @@ import aiohttp
 import numpy as np
 import numpy.typing as npt
 from opentelemetry import trace
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    model_serializer,
+)
 
 from livekit import rtc
 
+from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
+from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import (
@@ -117,16 +126,14 @@ class InterruptionCacheEntry:
 
 
 class InterruptionEvent(BaseModel):
-    """
-    Represents an event detected by the interruption detection model.
-    """
+    """Represents an event detected by the interruption detection model."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     type: Literal["user_interruption_detected", "user_non_interruption_detected"]
     """Type of the interruption event (e.g., interruption or non-interruption)."""
 
-    timestamp: float
+    timestamp: float = Field(default_factory=time.time)
     """Timestamp (in seconds) when the event was fired."""
 
     is_interruption: bool = False
@@ -152,6 +159,17 @@ class InterruptionEvent(BaseModel):
 
     probability: float = 0.0
     """The conservative estimated probability of the interruption event."""
+
+    num_requests: int = 0
+    """Number of requests sent for this event."""
+
+    @model_serializer(mode="wrap")
+    def serialize_model(self, handler: SerializerFunctionWrapHandler) -> Any:
+        # remove numpy arrays from the model dump
+        self.speech_input = None
+        self.probabilities = None
+        serialized = handler(self)
+        return serialized
 
     @classmethod
     def from_cache_entry(
@@ -237,7 +255,12 @@ InterruptionDataFrameType: TypeAlias = (
 
 class AdaptiveInterruptionDetector(
     rtc.EventEmitter[
-        Literal["user_interruption_detected", "user_non_interruption_detected", "error"]
+        Literal[
+            "user_interruption_detected",
+            "user_non_interruption_detected",
+            "error",
+            "metrics_collected",
+        ]
     ],
 ):
     def __init__(
@@ -414,6 +437,11 @@ class InterruptionStreamBase(ABC):
             sample_rate=self._opts.sample_rate,
         )
         self._cache = BoundedDict[int, InterruptionCacheEntry](maxsize=10)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="InterruptionStreamBase._metrics_task"
+        )
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -427,6 +455,7 @@ class InterruptionStreamBase(ABC):
         self._overlap_speech_started: bool = False
         self._overlap_count: int = 0
         self._accumulated_samples: int = 0
+        self._num_requests = aio.AsyncAtomicCounter(initial=0)
         self._batch_size: int = int(self._opts.detection_interval * self._opts.sample_rate)
         self._prefix_size: int = int(self._opts.audio_prefix_duration * self._opts.sample_rate)
 
@@ -494,10 +523,12 @@ class InterruptionStreamBase(ABC):
         self._input_ch.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
+        await self._metrics_task
+        await self._tee_aiter.aclose()
 
     async def __anext__(self) -> InterruptionEvent:
         try:
-            val = await self._event_ch.__anext__()
+            val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc  # noqa: B904
@@ -543,11 +574,12 @@ class InterruptionStreamBase(ABC):
     async def _forward_data(self, output_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
         """Preprocess the audio data and forward it to the output channel for inference."""
 
-        def _reset_state() -> None:
+        async def _reset_state() -> None:
             self._agent_speech_started = False
             self._overlap_speech_started = False
             self._overlap_count = 0
             self._accumulated_samples = 0
+            await self._num_requests.set(0)
 
             self._audio_buffer.reset()
             self._cache.clear()
@@ -558,7 +590,7 @@ class InterruptionStreamBase(ABC):
                 case _FlushSentinel():
                     continue
                 case _AgentSpeechStartedSentinel() | _AgentSpeechEndedSentinel():
-                    _reset_state()
+                    await _reset_state()
                     self._agent_speech_started = isinstance(
                         input_frame, _AgentSpeechStartedSentinel
                     )
@@ -607,6 +639,7 @@ class InterruptionStreamBase(ABC):
                             started_at=self._overlap_speech_started_at,
                             ended_at=input_frame._ended_at,
                         )
+                        ev.num_requests = await self._num_requests.get_and_reset()
                         self.send(ev)
 
                     self._overlap_speech_started = False
@@ -628,6 +661,24 @@ class InterruptionStreamBase(ABC):
     def send(self, event: InterruptionEvent) -> None:
         self._event_ch.send_nowait(event)
         self._model.emit(event.type, event)
+
+    @utils.log_exceptions(logger=logger)
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[InterruptionEvent]) -> None:
+
+        async for ev in event_aiter:
+            metrics = InterruptionMetrics(
+                timestamp=time.time(),
+                total_duration=ev.total_duration,
+                prediction_duration=ev.prediction_duration,
+                detection_delay=ev.detection_delay,
+                num_interruptions=1 if ev.is_interruption else 0,
+                num_non_interruptions=1 if not ev.is_interruption else 0,
+                num_requests=ev.num_requests,
+                metadata=Metadata(
+                    model_name=self._model.model, model_provider=self._model.provider
+                ),
+            )
+            self._model.emit("metrics_collected", metrics)
 
 
 # region: HTTP Stream
@@ -668,6 +719,8 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     overlap_speech_started_at := self._overlap_speech_started_at
                 ) is None or not self._overlap_speech_started:
                     continue
+
+                await self._num_requests.increment()
                 resp: InterruptionResponse = await self.predict(data)
                 created_at = resp.created_at
                 self._cache[created_at] = entry = InterruptionCacheEntry(
@@ -690,6 +743,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         started_at=overlap_speech_started_at,
                         ended_at=time.time(),
                     )
+                    ev.num_requests = await self._num_requests.get_and_reset()
                     self.send(ev)
                     self._overlap_speech_started = False
 
@@ -869,6 +923,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             nonlocal closing_ws
 
             async for audio_data in input_ch:
+                await self._num_requests.increment()
                 created_at = perf_counter_ns()
                 header = struct.pack("<Q", created_at)  # 8 bytes
                 await ws.send_bytes(header + audio_data.tobytes())
@@ -948,6 +1003,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                                 started_at=overlap_speech_started_at,
                                 ended_at=time.time(),
                             )
+                            ev.num_requests = await self._num_requests.get_and_reset()
                             self.send(ev)
                             self._overlap_speech_started = False
                     case InterruptionWSInferenceDoneMessage():
