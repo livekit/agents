@@ -36,6 +36,11 @@ logger = logging.getLogger("hamming-trace-example")
 
 load_dotenv()
 
+# Initialize Hamming telemetry once at module level.
+# setup_hamming() is a singleton — only the first call configures providers.
+# api_key defaults to HAMMING_API_KEY env var.
+telemetry = hamming.setup_hamming()
+
 
 @function_tool
 async def lookup_weather(context: RunContext, location: str) -> str:
@@ -69,14 +74,6 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    # One-line setup: traces, logs, and metrics all go to Hamming
-    telemetry = hamming.setup_hamming(
-        # api_key defaults to HAMMING_API_KEY env var
-        metadata={
-            "livekit.room_name": ctx.room.name,
-        },
-    )
-
     # Flush telemetry on shutdown (use to_thread to avoid blocking the event loop)
     async def flush():
         await asyncio.to_thread(telemetry.force_flush)

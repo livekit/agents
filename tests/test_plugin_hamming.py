@@ -13,19 +13,18 @@
 # limitations under the License.
 
 import logging
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import livekit.plugins.hamming._setup as _setup_mod
 from livekit.plugins.hamming._setup import (
+    _OTLP_BASE_PATH,
     DEFAULT_BASE_URL,
     WORKSPACE_KEY_HEADER,
     HammingTelemetry,
-    _OTLP_BASE_PATH,
     setup_hamming,
 )
-import livekit.plugins.hamming._setup as _setup_mod
 
 TEST_API_KEY = "ham_test_key_12345"
 CUSTOM_BASE_URL = "https://custom.hamming.ai"
@@ -85,9 +84,7 @@ def test_param_key_takes_priority_over_env(monkeypatch):
     """api_key param should win over env var."""
     monkeypatch.setenv("HAMMING_API_KEY", "ham_env_key")
 
-    with patch(
-        "livekit.plugins.hamming._setup.OTLPSpanExporter"
-    ) as mock_exporter:
+    with patch("livekit.plugins.hamming._setup.OTLPSpanExporter") as mock_exporter:
         setup_hamming(api_key=TEST_API_KEY)
         # The exporter should have been called with the param key, not env key
         call_kwargs = mock_exporter.call_args
@@ -114,9 +111,7 @@ def test_empty_env_api_key_raises(monkeypatch):
 
 def test_default_base_url():
     """Uses https://app.hamming.ai when no base_url is specified."""
-    with patch(
-        "livekit.plugins.hamming._setup.OTLPSpanExporter"
-    ) as mock_exporter:
+    with patch("livekit.plugins.hamming._setup.OTLPSpanExporter") as mock_exporter:
         setup_hamming(api_key=TEST_API_KEY)
         endpoint = mock_exporter.call_args.kwargs["endpoint"]
         assert endpoint == f"{DEFAULT_BASE_URL}{_OTLP_BASE_PATH}/traces"
@@ -124,9 +119,7 @@ def test_default_base_url():
 
 def test_base_url_from_param():
     """Explicit base_url parameter takes priority."""
-    with patch(
-        "livekit.plugins.hamming._setup.OTLPSpanExporter"
-    ) as mock_exporter:
+    with patch("livekit.plugins.hamming._setup.OTLPSpanExporter") as mock_exporter:
         setup_hamming(api_key=TEST_API_KEY, base_url=CUSTOM_BASE_URL)
         endpoint = mock_exporter.call_args.kwargs["endpoint"]
         assert endpoint.startswith(CUSTOM_BASE_URL)
@@ -135,9 +128,7 @@ def test_base_url_from_param():
 def test_base_url_from_env(monkeypatch):
     """Falls back to HAMMING_BASE_URL env var."""
     monkeypatch.setenv("HAMMING_BASE_URL", CUSTOM_BASE_URL)
-    with patch(
-        "livekit.plugins.hamming._setup.OTLPSpanExporter"
-    ) as mock_exporter:
+    with patch("livekit.plugins.hamming._setup.OTLPSpanExporter") as mock_exporter:
         setup_hamming(api_key=TEST_API_KEY)
         endpoint = mock_exporter.call_args.kwargs["endpoint"]
         assert endpoint.startswith(CUSTOM_BASE_URL)
@@ -145,9 +136,7 @@ def test_base_url_from_env(monkeypatch):
 
 def test_base_url_trailing_slash_stripped():
     """Trailing slashes in base_url should be stripped."""
-    with patch(
-        "livekit.plugins.hamming._setup.OTLPSpanExporter"
-    ) as mock_exporter:
+    with patch("livekit.plugins.hamming._setup.OTLPSpanExporter") as mock_exporter:
         setup_hamming(api_key=TEST_API_KEY, base_url="https://example.com///")
         endpoint = mock_exporter.call_args.kwargs["endpoint"]
         assert "///" not in endpoint
