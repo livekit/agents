@@ -33,7 +33,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as trace_utils
+from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -1278,6 +1278,7 @@ class AgentActivity(RecognitionHooks):
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         self._session.emit(
             "session_usage_updated",
