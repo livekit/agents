@@ -198,6 +198,7 @@ class FunctionCallOutput(BaseModel):
     name: str = Field(default="")
     call_id: str
     output: str
+    content: list[dict[str, Any]] | None = None
     is_error: bool
     created_at: float = Field(default_factory=time.time)
 

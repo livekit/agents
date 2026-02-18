@@ -61,11 +61,12 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
+            result_content = msg.content if msg.content is not None else msg.output
             content.append(
                 {
                     "tool_use_id": msg.call_id,
                     "type": "tool_result",
-                    "content": msg.output,
+                    "content": result_content,
                     "is_error": msg.is_error,
                 }
             )
@@ -131,4 +132,9 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
                     "input_schema": info.raw_schema.get("parameters", {}),
                 }
             )
+
+    for tool in tool_ctx.provider_tools:
+        if tool.definition:
+            schemas.append(tool.definition)
+
     return schemas

@@ -13,15 +13,19 @@ from livekit.browser import (  # type: ignore[import-untyped]
     PaintData,
 )
 
+from .browser_agent import BrowserAgent
+from .computer_tool import ComputerTool
 from .log import logger
 from .session import BrowserSession
 from .version import __version__
 
 __all__ = [
     "AudioData",
+    "BrowserAgent",
     "BrowserContext",
     "BrowserPage",
     "BrowserSession",
+    "ComputerTool",
     "PaintData",
 ]
 

@@ -39,12 +39,17 @@ class Tool(ABC):
 
 
 class ProviderTool(Tool):
-    def __init__(self, *, id: str) -> None:
+    def __init__(self, *, id: str, definition: dict[str, Any] | None = None) -> None:
         self._id = id
+        self._definition = definition or {}
 
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def definition(self) -> dict[str, Any]:
+        return self._definition
 
 
 class Toolset(ABC):

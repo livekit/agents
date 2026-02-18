@@ -151,8 +151,21 @@ class LLM(llm.LLM):
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
+        beta_flag: str | None = None
         if tools:
-            extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
+            tool_ctx = llm.ToolContext(tools)
+            extra["tools"] = tool_ctx.parse_function_tools("anthropic")
+
+            # Detect computer-use tools and set the appropriate beta header
+            for t in tool_ctx.provider_tools:
+                tool_type = t.definition.get("type", "") if t.definition else ""
+                if "computer_20251124" in tool_type:
+                    beta_flag = "computer-use-2025-11-24"
+                    break
+                elif "computer_20250124" in tool_type:
+                    beta_flag = "computer-use-2025-01-24"
+                    break
+
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -209,13 +222,23 @@ class LLM(llm.LLM):
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
-        stream = self._client.messages.create(
-            messages=messages,
-            model=self._opts.model,
-            stream=True,
-            timeout=conn_options.timeout,
-            **extra,
-        )
+        if beta_flag:
+            stream = self._client.beta.messages.create(
+                betas=[beta_flag],
+                messages=messages,
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
+        else:
+            stream = self._client.messages.create(
+                messages=messages,
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
 
         return LLMStream(
             self,

@@ -4,61 +4,15 @@ import asyncio
 import contextlib
 import json
 import logging
-import sys
 import time
 from typing import Any
 
 from livekit import rtc
 from livekit.browser import AudioData, BrowserPage, PaintData  # type: ignore[import-untyped]
 
+from ._keys import NATIVE_KEY_CODES as _NATIVE_KEY_CODES
+
 logger = logging.getLogger(__name__)
-
-
-def _build_native_keycode_map() -> dict[int, int]:
-    """Map JS keyCode (Windows VK codes) to platform-specific native key codes.
-
-    CEF uses native_key_code for editing commands (deleteBackward, etc.)
-    on macOS. On Linux it uses X11 key codes. On Windows, windows_key_code
-    is primary so native_key_code is less critical.
-    """
-    if sys.platform == "darwin":
-        return {
-            8: 51,  # Backspace
-            9: 48,  # Tab
-            13: 36,  # Enter/Return
-            27: 53,  # Escape
-            37: 123,  # Arrow Left
-            38: 126,  # Arrow Up
-            39: 124,  # Arrow Right
-            40: 125,  # Arrow Down
-            46: 117,  # Delete (forward)
-            33: 116,  # Page Up
-            34: 121,  # Page Down
-            35: 119,  # End
-            36: 115,  # Home
-        }
-    elif sys.platform == "linux":
-        return {
-            8: 22,  # Backspace
-            9: 23,  # Tab
-            13: 36,  # Enter/Return
-            27: 9,  # Escape
-            37: 113,  # Arrow Left
-            38: 111,  # Arrow Up
-            39: 114,  # Arrow Right
-            40: 116,  # Arrow Down
-            46: 119,  # Delete (forward)
-            33: 112,  # Page Up
-            34: 117,  # Page Down
-            35: 115,  # End
-            36: 110,  # Home
-        }
-    else:
-        # Windows — CEF primarily uses windows_key_code
-        return {}
-
-
-_NATIVE_KEY_CODES = _build_native_keycode_map()
 
 
 class BrowserSession:
@@ -79,6 +33,26 @@ class BrowserSession:
         self._input_task: asyncio.Task[None] | None = None
 
         self._focus_identity: str | None = None
+
+        # Event set when a human interrupts the agent's focus
+        self._agent_interrupted = asyncio.Event()
+
+    @property
+    def focus_identity(self) -> str | None:
+        return self._focus_identity
+
+    @property
+    def agent_interrupted(self) -> asyncio.Event:
+        """Event that is set when a human takes focus from the agent."""
+        return self._agent_interrupted
+
+    def set_agent_focus(self, active: bool) -> None:
+        """Grant or revoke browser focus for the AI agent."""
+        if active:
+            self._focus_identity = "__agent__"
+            self._agent_interrupted.clear()
+        elif self._focus_identity == "__agent__":
+            self._focus_identity = None
 
     async def start(self) -> None:
         if self._started:
@@ -120,6 +94,15 @@ class BrowserSession:
                 await self._page.send_focus_event(True)
                 await self._broadcast_focus()
                 return json.dumps({"granted": True})
+
+            # If agent has focus, allow human to interrupt
+            if self._focus_identity == "__agent__":
+                self._focus_identity = data.caller_identity
+                self._agent_interrupted.set()
+                await self._page.send_focus_event(True)
+                await self._broadcast_focus()
+                return json.dumps({"granted": True})
+
             return json.dumps({"granted": False, "holder": self._focus_identity})
 
         @self._room.local_participant.register_rpc_method("browser/release-focus")  # type: ignore[arg-type]
