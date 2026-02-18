@@ -1,6 +1,5 @@
 """Tests for AssemblyAI STT plugin configuration options."""
 
-
 from livekit.agents.types import NOT_GIVEN
 
 
