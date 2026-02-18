@@ -52,6 +52,18 @@ class HammingTelemetry:
     logger_provider: LoggerProvider | None = None
     meter_provider: MeterProvider | None = None
 
+    def _remove_log_handlers(self) -> None:
+        """Remove OTel LoggingHandler from root logger to prevent deadlock.
+
+        During flush/shutdown, the BatchLogRecordProcessor may emit logs that
+        feed back through the LoggingHandler into the provider mid-flush.
+        Follows the pattern from livekit-agents/livekit/agents/telemetry/traces.py.
+        """
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            if isinstance(h, LoggingHandler):
+                root.removeHandler(h)
+
     def force_flush(self, timeout_ms: int = 5000) -> None:
         """Flush all pending telemetry data.
 
@@ -59,6 +71,9 @@ class HammingTelemetry:
         the remaining providers are still flushed before the first error
         is re-raised.
         """
+        if self.logger_provider:
+            self._remove_log_handlers()
+
         errors: list[Exception] = []
         for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
             if provider:
@@ -77,6 +92,9 @@ class HammingTelemetry:
         the remaining providers are still shut down before the first error
         is re-raised.
         """
+        if self.logger_provider:
+            self._remove_log_handlers()
+
         errors: list[Exception] = []
         for provider in (self.trace_provider, self.logger_provider, self.meter_provider):
             if provider:
