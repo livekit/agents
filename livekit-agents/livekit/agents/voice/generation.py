@@ -20,6 +20,7 @@ from ..llm import (
     ChatContext,
     StopResponse,
     ToolContext,
+    ToolError,
     utils as llm_utils,
 )
 from ..log import logger
@@ -608,7 +609,16 @@ async def _execute_tools_task(
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        if not isinstance(e, StopResponse):
+                        if isinstance(e, ToolError):
+                            logger.warning(
+                                "ToolError while executing tool: %s",
+                                e.message,
+                                extra={
+                                    "function": fnc_call.name,
+                                    "speech_id": speech_handle.id,
+                                },
+                            )
+                        elif not isinstance(e, StopResponse):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},
