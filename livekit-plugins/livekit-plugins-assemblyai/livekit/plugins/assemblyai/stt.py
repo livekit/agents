@@ -57,6 +57,7 @@ class STTOptions:
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
+    vad_threshold: NotGivenOr[float] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -75,6 +76,7 @@ class STT(stt.STT):
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -85,6 +87,10 @@ class STT(stt.STT):
                 (wss://streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
                 wss://streaming.assemblyai.com.
                 See https://www.assemblyai.com/docs/universal-streaming for more details.
+            vad_threshold: The threshold for voice activity detection (VAD). A value between
+                0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
+                more sensitive (detects quieter speech). Higher values make it less sensitive.
+                Defaults to 0.5.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -120,6 +126,7 @@ class STT(stt.STT):
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
             keyterms_prompt=keyterms_prompt,
+            vad_threshold=vad_threshold,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -172,6 +179,7 @@ class STT(stt.STT):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -183,6 +191,8 @@ class STT(stt.STT):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -190,6 +200,7 @@ class STT(stt.STT):
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
                 min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
                 max_turn_silence=max_turn_silence,
+                vad_threshold=vad_threshold,
             )
 
 
@@ -224,6 +235,7 @@ class SpeechStream(stt.SpeechStream):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -235,6 +247,8 @@ class SpeechStream(stt.SpeechStream):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
 
         self._reconnect_event.set()
 
@@ -358,6 +372,9 @@ class SpeechStream(stt.SpeechStream):
             else True
             if "multilingual" in self._opts.speech_model
             else False,
+            "vad_threshold": self._opts.vad_threshold
+            if is_given(self._opts.vad_threshold)
+            else None,
         }
 
         headers = {
