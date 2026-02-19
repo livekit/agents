@@ -73,7 +73,7 @@ DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
-BARGE_IN_SIGNAL = '{ "interrupted" : true }\n'  # Nova Sonic's barge-in detection signal
+BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. "
     "You love helping people and having natural conversations. "
@@ -1120,7 +1120,7 @@ class RealtimeSession(  # noqa: F811
             return
 
         content_id = event_data["event"]["textOutput"]["contentId"]
-        text_content = f"{event_data['event']['textOutput']['content']}\n"
+        text_content = event_data["event"]["textOutput"]["content"]
 
         # Nova Sonic's automatic barge-in detection
         if text_content == BARGE_IN_SIGNAL:
@@ -1624,6 +1624,13 @@ class RealtimeSession(  # noqa: F811
         # Initial context setup (once)
         if not self._chat_ctx_ready.done():
             self._chat_ctx = chat_ctx.copy()
+            # Mark all initial context messages as already sent so the loop below
+            # doesn't re-send them as interactive=true text. These messages are already
+            # sent as non-interactive history via create_prompt_start_block during
+            # initialize_streams.
+            for item in chat_ctx.items:
+                if item.type == "message":
+                    self._sent_message_ids.add(item.id)
             logger.debug(f"Chat context updated: {self._chat_ctx.items}")
             self._chat_ctx_ready.set_result(True)
 
@@ -1660,7 +1667,7 @@ class RealtimeSession(  # noqa: F811
             ):
                 # Check if this is an audio message (already transcribed by Nova)
                 if item.id not in self._audio_message_ids:
-                    if item.text_content:
+                    if item.text_content and item.text_content.strip():
                         logger.debug(
                             f"Sending user message as interactive text: {item.text_content}"
                         )
