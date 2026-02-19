@@ -379,7 +379,6 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     mock_blrp.assert_not_called()
 
 
-
 # ---------------------------------------------------------------------------
 # Group 4: RecorderIO conditional creation
 # ---------------------------------------------------------------------------
