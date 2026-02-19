@@ -57,7 +57,6 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
-        "gemini-2.0-flash-exp",
     }
 )
 
