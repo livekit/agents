@@ -641,7 +641,7 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
-        if self._recording_initialized or not is_cloud(self._info.url):
+        if self._recording_initialized:
             self._stop_log_buffering()
             return
 
@@ -653,7 +653,7 @@ class JobContext:
             or options.get("audio", True)
             or options.get("transcript", True)
         )
-        if not needs_cloud:
+        if not (needs_cloud and is_cloud(self._info.url)):
             self._stop_log_buffering()
             return
 
