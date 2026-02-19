@@ -48,8 +48,6 @@ lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
         "gemini-live-2.5-flash-native-audio",
-        "gemini-live-2.5-flash-preview-native-audio-09-2025",
-        "gemini-live-2.5-flash-preview-native-audio",
     }
 )
 
