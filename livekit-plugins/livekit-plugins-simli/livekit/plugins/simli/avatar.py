@@ -121,9 +121,15 @@ class AvatarSession:
             )
             body = await simli_session_token_request.text()
             simli_session_token_request.raise_for_status()
-        except Exception:
+        except Exception as e:
+            status = (
+                getattr(simli_session_token_request, "status", "N/A")
+                if "simli_session_token_request" in dir()
+                else "N/A"
+            )
+            detail = body if "body" in dir() else str(e)
             logger.error(
-                f"failed to create simli session token server returned {simli_session_token_request.status} and detail {body}"
+                f"failed to create simli session token server returned {status} and detail {detail}"
             )
             return
         try:
@@ -141,8 +147,9 @@ class AvatarSession:
             logger.error(
                 f"failed to connect to simli avatar session server returned {avatarConnectionRequest.status} and detail {body}"
             )
-            agent_session.output.audio = DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-            )
+            return
+        agent_session.output.audio = DataStreamAudioOutput(
+            room=room,
+            destination_identity=self._avatar_participant_identity,
+            sample_rate=SAMPLE_RATE,
+        )
