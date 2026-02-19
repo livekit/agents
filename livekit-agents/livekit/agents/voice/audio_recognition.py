@@ -13,7 +13,6 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..llm.realtime import RealtimeModel
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -150,11 +149,7 @@ class AudioRecognition:
         self._closing = asyncio.Event()
 
         # AMD
-        self._amd: AMD | None = (
-            AMD(session._llm)
-            if session._llm and not isinstance(session._llm, RealtimeModel)
-            else None
-        )
+        self._amd: AMD | None = session._activity._amd if session._activity is not None else None
         if self._amd:
             self._amd.on("amd_result", self._hooks.on_amd_result)
 

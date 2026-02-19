@@ -34,6 +34,14 @@ class AMDResult:
     transcript: str
     delay: float
 
+    @property
+    def is_human(self) -> bool:
+        return self.category == "human"
+
+    @property
+    def is_machine(self) -> bool:
+        return self.category.startswith("machine")
+
 
 AMD_PROMPT = """Task:
 Classify the call greeting transcript into exactly one of these categories:
@@ -146,7 +154,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                     category=category,
                     reason=reason,
                     transcript="",
-                    delay=time.time() - self._speech_ended_at,
+                    delay=time.time() - (self._speech_ended_at or time.time()),
                 )
                 if self._no_speech_timer is not None:
                     self._no_speech_timer.cancel()
@@ -190,7 +198,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                     category=response,
                     reason="llm",
                     transcript=transcript,
-                    delay=time.time() - self._speech_ended_at,
+                    delay=time.time() - (self._speech_ended_at or time.time()),
                 )
 
             if self._no_speech_timer is not None:

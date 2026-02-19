@@ -36,7 +36,7 @@ from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
-from ..voice.amd import AMDResult
+from ..voice.amd import AMD, AMDResult
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
@@ -143,6 +143,11 @@ class AgentActivity(RecognitionHooks):
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
+
+        # AMD state
+        self._amd: AMD | None = self.amd
+        self._amd_result: AMDResult | None = None
+        self._amd_ready: asyncio.Event | None = asyncio.Event() if self.amd is not None else None
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -490,6 +495,8 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
+                    if self._amd_ready is not None:
+                        await self._amd_ready.wait()
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)
@@ -1472,7 +1479,9 @@ class AgentActivity(RecognitionHooks):
         return True
 
     def on_amd_result(self, result: AMDResult) -> None:
-        pass
+        self._amd_result = result
+        if self._amd_ready is not None:
+            self._amd_ready.set()
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
@@ -1494,6 +1503,13 @@ class AgentActivity(RecognitionHooks):
 
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
+
+        # hold until AMD resolves when enabled; abort on machine detection
+        if self._amd_ready is not None and not self._session._amd_result_yielded:
+            await self._amd_ready.wait()
+            if self._amd_result is not None and self._amd_result.is_machine:
+                self._cancel_preemptive_generation()
+                return
 
         user_message = llm.ChatMessage(
             role="user",
@@ -2843,3 +2859,14 @@ class AgentActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
+
+    @property
+    def amd(self) -> AMD | None:
+        """Resolve the AMD LLM instance to use for AMD detection."""
+        if not self._session._amd:
+            return None
+        if isinstance(self._session._amd, llm.LLM):
+            return AMD(self._session._amd)
+        if self.llm and isinstance(self.llm, llm.LLM):
+            return AMD(self.llm)
+        return None
