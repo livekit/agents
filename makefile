@@ -104,7 +104,9 @@ unit-tests:
 		tests/test_recording.py \
 		tests/test_tokenizer.py \
 		tests/test_transcription_filter.py \
-		tests/test_tools.py
+		tests/test_tools.py \
+		tests/test_aio_itertools.py \
+		tests/test_room.py
 
 # ============================================
 # Development Workflows
