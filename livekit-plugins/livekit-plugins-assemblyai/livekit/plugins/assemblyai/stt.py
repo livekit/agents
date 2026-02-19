@@ -90,7 +90,7 @@ class STT(stt.STT):
             vad_threshold: The threshold for voice activity detection (VAD). A value between
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
-                Defaults to 0.5.
+                Defaults to 0.4.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
