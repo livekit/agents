@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
+import weakref
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -34,10 +36,14 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import AudioBuffer, ConnectionPool, is_given
 from livekit.agents.voice.io import TimedString
 from mistralai import Mistral
-from mistralai.extra.realtime.connection import RealtimeConnection, UnknownRealtimeEvent
+from mistralai.extra.realtime.connection import (
+    RealtimeConnection,
+    UnknownRealtimeEvent,
+    parse_realtime_event,
+)
 from mistralai.extra.realtime.transcription import RealtimeTranscription
 from mistralai.models import AudioFormat
 from mistralai.models.realtimetranscriptionerror import RealtimeTranscriptionError
@@ -69,6 +75,9 @@ CHUNK_DURATION_MS = 100
 DEFAULT_FINALIZE_DELAY_MS = (
     100  # client-side finalize delay, not the model's transcription_delay_ms
 )
+# Idle threshold: time since last text delta before emitting FINAL_TRANSCRIPT.
+# Must exceed the model's transcription_delay_ms (default 480ms) so the model
+# has time to process trailing silence and emit final tokens. 650ms gives ~170ms margin.
 MIN_IDLE_FINALIZE_MS = 650
 
 
@@ -124,6 +133,11 @@ class STT(stt.STT):
         if not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
+        self._pool = ConnectionPool[RealtimeConnection](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+        self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
 
     @property
     def model(self) -> str:
@@ -165,6 +179,15 @@ class STT(stt.STT):
                 interim_results=self._opts.interim_results,
             )
 
+        if (
+            is_given(model)
+            or is_given(language)
+            or is_given(sample_rate)
+            or is_given(interim_results)
+        ):
+            for stream in self._streams:
+                stream._reconnect_event.set()
+
     @staticmethod
     def _build_capabilities(
         *, model: STTModels | str, interim_results: bool
@@ -186,12 +209,43 @@ class STT(stt.STT):
         if is_given(language):
             opts.language = language
 
-        return SpeechStream(
+        stream = SpeechStream(
             stt=self,
-            client=self._client,
+            pool=self._pool,
             opts=opts,
             conn_options=conn_options,
         )
+        self._streams.add(stream)
+        return stream
+
+    async def _connect_ws(self, timeout: float) -> RealtimeConnection:
+        realtime = RealtimeTranscription(self._client.sdk_configuration)
+        return await asyncio.wait_for(
+            realtime.connect(
+                model=self._opts.model,
+                audio_format=AudioFormat(
+                    encoding="pcm_s16le",
+                    sample_rate=self._opts.sample_rate,
+                ),
+            ),
+            timeout=timeout,
+        )
+
+    async def _close_ws(self, conn: RealtimeConnection) -> None:
+        if conn.is_closed:
+            return
+
+        try:
+            await conn.end_audio()
+        finally:
+            await conn.close()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
+    async def aclose(self) -> None:
+        await self._pool.aclose()
+        await super().aclose()
 
     async def _recognize_impl(
         self,
@@ -258,16 +312,25 @@ class STT(stt.STT):
 class SpeechStream(stt.RecognizeStream):
     """Realtime speech recognition stream for MistralAI Voxtral.
 
-    Uses debounced finalization: after VAD flush, waits for transcription
-    to stabilize before emitting FINAL_TRANSCRIPT. Also supports idle-based
-    finalization when FlushSentinel is not used (LiveKit 1.x STTNode path).
+    Connections are obtained from the STT-level pool and reused across turns.
+    end_audio() is reserved for final pool cleanup.
+
+    The model flushes buffered tokens when it detects silence in the audio stream.
+    The LiveKit voice pipeline keeps sending audio frames (including silence) after
+    speech ends, which gives the model the context it needs to emit final tokens.
+
+    Finalization strategy:
+    1. Flush-based: FlushSentinel from caller → debounced finalize after delay.
+    2. Idle-based (primary path): no text deltas for MIN_IDLE_FINALIZE_MS →
+       emit FINAL_TRANSCRIPT. By this point the model has already flushed via
+       silence detection.
     """
 
     def __init__(
         self,
         *,
         stt: STT,
-        client: Mistral,
+        pool: ConnectionPool[RealtimeConnection],
         opts: _STTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -276,8 +339,9 @@ class SpeechStream(stt.RecognizeStream):
             conn_options=conn_options,
             sample_rate=opts.sample_rate,
         )
-        self._client = client
+        self._pool = pool
         self._opts = opts
+        self._reconnect_event = asyncio.Event()
 
         self._speaking = False
         self._partial_text = ""
@@ -297,29 +361,55 @@ class SpeechStream(stt.RecognizeStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=self._opts.sample_rate)
-
         try:
-            realtime = RealtimeTranscription(self._client.sdk_configuration)
             finalize_task = asyncio.create_task(self._finalization_checker())
 
             try:
-                async with await realtime.connect(
-                    model=self._opts.model,
-                    audio_format=audio_format,
-                ) as connection:
+                closing = False
+                while not closing:
+                    connection = await self._pool.get(timeout=self._conn_options.timeout)
                     self._request_id = connection.request_id or self._request_id
-                    send_task = asyncio.create_task(self._send_audio(connection))
+
+                    send_task = asyncio.create_task(self._send_task(connection))
+                    recv_task = asyncio.create_task(self._recv_task(connection))
+                    reconnect_wait = asyncio.create_task(self._reconnect_event.wait())
+
                     try:
-                        async for event in connection.events():
-                            if self._process_event(event):
-                                break
+                        done, _ = await asyncio.wait(
+                            {send_task, recv_task, reconnect_wait},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+
+                        for task in done:
+                            if task is reconnect_wait:
+                                continue
+                            task.result()
+
+                        if reconnect_wait in done:
+                            self._reconnect_event.clear()
+                        else:
+                            closing = True
+                    except asyncio.CancelledError:
+                        self._release_connection(connection)
+                        raise
+                    except Exception:
+                        self._pool.remove(connection)
+                        raise
+                    else:
+                        self._release_connection(connection)
                     finally:
-                        await utils.aio.gracefully_cancel(send_task)
+                        await utils.aio.gracefully_cancel(send_task, recv_task, reconnect_wait)
             finally:
                 await utils.aio.gracefully_cancel(finalize_task)
 
             self._finalize_utterance(reason="stream_end")
+            if not self._usage_emitted:
+                logger.warning(
+                    "stream ended without TranscriptionStreamDone event"
+                    " | audio_duration=%.1f | data_sent=%s",
+                    self._audio_duration,
+                    self._data_sent,
+                )
             self._emit_usage_metrics()
 
         except SDKError as e:
@@ -336,7 +426,14 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             raise APIConnectionError(retryable=not self._data_sent) from e
 
-    async def _send_audio(self, connection: RealtimeConnection) -> None:
+    def _release_connection(self, connection: RealtimeConnection) -> None:
+        if connection.is_closed or self._speaking or self._pending_finalize or bool(self._partial_text.strip()):
+            self._pool.remove(connection)
+            return
+
+        self._pool.put(connection)
+
+    async def _send_task(self, connection: RealtimeConnection) -> None:
         samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
@@ -360,13 +457,40 @@ class SpeechStream(stt.RecognizeStream):
                 self._pending_finalize = True
                 self._flush_time = time.monotonic()
 
+        # Stream input exhausted (stream being torn down) — flush remaining audio
         for frame in audio_bstream.flush():
             if connection.is_closed:
                 break
             await connection.send_audio(frame.data.tobytes())
 
-        if not connection.is_closed:
-            await connection.end_audio()
+    async def _recv_task(self, connection: RealtimeConnection) -> None:
+        initial_events = getattr(connection, "_initial_events", None)
+        while initial_events:
+            event = initial_events.popleft()
+            if self._process_event(event):
+                return
+
+        websocket = getattr(connection, "_websocket", None)
+        if websocket is None:
+            raise APIConnectionError("Realtime websocket unavailable")
+
+        async for msg in websocket:
+            text = msg if isinstance(msg, str) else bytes(msg).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(text)
+            except Exception:
+                continue
+
+            event = parse_realtime_event(data)
+            if self._process_event(event):
+                return
+
+        raise APIStatusError(
+            message="Mistral realtime connection closed unexpectedly",
+            status_code=getattr(websocket, "close_code", -1) or -1,
+            request_id=self._request_id or None,
+            retryable=not self._data_sent,
+        )
 
     async def _finalization_checker(self) -> None:
         check_interval = 0.05
@@ -388,6 +512,10 @@ class SpeechStream(stt.RecognizeStream):
                     self._finalize_utterance(reason="flush_timeout")
                     continue
 
+            # Idle-based finalization: no text deltas for idle_finalize_delay_s.
+            # The model flushes buffered tokens when it detects silence in the
+            # audio stream (pipeline keeps sending silence frames after speech ends).
+            # By the time this fires, the model should have already emitted all tokens.
             idle_ready = (
                 self._speaking
                 and self._last_text_time > 0
@@ -404,6 +532,12 @@ class SpeechStream(stt.RecognizeStream):
         end_time: float = 0.0,
     ) -> None:
         text = self._partial_text.strip()
+        logger.debug(
+            "[FINALIZE] reason=%s | text=%r | time_since_last_delta=%.3f",
+            reason,
+            text,
+            time.monotonic() - self._last_text_time if self._last_text_time > 0 else -1,
+        )
         if text:
             self._emit_final_text(text, start_time=start_time, end_time=end_time)
 
@@ -452,18 +586,45 @@ class SpeechStream(stt.RecognizeStream):
             session = event.session
             if session.request_id:
                 self._request_id = session.request_id
+            event_type = type(event).__name__
+            logger.debug(
+                "[EVENT:%s] request_id=%s | session=%s",
+                event_type,
+                session.request_id,
+                {
+                    k: v
+                    for k, v in (getattr(session, "__dict__", None) or {}).items()
+                    if k != "request_id"
+                },
+            )
             return False
 
         if isinstance(event, TranscriptionStreamLanguage):
+            logger.debug(
+                "[EVENT:Language] audio_language=%s",
+                event.audio_language,
+            )
             if event.audio_language:
                 self._detected_language = event.audio_language
             return False
 
         if isinstance(event, TranscriptionStreamTextDelta):
+            logger.debug(
+                "[EVENT:TextDelta] text=%r | len=%d",
+                event.text,
+                len(event.text) if event.text else 0,
+            )
             self._handle_interim_text(event.text)
             return False
 
         if isinstance(event, TranscriptionStreamSegmentDelta):
+            logger.debug(
+                "[EVENT:SegmentDelta] text=%r | start=%.3f | end=%.3f | speaker_id=%s",
+                event.text,
+                event.start or 0.0,
+                event.end or 0.0,
+                getattr(event, "speaker_id", None),
+            )
             self._handle_final_segment(
                 event.text,
                 start_time=event.start,
@@ -472,14 +633,21 @@ class SpeechStream(stt.RecognizeStream):
             return False
 
         if isinstance(event, TranscriptionStreamDone):
+            logger.debug(
+                "[EVENT:Done] text=%r | model=%s | language=%s | segments=%d | usage=%s",
+                event.text,
+                getattr(event, "model", None),
+                event.language,
+                len(event.segments) if event.segments else 0,
+                getattr(event, "usage", None),
+            )
             if event.language:
                 self._detected_language = event.language
 
             done_text = event.text.strip()
+
             if done_text:
-                if self._partial_text:
-                    self._partial_text = self._merge_partial_text(self._partial_text, done_text)
-                elif not self._is_redundant_done_text(done_text):
+                if not self._is_redundant_done_text(done_text):
                     self._partial_text = done_text
 
             self._finalize_utterance(reason="transcription_done")
@@ -488,6 +656,11 @@ class SpeechStream(stt.RecognizeStream):
 
         if isinstance(event, RealtimeTranscriptionError):
             error = event.error
+            logger.debug(
+                "[EVENT:Error] code=%s | message=%s",
+                error.code,
+                error.message,
+            )
             message = error.message if isinstance(error.message, str) else str(error.message)
             raise APIStatusError(
                 message=message,
@@ -514,13 +687,21 @@ class SpeechStream(stt.RecognizeStream):
             self._data_sent = True
 
     def _handle_interim_text(self, text: str) -> None:
-        clean_text = text.strip()
-        if not clean_text:
+        if not text or not text.strip():
             return
 
         self._last_text_time = time.monotonic()
+        logger.debug(
+            "[DELTA] text=%r | accumulated=%r | t=%.3f",
+            text,
+            self._partial_text + text,
+            self._last_text_time,
+        )
         self._ensure_speaking()
-        self._partial_text = self._merge_partial_text(self._partial_text, clean_text)
+        # Mistral sends BPE sub-word tokens with whitespace baked in:
+        # word-initial tokens have a leading space (" Who", " built"),
+        # continuations have none ("ody", "enten"). Concatenate directly.
+        self._partial_text += text
 
         if self._opts.interim_results:
             language = self._detected_language or self._opts.language or ""
@@ -528,7 +709,9 @@ class SpeechStream(stt.RecognizeStream):
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     request_id=self._request_id,
-                    alternatives=[stt.SpeechData(text=self._partial_text, language=language)],
+                    alternatives=[
+                        stt.SpeechData(text=self._partial_text.strip(), language=language)
+                    ],
                 )
             )
             self._data_sent = True
@@ -540,8 +723,8 @@ class SpeechStream(stt.RecognizeStream):
         start_time: float | None = None,
         end_time: float | None = None,
     ) -> None:
-        clean_text = text.strip()
-        if not clean_text:
+        stripped = text.strip()
+        if not stripped:
             return
 
         self._last_text_time = time.monotonic()
@@ -549,7 +732,7 @@ class SpeechStream(stt.RecognizeStream):
         self._partial_text = ""
         start = (start_time or 0.0) + self.start_time_offset
         end = (end_time or 0.0) + self.start_time_offset
-        self._emit_final_text(clean_text, start_time=start, end_time=end)
+        self._emit_final_text(stripped, start_time=start, end_time=end)
 
     def _emit_final_text(
         self,
@@ -595,26 +778,3 @@ class SpeechStream(stt.RecognizeStream):
         if not self._last_final_text:
             return False
         return text == self._last_final_text and (time.monotonic() - self._last_final_time) < 1.0
-
-    @staticmethod
-    def _merge_partial_text(current: str, incoming: str) -> str:
-        if not current:
-            return incoming
-        if not incoming:
-            return current
-        if incoming.startswith(current):
-            return incoming
-        if current.startswith(incoming):
-            return current
-
-        max_overlap = min(len(current), len(incoming))
-        for overlap in range(max_overlap, 0, -1):
-            if current.endswith(incoming[:overlap]):
-                return current + incoming[overlap:]
-
-        separator = (
-            ""
-            if current.endswith((" ", "\n", "\t")) or incoming.startswith((" ", "\n", "\t"))
-            else " "
-        )
-        return f"{current}{separator}{incoming}"
