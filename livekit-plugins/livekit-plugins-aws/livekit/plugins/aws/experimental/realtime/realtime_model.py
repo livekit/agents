@@ -917,7 +917,7 @@ class RealtimeSession(  # noqa: F811
                     restart_ctx.items.insert(0, dummy_msg)
                     logger.debug("[SESSION] Added dummy USER message to start of chat history")
 
-            init_events = self._event_builder.create_prompt_start_block(
+            init_events, history_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
@@ -929,8 +929,15 @@ class RealtimeSession(  # noqa: F811
                 endpointing_sensitivity=self._realtime_model._opts.turn_detection,
             )
 
+            # Step 1: Send session init events (session start, prompt start, system prompt)
             for event in init_events:
                 await self._send_raw_event(event)
+                logger.debug(f"Sent event: {event}")
+
+            # Step 2: Send history events with small delays between them
+            for event in history_events:
+                await self._send_raw_event(event)
+                await asyncio.sleep(0.01)
                 logger.debug(f"Sent event: {event}")
 
             # Always create audio input task (even on restart)
