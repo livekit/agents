@@ -725,7 +725,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                 ) is None or not self._overlap_speech_started:
                     continue
 
-                await self._num_requests.increment()
+                # we don't increment the request counter for hosted agents
                 resp: InterruptionResponse = await self.predict(data)
                 created_at = resp.created_at
                 self._cache[created_at] = entry = InterruptionCacheEntry(
@@ -748,7 +748,6 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         started_at=overlap_speech_started_at,
                         ended_at=time.time(),
                     )
-                    ev.num_requests = await self._num_requests.get_and_reset()
                     self.send(ev)
                     self._overlap_speech_started = False
 
