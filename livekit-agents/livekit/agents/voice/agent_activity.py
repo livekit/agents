@@ -178,13 +178,16 @@ class AgentActivity(RecognitionHooks):
         llm_model = self.llm
 
         if mode == "vad" and not vad_model:
-            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
+            logger.warning(
+                "turn_detection is set to 'vad', but no VAD model is provided. "
+                "Pass a VAD instance, e.g. Agent(vad=silero.VAD.load())"
+            )
             mode = None
 
         if mode == "stt" and not stt_model:
             logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided, "
-                "ignoring the turn_detection setting"
+                "turn_detection is set to 'stt', but no STT model is provided. "
+                "Pass an STT instance, e.g. Agent(stt=deepgram.STT())"
             )
             mode = None
 
@@ -636,14 +639,19 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
-            self._on_exit_task = task = self._create_speech_task(
-                _traceable_on_exit(), name="AgentTask_on_exit"
-            )
-            _set_activity_task_info(task, inline_task=True)
+            if self._on_exit_task is None:
+                self._on_exit_task = task = self._create_speech_task(
+                    _traceable_on_exit(), name="AgentTask_on_exit"
+                )
+                _set_activity_task_info(task, inline_task=True)
 
             self._cancel_preemptive_generation()
 
-            await self._on_exit_task
+            try:
+                await self._on_exit_task
+            except Exception:
+                pass  # already logged by @log_exceptions
+
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
@@ -768,6 +776,9 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+
+            # on_exit_task should be awaited in `drain`
+            self._on_exit_task = None
 
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
@@ -1042,14 +1053,16 @@ class AgentActivity(RecognitionHooks):
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
+            speech.interrupt(force=True)
             raise RuntimeError(
-                "cannot schedule new speech, the speech scheduling is draining/pausing"
+                "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"
             )
 
         if self._scheduling_atask and self._scheduling_atask.done():
             logger.warning(
-                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running."
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled"
             )
+            speech.interrupt(force=True)
             return
 
         while True:
@@ -2688,7 +2701,7 @@ class AgentActivity(RecognitionHooks):
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one AgentTask from the tool executions",
+                        "expected to receive only one Agent from the tool executions",
                     )
                     ignore_task_switch = True
 
