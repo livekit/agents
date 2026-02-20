@@ -303,8 +303,7 @@ class ChunkedStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
                         extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
                     )
 
@@ -486,8 +485,7 @@ class SynthesizeStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
                         extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
                     )
 
