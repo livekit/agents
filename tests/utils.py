@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import io
 import asyncio
+import io
 import os
 import pathlib
-from collections.abc import AsyncGenerator
 import wave
+from collections.abc import AsyncGenerator
 
 import jiwer as tr
 import tiktoken

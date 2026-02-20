@@ -2,8 +2,7 @@ import pytest
 
 from livekit.agents import vad
 from livekit.plugins import silero
-from livekit.plugins.silero import onnx_model
-from livekit.plugins.silero import vad as silero_vad
+from livekit.plugins.silero import onnx_model, vad as silero_vad
 
 from . import utils
 
