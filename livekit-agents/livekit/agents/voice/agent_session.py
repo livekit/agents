@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Sequence
-from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
+from collections.abc import AsyncIterable, Generator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
@@ -90,7 +90,6 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
-    amd: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -161,7 +160,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
-        amd: bool | llm.LLM = False,
+        amd: bool | llm.LLM | LLMModels | str = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -270,6 +269,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
             false_interruption_timeout = agent_false_interruption_timeout
 
+        if ivr_detection and amd:
+            logger.warning("ivr detection will be disabled when amd is enabled")
+            ivr_detection = False
+
         if not is_given(video_sampler):
             video_sampler = VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
 
@@ -296,7 +299,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
-            amd=True if amd else False,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
@@ -320,8 +322,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
-
-        self._amd = amd
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
@@ -371,8 +371,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._enable_recording: bool = False
         self._started_at: float | None = None
 
-        # ivr activity
+        # ivr and amd
         self._ivr_activity: IVRActivity | None = None
+        self._amd = inference.LLM(amd) if isinstance(amd, str) else amd
         self._amd_result_yielded: bool = False
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
@@ -906,9 +907,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _warn_if_amd_pending(self, method: str) -> None:
         if (
             self._activity is not None
-            and self._activity._amd is not None
-            and self._activity._amd_ready is not None
-            and not self._activity._amd_ready.is_set()
+            and self._activity.amd is not None
+            and self._activity._amd_result is not None
+            and not self._activity._amd_result.done()
         ):
             logger.warning(
                 "%s() called before AMD result is available, "
@@ -916,37 +917,33 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 method,
             )
 
-    @asynccontextmanager
-    async def amd_detection(self) -> AsyncIterator[AMDResult]:
-        """Async context manager that waits for answering machine detection to complete.
+    async def amd_detection_result(self) -> AMDResult:
+        """
+        Wait for the AMD result and return it.
 
-        Use inside ``on_enter`` to gate agent behavior on whether a human or
-        machine answered the call::
-
-            async with self.session.amd_detection() as result:
-                if result.is_machine:
-                    ...
-                    return
-
+        Returns:
+            AMDResult: The AMD result.
         Raises:
             RuntimeError: If AMD is not enabled on this session.
         """
         activity = self._activity
-        if activity is None or activity._amd_ready is None:
+        if activity is None or activity._amd_result is None:
             raise RuntimeError("AMD is not enabled on this session")
-        await activity._amd_ready.wait()
-        assert activity._amd_result is not None
-        yield activity._amd_result
+        result = await activity._amd_result
         self._amd_result_yielded = True
+        return result
 
     async def start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
 
-        Injects the DTMF tool and enables loop/silence detection so the agent
-        can navigate IVR phone trees. Safe to call after AMD resolves -- the
-        IVR activity only starts listening from this point forward.
+        This method injects the DTMF tool and enables loop/silence detection,
+        allowing the agent to navigate IVR phone trees. Safe to call after AMD resolves.
+
+        Args:
+            transcript (str | None, optional): The transcript to start IVR detection with.
         """
         if self._ivr_activity is not None:
+            logger.warning("IVR detection already started, skipping")
             return
 
         self._ivr_activity = IVRActivity(self)
@@ -1422,3 +1419,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+    @contextmanager
+    def disable_preemptive_generation(self) -> Generator[None, None, None]:
+        prev_val, self.options.preemptive_generation = self.options.preemptive_generation, False
+        try:
+            yield
+        finally:
+            self.options.preemptive_generation = prev_val

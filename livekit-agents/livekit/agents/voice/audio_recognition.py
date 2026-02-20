@@ -148,8 +148,8 @@ class AudioRecognition:
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
-        # AMD
-        self._amd: AMD | None = session._activity._amd if session._activity is not None else None
+        # automatic machine detection
+        self._amd: AMD | None = session._activity.amd if session._activity is not None else None
         if self._amd:
             self._amd.on("amd_result", self._hooks.on_amd_result)
 
@@ -197,6 +197,9 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
+        if self._amd is not None and not self._amd.started:
+            self._amd.start()
+
     async def aclose(self) -> None:
         self._closing.set()
 
@@ -215,7 +218,9 @@ class AudioRecognition:
             await self._end_of_turn_task
 
         if self._amd is not None:
-            self._amd.close()
+            self._amd.off("amd_result", self._hooks.on_amd_result)
+            if not self._amd.closed:
+                self._amd.close()
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -340,13 +345,6 @@ class AudioRecognition:
         if self._audio_interim_transcript:
             return self._audio_transcript + " " + self._audio_interim_transcript
         return self._audio_transcript
-
-    @property
-    async def amd_result(self) -> AMDResult | None:
-        if self._amd:
-            await self._amd._ready_event.wait()
-            return self._amd._verdit
-        return None
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if (

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import heapq
 import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry import context as otel_context, trace
@@ -144,10 +146,7 @@ class AgentActivity(RecognitionHooks):
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
 
-        # AMD state
-        self._amd: AMD | None = self.amd
-        self._amd_result: AMDResult | None = None
-        self._amd_ready: asyncio.Event | None = asyncio.Event() if self.amd is not None else None
+        self._amd_result: asyncio.Future[AMDResult] | None = asyncio.Future() if self.amd else None
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -495,8 +494,8 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    if self._amd_ready is not None:
-                        await self._amd_ready.wait()
+                    if self._amd_result is not None and not self._amd_result.done():
+                        await self._amd_result
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)
@@ -1479,9 +1478,9 @@ class AgentActivity(RecognitionHooks):
         return True
 
     def on_amd_result(self, result: AMDResult) -> None:
-        self._amd_result = result
-        if self._amd_ready is not None:
-            self._amd_ready.set()
+        if self._amd_result is not None:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._amd_result.set_result(result)
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
@@ -1504,10 +1503,10 @@ class AgentActivity(RecognitionHooks):
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
-        # hold until AMD resolves when enabled; abort on machine detection
-        if self._amd_ready is not None and not self._session._amd_result_yielded:
-            await self._amd_ready.wait()
-            if self._amd_result is not None and self._amd_result.is_machine:
+        if self._amd_result is not None and not self._session._amd_result_yielded:
+            await self._amd_result
+            # cancel preemptive generation if the AMD result is a machine
+            if self._amd_result.done() and self._amd_result.result().is_machine:
                 self._cancel_preemptive_generation()
                 return
 
@@ -2860,9 +2859,8 @@ class AgentActivity(RecognitionHooks):
     def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
 
-    @property
+    @cached_property
     def amd(self) -> AMD | None:
-        """Resolve the AMD LLM instance to use for AMD detection."""
         if not self._session._amd:
             return None
         if isinstance(self._session._amd, llm.LLM):

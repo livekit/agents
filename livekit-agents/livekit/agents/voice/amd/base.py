@@ -6,8 +6,8 @@ from enum import Enum
 from functools import partial
 from typing import Literal, TypeAlias, get_args
 
-from ...llm.chat_context import ChatMessage
-from ...llm.llm import LLM, ChatContext
+from ...llm.chat_context import ChatContext, ChatMessage
+from ...llm.llm import LLM
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given, log_exceptions
@@ -80,7 +80,22 @@ class AMD(EventEmitter[Literal["amd_result"]]):
         self._silence_timer: asyncio.TimerHandle | None = None
         self._input_ch: aio.Chan[str] = aio.Chan()
         self._classify_task: asyncio.Task[None] | None = None
-        self._no_speech_timer: asyncio.TimerHandle = asyncio.get_running_loop().call_later(
+        self._no_speech_timer: asyncio.TimerHandle | None = None
+
+        self._verdict: asyncio.Future[AMDResult] = asyncio.Future()
+
+        self._llm = llm
+        self._speech_started_at: float | None = None
+        self._speech_ended_at: float | None = None
+        self._started = False
+        self._closed = False
+        self._machine_silence_reached = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        self._no_speech_timer = asyncio.get_running_loop().call_later(
             NO_SPEECH_THRESHOLD,
             partial(
                 self._silence_timer_callback,
@@ -89,32 +104,30 @@ class AMD(EventEmitter[Literal["amd_result"]]):
             ),
         )
 
-        self._verdit: AMDResult | None = None
-        self._ready_event = asyncio.Event()
-        self._llm = llm
-        self._speech_started_at: float | None = None
-        self._speech_ended_at: float | None = None
-        self._closed = False
-
     def on_user_speech_started(self) -> None:
         if self._silence_timer is not None:
             self._silence_timer.cancel()
+        if self._no_speech_timer is not None:
+            self._no_speech_timer.cancel()
+            self._no_speech_timer = None
         if self._speech_started_at is None:
             self._speech_started_at = time.time()
 
-    def on_user_speech_ended(self, silence_duration: float):
-        if self._closed or self._ready_event.is_set():
+    def on_user_speech_ended(self, silence_duration: float) -> None:
+        if self._closed:
             return
 
+        if self._speech_started_at is None:
+            logger.warning("on_user_speech_ended called before on_user_speech_started")
+            return
         speech_duration = time.time() - self._speech_started_at
         self._speech_ended_at = time.time()
         if speech_duration <= self._human_speech_threshold and self._phase == AMDPhase.SHORT_SPEECH:
-            wait_for_silence = max(0, self._human_silence_threshold - silence_duration)
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
-            self._silence_timer = asyncio.get_event_loop().call_later(
-                wait_for_silence,
+            self._silence_timer = asyncio.get_running_loop().call_later(
+                max(0, self._human_silence_threshold - silence_duration),
                 partial(
                     self._silence_timer_callback,
                     category="human",
@@ -126,15 +139,13 @@ class AMD(EventEmitter[Literal["amd_result"]]):
         if speech_duration > self._human_speech_threshold:
             if self._phase == AMDPhase.SHORT_SPEECH:
                 self._phase = AMDPhase.LONG_SPEECH
-            wait_for_silence = max(0, self._machine_silence_threshold - silence_duration)
             if self._classify_task is None or self._classify_task.done():
                 self._classify_task = asyncio.create_task(self._classify_user_speech())
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
-
             self._silence_timer = asyncio.get_event_loop().call_later(
-                wait_for_silence,
+                max(0, self._machine_silence_threshold - silence_duration),
                 self._silence_timer_callback,
             )
 
@@ -149,29 +160,30 @@ class AMD(EventEmitter[Literal["amd_result"]]):
 
         if is_given(category) and is_given(reason):
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._verdit = AMDResult(
-                    phase=self._phase,
-                    category=category,
-                    reason=reason,
-                    transcript="",
-                    delay=time.time() - (self._speech_ended_at or time.time()),
+                self._verdict.set_result(
+                    AMDResult(
+                        phase=self._phase,
+                        category=category,  # type: ignore[arg-type]
+                        reason=reason,
+                        transcript="",
+                        delay=time.time() - (self._speech_ended_at or time.time()),
+                    )
                 )
                 if self._no_speech_timer is not None:
                     self._no_speech_timer.cancel()
                     self._no_speech_timer = None
 
-        if self._verdit is not None:
-            self._ready_event.set()
-            self.emit("amd_result", self._verdit)
+        self._machine_silence_reached = True
+        if self._verdict.done() and not self.closed:
+            self.emit("amd_result", self._verdict.result())
             self.close()
+            return
+        logger.warning("timed out waiting for AMD result")
 
     def push_text(self, text: str) -> None:
         if self._input_ch.closed or self._closed:
             return
         self._input_ch.send_nowait(text)
-
-    def end_input(self) -> None:
-        self._input_ch.close()
 
     @log_exceptions(logger=logger)
     async def _classify_user_speech(self) -> None:
@@ -187,30 +199,36 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                     ]
                 )
             )
-            response = ""
-            async for chunk in stream:
-                if chunk.delta and chunk.delta.content:
-                    response += chunk.delta.content
-            response = response.strip().lower()
+            response = (await stream.collect()).text.strip().lower()
             if response in set(get_args(AMDCategory)):
-                self._verdit = AMDResult(
-                    phase=self._phase,
-                    category=response,
-                    reason="llm",
-                    transcript=transcript,
-                    delay=time.time() - (self._speech_ended_at or time.time()),
-                )
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    result = AMDResult(
+                        phase=self._phase,
+                        category=response,  # type: ignore[arg-type]
+                        reason="llm",
+                        transcript=transcript,
+                        delay=time.time() - (self._speech_ended_at or time.time()),
+                    )
+                    self._verdict.set_result(result)
+                    if self._machine_silence_reached and not self._closed:
+                        self.emit("amd_result", result)
+                        self.close()
 
-            if self._no_speech_timer is not None:
-                self._no_speech_timer.cancel()
-                self._no_speech_timer = None
+                if self._no_speech_timer is not None:
+                    self._no_speech_timer.cancel()
+                    self._no_speech_timer = None
 
-        async for text in self._input_ch:
-            transcript += text
+        try:
+            async for text in self._input_ch:
+                transcript += " " + text
+                if run_atask is not None and not run_atask.done():
+                    run_atask.cancel()
+                    run_atask = None
+                run_atask = asyncio.create_task(_run(transcript))
+        finally:
             if run_atask is not None and not run_atask.done():
                 run_atask.cancel()
                 run_atask = None
-            run_atask = asyncio.create_task(_run(transcript))
 
     def close(self) -> None:
         if self._no_speech_timer is not None:
@@ -226,3 +244,12 @@ class AMD(EventEmitter[Literal["amd_result"]]):
             self._input_ch.close()
 
         self._closed = True
+        self._started = False
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    @property
+    def closed(self) -> bool:
+        return self._closed

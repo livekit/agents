@@ -30,21 +30,39 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Kelly. You would interact with users via voice."
-            "with that in mind keep your responses concise and to the point."
-            "do not use emojis, asterisks, markdown, or other special characters in your responses."
-            "You are curious and friendly, and have a sense of humor."
-            "you will speak english to the user",
+            instructions=(
+                "You are reaching out to a customer with a phone call. "
+                "You are calling to see if they are home. "
+                "You might encounter an answering machine with a DTFM menu or IVR system. "
+                "If you do, you will try to leave a message to ask them to call back."
+            ),
         )
 
     async def on_enter(self):
-        # when the agent is added to the session, it'll generate a reply
-        # according to its instructions
-        # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
-        self.session.generate_reply(allow_interruptions=False)
+        result = await self.session.amd_detection_result()
+        if result.is_human:
+            logger.info("human answered the call, proceeding with normal conversation")
+            return
 
-    # all functions annotated with @function_tool will be passed to the LLM when this
-    # agent is active
+        with self.session.disable_preemptive_generation():
+            if result.category == "machine-dtf":
+                logger.info("dtfm menu detected, starting IVR detection")
+                await self.session.start_ivr_detection(transcript=result.transcript)
+                return
+
+            if result.category == "machine-vm":
+                logger.info("voicemail detected, leaving a message")
+                speech_handle = self.session.generate_reply(
+                    instructions=(
+                        "You've reached voicemail. Leave a brief message asking "
+                        "the customer to call back."
+                    ),
+                )
+                await speech_handle.wait_for_playout()
+            else:
+                logger.info("mailbox unavailable, ending call")
+            self.session.shutdown()
+
     @function_tool
     async def lookup_weather(
         self, context: RunContext, location: str, latitude: str, longitude: str
@@ -77,34 +95,21 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    # each log entry will include these fields
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
-        # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-        # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
+        amd="openai/gpt-5-mini",
     )
 
-    # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -116,7 +121,6 @@ async def entrypoint(ctx: JobContext):
         summary = usage_collector.get_summary()
         logger.info(f"Usage: {summary}")
 
-    # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
