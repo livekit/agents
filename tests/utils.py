@@ -114,6 +114,7 @@ async def fake_llm_stream(
         yield enc.decode([tok_id])
         await asyncio.sleep(sleep_time)
 
+
 def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
     buffer = utils.merge_frames(frames)
     io_buffer = io.BytesIO()
