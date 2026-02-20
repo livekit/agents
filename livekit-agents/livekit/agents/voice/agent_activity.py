@@ -1518,8 +1518,7 @@ class AgentActivity(RecognitionHooks):
 
         if self._amd_result is not None and not self._session._amd_result_yielded:
             await self._amd_result
-            # cancel preemptive generation if the AMD result is a machine
-            if self._amd_result.done() and self._amd_result.result().is_machine:
+            if self._amd_result.result().is_machine:
                 self._cancel_preemptive_generation()
                 return
 
@@ -2878,6 +2877,10 @@ class AgentActivity(RecognitionHooks):
             return None
         if isinstance(self._session._amd, llm.LLM):
             return AMD(self._session._amd)
-        if self.llm and isinstance(self.llm, llm.LLM):
-            return AMD(self.llm)
+        if self.llm:
+            if isinstance(self.llm, llm.LLM):
+                return AMD(self.llm)
+            elif self._session._amd:
+                logger.warning("amd will be disabled as the LLM provided is not compatible")
+
         return None

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncIterable, Generator, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
@@ -1493,8 +1493,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         await self.aclose()
 
-    @contextmanager
-    def disable_preemptive_generation(self) -> Generator[None, None, None]:
+    @asynccontextmanager
+    async def disable_preemptive_generation(self) -> AsyncGenerator[None, None]:
         prev_val, self.options.preemptive_generation = self.options.preemptive_generation, False
         try:
             yield

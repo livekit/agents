@@ -9,18 +9,12 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    RunContext,
     cli,
     inference,
     metrics,
-    room_io,
 )
-from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-# uncomment to enable Krisp background voice/noise cancellation
-# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
 
@@ -33,7 +27,7 @@ class MyAgent(Agent):
             instructions=(
                 "You are reaching out to a customer with a phone call. "
                 "You are calling to see if they are home. "
-                "You might encounter an answering machine with a DTFM menu or IVR system. "
+                "You might encounter an answering machine with a DTMF menu or IVR system. "
                 "If you do, you will try to leave a message to ask them to call back."
             ),
         )
@@ -44,9 +38,9 @@ class MyAgent(Agent):
             logger.info("human answered the call, proceeding with normal conversation")
             return
 
-        with self.session.disable_preemptive_generation():
-            if result.category == "machine-dtf":
-                logger.info("dtfm menu detected, starting IVR detection")
+        async with self.session.disable_preemptive_generation():
+            if result.category == "machine-dtmf":
+                logger.info("dtmf menu detected, starting IVR detection")
                 await self.session.start_ivr_detection(transcript=result.transcript)
                 return
 
@@ -62,25 +56,6 @@ class MyAgent(Agent):
             else:
                 logger.info("mailbox unavailable, ending call")
             self.session.shutdown()
-
-    @function_tool
-    async def lookup_weather(
-        self, context: RunContext, location: str, latitude: str, longitude: str
-    ):
-        """Called when the user asks for weather related information.
-        Ensure the user's location (city or region) is provided.
-        When given a location, please estimate the latitude and longitude of the location and
-        do not ask the user for them.
-
-        Args:
-            location: The location they are asking for
-            latitude: The latitude of the location, do not ask user for it
-            longitude: The longitude of the location, do not ask user for it
-        """
-
-        logger.info(f"Looking up weather for {location}")
-
-        return "sunny with a temperature of 70 degrees."
 
 
 server = AgentServer()
@@ -126,12 +101,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                # uncomment to enable the Krisp BVC noise cancellation
-                # noise_cancellation=noise_cancellation.BVC(),
-            ),
-        ),
     )
 
 

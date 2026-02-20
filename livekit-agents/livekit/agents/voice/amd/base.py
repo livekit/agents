@@ -23,7 +23,7 @@ class AMDPhase(Enum):
     LONG_SPEECH = 2
 
 
-AMDCategory: TypeAlias = Literal["human", "machine-dtf", "machine-vm", "machine-nvm"]
+AMDCategory: TypeAlias = Literal["human", "machine-dtmf", "machine-vm", "machine-nvm"]
 
 
 @dataclass
@@ -47,7 +47,7 @@ AMD_PROMPT = """Task:
 Classify the call greeting transcript into exactly one of these categories:
 
 human: A person answered (e.g., "Hello?", "This is John.").
-machine-dtf: A prompt to press a key (e.g., "Press 1 to continue").
+machine-dtmf: A prompt to press a key (e.g., "Press 1 to continue").
 machine-vm: A voicemail greeting where leaving a message IS possible.
 machine-nvm: Any greeting indicating it's NOT possible to leave message, eg because mailbox is full, not setup, etc.
 uncertain: For partial transcripts that are ambiguous.
@@ -60,7 +60,7 @@ Input: "Thank you for calling Truly Pizza in Dana Pointe. Our hours of operation
 Output: uncertain
 
 Input: "You for calling Truly Pizza in Dana Pointe. Our hours of operation are 11AM to 8PM, Sunday through Thursday, 11AM to 9PM, Friday and Saturday, and we're closed on Tuesdays. If you'd like to place an order, please press 1 or head to our website to order online for pickup and local delivery."
-Output: machine-dtf
+Output: machine-dtmf
 
 Input: "I'm away from my desk. If you leave a message, I will get back to you."
 Output: machine-vm
@@ -144,7 +144,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
-            self._silence_timer = asyncio.get_event_loop().call_later(
+            self._silence_timer = asyncio.get_running_loop().call_later(
                 max(0, self._machine_silence_threshold - silence_duration),
                 self._silence_timer_callback,
             )
@@ -169,9 +169,9 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                         delay=time.time() - (self._speech_ended_at or time.time()),
                     )
                 )
-                if self._no_speech_timer is not None:
-                    self._no_speech_timer.cancel()
-                    self._no_speech_timer = None
+            if self._no_speech_timer is not None:
+                self._no_speech_timer.cancel()
+                self._no_speech_timer = None
 
         self._machine_silence_reached = True
         if self._verdict.done() and not self.closed:
@@ -200,6 +200,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                 )
             )
             response = (await stream.collect()).text.strip().lower()
+            # we skip the uncertain category for now as new transcripts might be coming in
             if response in set(get_args(AMDCategory)):
                 with contextlib.suppress(asyncio.InvalidStateError):
                     result = AMDResult(
@@ -224,13 +225,16 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                 if run_atask is not None and not run_atask.done():
                     run_atask.cancel()
                     run_atask = None
-                run_atask = asyncio.create_task(_run(transcript))
+                run_atask = asyncio.create_task(_run(transcript.lstrip()))
         finally:
             if run_atask is not None and not run_atask.done():
                 run_atask.cancel()
                 run_atask = None
 
     def close(self) -> None:
+        if not self._verdict.done():
+            self._verdict.cancel()
+
         if self._no_speech_timer is not None:
             self._no_speech_timer.cancel()
             self._no_speech_timer = None
