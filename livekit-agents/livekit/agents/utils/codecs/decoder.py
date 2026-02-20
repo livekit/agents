@@ -195,14 +195,19 @@ class _WavInlineDecoder:
         self._flush_current()
 
     def _flush_current(self) -> None:
-        """Flush AudioByteStream or resampler for the current WAV segment."""
-        if self._resampler is not None:
-            for frame in self._resampler.flush():
-                if frame.samples_per_channel > 0:
+        """Flush AudioByteStream and resampler for the current WAV segment."""
+        if self._bstream is not None:
+            remaining = self._bstream.flush()
+            if self._resampler is not None:
+                for frame in remaining:
+                    for resampled in self._resampler.push(frame):
+                        self._output_ch.send_nowait(resampled)
+                for frame in self._resampler.flush():
+                    if frame.samples_per_channel > 0:
+                        self._output_ch.send_nowait(frame)
+            else:
+                for frame in remaining:
                     self._output_ch.send_nowait(frame)
-        elif self._bstream is not None:
-            for frame in self._bstream.flush():
-                self._output_ch.send_nowait(frame)
 
     def _reset_state(self) -> None:
         """Reset the state machine to parse a new WAV file."""
@@ -289,26 +294,23 @@ class _WavInlineDecoder:
         if self._wave_rate == 0:
             raise ValueError("Invalid WAV file: data chunk before fmt chunk")
 
+        self._bstream = AudioByteStream(
+            sample_rate=self._wave_rate, num_channels=self._wave_channels
+        )
         if self._sample_rate is not None and self._sample_rate != self._wave_rate:
-            # resampling needed — push raw PCM bytes directly to the resampler,
-            # bypassing AudioByteStream to avoid double-handling
             self._resampler = rtc.AudioResampler(
                 input_rate=self._wave_rate,
                 output_rate=self._sample_rate,
                 num_channels=self._wave_channels,
             )
-        else:
-            # no resampling — use AudioByteStream for fixed-size framing only
-            self._bstream = AudioByteStream(
-                sample_rate=self._wave_rate, num_channels=self._wave_channels
-            )
 
     def _push_pcm(self, data: bytes) -> None:
+        assert self._bstream is not None
         if self._resampler is not None:
-            for frame in self._resampler.push(bytearray(data)):
-                self._output_ch.send_nowait(frame)
+            for frame in self._bstream.push(data):
+                for resampled in self._resampler.push(frame):
+                    self._output_ch.send_nowait(resampled)
         else:
-            assert self._bstream is not None
             for frame in self._bstream.push(data):
                 self._output_ch.send_nowait(frame)
 
