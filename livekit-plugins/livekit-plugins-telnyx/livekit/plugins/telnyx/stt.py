@@ -203,8 +203,9 @@ class SpeechStream(stt.RecognizeStream):
             for frame in audio_bstream.flush():
                 await ws.send_bytes(frame.data.tobytes())
 
+            # Don't close the WS here — let recv_task read the final
+            # transcript before the server closes the connection.
             closing_ws = True
-            await ws.close()
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

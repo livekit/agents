@@ -95,6 +95,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._segments_ch = utils.aio.Chan[str]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -139,8 +140,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(self, text: str, output_emitter: tts.AudioEmitter) -> None:
-        # Create a fresh channel for each attempt to support retries
-        self._segments_ch = utils.aio.Chan[str]()
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
