@@ -36,7 +36,8 @@ from . import onnx_model
 from .log import logger
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
-WARNING_THROTTLE_S = 1.0 # throttle warnings to 1 second
+WARNING_THROTTLE_S = 1.0  # throttle warnings to 1 second
+
 
 @dataclass
 class _VADOptions:
@@ -68,6 +69,7 @@ class VAD(agents.vad.VAD):
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
         onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
+        warmup: bool = False,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
@@ -86,7 +88,7 @@ class VAD(agents.vad.VAD):
 
             ```python
             def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load()
+                proc.userdata["vad"] = silero.VAD.load(warmup=True)
 
 
             async def entrypoint(ctx: JobContext):
@@ -107,6 +109,7 @@ class VAD(agents.vad.VAD):
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
             onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
+            warmup (bool): If enabled, warmup ONNX model upon startup to reduce latency spikes when the stream starts.
             deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -138,6 +141,12 @@ class VAD(agents.vad.VAD):
             deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
             sample_rate=sample_rate,
         )
+
+        if warmup:
+            model = onnx_model.OnnxModel(onnx_session=session, sample_rate=sample_rate)
+            inference_f32_data = np.zeros(model.window_size_samples, dtype=np.float32)
+            model(inference_f32_data)
+
         return cls(session=session, opts=opts)
 
     def __init__(
@@ -411,7 +420,7 @@ class VADStream(agents.vad.VADStream):
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
                     now = time.perf_counter()
-                    if now - last_slow_inference_warning >= 1.0:
+                    if now - last_slow_inference_warning >= WARNING_THROTTLE_S:
                         last_slow_inference_warning = now
                         logger.warning(
                             "inference is slower than realtime",
