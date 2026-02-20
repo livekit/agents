@@ -36,7 +36,7 @@ from . import onnx_model
 from .log import logger
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
-
+WARNING_THROTTLE_S = 1.0 # throttle warnings to 1 second
 
 @dataclass
 class _VADOptions:
@@ -310,6 +310,7 @@ class VADStream(agents.vad.VADStream):
         input_copy_remaining_fract = 0.0
 
         extra_inference_time = 0.0
+        last_slow_inference_warning = 0.0
 
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
@@ -409,10 +410,13 @@ class VADStream(agents.vad.VADStream):
                     extra_inference_time + inference_duration - window_duration,
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
-                    logger.warning(
-                        "inference is slower than realtime",
-                        extra={"delay": extra_inference_time},
-                    )
+                    now = time.perf_counter()
+                    if now - last_slow_inference_warning >= 1.0:
+                        last_slow_inference_warning = now
+                        logger.warning(
+                            "inference is slower than realtime",
+                            extra={"delay": extra_inference_time},
+                        )
 
                 def _reset_write_cursor() -> None:
                     nonlocal speech_buffer_index
