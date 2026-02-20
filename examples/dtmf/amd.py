@@ -38,23 +38,25 @@ class MyAgent(Agent):
             logger.info("human answered the call, proceeding with normal conversation")
             return
 
+        # disable preemptive generation to avoid concurrent responses
         async with self.session.disable_preemptive_generation():
-            if result.category == "machine-dtmf":
-                logger.info("dtmf menu detected, starting IVR detection")
-                await self.session.start_ivr_detection(transcript=result.transcript)
-                return
-
-            if result.category == "machine-vm":
-                logger.info("voicemail detected, leaving a message")
-                speech_handle = self.session.generate_reply(
-                    instructions=(
-                        "You've reached voicemail. Leave a brief message asking "
-                        "the customer to call back."
-                    ),
-                )
-                await speech_handle.wait_for_playout()
-            else:
-                logger.info("mailbox unavailable, ending call")
+            match result.category:
+                case "machine-dtmf":
+                    logger.info("dtmf menu detected, starting IVR detection")
+                    await self.session.start_ivr_detection(transcript=result.transcript)
+                    return
+                case "machine-vm":
+                    logger.info("voicemail detected, leaving a message")
+                    speech_handle = self.session.generate_reply(
+                        instructions=(
+                            "You've reached voicemail. Leave a brief message asking "
+                            "the customer to call back."
+                        ),
+                    )
+                    await speech_handle.wait_for_playout()
+                case _:
+                    logger.info("mailbox unavailable, ending call")
+            # shutdown the session if we don't need to proceed with the conversation
             self.session.shutdown()
 
 
