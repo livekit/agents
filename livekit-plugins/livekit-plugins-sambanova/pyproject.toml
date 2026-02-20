@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "livekit", "sambanova", "multilingual", "sst"]
+keywords = ["webrtc", "realtime", "audio", "livekit", "sambanova", "multilingual", "stt"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -21,7 +21,10 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.4.2"]
+dependencies = [
+    "livekit-agents[codecs]>=1.4.2",
+    "aiohttp",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
