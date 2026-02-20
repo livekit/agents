@@ -203,7 +203,6 @@ class SpeechStream(stt.RecognizeStream):
             for frame in audio_bstream.flush():
                 await ws.send_bytes(frame.data.tobytes())
 
-            await asyncio.sleep(1.0)
             closing_ws = True
             await ws.close()
 

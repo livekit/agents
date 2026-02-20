@@ -93,7 +93,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._segments_ch = utils.aio.Chan[str]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -132,12 +131,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
+        except APIConnectionError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(self, text: str, output_emitter: tts.AudioEmitter) -> None:
+        # Create a fresh channel for each attempt to support retries
+        self._segments_ch = utils.aio.Chan[str]()
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
