@@ -2,6 +2,8 @@ import pytest
 
 from livekit.agents import vad
 from livekit.plugins import silero
+from livekit.plugins.silero import onnx_model
+from livekit.plugins.silero import vad as silero_vad
 
 from . import utils
 
@@ -12,6 +14,107 @@ VAD = silero.VAD.load(
     min_speech_duration=0.5,
     min_silence_duration=0.75,
 )
+
+
+def test_vad_load_without_warmup_does_not_run_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    warmup_calls = {"count": 0}
+
+    def _fake_new_inference_session(_force_cpu: bool, onnx_file_path=None) -> object:
+        del onnx_file_path
+        return object()
+
+    class FakeOnnxModel:
+        window_size_samples = 512
+
+        def __init__(self, *, onnx_session: object, sample_rate: int) -> None:
+            del onnx_session, sample_rate
+
+        def __call__(self, _x) -> float:
+            warmup_calls["count"] += 1
+            return 0.0
+
+    monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
+    monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
+
+    silero_vad.VAD.load(warmup=False)
+    assert warmup_calls["count"] == 0
+
+
+def test_vad_load_with_warmup_runs_single_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    warmup_calls = {"count": 0}
+
+    def _fake_new_inference_session(_force_cpu: bool, onnx_file_path=None) -> object:
+        del onnx_file_path
+        return object()
+
+    class FakeOnnxModel:
+        window_size_samples = 512
+
+        def __init__(self, *, onnx_session: object, sample_rate: int) -> None:
+            del onnx_session, sample_rate
+
+        def __call__(self, _x) -> float:
+            warmup_calls["count"] += 1
+            return 0.0
+
+    monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
+    monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
+
+    silero_vad.VAD.load(warmup=True)
+    assert warmup_calls["count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "expected_window_size"),
+    [(8000, 256), (16000, 512)],
+)
+def test_vad_load_with_warmup_uses_expected_window_size(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_rate: int,
+    expected_window_size: int,
+) -> None:
+    warmup_calls = {"shape": None}
+
+    def _fake_new_inference_session(_force_cpu: bool, onnx_file_path=None) -> object:
+        del onnx_file_path
+        return object()
+
+    class FakeOnnxModel:
+        window_size_samples = expected_window_size
+
+        def __init__(self, *, onnx_session: object, sample_rate: int) -> None:
+            del onnx_session, sample_rate
+
+        def __call__(self, x) -> float:
+            warmup_calls["shape"] = x.shape
+            return 0.0
+
+    monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
+    monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
+
+    silero_vad.VAD.load(sample_rate=sample_rate, warmup=True)
+    assert warmup_calls["shape"] == (expected_window_size,)
+
+
+def test_vad_load_with_warmup_propagates_warmup_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_new_inference_session(_force_cpu: bool, onnx_file_path=None) -> object:
+        del onnx_file_path
+        return object()
+
+    class FakeOnnxModel:
+        window_size_samples = 512
+
+        def __init__(self, *, onnx_session: object, sample_rate: int) -> None:
+            del onnx_session, sample_rate
+
+        def __call__(self, _x) -> float:
+            raise RuntimeError("warmup failed")
+
+    monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
+    monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
+
+    with pytest.raises(RuntimeError, match="warmup failed"):
+        silero_vad.VAD.load(warmup=True)
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
