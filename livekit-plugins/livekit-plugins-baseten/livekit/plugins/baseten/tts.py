@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+import weakref
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -26,15 +27,21 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .log import logger
+
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
+
+# End-of-text sentinel expected by Baseten TTS WebSocket API
+_END_SENTINEL = "__END__"
 
 
 @dataclass
@@ -42,9 +49,30 @@ class _TTSOptions:
     language: str
     voice: str
     temperature: float
-    ws_url: str | None
     max_tokens: int
     buffer_size: int
+    api_key: str
+    model_endpoint: str
+
+    def get_ws_url(self) -> str:
+        """Convert HTTP endpoint to WebSocket URL."""
+        # model_endpoint is typically like:
+        # https://model-{id}.api.baseten.co/environments/production/predict
+        # We need: wss://model-{id}.api.baseten.co/environments/production/websocket
+        url = self.model_endpoint
+        if url.startswith("https://"):
+            url = "wss://" + url[8:]
+        elif url.startswith("http://"):
+            url = "ws://" + url[7:]
+
+        # Replace /predict with /websocket if present
+        if url.endswith("/predict"):
+            url = url[:-8] + "/websocket"
+        elif not url.endswith("/websocket"):
+            # Append /websocket if not already there
+            url = url.rstrip("/") + "/websocket"
+
+        return url
 
 
 class TTS(tts.TTS):
@@ -53,31 +81,36 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model_endpoint: str | None = None,
-        ws_url: str | None = None,
         voice: str = "tara",
         language: str = "en",
         temperature: float = 0.6,
         max_tokens: int = 2000,
         buffer_size: int = 10,
         http_session: aiohttp.ClientSession | None = None,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
-        Initialize the Baseten TTS.
+        Initialize the Baseten TTS with streaming support.
 
         Args:
-            api_key: Baseten API key, or ``BASETEN_API_KEY`` env var.
-            model_endpoint: Baseten model HTTP endpoint for non-streaming synthesis,
-                or ``BASETEN_MODEL_ENDPOINT`` env var.
-            ws_url: Baseten WebSocket URL for streaming synthesis,
-                or ``BASETEN_WS_URL`` env var. Example:
-                ``wss://model-{MODEL_ID}.api.baseten.co/environments/production/websocket``
-            voice: Speaker voice. Defaults to "tara".
-            language: Language code. Defaults to "en".
-            temperature: Sampling temperature. Defaults to 0.6.
-            max_tokens: Maximum tokens for WebSocket streaming synthesis. Defaults to 2000.
-            buffer_size: Number of words per chunk for WebSocket streaming. Defaults to 10.
-            http_session: Optional aiohttp session to reuse.
+            api_key (str): Baseten API key, or `BASETEN_API_KEY` env var.
+            model_endpoint (str): Baseten model endpoint, or `BASETEN_MODEL_ENDPOINT` env var.
+                For streaming, this should be the WebSocket endpoint or the HTTP endpoint
+                (which will be converted to WebSocket automatically).
+            voice (str): Speaker voice. Defaults to "tara".
+            language (str): Language code. Defaults to "en".
+            temperature (float): Sampling temperature. Defaults to 0.6.
+            max_tokens (int): Maximum tokens for generation. Defaults to 2000.
+            buffer_size (int): Words per chunk for streaming. Defaults to 10.
+            http_session: Optional aiohttp session for connection pooling.
+            tokenizer: Optional sentence tokenizer for streaming input.
         """
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=True),
+            sample_rate=24000,
+            num_channels=1,
+        )
+
         api_key = api_key or os.environ.get("BASETEN_API_KEY")
 
         if not api_key:
@@ -88,37 +121,30 @@ class TTS(tts.TTS):
             )
 
         model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
-        ws_url = ws_url or os.environ.get("BASETEN_WS_URL")
 
-        if not model_endpoint and not ws_url:
+        if not model_endpoint:
             raise ValueError(
-                "At least one of model_endpoint or ws_url is required. "
-                "Set model_endpoint (BASETEN_MODEL_ENDPOINT) for HTTP synthesis, "
-                "or ws_url (BASETEN_WS_URL) for WebSocket streaming."
+                "The model endpoint is required, you can find it in the Baseten dashboard"
             )
-
-        super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=ws_url is not None),
-            sample_rate=24000,
-            num_channels=1,
-        )
-
-        self._api_key = api_key
-        self._model_endpoint = model_endpoint
 
         self._opts = _TTSOptions(
             voice=voice,
             language=language,
             temperature=temperature,
-            ws_url=ws_url,
             max_tokens=max_tokens,
             buffer_size=buffer_size,
+            api_key=api_key,
+            model_endpoint=model_endpoint,
         )
         self._session = http_session
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+        )
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return "orpheus-tts"
 
     @property
     def provider(self) -> str:
@@ -153,37 +179,32 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        if not self._model_endpoint:
-            raise ValueError(
-                "model_endpoint is required for non-streaming synthesis. "
-                "Provide it via the constructor or BASETEN_MODEL_ENDPOINT env var."
-            )
         return ChunkedStream(
             tts=self,
-            api_key=self._api_key,
             input_text=text,
-            model_endpoint=self._model_endpoint,
             conn_options=conn_options,
         )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        if not self._opts.ws_url:
-            raise ValueError(
-                "ws_url is required for streaming synthesis. "
-                "Provide it via the constructor or BASETEN_WS_URL env var."
-            )
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):
+    """Synthesize text using the HTTP endpoint (non-streaming, for single requests)."""
+
     def __init__(
         self,
         *,
         tts: TTS,
-        api_key: str,
-        model_endpoint: str,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -194,16 +215,19 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         self._tts: TTS = tts
-        self._api_key = api_key
-        self._model_endpoint = model_endpoint
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            # Use the original HTTP endpoint for non-streaming
+            http_endpoint = self._opts.model_endpoint
+            if http_endpoint.endswith("/websocket"):
+                http_endpoint = http_endpoint[:-10] + "/predict"
+
             async with self._tts._ensure_session().post(
-                self._model_endpoint,
+                http_endpoint,
                 headers={
-                    "Authorization": f"Api-Key {self._api_key}",
+                    "Authorization": f"Api-Key {self._opts.api_key}",
                 },
                 json={
                     "prompt": self._input_text,
@@ -238,12 +262,9 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    """Stream text to Baseten TTS via WebSocket and receive audio chunks."""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -258,68 +279,99 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        assert self._opts.ws_url is not None
+        ws_url = self._opts.get_ws_url()
+        headers = {"Authorization": f"Api-Key {self._opts.api_key}"}
 
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+
+        async def _input_task() -> None:
+            """Read input text and feed to tokenizer."""
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
+                    sent_tokenizer_stream.flush()
                     continue
-                words = data.split()
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
+
+        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            """Send tokenized sentences as words to WebSocket."""
+            async for ev in sent_tokenizer_stream:
+                # Split sentence into words and send each word
+                words = ev.token.strip().split()
                 for word in words:
                     self._mark_started()
                     await ws.send_str(word)
-            await ws.send_str("__END__")
+
+            # Signal end of text
+            await ws.send_str(_END_SENTINEL)
+            logger.debug("Baseten TTS: sent END sentinel")
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            segment_started = False
+            """Receive audio chunks from WebSocket."""
+            segment_id = utils.shortuuid()
+            output_emitter.start_segment(segment_id=segment_id)
+
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    if not segment_started:
-                        output_emitter.start_segment(segment_id=request_id)
-                        segment_started = True
+                    # Raw PCM audio data
                     output_emitter.push(msg.data)
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    logger.debug("Baseten TTS: WebSocket closed")
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError()
-            if segment_started:
-                output_emitter.end_segment()
+                    raise APIConnectionError(f"WebSocket error: {ws.exception()}")
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    # Baseten might send JSON messages for errors or status
+                    logger.debug(f"Baseten TTS: received text message: {msg.data}")
 
+            output_emitter.end_input()
 
         try:
-            session = self._tts._ensure_session()
-            async with session.ws_connect(
-                self._opts.ws_url,
-                headers={"Authorization": f"Api-Key {self._tts._api_key}"},
+            async with self._tts._ensure_session().ws_connect(
+                ws_url,
+                headers=headers,
                 ssl=ssl_context,
+                timeout=aiohttp.ClientTimeout(
+                    total=None,  # No total timeout for streaming
+                    sock_connect=self._conn_options.timeout,
+                ),
             ) as ws:
-                await ws.send_json(
-                    {
-                        "voice": self._opts.voice,
-                        "max_tokens": self._opts.max_tokens,
-                        "buffer_size": self._opts.buffer_size,
-                    }
-                )
+                logger.debug(f"Baseten TTS: WebSocket connected to {ws_url}")
+
+                # Send metadata first
+                metadata = {
+                    "voice": self._opts.voice,
+                    "max_tokens": self._opts.max_tokens,
+                    "buffer_size": self._opts.buffer_size,
+                }
+                await ws.send_json(metadata)
+                logger.debug(f"Baseten TTS: sent metadata {metadata}")
 
                 tasks = [
+                    asyncio.create_task(_input_task()),
                     asyncio.create_task(_send_task(ws)),
                     asyncio.create_task(_recv_task(ws)),
                 ]
+
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
+
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
-        except (APIConnectionError, APIStatusError, APITimeoutError):
-            raise
+        except aiohttp.ClientError as e:
+            logger.exception("Baseten TTS WebSocket connection error")
+            raise APIConnectionError() from e
         except Exception as e:
+            logger.exception("Baseten TTS error")
             raise APIConnectionError() from e
