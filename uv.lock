@@ -2042,15 +2042,14 @@ wheels = [
 
 [[package]]
 name = "livekit-browser"
-version = "0.1.4"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "livekit" },
-    { name = "livekit-agents" },
     { name = "numpy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/af/83ec6718f4ee00a130fb4e2fca196a69099aa4a73b932afd1ac3af5cf6c2/livekit_browser-0.1.4-py3-none-any.whl", hash = "sha256:9b22edf6b349ced35381cb6f775ac2680de4d896d3986689d9f4b886d21895e6", size = 14890, upload-time = "2026-02-17T03:27:31.882Z" },
+    { url = "https://files.pythonhosted.org/packages/40/14/20753ed93a770fa84af29fcaae062846302e1d5597357074bad09dbc2cad/livekit_browser-0.1.2-py3-none-any.whl", hash = "sha256:27206445da76711bc4590f9e2d2b15dfd576afd30770d4ecb1d7918c21ae9612", size = 15369, upload-time = "2026-02-16T05:41:14.718Z" },
 ]
 
 [[package]]
@@ -2215,7 +2214,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-browser", specifier = ">=0.1.4" },
+    { name = "livekit-browser", specifier = ">=0.1.0" },
 ]
 
 [[package]]
@@ -2699,7 +2698,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "speechmatics-voice", extras = ["smart"], specifier = "~=0.2.8" },
+    { name = "speechmatics-voice", extras = ["smart"], specifier = ">=0.2.8" },
 ]
 
 [[package]]
