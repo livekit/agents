@@ -566,6 +566,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
             )
             self._worker_load: float = 0.0
+            self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
@@ -1148,17 +1149,47 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
+    async def _refresh_worker_load(self) -> None:
+        """Refresh _worker_load by running load_fnc. Used before availability checks
+        so concurrent job requests see up-to-date load (fixes race with periodic interval).
+        """
+        if self._load_fnc is None:
+            return
+
+        def load_fnc() -> float:
+            assert self._load_fnc is not None
+            signature = inspect.signature(self._load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._load_fnc()  # type: ignore
+            return self._load_fnc(self)  # type: ignore
+
+        self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+        telemetry.metrics._update_worker_load(self._worker_load)
+
+    def _get_effective_load(self) -> float:
+        """Current load including reserved slots (accepted but not yet launched)."""
+        active_jobs = self.active_jobs
+        job_load_estimate = self._worker_load / len(active_jobs) if active_jobs else 1.0
+        return self._worker_load + self._reserved_slots * job_load_estimate
+
     def _is_available(self) -> bool:
         if self._draining:
             return False
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        return self._worker_load < load_threshold
+        if math.isinf(load_threshold):
+            return True
+
+        # Use effective load so we don't over-accept when two requests arrive
+        # before either job appears in active_jobs.
+        return self._get_effective_load() < load_threshold
 
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1182,44 +1213,50 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
 
-            availability_resp = agent.WorkerMessage()
-            availability_resp.availability.job_id = msg.job.id
-            availability_resp.availability.available = True
-            availability_resp.availability.participant_identity = args.identity
-            availability_resp.availability.participant_name = args.name
-            availability_resp.availability.participant_metadata = args.metadata
-            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
-                self._agent_name
-            )
-            if args.attributes:
-                availability_resp.availability.participant_attributes.update(args.attributes)
-
-            wait_assignment = asyncio.Future[agent.JobAssignment]()
-            self._pending_assignments[job_req.id] = wait_assignment
-            await self._queue_msg(availability_resp)
-
-            # the job was accepted by the user, wait for the server assignment
+            # Reserve a slot so concurrent availability checks see updated load
+            # until this job is launched (or we reject/timeout).
+            self._reserved_slots += 1
             try:
-                await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
-            except asyncio.TimeoutError:
-                self._pending_assignments.pop(job_req.id, None)
-                logger.warning(
-                    f"assignment for job {job_req.id} timed out",
-                    extra={"job_request": job_req, "agent_name": self._agent_name},
+                availability_resp = agent.WorkerMessage()
+                availability_resp.availability.job_id = msg.job.id
+                availability_resp.availability.available = True
+                availability_resp.availability.participant_identity = args.identity
+                availability_resp.availability.participant_name = args.name
+                availability_resp.availability.participant_metadata = args.metadata
+                availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
+                    self._agent_name
                 )
-                raise AssignmentTimeoutError() from None
+                if args.attributes:
+                    availability_resp.availability.participant_attributes.update(args.attributes)
 
-            job_assign = wait_assignment.result()
-            running_info = RunningJobInfo(
-                accept_arguments=args,
-                job=msg.job,
-                url=job_assign.url or self._ws_url,
-                token=job_assign.token,
-                worker_id=self._id,
-                fake_job=False,
-            )
+                wait_assignment = asyncio.Future[agent.JobAssignment]()
+                self._pending_assignments[job_req.id] = wait_assignment
+                await self._queue_msg(availability_resp)
 
-            await self._proc_pool.launch_job(running_info)
+                # the job was accepted by the user, wait for the server assignment
+                try:
+                    await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    self._pending_assignments.pop(job_req.id, None)
+                    logger.warning(
+                        f"assignment for job {job_req.id} timed out",
+                        extra={"job_request": job_req, "agent_name": self._agent_name},
+                    )
+                    raise AssignmentTimeoutError() from None
+
+                job_assign = wait_assignment.result()
+                running_info = RunningJobInfo(
+                    accept_arguments=args,
+                    job=msg.job,
+                    url=job_assign.url or self._ws_url,
+                    token=job_assign.token,
+                    worker_id=self._id,
+                    fake_job=False,
+                )
+
+                await self._proc_pool.launch_job(running_info)
+            finally:
+                self._reserved_slots -= 1
 
         job_req = JobRequest(job=msg.job, on_reject=_on_reject, on_accept=_on_accept)
 
@@ -1297,7 +1334,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        is_full = self._worker_load >= load_threshold
+        effective_load = self._get_effective_load()
+        is_full = effective_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (
@@ -1309,7 +1347,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # only log if status has changed
         if self._previous_status != status and not self._draining:
             self._previous_status = status
-            extra = {"load": self._worker_load, "threshold": load_threshold}
+            extra = {"load": effective_load, "threshold": load_threshold}
             if is_full:
                 logger.info("worker is at full capacity, marking as unavailable", extra=extra)
             else:
