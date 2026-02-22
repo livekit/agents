@@ -24,9 +24,8 @@ logger = logging.getLogger(__name__)
 
 _POST_ACTION_DELAY = 0.3
 
-# Data channel topics
-_CHAT_TOPIC = "agent-chat"
-_STATUS_TOPIC = "agent-status"
+_CHAT_TOPIC = "browser-agent-chat"
+_STATUS_TOPIC = "browser-agent-status"
 
 
 class BrowserAgent:
@@ -97,7 +96,6 @@ class BrowserAgent:
         self._started = True
         self._room = room
 
-        # 1. Create browser context and page
         self._browser_ctx = BrowserContext(dev_mode=False)
         await self._browser_ctx.initialize()
 
@@ -108,11 +106,9 @@ class BrowserAgent:
             framerate=self._framerate,
         )
 
-        # 2. Create session and publish tracks
         self._session = BrowserSession(page=self._page, room=room)
         await self._session.start()
 
-        # 3. Create computer tool
         from livekit.plugins.anthropic.computer_tool import ComputerTool
 
         self._page_actions = PageActions(page=self._page)
@@ -122,7 +118,6 @@ class BrowserAgent:
             height=self._height,
         )
 
-        # 4. Create navigation tools (schema only — dispatched in _run_llm_loop)
         @function_tool(name="navigate", description="Navigate the browser to a URL.")
         async def _navigate(url: str) -> None:
             pass
@@ -137,14 +132,11 @@ class BrowserAgent:
 
         self._nav_tools: list[llm.Tool] = [_navigate, _go_back, _go_forward]
 
-        # 5. Initialize chat context
         self._chat_ctx = llm.ChatContext()
         self._chat_ctx.add_message(role="system", content=self._instructions)
 
-        # 6. Grant agent focus
         await self._session.reclaim_agent_focus()
 
-        # 7. Listen for chat messages on data channel
         if self._chat_enabled:
 
             @room.on("data_received")
@@ -161,7 +153,6 @@ class BrowserAgent:
 
             self._on_chat_data = _on_chat_data
 
-        # 8. Start the agent loop
         self._agent_loop_task = asyncio.create_task(self._agent_loop())
 
     async def send_message(self, text: str) -> None:

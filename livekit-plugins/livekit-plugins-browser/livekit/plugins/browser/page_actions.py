@@ -45,8 +45,6 @@ class PageActions:
     def last_frame(self) -> rtc.VideoFrame | None:
         return self._last_frame
 
-    # -- mouse actions -------------------------------------------------------
-
     async def left_click(self, x: int, y: int, *, modifiers: str | None = None) -> None:
         mod_keys = _parse_modifier_keys(modifiers)
         await self._page.send_mouse_move(x, y)
@@ -123,8 +121,6 @@ class PageActions:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_wheel(x, y, delta_x, delta_y)
 
-    # -- keyboard actions ----------------------------------------------------
-
     async def type_text(self, text: str) -> None:
         for ch in text:
             char_code = ord(ch)
@@ -184,8 +180,6 @@ class PageActions:
     async def wait(self) -> None:
         await asyncio.sleep(1)
 
-    # -- navigation ----------------------------------------------------------
-
     async def navigate(self, url: str) -> None:
         await self._page.navigate(url)
 
@@ -195,13 +189,8 @@ class PageActions:
     async def go_forward(self) -> None:
         await self._page.go_forward()
 
-    # -- lifecycle -----------------------------------------------------------
-
     def aclose(self) -> None:
         self._page.off("paint", self._on_paint)
-
-
-# -- helpers -----------------------------------------------------------------
 
 
 def _parse_modifier_keys(text: str | None) -> list[str]:
@@ -236,14 +225,14 @@ async def _send_key_combo(page: BrowserPage, text: str) -> None:
         else:
             main_keys.append(k)
 
-    # Press modifier keys down
+    # press modifiers down
     for k in keys:
         if k in MODIFIER_MAP:
             vk = KEY_NAME_TO_VK.get(k, 0)
             nkc = NATIVE_KEY_CODES.get(vk, 0)
             await page.send_key_event(RAWKEYDOWN, modifiers, vk, nkc, 0)
 
-    # Press and release main keys
+    # press and release main keys
     for k in main_keys:
         vk = KEY_NAME_TO_VK.get(k, 0)
         if vk == 0 and len(k) == 1:
@@ -255,7 +244,7 @@ async def _send_key_combo(page: BrowserPage, text: str) -> None:
             await page.send_key_event(CHAR, modifiers, char_code, nkc, char_code)
         await page.send_key_event(KEYUP, modifiers, vk, 0, 0)
 
-    # Release modifier keys
+    # release modifiers
     for k in reversed(keys):
         if k in MODIFIER_MAP:
             vk = KEY_NAME_TO_VK.get(k, 0)
