@@ -20,11 +20,14 @@ See https://docs.livekit.io/agents/integrations/llm/anthropic/ for more informat
 from .llm import LLM, LLMStream
 from .log import logger
 from .models import ChatModels
+from .tools import AnthropicTool, ComputerUse
 from .version import __version__
 
 __all__ = [
     "LLM",
     "LLMStream",
+    "AnthropicTool",
+    "ComputerUse",
     "ChatModels",
     "logger",
     "__version__",

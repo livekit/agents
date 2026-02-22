@@ -15,10 +15,6 @@ from ._keys import (
     CHAR,
     KEY_NAME_TO_VK,
     KEYUP,
-    MOD_ALT,
-    MOD_CTRL,
-    MOD_META,
-    MOD_SHIFT,
     MODIFIER_MAP,
     NATIVE_KEY_CODES,
     NON_CHAR_KEYS,
@@ -27,13 +23,12 @@ from ._keys import (
 
 logger = logging.getLogger(__name__)
 
-# Delay after actions to let the page repaint before screenshot
 _POST_ACTION_DELAY = 0.3
 
 
 def _encode_frame_png(frame: rtc.VideoFrame) -> str:
     """Encode a VideoFrame as a base64 PNG string."""
-    from livekit.agents.utils.images import encode, EncodeOptions
+    from livekit.agents.utils.images import EncodeOptions, encode
 
     png_bytes = encode(frame, EncodeOptions(format="PNG"))
     return base64.b64encode(png_bytes).decode("utf-8")
@@ -76,18 +71,13 @@ class ComputerTool(llm.Toolset):
         self._height = height
         self._last_frame: rtc.VideoFrame | None = None
 
-        # Subscribe to paint events for screenshots
         self._page.on("paint", self._on_paint)
 
-        self._provider_tool = llm.ProviderTool(
-            id="computer",
-            definition={
-                "type": "computer_20251124",
-                "name": "computer",
-                "display_width_px": width,
-                "display_height_px": height,
-                "display_number": 1,
-            },
+        from livekit.plugins.anthropic.tools import ComputerUse
+
+        self._provider_tool = ComputerUse(
+            display_width_px=width,
+            display_height_px=height,
         )
 
     def _on_paint(self, data: Any) -> None:
@@ -111,11 +101,8 @@ class ComputerTool(llm.Toolset):
 
         await handler(self, **kwargs)
 
-        # Small delay to let the browser repaint
         await asyncio.sleep(_POST_ACTION_DELAY)
         return await self._take_screenshot()
-
-    # ---- Action implementations ----
 
     async def _action_screenshot(self, **kwargs: Any) -> None:
         pass  # Just return the screenshot
@@ -123,7 +110,7 @@ class ComputerTool(llm.Toolset):
     async def _action_left_click(self, **kwargs: Any) -> None:
         coord = kwargs.get("coordinate", [0, 0])
         x, y = int(coord[0]), int(coord[1])
-        modifiers = _text_to_modifiers(kwargs.get("text"))
+        _text_to_modifiers(kwargs.get("text"))
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 0, False, 1)
         await self._page.send_mouse_click(x, y, 0, True, 1)
@@ -173,11 +160,11 @@ class ComputerTool(llm.Toolset):
         sx, sy = int(start[0]), int(start[1])
         ex, ey = int(end[0]), int(end[1])
         await self._page.send_mouse_move(sx, sy)
-        await self._page.send_mouse_click(sx, sy, 0, False, 1)  # mousedown
+        await self._page.send_mouse_click(sx, sy, 0, False, 1)
         await asyncio.sleep(0.05)
         await self._page.send_mouse_move(ex, ey)
         await asyncio.sleep(0.05)
-        await self._page.send_mouse_click(ex, ey, 0, True, 1)  # mouseup
+        await self._page.send_mouse_click(ex, ey, 0, True, 1)
 
     async def _action_left_mouse_down(self, **kwargs: Any) -> None:
         coord = kwargs.get("coordinate", [0, 0])
@@ -215,7 +202,6 @@ class ComputerTool(llm.Toolset):
         text = kwargs.get("text", "")
         for ch in text:
             code = ord(ch)
-            # Send CHAR event for each character
             await self._page.send_key_event(CHAR, 0, code, 0, code)
             await asyncio.sleep(0.01)
 
@@ -228,7 +214,6 @@ class ComputerTool(llm.Toolset):
         duration = float(kwargs.get("duration", 0.5))
         keys = [k.strip().lower() for k in text.split("+")]
 
-        # Press all keys down
         modifiers = 0
         for key in keys:
             if key in MODIFIER_MAP:
@@ -243,7 +228,6 @@ class ComputerTool(llm.Toolset):
 
         await asyncio.sleep(duration)
 
-        # Release all keys in reverse order
         for key in reversed(keys):
             vk = KEY_NAME_TO_VK.get(key, 0)
             await self._page.send_key_event(KEYUP, 0, vk, 0, 0)
@@ -307,7 +291,6 @@ async def _send_key_combo(page: BrowserPage, text: str) -> None:
             await page.send_key_event(KEYUP, 0, vk, 0, 0)
 
 
-# Action dispatch table
 _ACTION_HANDLERS: dict[str, Any] = {
     "screenshot": ComputerTool._action_screenshot,
     "left_click": ComputerTool._action_left_click,

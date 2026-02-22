@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import logging
-from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
@@ -152,21 +151,17 @@ class BrowserAgent:
 
         while True:
             try:
-                # Wait for the next user message
                 text = await self._pending_messages.get()
 
-                # If agent was interrupted, reclaim focus
                 if self._session.agent_interrupted.is_set():
                     self._session.agent_interrupted.clear()
                     self._session.set_agent_focus(True)
                     await self._page.send_focus_event(True)  # type: ignore[union-attr]
 
-                # Add user message to chat context
                 self._chat_ctx.add_message(role="user", content=text)
 
                 await self._send_status("thinking")
 
-                # Run the LLM loop (may involve multiple tool calls)
                 await self._run_llm_loop()
 
                 await self._send_status("idle")
@@ -187,37 +182,30 @@ class BrowserAgent:
         tool_ctx = llm.ToolContext(all_tools)
 
         while True:
-            # Check for interrupt
             if self._session.agent_interrupted.is_set():
                 logger.info("agent interrupted by human, pausing")
                 await self._send_chat("(paused — you have control)")
                 return
 
-            # Call LLM
             response = await self._llm.chat(
                 chat_ctx=self._chat_ctx,
                 tools=all_tools,
             ).collect()
 
-            # Handle text response
             if response.text:
                 self._chat_ctx.add_message(role="assistant", content=response.text)
                 await self._send_chat(response.text)
 
-            # No tool calls — done
             if not response.tool_calls:
                 return
 
-            # Process tool calls
             for tc in response.tool_calls:
-                # Check interrupt between tool calls
                 if self._session.agent_interrupted.is_set():
                     logger.info("agent interrupted between tool calls")
                     await self._send_chat("(paused — you have control)")
                     return
 
                 if tc.name == "computer":
-                    # Computer tool — execute directly
                     import json as _json
 
                     args = _json.loads(tc.arguments or "{}")
@@ -227,7 +215,6 @@ class BrowserAgent:
 
                     screenshot_content = await self._computer_tool.execute(action, **args)
 
-                    # Add function call and output to chat context
                     fnc_call = llm.FunctionCall(
                         call_id=tc.call_id,
                         name=tc.name,
@@ -236,14 +223,12 @@ class BrowserAgent:
                     fnc_output = llm.FunctionCallOutput(
                         call_id=tc.call_id,
                         name=tc.name,
-                        output="screenshot taken",
-                        content=screenshot_content,
+                        output=json.dumps(screenshot_content),
                         is_error=False,
                     )
                     self._chat_ctx.items.append(fnc_call)
                     self._chat_ctx.items.append(fnc_output)
                 else:
-                    # Regular function tool — use standard execution
                     result = await llm.execute_function_call(tc, tool_ctx)
                     self._chat_ctx.items.append(result.fnc_call)
                     if result.fnc_call_out:

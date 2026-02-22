@@ -53,8 +53,6 @@ def build_native_keycode_map() -> dict[int, int]:
 
 NATIVE_KEY_CODES = build_native_keycode_map()
 
-# Key name to Windows virtual key code mapping
-# Used by ComputerTool to convert Anthropic key names to CEF key events
 KEY_NAME_TO_VK: dict[str, int] = {
     # Letters
     **{chr(c): c - 32 for c in range(ord("a"), ord("z") + 1)},  # a=65 .. z=90
@@ -87,7 +85,18 @@ KEY_NAME_TO_VK: dict[str, int] = {
     "pagedown": 34,
     "page_down": 34,
     # Function keys
-    **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
+    "f1": 0x70,
+    "f2": 0x71,
+    "f3": 0x72,
+    "f4": 0x73,
+    "f5": 0x74,
+    "f6": 0x75,
+    "f7": 0x76,
+    "f8": 0x77,
+    "f9": 0x78,
+    "f10": 0x79,
+    "f11": 0x7A,
+    "f12": 0x7B,
     # Modifier keys (as standalone)
     "shift": 16,
     "control": 17,
@@ -136,10 +145,22 @@ CHAR = 3
 
 # Keys that should NOT receive a CHAR event (handled by RAWKEYDOWN alone)
 NON_CHAR_KEYS = {
-    8, 9, 13, 27,  # Backspace, Tab, Enter, Escape
-    37, 38, 39, 40,  # Arrow keys
-    33, 34, 35, 36,  # Page Up/Down, End, Home
+    8,
+    9,
+    13,
+    27,  # Backspace, Tab, Enter, Escape
+    37,
+    38,
+    39,
+    40,  # Arrow keys
+    33,
+    34,
+    35,
+    36,  # Page Up/Down, End, Home
     46,  # Delete
-    16, 17, 18, 91,  # Modifier keys
+    16,
+    17,
+    18,
+    91,  # Modifier keys
     *range(0x70, 0x7C),  # F1-F12
 }

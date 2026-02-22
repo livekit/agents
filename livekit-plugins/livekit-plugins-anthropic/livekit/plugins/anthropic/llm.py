@@ -153,18 +153,22 @@ class LLM(llm.LLM):
 
         beta_flag: str | None = None
         if tools:
-            tool_ctx = llm.ToolContext(tools)
-            extra["tools"] = tool_ctx.parse_function_tools("anthropic")
+            from .tools import AnthropicTool
 
-            # Detect computer-use tools and set the appropriate beta header
-            for t in tool_ctx.provider_tools:
-                tool_type = t.definition.get("type", "") if t.definition else ""
-                if "computer_20251124" in tool_type:
-                    beta_flag = "computer-use-2025-11-24"
-                    break
-                elif "computer_20250124" in tool_type:
-                    beta_flag = "computer-use-2025-01-24"
-                    break
+            tool_ctx = llm.ToolContext(tools)
+            tool_schemas = tool_ctx.parse_function_tools("anthropic")
+
+            for tool in tool_ctx.provider_tools:
+                if isinstance(tool, AnthropicTool):
+                    tool_dict = tool.to_dict()
+                    tool_schemas.append(tool_dict)
+                    tool_type = tool_dict.get("type", "")
+                    if "computer_20251124" in tool_type:
+                        beta_flag = "computer-use-2025-11-24"
+                    elif "computer_20250124" in tool_type:
+                        beta_flag = "computer-use-2025-01-24"
+
+            extra["tools"] = tool_schemas
 
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
@@ -225,7 +229,7 @@ class LLM(llm.LLM):
         if beta_flag:
             stream = self._client.beta.messages.create(
                 betas=[beta_flag],
-                messages=messages,
+                messages=messages,  # type: ignore[arg-type]
                 model=self._opts.model,
                 stream=True,
                 timeout=conn_options.timeout,
@@ -242,7 +246,7 @@ class LLM(llm.LLM):
 
         return LLMStream(
             self,
-            anthropic_stream=stream,
+            anthropic_stream=stream,  # type: ignore[arg-type]
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,

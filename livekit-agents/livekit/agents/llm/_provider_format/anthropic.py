@@ -61,7 +61,13 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
-            result_content = msg.content if msg.content is not None else msg.output
+            result_content: list[Any] | str = msg.output
+            try:
+                parsed = json.loads(msg.output)
+                if isinstance(parsed, list):
+                    result_content = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
             content.append(
                 {
                     "tool_use_id": msg.call_id,
@@ -132,9 +138,5 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
                     "input_schema": info.raw_schema.get("parameters", {}),
                 }
             )
-
-    for tool in tool_ctx.provider_tools:
-        if tool.definition:
-            schemas.append(tool.definition)
 
     return schemas
