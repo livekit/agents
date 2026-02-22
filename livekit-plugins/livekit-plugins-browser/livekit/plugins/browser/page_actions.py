@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 from typing import Any
 
 from livekit import rtc
@@ -19,8 +18,6 @@ from ._keys import (
     RAWKEYDOWN,
 )
 
-Coordinate = Sequence[float]
-
 
 class PageActions:
     """Typed input API for a CEF BrowserPage with frame capture.
@@ -28,7 +25,7 @@ class PageActions:
     Usage::
 
         actions = PageActions(page=page)
-        await actions.left_click([100, 200])
+        await actions.left_click(100, 200)
         frame = actions.last_frame
     """
 
@@ -46,8 +43,7 @@ class PageActions:
 
     # -- mouse actions -------------------------------------------------------
 
-    async def left_click(self, coordinate: Coordinate, *, modifiers: str | None = None) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def left_click(self, x: int, y: int, *, modifiers: str | None = None) -> None:
         mod_keys = _parse_modifier_keys(modifiers)
         await self._page.send_mouse_move(x, y)
         await _press_modifiers(self._page, mod_keys)
@@ -55,22 +51,19 @@ class PageActions:
         await self._page.send_mouse_click(x, y, 0, True, 1)
         await _release_modifiers(self._page, mod_keys)
 
-    async def right_click(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def right_click(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 2, False, 1)
         await self._page.send_mouse_click(x, y, 2, True, 1)
 
-    async def double_click(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def double_click(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 0, False, 1)
         await self._page.send_mouse_click(x, y, 0, True, 1)
         await self._page.send_mouse_click(x, y, 0, False, 2)
         await self._page.send_mouse_click(x, y, 0, True, 2)
 
-    async def triple_click(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def triple_click(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 0, False, 1)
         await self._page.send_mouse_click(x, y, 0, True, 1)
@@ -79,44 +72,38 @@ class PageActions:
         await self._page.send_mouse_click(x, y, 0, False, 3)
         await self._page.send_mouse_click(x, y, 0, True, 3)
 
-    async def middle_click(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def middle_click(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 1, False, 1)
         await self._page.send_mouse_click(x, y, 1, True, 1)
 
-    async def mouse_move(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def mouse_move(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
 
-    async def left_click_drag(self, *, start: Coordinate, end: Coordinate) -> None:
-        sx, sy = int(start[0]), int(start[1])
-        ex, ey = int(end[0]), int(end[1])
-        await self._page.send_mouse_move(sx, sy)
-        await self._page.send_mouse_click(sx, sy, 0, False, 1)
+    async def left_click_drag(self, *, start_x: int, start_y: int, end_x: int, end_y: int) -> None:
+        await self._page.send_mouse_move(start_x, start_y)
+        await self._page.send_mouse_click(start_x, start_y, 0, False, 1)
         await asyncio.sleep(0.05)
-        await self._page.send_mouse_move(ex, ey)
+        await self._page.send_mouse_move(end_x, end_y)
         await asyncio.sleep(0.05)
-        await self._page.send_mouse_click(ex, ey, 0, True, 1)
+        await self._page.send_mouse_click(end_x, end_y, 0, True, 1)
 
-    async def left_mouse_down(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def left_mouse_down(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 0, False, 1)
 
-    async def left_mouse_up(self, coordinate: Coordinate) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
+    async def left_mouse_up(self, x: int, y: int) -> None:
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_click(x, y, 0, True, 1)
 
     async def scroll(
         self,
-        coordinate: Coordinate,
+        x: int,
+        y: int,
         *,
         direction: str = "down",
         amount: int = 3,
     ) -> None:
-        x, y = int(coordinate[0]), int(coordinate[1])
         pixels = amount * 120
 
         delta_x, delta_y = 0, 0
@@ -177,14 +164,12 @@ class PageActions:
 
 
 def _parse_modifier_keys(text: str | None) -> list[str]:
-    """Parse a modifier string like 'shift+ctrl' into key names."""
     if not text:
         return []
     return [part.strip().lower() for part in text.split("+") if part.strip()]
 
 
 async def _press_modifiers(page: BrowserPage, keys: list[str]) -> None:
-    """Send RAWKEYDOWN for each modifier key."""
     modifiers = 0
     for k in keys:
         modifiers |= MODIFIER_MAP.get(k, 0)
@@ -194,7 +179,6 @@ async def _press_modifiers(page: BrowserPage, keys: list[str]) -> None:
 
 
 async def _release_modifiers(page: BrowserPage, keys: list[str]) -> None:
-    """Send KEYUP for each modifier key (reversed)."""
     for k in reversed(keys):
         vk = KEY_NAME_TO_VK.get(k, 0)
         await page.send_key_event(KEYUP, 0, vk, 0, 0)

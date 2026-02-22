@@ -57,32 +57,38 @@ class ComputerTool(llm.Toolset):
             case "screenshot":
                 pass
             case "left_click":
-                await actions.left_click(
-                    _require(kwargs, "coordinate"),
-                    modifiers=kwargs.get("text"),
-                )
+                x, y = _require_coordinate(kwargs)
+                await actions.left_click(x, y, modifiers=kwargs.get("text"))
             case "right_click":
-                await actions.right_click(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.right_click(x, y)
             case "double_click":
-                await actions.double_click(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.double_click(x, y)
             case "triple_click":
-                await actions.triple_click(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.triple_click(x, y)
             case "middle_click":
-                await actions.middle_click(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.middle_click(x, y)
             case "mouse_move":
-                await actions.mouse_move(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.mouse_move(x, y)
             case "left_click_drag":
-                await actions.left_click_drag(
-                    start=_require(kwargs, "start_coordinate"),
-                    end=_require(kwargs, "coordinate"),
-                )
+                sx, sy = _require_coordinate(kwargs, key="start_coordinate")
+                ex, ey = _require_coordinate(kwargs)
+                await actions.left_click_drag(start_x=sx, start_y=sy, end_x=ex, end_y=ey)
             case "left_mouse_down":
-                await actions.left_mouse_down(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.left_mouse_down(x, y)
             case "left_mouse_up":
-                await actions.left_mouse_up(_require(kwargs, "coordinate"))
+                x, y = _require_coordinate(kwargs)
+                await actions.left_mouse_up(x, y)
             case "scroll":
+                x, y = _require_coordinate(kwargs)
                 await actions.scroll(
-                    _require(kwargs, "coordinate"),
+                    x,
+                    y,
                     direction=kwargs.get("scroll_direction", "down"),
                     amount=int(kwargs.get("scroll_amount", 3)),
                 )
@@ -116,6 +122,12 @@ def _require(kwargs: dict[str, Any], key: str) -> Any:
     if key not in kwargs:
         raise ValueError(f"Missing required argument: {key!r}")
     return kwargs[key]
+
+
+def _require_coordinate(kwargs: dict[str, Any], *, key: str = "coordinate") -> tuple[int, int]:
+    """Extract and unpack a coordinate pair from Anthropic's [x, y] format."""
+    coord = _require(kwargs, key)
+    return int(coord[0]), int(coord[1])
 
 
 def _screenshot_content(frame: rtc.VideoFrame) -> list[dict[str, Any]]:
