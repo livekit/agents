@@ -48,10 +48,12 @@ class PageActions:
 
     async def left_click(self, coordinate: Coordinate, *, modifiers: str | None = None) -> None:
         x, y = int(coordinate[0]), int(coordinate[1])
-        _text_to_modifiers(modifiers)
+        mod_keys = _parse_modifier_keys(modifiers)
         await self._page.send_mouse_move(x, y)
+        await _press_modifiers(self._page, mod_keys)
         await self._page.send_mouse_click(x, y, 0, False, 1)
         await self._page.send_mouse_click(x, y, 0, True, 1)
+        await _release_modifiers(self._page, mod_keys)
 
     async def right_click(self, coordinate: Coordinate) -> None:
         x, y = int(coordinate[0]), int(coordinate[1])
@@ -134,8 +136,12 @@ class PageActions:
 
     async def type_text(self, text: str) -> None:
         for ch in text:
-            code = ord(ch)
-            await self._page.send_key_event(CHAR, 0, code, 0, code)
+            vk = ord(ch.upper()) if ch.isalpha() else ord(ch)
+            nkc = NATIVE_KEY_CODES.get(vk, 0)
+            char_code = ord(ch)
+            await self._page.send_key_event(RAWKEYDOWN, 0, vk, nkc, 0)
+            await self._page.send_key_event(CHAR, 0, vk, nkc, char_code)
+            await self._page.send_key_event(KEYUP, 0, vk, 0, 0)
             await asyncio.sleep(0.01)
 
     async def key(self, text: str) -> None:
@@ -170,13 +176,28 @@ class PageActions:
 # -- helpers -----------------------------------------------------------------
 
 
-def _text_to_modifiers(text: str | None) -> int:
+def _parse_modifier_keys(text: str | None) -> list[str]:
+    """Parse a modifier string like 'shift+ctrl' into key names."""
     if not text:
-        return 0
-    flags = 0
-    for part in text.split("+"):
-        flags |= MODIFIER_MAP.get(part.strip().lower(), 0)
-    return flags
+        return []
+    return [part.strip().lower() for part in text.split("+") if part.strip()]
+
+
+async def _press_modifiers(page: BrowserPage, keys: list[str]) -> None:
+    """Send RAWKEYDOWN for each modifier key."""
+    modifiers = 0
+    for k in keys:
+        modifiers |= MODIFIER_MAP.get(k, 0)
+        vk = KEY_NAME_TO_VK.get(k, 0)
+        nkc = NATIVE_KEY_CODES.get(vk, 0)
+        await page.send_key_event(RAWKEYDOWN, modifiers, vk, nkc, 0)
+
+
+async def _release_modifiers(page: BrowserPage, keys: list[str]) -> None:
+    """Send KEYUP for each modifier key (reversed)."""
+    for k in reversed(keys):
+        vk = KEY_NAME_TO_VK.get(k, 0)
+        await page.send_key_event(KEYUP, 0, vk, 0, 0)
 
 
 async def _send_key_combo(page: BrowserPage, text: str) -> None:

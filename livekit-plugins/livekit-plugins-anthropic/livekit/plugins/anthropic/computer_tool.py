@@ -58,47 +58,47 @@ class ComputerTool(llm.Toolset):
                 pass
             case "left_click":
                 await actions.left_click(
-                    kwargs.get("coordinate", [0, 0]),
+                    _require(kwargs, "coordinate"),
                     modifiers=kwargs.get("text"),
                 )
             case "right_click":
-                await actions.right_click(kwargs.get("coordinate", [0, 0]))
+                await actions.right_click(_require(kwargs, "coordinate"))
             case "double_click":
-                await actions.double_click(kwargs.get("coordinate", [0, 0]))
+                await actions.double_click(_require(kwargs, "coordinate"))
             case "triple_click":
-                await actions.triple_click(kwargs.get("coordinate", [0, 0]))
+                await actions.triple_click(_require(kwargs, "coordinate"))
             case "middle_click":
-                await actions.middle_click(kwargs.get("coordinate", [0, 0]))
+                await actions.middle_click(_require(kwargs, "coordinate"))
             case "mouse_move":
-                await actions.mouse_move(kwargs.get("coordinate", [0, 0]))
+                await actions.mouse_move(_require(kwargs, "coordinate"))
             case "left_click_drag":
                 await actions.left_click_drag(
-                    start=kwargs.get("start_coordinate", [0, 0]),
-                    end=kwargs.get("coordinate", [0, 0]),
+                    start=_require(kwargs, "start_coordinate"),
+                    end=_require(kwargs, "coordinate"),
                 )
             case "left_mouse_down":
-                await actions.left_mouse_down(kwargs.get("coordinate", [0, 0]))
+                await actions.left_mouse_down(_require(kwargs, "coordinate"))
             case "left_mouse_up":
-                await actions.left_mouse_up(kwargs.get("coordinate", [0, 0]))
+                await actions.left_mouse_up(_require(kwargs, "coordinate"))
             case "scroll":
                 await actions.scroll(
-                    kwargs.get("coordinate", [0, 0]),
+                    _require(kwargs, "coordinate"),
                     direction=kwargs.get("scroll_direction", "down"),
                     amount=int(kwargs.get("scroll_amount", 3)),
                 )
             case "type":
-                await actions.type_text(kwargs.get("text", ""))
+                await actions.type_text(_require(kwargs, "text"))
             case "key":
-                await actions.key(kwargs.get("text", ""))
+                await actions.key(_require(kwargs, "text"))
             case "hold_key":
                 await actions.hold_key(
-                    kwargs.get("text", ""),
+                    _require(kwargs, "text"),
                     duration=float(kwargs.get("duration", 0.5)),
                 )
             case "wait":
                 await actions.wait()
             case _:
-                return [{"type": "text", "text": f"Unknown action: {action}"}]
+                raise ValueError(f"Unknown computer_use action: {action!r}")
 
         await asyncio.sleep(_POST_ACTION_DELAY)
 
@@ -109,6 +109,13 @@ class ComputerTool(llm.Toolset):
 
     def aclose(self) -> None:
         self._actions.aclose()
+
+
+def _require(kwargs: dict[str, Any], key: str) -> Any:
+    """Extract a required argument, raising ValueError if missing."""
+    if key not in kwargs:
+        raise ValueError(f"Missing required argument: {key!r}")
+    return kwargs[key]
 
 
 def _screenshot_content(frame: rtc.VideoFrame) -> list[dict[str, Any]]:
