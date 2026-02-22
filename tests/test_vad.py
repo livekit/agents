@@ -203,8 +203,8 @@ async def test_file_vad(sample_rate) -> None:
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
 
 
-def _benchmark_inference(*, warmup: int, n: int = 10) -> list[float]:
-    vad_instance = silero_vad.VAD.load(warmup=warmup)
+def _benchmark_inference(*, n: int = 10) -> list[float]:
+    vad_instance = silero_vad.VAD.load()
     model = onnx_model.OnnxModel(
         onnx_session=vad_instance._onnx_session,
         sample_rate=vad_instance._opts.sample_rate,
@@ -231,12 +231,7 @@ def _print_benchmark_results(name: str, durations_ms: list[float]) -> None:
 
 
 if __name__ == "__main__":
-    n = 10 # no of iterations to benchmark
-    m = 3 # warmup calls
+    n = 10  # no of iterations to benchmark
     print(f"Silero VAD inference benchmark (N={n})")
-    with_warmup = _benchmark_inference(warmup=m, n=n)
-    # Allow for a cooldown for a fair comparison
-    time.sleep(60)
-    without_warmup = _benchmark_inference(warmup=0, n=n)
+    without_warmup = _benchmark_inference(n=n)
     _print_benchmark_results("without_warmup", without_warmup)
-    _print_benchmark_results(f"with_warmup({m})", with_warmup)
