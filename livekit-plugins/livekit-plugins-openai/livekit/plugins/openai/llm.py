@@ -26,6 +26,7 @@ from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
+    ChatMessage,
     ToolChoice,
     utils as llm_utils,
 )
@@ -42,6 +43,7 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CohereChatModels,
     CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
@@ -455,6 +457,44 @@ class LLM(llm.LLM):
             extra_body=or_body,
             extra_headers=default_headers,
             timeout=timeout,
+        )
+
+    @staticmethod
+    def with_cohere(
+        *,
+        model: str | CohereChatModels = "command-r-08-2024",
+        api_key: str | None = None,
+        base_url: str = "https://api.cohere.ai/compatibility/v1",
+        client: openai.AsyncClient | None = None,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of Cohere LLM using OpenAI-compatible API.
+
+        ``api_key`` must be set to your Cohere API key, either using the argument or by setting
+        the ``COHERE_API_KEY`` environment variable.
+        """
+        api_key = api_key or os.environ.get("COHERE_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Cohere API key is required, either as argument or set COHERE_API_KEY environment variable"
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            temperature=temperature,
+            tool_choice=tool_choice,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+            timeout=timeout,
+            _strict_tool_schema=False,
         )
 
     @staticmethod
@@ -970,6 +1010,16 @@ class LLM(llm.LLM):
 
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
+
+        # Cohere requires at least one user message to generate a response
+        if "api.cohere.ai" in str(self._client.base_url):
+            has_user_message = any(
+                isinstance(item, ChatMessage) and item.role == "user" for item in chat_ctx.items
+            )
+
+            if not has_user_message:
+                placeholder_msg = ChatMessage(role="user", content=["."])
+                chat_ctx.items.append(placeholder_msg)
 
         return LLMStream(
             self,
