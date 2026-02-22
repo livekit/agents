@@ -237,6 +237,85 @@ def test_stream_buffer_end_input_with_pending_data():
     assert bytes(received) == payload
 
 
+def test_stream_buffer_compaction():
+    """Verify that compaction preserves unread data after _COMPACT_THRESHOLD bytes are consumed."""
+    import hashlib
+
+    buffer = StreamBuffer()
+    chunk_size = 512 * 1024  # 512KB per write
+    # write enough to push read_pos past the 5MB threshold with leftover unread data
+    num_writer_chunks = 12  # 6MB total
+    total_written = num_writer_chunks * chunk_size
+    read_size = 4096
+
+    chunks = [os.urandom(chunk_size) for _ in range(num_writer_chunks)]
+    input_hasher = hashlib.sha256()
+    for c in chunks:
+        input_hasher.update(c)
+
+    received = bytearray()
+    output_hasher = hashlib.sha256()
+
+    def writer():
+        for chunk in chunks:
+            buffer.write(chunk)
+            time.sleep(0.002)
+        buffer.end_input()
+
+    def reader():
+        while True:
+            data = buffer.read(read_size)
+            if not data:
+                break
+            received.extend(data)
+            output_hasher.update(data)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        wf = pool.submit(writer)
+        rf = pool.submit(reader)
+        wf.result(timeout=30)
+        rf.result(timeout=30)
+
+    assert len(received) == total_written
+    assert input_hasher.hexdigest() == output_hasher.hexdigest()
+
+    # confirm compaction actually fired: after reading 6MB in 4KB chunks,
+    # _read_pos would have exceeded the 5MB threshold at least once.
+    # The data integrity check above is the real proof — if compaction
+    # dropped or duplicated bytes, the hash would mismatch.
+
+
+def test_stream_buffer_compaction_boundary():
+    """Compaction must not lose the tail bytes sitting between read_pos and write_pos."""
+    buffer = StreamBuffer()
+    threshold = StreamBuffer._COMPACT_THRESHOLD  # 5MB
+
+    # 1. Write exactly threshold + extra bytes, read exactly threshold bytes,
+    #    then verify the extra bytes survive compaction.
+    extra = b"HELLO_AFTER_COMPACT"
+    big_block = os.urandom(threshold) + extra
+
+    buffer.write(big_block)
+    buffer.end_input()
+
+    # drain exactly `threshold` bytes in small reads
+    drained = 0
+    while drained < threshold:
+        chunk = buffer.read(8192)
+        assert chunk  # should not be empty yet
+        drained += len(chunk)
+
+    # the next read triggers compaction (read_pos >= threshold) and must return the extra
+    remainder = bytearray()
+    while True:
+        data = buffer.read(8192)
+        if not data:
+            break
+        remainder.extend(data)
+
+    assert bytes(remainder) == extra
+
+
 def test_stream_buffer_close_while_reading():
     """Reader is blocked in read(), then close() is called. Must unblock promptly."""
     buffer = StreamBuffer()

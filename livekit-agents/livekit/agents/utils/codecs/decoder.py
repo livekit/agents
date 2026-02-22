@@ -69,6 +69,8 @@ class StreamBuffer:
     Allows writing from one thread and reading from another.
     """
 
+    _COMPACT_THRESHOLD = 5 * 1024 * 1024  # compact after 5MB consumed
+
     def __init__(self) -> None:
         self._bio = io.BytesIO()
         self._lock = threading.Lock()
@@ -104,6 +106,14 @@ class StreamBuffer:
                     else:
                         data = self._bio.read(min(size, available))
                     self._read_pos = self._bio.tell()
+
+                    if self._read_pos >= self._COMPACT_THRESHOLD:
+                        remaining = self._bio.read()
+                        self._bio = io.BytesIO(remaining)
+                        self._bio.seek(0, io.SEEK_END)
+                        self._write_pos = self._bio.tell()
+                        self._read_pos = 0
+
                     return data if data else b""
 
                 if self._eof:
