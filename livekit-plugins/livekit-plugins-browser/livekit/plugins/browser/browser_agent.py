@@ -123,8 +123,7 @@ class BrowserAgent:
         self._chat_ctx.add_message(role="system", content=self._instructions)
 
         # 5. Grant agent focus
-        self._session.set_agent_focus(True)
-        await self._page.send_focus_event(True)
+        await self._session.reclaim_agent_focus()
 
         # 6. Listen for chat messages on data channel
         if self._chat_enabled:
@@ -162,8 +161,7 @@ class BrowserAgent:
 
                 if self._session.agent_interrupted.is_set():
                     self._session.agent_interrupted.clear()
-                    self._session.set_agent_focus(True)
-                    await self._page.send_focus_event(True)  # type: ignore[union-attr]
+                    await self._session.reclaim_agent_focus()
 
                 self._chat_ctx.add_message(role="user", content=text)
 

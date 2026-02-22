@@ -54,6 +54,12 @@ class BrowserSession:
         elif self._focus_identity == "__agent__":
             self._focus_identity = None
 
+    async def reclaim_agent_focus(self) -> None:
+        """Reclaim focus for the agent and notify all participants."""
+        self.set_agent_focus(True)
+        await self._page.send_focus_event(True)
+        await self._broadcast_focus()
+
     async def start(self) -> None:
         if self._started:
             return

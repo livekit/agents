@@ -123,12 +123,24 @@ class PageActions:
 
     async def type_text(self, text: str) -> None:
         for ch in text:
-            vk = ord(ch.upper()) if ch.isalpha() else ord(ch)
-            nkc = NATIVE_KEY_CODES.get(vk, 0)
             char_code = ord(ch)
-            await self._page.send_key_event(RAWKEYDOWN, 0, vk, nkc, 0)
-            await self._page.send_key_event(CHAR, 0, vk, nkc, char_code)
-            await self._page.send_key_event(KEYUP, 0, vk, 0, 0)
+            # Look up the correct VK code: alpha uses uppercase ord,
+            # others use KEY_NAME_TO_VK. For characters without a known
+            # VK mapping (shifted punctuation like !@#$%), only send CHAR
+            # to avoid colliding with navigation VK codes (e.g. ord('!')=33=VK_PRIOR).
+            if ch.isalpha():
+                vk = ord(ch.upper())
+            else:
+                vk = KEY_NAME_TO_VK.get(ch, 0)
+
+            if vk:
+                nkc = NATIVE_KEY_CODES.get(vk, 0)
+                await self._page.send_key_event(RAWKEYDOWN, 0, vk, nkc, 0)
+                await self._page.send_key_event(CHAR, 0, vk, nkc, char_code)
+                await self._page.send_key_event(KEYUP, 0, vk, 0, 0)
+            else:
+                await self._page.send_key_event(CHAR, 0, 0, 0, char_code)
+
             await asyncio.sleep(0.01)
 
     async def key(self, text: str) -> None:
