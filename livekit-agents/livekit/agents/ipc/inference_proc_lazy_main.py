@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
-if current_process().name == "inference_proc":
+if current_process().name == "agents_inference_process":
     import signal
 
     # ignore signals in the jobs process (the parent process will handle them)

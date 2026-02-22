@@ -7,6 +7,7 @@ import httpx
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
@@ -188,7 +189,7 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm
-        self._extra_kwargs = extra_kwargs
+        self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
 
     async def _run(self) -> None:
         self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
