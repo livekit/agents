@@ -6,13 +6,16 @@ import asyncio
 import contextlib
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from livekit import rtc
 from livekit.agents import llm
 from livekit.browser import BrowserContext, BrowserPage  # type: ignore[import-untyped]
 
-from .computer_tool import ComputerTool
 from .session import BrowserSession
+
+if TYPE_CHECKING:
+    from livekit.plugins.anthropic.computer_tool import ComputerTool
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,8 @@ class BrowserAgent:
         await self._session.start()
 
         # 3. Create computer tool
+        from livekit.plugins.anthropic.computer_tool import ComputerTool
+
         self._computer_tool = ComputerTool(
             page=self._page,
             width=self._width,

@@ -10,8 +10,7 @@ from typing import Any
 from livekit import rtc
 from livekit.agents import llm
 from livekit.browser import BrowserPage  # type: ignore[import-untyped]
-
-from ._keys import (
+from livekit.plugins.browser._keys import (  # type: ignore[import-untyped]
     CHAR,
     KEY_NAME_TO_VK,
     KEYUP,
@@ -20,6 +19,8 @@ from ._keys import (
     NON_CHAR_KEYS,
     RAWKEYDOWN,
 )
+
+from .tools import ComputerUse
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,6 @@ class ComputerTool(llm.Toolset):
         self._last_frame: rtc.VideoFrame | None = None
 
         self._page.on("paint", self._on_paint)
-
-        from livekit.plugins.anthropic.tools import ComputerUse
 
         self._provider_tool = ComputerUse(
             display_width_px=width,
