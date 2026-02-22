@@ -182,8 +182,12 @@ class STT(stt.STT):
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
-        if is_given(adaptation) and is_given(keywords):
-            logger.warning("Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored.")
+        if is_given(adaptation):
+            if is_given(keywords):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
+            self._validate_adaptation(adaptation, 2 if model in get_args(SpeechModelsV2) else 1)
 
         if not is_given(use_streaming):
             use_streaming = True
@@ -460,6 +464,7 @@ class STT(stt.STT):
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
         if is_given(adaptation):
+            self._validate_adaptation(adaptation, self._config.version)
             self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
@@ -487,6 +492,22 @@ class STT(stt.STT):
     async def aclose(self) -> None:
         await self._pool.aclose()
         await super().aclose()
+
+    def _validate_adaptation(
+        self,
+        adaptation: cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation,
+        api_version: int,
+    ) -> None:
+        if api_version == 2 and not isinstance(adaptation, cloud_speech_v2.SpeechAdaptation):
+            raise ValueError(
+                "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models, "
+                f"got {type(adaptation).__name__}"
+            )
+        if api_version == 1 and not isinstance(adaptation, resource_v1.SpeechAdaptation):
+            raise ValueError(
+                "adaptation must be resource_v1.SpeechAdaptation for v1 models, "
+                f"got {type(adaptation).__name__}"
+            )
 
 
 class SpeechStream(stt.SpeechStream):
