@@ -120,6 +120,32 @@ KEY_NAME_TO_VK: dict[str, int] = {
     "'": 222,
 }
 
+# Shifted character → (base VK code, MOD_SHIFT) for US keyboard layout.
+# Maps characters produced by Shift+key to their underlying VK code.
+SHIFTED_CHAR_TO_VK: dict[str, int] = {
+    "!": 0x31,  # Shift+1
+    "@": 0x32,  # Shift+2
+    "#": 0x33,  # Shift+3
+    "$": 0x34,  # Shift+4
+    "%": 0x35,  # Shift+5
+    "^": 0x36,  # Shift+6
+    "&": 0x37,  # Shift+7
+    "*": 0x38,  # Shift+8
+    "(": 0x39,  # Shift+9
+    ")": 0x30,  # Shift+0
+    "_": 189,  # Shift+-
+    "+": 187,  # Shift+=
+    "{": 219,  # Shift+[
+    "}": 221,  # Shift+]
+    "|": 220,  # Shift+\
+    ":": 186,  # Shift+;
+    '"': 222,  # Shift+'
+    "<": 188,  # Shift+,
+    ">": 190,  # Shift+.
+    "?": 191,  # Shift+/
+    "~": 192,  # Shift+`
+}
+
 # CEF modifier flags
 MOD_SHIFT = 1 << 1
 MOD_CTRL = 1 << 2
