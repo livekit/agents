@@ -122,25 +122,20 @@ class BrowserAgent:
             height=self._height,
         )
 
-        # 4. Create navigation tools
+        # 4. Create navigation tools (schemas only — dispatched in _run_llm_loop)
         @function_tool(name="navigate", description="Navigate the browser to a URL.")
         async def _navigate(url: str) -> None:
-            pass
+            await self._page_actions.navigate(url)
 
         @function_tool(name="go_back", description="Go back to the previous page.")
         async def _go_back() -> None:
-            pass
+            await self._page_actions.go_back()
 
         @function_tool(name="go_forward", description="Go forward to the next page.")
         async def _go_forward() -> None:
-            pass
+            await self._page_actions.go_forward()
 
         self._nav_tools: list[llm.Tool] = [_navigate, _go_back, _go_forward]
-        self._nav_tool_dispatch: dict[str, Any] = {
-            "navigate": self._page_actions.navigate,
-            "go_back": self._page_actions.go_back,
-            "go_forward": self._page_actions.go_forward,
-        }
 
         # 5. Initialize chat context
         self._chat_ctx = llm.ChatContext()
@@ -261,12 +256,21 @@ class BrowserAgent:
                     )
                     self._chat_ctx.items.append(fnc_call)
                     self._chat_ctx.items.append(fnc_output)
-                elif tc.name in self._nav_tool_dispatch:
+                elif tc.name == "navigate":
                     import json as _json
 
-                    args = _json.loads(tc.arguments or "{}")
+                    url = _json.loads(tc.arguments or "{}").get("url", "")
                     await self._send_status("acting")
-                    await self._nav_tool_dispatch[tc.name](**args)
+                    await self._page_actions.navigate(url)
+                    await asyncio.sleep(_POST_ACTION_DELAY)
+
+                    screenshot_content = _screenshot_content(self._page_actions)
+                elif tc.name in ("go_back", "go_forward"):
+                    await self._send_status("acting")
+                    if tc.name == "go_back":
+                        await self._page_actions.go_back()
+                    else:
+                        await self._page_actions.go_forward()
                     await asyncio.sleep(_POST_ACTION_DELAY)
 
                     screenshot_content = _screenshot_content(self._page_actions)
