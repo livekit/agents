@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Room, RemoteTrackPublication, Track } from "livekit-client";
+import { Room, RemoteTrackPublication, Track, RoomEvent } from "livekit-client";
 
 interface VideoTrack {
   participant: string;
@@ -19,12 +19,12 @@ export function useVideoTrack(room: Room | null, participantIdentity?: string) {
       const tracks: VideoTrack[] = [];
 
       // Get video tracks from all participants or specific participant
-      room.participants.forEach((participant) => {
+      room.remoteParticipants.forEach((participant) => {
         if (participantIdentity && participant.identity !== participantIdentity) {
           return;
         }
 
-        participant.publications.forEach((publication) => {
+        participant.trackPublications.forEach((publication) => {
           if (
             publication.track &&
             publication.track.kind === Track.Kind.Video
@@ -42,19 +42,19 @@ export function useVideoTrack(room: Room | null, participantIdentity?: string) {
     };
 
     // Subscribe to track events
-    room.on("trackSubscribed", updateTracks);
-    room.on("trackUnsubscribed", updateTracks);
-    room.on("participantJoined", updateTracks);
-    room.on("participantLeft", updateTracks);
+    room.on(RoomEvent.TrackSubscribed, updateTracks);
+    room.on(RoomEvent.TrackUnsubscribed, updateTracks);
+    room.on(RoomEvent.ParticipantConnected, updateTracks);
+    room.on(RoomEvent.ParticipantDisconnected, updateTracks);
 
     // Initial update
     updateTracks();
 
     return () => {
-      room.off("trackSubscribed", updateTracks);
-      room.off("trackUnsubscribed", updateTracks);
-      room.off("participantJoined", updateTracks);
-      room.off("participantLeft", updateTracks);
+      room.off(RoomEvent.TrackSubscribed, updateTracks);
+      room.off(RoomEvent.TrackUnsubscribed, updateTracks);
+      room.off(RoomEvent.ParticipantConnected, updateTracks);
+      room.off(RoomEvent.ParticipantDisconnected, updateTracks);
     };
   }, [room, participantIdentity]);
 
@@ -73,12 +73,12 @@ export function useAudioTrack(room: Room | null, participantIdentity?: string) {
     const updateTracks = () => {
       const tracks: VideoTrack[] = [];
 
-      room.participants.forEach((participant) => {
+      room.remoteParticipants.forEach((participant) => {
         if (participantIdentity && participant.identity !== participantIdentity) {
           return;
         }
 
-        participant.publications.forEach((publication) => {
+        participant.trackPublications.forEach((publication) => {
           if (
             publication.track &&
             publication.track.kind === Track.Kind.Audio
@@ -95,13 +95,13 @@ export function useAudioTrack(room: Room | null, participantIdentity?: string) {
       setAudioTracks(tracks);
     };
 
-    room.on("trackSubscribed", updateTracks);
-    room.on("trackUnsubscribed", updateTracks);
+    room.on(RoomEvent.TrackSubscribed, updateTracks);
+    room.on(RoomEvent.TrackUnsubscribed, updateTracks);
     updateTracks();
 
     return () => {
-      room.off("trackSubscribed", updateTracks);
-      room.off("trackUnsubscribed", updateTracks);
+      room.off(RoomEvent.TrackSubscribed, updateTracks);
+      room.off(RoomEvent.TrackUnsubscribed, updateTracks);
     };
   }, [room, participantIdentity]);
 

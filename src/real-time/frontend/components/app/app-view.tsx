@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Participant, Room } from "livekit-client";
+import { Participant, Room, RoomEvent } from "livekit-client";
 import { useAgentSession } from "./agent-session-provider";
 import { connectToRoom } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
@@ -23,10 +23,11 @@ export function AppView() {
 
         // Update participants when they change
         const updateParticipants = () => {
-          setParticipants(Array.from(room.participants.values()));
+          setParticipants(Array.from(room.remoteParticipants.values()));
         };
 
-        room.on("participantsChanged", updateParticipants);
+        room.on(RoomEvent.ParticipantConnected, updateParticipants);
+        room.on(RoomEvent.ParticipantDisconnected, updateParticipants);
         updateParticipants();
 
         setError(null);
