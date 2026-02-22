@@ -327,6 +327,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             old_ch.close()
             self._msg_ch = utils.aio.Chan[bytes]()
 
+            if self._current_generation and not self._current_generation._done:
+                self._finalize_generation(interrupted=True)
+
             if self._pending_generation_fut and not self._pending_generation_fut.done():
                 self._pending_generation_fut.cancel("Session restart")
             self._pending_generation_fut = None
