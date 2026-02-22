@@ -1,0 +1,44 @@
+{
+  "name": "real-time-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "next": "^15.5.9",
+    "@livekit/components-react": "^0.11.0",
+    "@livekit/components-styles": "^0.11.0",
+    "livekit-client": "^1.18.0",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-dropdown-menu": "^2.1.2",
+    "@radix-ui/react-popover": "^1.1.2",
+    "@radix-ui/react-select": "^2.1.2",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-toggle": "^1.1.0",
+    "@radix-ui/react-tooltip": "^1.1.2",
+    "lucide-react": "^0.555.0",
+    "motion": "^12.16.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "jose": "^5.4.0",
+    "nanoid": "^5.1.0",
+    "sonner": "^1.8.0",
+    "tailwindcss": "^3.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^15.5.9",
+    "autoprefixer": "^10.4.18",
+    "postcss": "^8.4.35"
+  }
+}
