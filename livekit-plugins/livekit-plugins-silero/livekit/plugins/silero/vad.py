@@ -69,7 +69,7 @@ class VAD(agents.vad.VAD):
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
         onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
-        warmup: bool = False,
+        warmup: int = 0,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
@@ -88,7 +88,7 @@ class VAD(agents.vad.VAD):
 
             ```python
             def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load(warmup=True)
+                proc.userdata["vad"] = silero.VAD.load(warmup=3)
 
 
             async def entrypoint(ctx: JobContext):
@@ -109,7 +109,7 @@ class VAD(agents.vad.VAD):
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
             onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
-            warmup (bool): If enabled, warmup ONNX model upon startup to reduce latency spikes when the stream starts.
+            warmup (int): Number of dry inference calls to run during startup to reduce latency spikes. Use 0 to disable warmup.
             deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -118,6 +118,8 @@ class VAD(agents.vad.VAD):
 
         Raises:
             ValueError: If an unsupported sample rate is provided.
+            ValueError: If warmup is negative.
+            TypeError: If warmup is not an integer.
         """  # noqa: E501
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
@@ -131,6 +133,11 @@ class VAD(agents.vad.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
 
+        if isinstance(warmup, bool) or not isinstance(warmup, int):
+            raise TypeError("warmup must be an integer")
+        if warmup < 0:
+            raise ValueError("warmup must be greater than or equal to 0")
+
         session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
@@ -142,10 +149,11 @@ class VAD(agents.vad.VAD):
             sample_rate=sample_rate,
         )
 
-        if warmup:
+        if warmup > 0:
             model = onnx_model.OnnxModel(onnx_session=session, sample_rate=sample_rate)
             inference_f32_data = np.zeros(model.window_size_samples, dtype=np.float32)
-            model(inference_f32_data)
+            for _ in range(warmup):
+                model(inference_f32_data)
 
         return cls(session=session, opts=opts)
 

@@ -41,11 +41,11 @@ def test_vad_load_without_warmup_does_not_run_inference(monkeypatch: pytest.Monk
     monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
     monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
 
-    silero_vad.VAD.load(warmup=False)
+    silero_vad.VAD.load(warmup=0)
     assert warmup_calls["count"] == 0
 
 
-def test_vad_load_with_warmup_runs_single_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vad_load_with_warmup_runs_n_inferences(monkeypatch: pytest.MonkeyPatch) -> None:
     warmup_calls = {"count": 0}
 
     def _fake_new_inference_session(_force_cpu: bool, onnx_file_path=None) -> object:
@@ -65,8 +65,8 @@ def test_vad_load_with_warmup_runs_single_inference(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
     monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
 
-    silero_vad.VAD.load(warmup=True)
-    assert warmup_calls["count"] == 1
+    silero_vad.VAD.load(warmup=3)
+    assert warmup_calls["count"] == 3
 
 
 @pytest.mark.parametrize(
@@ -97,7 +97,7 @@ def test_vad_load_with_warmup_uses_expected_window_size(
     monkeypatch.setattr(onnx_model, "new_inference_session", _fake_new_inference_session)
     monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
 
-    silero_vad.VAD.load(sample_rate=sample_rate, warmup=True)
+    silero_vad.VAD.load(sample_rate=sample_rate, warmup=1)
     assert warmup_calls["shape"] == (expected_window_size,)
 
 
@@ -119,7 +119,17 @@ def test_vad_load_with_warmup_propagates_warmup_error(monkeypatch: pytest.Monkey
     monkeypatch.setattr(onnx_model, "OnnxModel", FakeOnnxModel)
 
     with pytest.raises(RuntimeError, match="warmup failed"):
-        silero_vad.VAD.load(warmup=True)
+        silero_vad.VAD.load(warmup=1)
+
+
+def test_vad_load_with_negative_warmup_raises() -> None:
+    with pytest.raises(ValueError, match="warmup must be greater than or equal to 0"):
+        silero_vad.VAD.load(warmup=-1)
+
+
+def test_vad_load_with_non_integer_warmup_raises() -> None:
+    with pytest.raises(TypeError, match="warmup must be an integer"):
+        silero_vad.VAD.load(warmup=1.5)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
@@ -169,7 +179,7 @@ async def test_chunks_vad(sample_rate) -> None:
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
-async def test_file_vad(sample_rate):
+async def test_file_vad(sample_rate) -> None:
     frames, *_ = await make_test_speech(sample_rate=sample_rate)
     assert len(frames) == 1, "one frame should be the whole audio"
 
@@ -193,7 +203,7 @@ async def test_file_vad(sample_rate):
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
 
 
-def _benchmark_inference(*, warmup: bool, n: int = 10) -> list[float]:
+def _benchmark_inference(*, warmup: int, n: int = 10) -> list[float]:
     vad_instance = silero_vad.VAD.load(warmup=warmup)
     model = onnx_model.OnnxModel(
         onnx_session=vad_instance._onnx_session,
@@ -221,9 +231,12 @@ def _print_benchmark_results(name: str, durations_ms: list[float]) -> None:
 
 
 if __name__ == "__main__":
-    n = 10
+    n = 10 # no of iterations to benchmark
+    m = 3 # warmup calls
     print(f"Silero VAD inference benchmark (N={n})")
-    without_warmup = _benchmark_inference(warmup=False, n=n)
-    with_warmup = _benchmark_inference(warmup=True, n=n)
+    with_warmup = _benchmark_inference(warmup=m, n=n)
+    # Allow for a cooldown for a fair comparison
+    time.sleep(60)
+    without_warmup = _benchmark_inference(warmup=0, n=n)
     _print_benchmark_results("without_warmup", without_warmup)
-    _print_benchmark_results("with_warmup", with_warmup)
+    _print_benchmark_results(f"with_warmup({m})", with_warmup)
