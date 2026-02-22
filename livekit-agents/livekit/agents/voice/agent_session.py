@@ -26,7 +26,7 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
-from ..llm import AgentHandoff, ChatContext
+from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -394,6 +394,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        # TODO(theomonnom): need a better way to expose early assistant metrics
+        self._early_assistant_metrics: MetricsReport | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None

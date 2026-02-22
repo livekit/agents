@@ -2046,6 +2046,19 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            # purely used for realtime console rendering (metrics are shown
+            # as soon as the agent starts speaking, before playout finishes)
+            early_metrics: llm.MetricsReport = {}
+            if llm_gen_data.ttft is not None:
+                early_metrics["llm_node_ttft"] = llm_gen_data.ttft
+            if tts_gen_data and tts_gen_data.ttfb is not None:
+                early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            if user_metrics and "stopped_speaking_at" in user_metrics:
+                early_metrics["e2e_latency"] = (
+                    started_speaking_at - user_metrics["stopped_speaking_at"]
+                )
+            self._session._early_assistant_metrics = early_metrics
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
