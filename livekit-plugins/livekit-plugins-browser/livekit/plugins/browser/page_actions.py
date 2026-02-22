@@ -112,9 +112,9 @@ class PageActions:
         elif direction == "up":
             delta_y = pixels
         elif direction == "left":
-            delta_x = pixels
-        elif direction == "right":
             delta_x = -pixels
+        elif direction == "right":
+            delta_x = pixels
 
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_wheel(x, y, delta_x, delta_y)
