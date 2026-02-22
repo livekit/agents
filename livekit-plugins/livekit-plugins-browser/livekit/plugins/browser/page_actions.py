@@ -20,6 +20,8 @@ from ._keys import (
     SHIFTED_CHAR_TO_VK,
 )
 
+VK_SHIFT = 16
+
 
 class PageActions:
     """Typed input API for a CEF BrowserPage with frame capture.
@@ -114,9 +116,9 @@ class PageActions:
         elif direction == "up":
             delta_y = pixels
         elif direction == "left":
-            delta_x = -pixels
-        elif direction == "right":
             delta_x = pixels
+        elif direction == "right":
+            delta_x = -pixels
 
         await self._page.send_mouse_move(x, y)
         await self._page.send_mouse_wheel(x, y, delta_x, delta_y)
@@ -126,26 +128,36 @@ class PageActions:
     async def type_text(self, text: str) -> None:
         for ch in text:
             char_code = ord(ch)
-            modifiers = 0
+            shifted = False
 
             if ch.isalpha():
                 vk = ord(ch.upper())
-                if ch.isupper():
-                    modifiers = MOD_SHIFT
+                shifted = ch.isupper()
             elif ch in SHIFTED_CHAR_TO_VK:
                 vk = SHIFTED_CHAR_TO_VK[ch]
-                modifiers = MOD_SHIFT
+                shifted = True
             else:
                 vk = KEY_NAME_TO_VK.get(ch, 0)
 
-            if vk:
-                nkc = NATIVE_KEY_CODES.get(vk, 0)
-                await self._page.send_key_event(RAWKEYDOWN, modifiers, vk, nkc, 0)
-                await self._page.send_key_event(CHAR, modifiers, vk, nkc, char_code)
-                await self._page.send_key_event(KEYUP, modifiers, vk, 0, 0)
-            else:
+            if not vk:
                 # Unknown character (e.g. unicode) — CHAR-only
                 await self._page.send_key_event(CHAR, 0, 0, 0, char_code)
+                await asyncio.sleep(0.01)
+                continue
+
+            modifiers = MOD_SHIFT if shifted else 0
+            nkc = NATIVE_KEY_CODES.get(vk, 0)
+
+            if shifted:
+                shift_nkc = NATIVE_KEY_CODES.get(VK_SHIFT, 0)
+                await self._page.send_key_event(RAWKEYDOWN, MOD_SHIFT, VK_SHIFT, shift_nkc, 0)
+
+            await self._page.send_key_event(RAWKEYDOWN, modifiers, vk, nkc, 0)
+            await self._page.send_key_event(CHAR, modifiers, char_code, nkc, char_code)
+            await self._page.send_key_event(KEYUP, modifiers, vk, 0, 0)
+
+            if shifted:
+                await self._page.send_key_event(KEYUP, 0, VK_SHIFT, 0, 0)
 
             await asyncio.sleep(0.01)
 
@@ -229,7 +241,7 @@ async def _send_key_combo(page: BrowserPage, text: str) -> None:
         await page.send_key_event(RAWKEYDOWN, modifiers, vk, nkc, 0)
         if vk not in NON_CHAR_KEYS and len(k) == 1:
             char_code = ord(k)
-            await page.send_key_event(CHAR, modifiers, vk, nkc, char_code)
+            await page.send_key_event(CHAR, modifiers, char_code, nkc, char_code)
         await page.send_key_event(KEYUP, modifiers, vk, 0, 0)
 
     # Release modifier keys
