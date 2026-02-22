@@ -160,13 +160,9 @@ class LLM(llm.LLM):
 
             for tool in tool_ctx.provider_tools:
                 if isinstance(tool, AnthropicTool):
-                    tool_dict = tool.to_dict()
-                    tool_schemas.append(tool_dict)
-                    tool_type = tool_dict.get("type", "")
-                    if "computer_20251124" in tool_type:
-                        beta_flag = "computer-use-2025-11-24"
-                    elif "computer_20250124" in tool_type:
-                        beta_flag = "computer-use-2025-01-24"
+                    tool_schemas.append(tool.to_dict())
+                    if tool.beta_flag:
+                        beta_flag = tool.beta_flag
 
             extra["tools"] = tool_schemas
 

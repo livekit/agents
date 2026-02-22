@@ -11,6 +11,16 @@ class AnthropicTool(ProviderTool, ABC):
     @abstractmethod
     def to_dict(self) -> dict[str, Any]: ...
 
+    @property
+    def beta_flag(self) -> str | None:
+        return None
+
+
+_TOOL_VERSION_BETA_FLAGS: dict[str, str] = {
+    "computer_20251124": "computer-use-2025-11-24",
+    "computer_20250124": "computer-use-2025-01-24",
+}
+
 
 @dataclass
 class ComputerUse(AnthropicTool):
@@ -21,6 +31,10 @@ class ComputerUse(AnthropicTool):
 
     def __post_init__(self) -> None:
         super().__init__(id="computer")
+
+    @property
+    def beta_flag(self) -> str | None:
+        return _TOOL_VERSION_BETA_FLAGS.get(self.tool_version)
 
     def to_dict(self) -> dict[str, Any]:
         return {
