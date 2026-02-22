@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm import function_tool
 from livekit.browser import BrowserContext, BrowserPage  # type: ignore[import-untyped]
 
 from .page_actions import PageActions
@@ -19,6 +21,8 @@ if TYPE_CHECKING:
     from livekit.plugins.anthropic.computer_tool import ComputerTool
 
 logger = logging.getLogger(__name__)
+
+_POST_ACTION_DELAY = 0.3
 
 # Data channel topics
 _CHAT_TOPIC = "agent-chat"
@@ -118,14 +122,34 @@ class BrowserAgent:
             height=self._height,
         )
 
-        # 4. Initialize chat context
+        # 4. Create navigation tools
+        @function_tool(name="navigate", description="Navigate the browser to a URL.")
+        async def _navigate(url: str) -> None:
+            pass
+
+        @function_tool(name="go_back", description="Go back to the previous page.")
+        async def _go_back() -> None:
+            pass
+
+        @function_tool(name="go_forward", description="Go forward to the next page.")
+        async def _go_forward() -> None:
+            pass
+
+        self._nav_tools: list[llm.Tool] = [_navigate, _go_back, _go_forward]
+        self._nav_tool_dispatch: dict[str, Any] = {
+            "navigate": self._page_actions.navigate,
+            "go_back": self._page_actions.go_back,
+            "go_forward": self._page_actions.go_forward,
+        }
+
+        # 5. Initialize chat context
         self._chat_ctx = llm.ChatContext()
         self._chat_ctx.add_message(role="system", content=self._instructions)
 
-        # 5. Grant agent focus
+        # 6. Grant agent focus
         await self._session.reclaim_agent_focus()
 
-        # 6. Listen for chat messages on data channel
+        # 7. Listen for chat messages on data channel
         if self._chat_enabled:
 
             @room.on("data_received")
@@ -142,7 +166,7 @@ class BrowserAgent:
 
             self._on_chat_data = _on_chat_data
 
-        # 7. Start the agent loop
+        # 8. Start the agent loop
         self._agent_loop_task = asyncio.create_task(self._agent_loop())
 
     async def send_message(self, text: str) -> None:
@@ -183,7 +207,11 @@ class BrowserAgent:
         assert self._computer_tool is not None
         assert self._session is not None
 
-        all_tools: list[llm.Tool] = [*self._computer_tool.tools, *self._extra_tools]
+        all_tools: list[llm.Tool] = [
+            *self._computer_tool.tools,
+            *self._nav_tools,
+            *self._extra_tools,
+        ]
         tool_ctx = llm.ToolContext(all_tools)
 
         while True:
@@ -220,6 +248,28 @@ class BrowserAgent:
 
                     screenshot_content = await self._computer_tool.execute(action, **args)
 
+                    fnc_call = llm.FunctionCall(
+                        call_id=tc.call_id,
+                        name=tc.name,
+                        arguments=tc.arguments or "{}",
+                    )
+                    fnc_output = llm.FunctionCallOutput(
+                        call_id=tc.call_id,
+                        name=tc.name,
+                        output=json.dumps(screenshot_content),
+                        is_error=False,
+                    )
+                    self._chat_ctx.items.append(fnc_call)
+                    self._chat_ctx.items.append(fnc_output)
+                elif tc.name in self._nav_tool_dispatch:
+                    import json as _json
+
+                    args = _json.loads(tc.arguments or "{}")
+                    await self._send_status("acting")
+                    await self._nav_tool_dispatch[tc.name](**args)
+                    await asyncio.sleep(_POST_ACTION_DELAY)
+
+                    screenshot_content = _screenshot_content(self._page_actions)
                     fnc_call = llm.FunctionCall(
                         call_id=tc.call_id,
                         name=tc.name,
@@ -286,3 +336,24 @@ class BrowserAgent:
 
         if self._room and hasattr(self, "_on_chat_data"):
             self._room.off("data_received", self._on_chat_data)
+
+
+def _screenshot_content(actions: PageActions) -> list[dict[str, Any]]:
+    """Capture the current frame from PageActions and return as Anthropic image content."""
+    from livekit.agents.utils.images import EncodeOptions, encode
+
+    frame = actions.last_frame
+    if frame is None:
+        return [{"type": "text", "text": "(no frame available yet)"}]
+    png_bytes = encode(frame, EncodeOptions(format="PNG"))
+    b64 = base64.b64encode(png_bytes).decode("utf-8")
+    return [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": b64,
+            },
+        }
+    ]

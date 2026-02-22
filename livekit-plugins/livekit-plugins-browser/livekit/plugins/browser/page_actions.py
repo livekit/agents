@@ -184,6 +184,17 @@ class PageActions:
     async def wait(self) -> None:
         await asyncio.sleep(1)
 
+    # -- navigation ----------------------------------------------------------
+
+    async def navigate(self, url: str) -> None:
+        await self._page.navigate(url)
+
+    async def go_back(self) -> None:
+        await self._page.go_back()
+
+    async def go_forward(self) -> None:
+        await self._page.go_forward()
+
     # -- lifecycle -----------------------------------------------------------
 
     def aclose(self) -> None:
