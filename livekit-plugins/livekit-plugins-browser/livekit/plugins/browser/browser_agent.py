@@ -122,18 +122,18 @@ class BrowserAgent:
             height=self._height,
         )
 
-        # 4. Create navigation tools (schemas only — dispatched in _run_llm_loop)
+        # 4. Create navigation tools (schema only — dispatched in _run_llm_loop)
         @function_tool(name="navigate", description="Navigate the browser to a URL.")
         async def _navigate(url: str) -> None:
-            await self._page_actions.navigate(url)
+            pass
 
         @function_tool(name="go_back", description="Go back to the previous page.")
         async def _go_back() -> None:
-            await self._page_actions.go_back()
+            pass
 
         @function_tool(name="go_forward", description="Go forward to the next page.")
         async def _go_forward() -> None:
-            await self._page_actions.go_forward()
+            pass
 
         self._nav_tools: list[llm.Tool] = [_navigate, _go_back, _go_forward]
 
