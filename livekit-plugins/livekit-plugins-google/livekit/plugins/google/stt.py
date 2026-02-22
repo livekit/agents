@@ -519,6 +519,9 @@ class SpeechStream(stt.SpeechStream):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[
+            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
+        ] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -546,6 +549,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
+        if is_given(adaptation):
+            self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
