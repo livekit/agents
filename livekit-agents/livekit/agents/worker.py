@@ -1170,7 +1170,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def _get_effective_load(self) -> float:
         """Current load including reserved slots (accepted but not yet launched)."""
         active_jobs = self.active_jobs
-        job_load_estimate = self._worker_load / len(active_jobs) if active_jobs else 1.0
+        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
+        if active_jobs:
+            job_load_estimate = self._worker_load / len(active_jobs)
+        elif math.isinf(load_threshold):
+            job_load_estimate = 0.0
+        else:
+            job_load_estimate = load_threshold
         return self._worker_load + self._reserved_slots * job_load_estimate
 
     def _is_available(self) -> bool:
@@ -1197,11 +1203,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._queue_msg(availability_resp)
             return
 
+        # Reserve a slot immediately so concurrent availability checks see updated
+        # load before the user's request_fnc runs or calls accept().
+        self._reserved_slots += 1
         answered = False
 
         async def _on_reject(terminate: bool) -> None:
             nonlocal answered
             answered = True
+            self._reserved_slots -= 1
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1213,9 +1223,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
 
-            # Reserve a slot so concurrent availability checks see updated load
-            # until this job is launched (or we reject/timeout).
-            self._reserved_slots += 1
             try:
                 availability_resp = agent.WorkerMessage()
                 availability_resp.availability.job_id = msg.job.id
