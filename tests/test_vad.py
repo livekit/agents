@@ -1,10 +1,16 @@
+import time
+
+import numpy as np
 import pytest
 
 from livekit.agents import vad
 from livekit.plugins import silero
 from livekit.plugins.silero import onnx_model, vad as silero_vad
 
-from . import utils
+try:
+    from .utils import make_test_speech, make_wav_file
+except ImportError:
+    from utils import make_test_speech, make_wav_file
 
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
@@ -118,7 +124,7 @@ def test_vad_load_with_warmup_propagates_warmup_error(monkeypatch: pytest.Monkey
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_chunks_vad(sample_rate) -> None:
-    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
+    frames, *_ = await make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
     assert len(frames) > 1, "frames aren't chunked"
 
     stream = VAD.stream()
@@ -139,7 +145,7 @@ async def test_chunks_vad(sample_rate) -> None:
                 f"test_vad.{sample_rate}.start_of_speech_frames_{start_of_speech_i}.wav",
                 "wb",
             ) as f:
-                f.write(utils.make_wav_file(ev.frames))
+                f.write(make_wav_file(ev.frames))
 
             start_of_speech_i += 1
 
@@ -151,7 +157,7 @@ async def test_chunks_vad(sample_rate) -> None:
                 f"test_vad.{sample_rate}.end_of_speech_frames_{end_of_speech_i}.wav",
                 "wb",
             ) as f:
-                f.write(utils.make_wav_file(ev.frames))
+                f.write(make_wav_file(ev.frames))
 
             end_of_speech_i += 1
 
@@ -159,12 +165,12 @@ async def test_chunks_vad(sample_rate) -> None:
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
 
     with open(f"test_vad.{sample_rate}.inference_frames.wav", "wb") as f:
-        f.write(utils.make_wav_file(inference_frames))
+        f.write(make_wav_file(inference_frames))
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_file_vad(sample_rate):
-    frames, *_ = await utils.make_test_speech(sample_rate=sample_rate)
+    frames, *_ = await make_test_speech(sample_rate=sample_rate)
     assert len(frames) == 1, "one frame should be the whole audio"
 
     stream = VAD.stream()
@@ -185,3 +191,39 @@ async def test_file_vad(sample_rate):
 
     assert start_of_speech_i > 0, "no start of speech detected"
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
+
+
+def _benchmark_inference(*, warmup: bool, n: int = 10) -> list[float]:
+    vad_instance = silero_vad.VAD.load(warmup=warmup)
+    model = onnx_model.OnnxModel(
+        onnx_session=vad_instance._onnx_session,
+        sample_rate=vad_instance._opts.sample_rate,
+    )
+    input_data = np.zeros(model.window_size_samples, dtype=np.float32)
+
+    durations_ms: list[float] = []
+    for _ in range(n):
+        start_time = time.perf_counter()
+        model(input_data)
+        durations_ms.append((time.perf_counter() - start_time) * 1000)
+
+    return durations_ms
+
+
+def _print_benchmark_results(name: str, durations_ms: list[float]) -> None:
+    avg = sum(durations_ms) / len(durations_ms)
+    print(f"{name}:")
+    print(f"  calls={len(durations_ms)}")
+    print(f"  avg_ms={avg:.3f}")
+    print(f"  min_ms={min(durations_ms):.3f}")
+    print(f"  max_ms={max(durations_ms):.3f}")
+    print(f"  per_call_ms={[round(v, 3) for v in durations_ms]}")
+
+
+if __name__ == "__main__":
+    n = 10
+    print(f"Silero VAD inference benchmark (N={n})")
+    without_warmup = _benchmark_inference(warmup=False, n=n)
+    with_warmup = _benchmark_inference(warmup=True, n=n)
+    _print_benchmark_results("without_warmup", without_warmup)
+    _print_benchmark_results("with_warmup", with_warmup)
