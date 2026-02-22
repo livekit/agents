@@ -48,6 +48,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    thinking: NotGivenOr[dict[str, Any]]
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -66,6 +67,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        thinking: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -82,6 +84,7 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        thinking (dict[str, Any], optional): Enables structured thinking on supported models, e.g. {"type": "enabled", "budget_tokens": 4096} or {"type": "disabled"}. For extended thinking, budget_tokens must be >= 1024.
         """  # noqa: E501
 
         super().__init__()
@@ -95,6 +98,7 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            thinking=thinking,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -150,6 +154,24 @@ class LLM(llm.LLM):
             extra["top_k"] = self._opts.top_k
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
+
+        if is_given(self._opts.thinking):
+            extra["thinking"] = self._opts.thinking
+            thinking_opts = self._opts.thinking
+            if thinking_opts.get("type") == "enabled":
+                budget = thinking_opts.get("budget_tokens")
+                if not isinstance(budget, int):
+                    raise ValueError(
+                        "thinking.budget_tokens must be an integer when thinking is enabled"
+                    )
+                if budget < 1024:
+                    raise ValueError("thinking.budget_tokens must be >= 1024 for extended thinking")
+                if not is_given(self._opts.max_tokens):
+                    extra["max_tokens"] = budget + 1024
+                elif extra["max_tokens"] <= budget:
+                    raise ValueError(
+                        f"max_tokens ({extra['max_tokens']}) must be greater than thinking.budget_tokens ({budget}) if thinking is enabled"
+                    )
 
         if tools:
             extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
@@ -249,6 +271,7 @@ class LLMStream(llm.LLMStream):
 
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
+        self._ignoring_thinking_block = False  # ignore explicit Anthropic thinking blocks
         self._input_tokens = 0
         self._cache_creation_tokens = 0
         self._cache_read_tokens = 0
@@ -312,6 +335,8 @@ class LLMStream(llm.LLMStream):
                 self._tool_call_id = event.content_block.id
                 self._fnc_name = event.content_block.name
                 self._fnc_raw_arguments = ""
+            elif event.content_block.type == "thinking":
+                self._ignoring_thinking_block = True
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -332,11 +357,16 @@ class LLMStream(llm.LLMStream):
                     id=self._request_id,
                     delta=llm.ChoiceDelta(content=text, role="assistant"),
                 )
+            elif getattr(delta, "type", None) == "thinking_delta":
+                return None
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
                 self._fnc_raw_arguments += delta.partial_json
 
         elif event.type == "content_block_stop":
+            if self._ignoring_thinking_block:
+                self._ignoring_thinking_block = False
+                return None
             if self._tool_call_id is not None:
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
