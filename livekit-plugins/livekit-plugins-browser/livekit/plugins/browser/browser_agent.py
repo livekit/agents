@@ -247,18 +247,14 @@ class BrowserAgent:
                     )
                     self._chat_ctx.items.append(fnc_call)
                     self._chat_ctx.items.append(fnc_output)
-                elif tc.name == "navigate":
-                    import json as _json
-
-                    url = _json.loads(tc.arguments or "{}").get("url", "")
+                elif tc.name in ("navigate", "go_back", "go_forward"):
                     await self._send_status("acting")
-                    await self._page_actions.navigate(url)
-                    await asyncio.sleep(_POST_ACTION_DELAY)
+                    if tc.name == "navigate":
+                        import json as _json
 
-                    screenshot_content = _screenshot_content(self._page_actions)
-                elif tc.name in ("go_back", "go_forward"):
-                    await self._send_status("acting")
-                    if tc.name == "go_back":
+                        url = _json.loads(tc.arguments or "{}").get("url", "")
+                        await self._page_actions.navigate(url)
+                    elif tc.name == "go_back":
                         await self._page_actions.go_back()
                     else:
                         await self._page_actions.go_forward()
