@@ -12,6 +12,7 @@ from livekit import rtc
 from livekit.agents import llm
 from livekit.browser import BrowserContext, BrowserPage  # type: ignore[import-untyped]
 
+from .page_actions import PageActions
 from .session import BrowserSession
 
 if TYPE_CHECKING:
@@ -110,8 +111,9 @@ class BrowserAgent:
         # 3. Create computer tool
         from livekit.plugins.anthropic.computer_tool import ComputerTool
 
+        self._page_actions = PageActions(page=self._page)
         self._computer_tool = ComputerTool(
-            page=self._page,
+            actions=self._page_actions,
             width=self._width,
             height=self._height,
         )

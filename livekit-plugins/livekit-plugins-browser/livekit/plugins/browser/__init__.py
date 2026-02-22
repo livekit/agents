@@ -15,6 +15,7 @@ from livekit.browser import (  # type: ignore[import-untyped]
 
 from .browser_agent import BrowserAgent
 from .log import logger
+from .page_actions import PageActions
 from .session import BrowserSession
 from .version import __version__
 
@@ -24,6 +25,7 @@ __all__ = [
     "BrowserContext",
     "BrowserPage",
     "BrowserSession",
+    "PageActions",
     "PaintData",
 ]
 
