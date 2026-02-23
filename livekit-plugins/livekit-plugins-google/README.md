@@ -25,12 +25,14 @@ LiveKit supports both Gemini Live API on both Gemini Developer API as well as Ve
 
 The following models are supported by Gemini Developer API:
 
-- gemini-2.0-flash-live-001
-- gemini-live-2.5-flash-preview
 - gemini-2.5-flash-native-audio-preview-09-2025
+- gemini-2.5-flash-native-audio-preview-12-2025
 
 And these on Vertex AI:
 
-- gemini-2.0-flash-exp
-- gemini-live-2.5-flash-preview-native-audio
-- gemini-live-2.5-flash-preview-native-audio-09-2025
+- gemini-live-2.5-flash-native-audio
+
+References:
+
+- [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
+- [Vertex Live API](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)

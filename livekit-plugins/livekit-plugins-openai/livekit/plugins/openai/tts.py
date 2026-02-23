@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from typing import Literal, Union
+from typing import Literal
 
 import httpx
 
@@ -40,7 +40,7 @@ NUM_CHANNELS = 1
 DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
-RESPONSE_FORMATS = Union[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"], str]
+RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
 
 
 @dataclass
@@ -84,6 +84,12 @@ class TTS(tts.TTS):
             instructions=instructions if is_given(instructions) else None,
             response_format=response_format if is_given(response_format) else "mp3",
         )
+
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
 
         self._client = client or openai.AsyncClient(
             max_retries=0,
@@ -214,7 +220,7 @@ class ChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
-            instructions=self._opts.instructions or openai.NOT_GIVEN,
+            instructions=self._opts.instructions or openai.omit,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 

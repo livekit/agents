@@ -10,9 +10,9 @@ import os
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, cast
+from typing import Any, Literal, cast
 
 import boto3
 from aws_sdk_bedrock_runtime.client import (
@@ -31,6 +31,7 @@ from aws_sdk_bedrock_runtime.models import (
     ValidationException,
 )
 from smithy_aws_core.identity import AWSCredentialsIdentity
+from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
 
 from livekit import rtc
@@ -542,7 +543,7 @@ class RealtimeSession(  # noqa: F811
         }
         self._turn_tracker = _TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
-            cast(Callable[[], None], self.emit_generation_event),
+            self.emit_generation_event,
         )
 
         # Create main task to manage session lifecycle
@@ -1493,6 +1494,7 @@ class RealtimeSession(  # noqa: F811
                     ModelNotReadyException,
                     ModelErrorException,
                     ModelStreamErrorException,
+                    InvalidEventBytes,
                 ) as re:
                     logger.warning(
                         f"Retryable error: {re}\nAttempting to recover...", exc_info=True
@@ -1613,7 +1615,10 @@ class RealtimeSession(  # noqa: F811
             self._chat_ctx_ready = asyncio.get_running_loop().create_future()
 
         chat_ctx = chat_ctx.copy(
-            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
         )
 
         # Initial context setup (once)
@@ -1838,8 +1843,9 @@ class RealtimeSession(  # noqa: F811
                 # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
 
                 for nf in self._bstream.write(f.data.tobytes()):
-                    self._log_significant_audio(nf.data)
-                    self._audio_input_chan.send_nowait(nf.data)
+                    audio_bytes = bytes(nf.data)
+                    self._log_significant_audio(audio_bytes)
+                    self._audio_input_chan.send_nowait(audio_bytes)
         else:
             logger.warning("audio input channel closed, skipping audio")
 

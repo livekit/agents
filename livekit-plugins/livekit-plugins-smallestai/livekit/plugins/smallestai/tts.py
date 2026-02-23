@@ -24,8 +24,8 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
     tts,
     utils,
 )
@@ -96,7 +96,10 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("SMALLEST_API_KEY")
         if not api_key:
-            raise ValueError("SMALLEST_API_KEY must be set")
+            raise ValueError(
+                "Smallest.ai API key is required, either as argument or set"
+                " SMALLEST_API_KEY environment variable"
+            )
 
         if (consistency or similarity or enhancement) and model == "lightning":
             logger.warning(
@@ -215,17 +218,15 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.output_format}",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
         except Exception as e:
             raise APIConnectionError() from e
 

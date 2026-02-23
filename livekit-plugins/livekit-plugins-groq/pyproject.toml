@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Groq inference plugin for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9.0"
+requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "groq"]
 classifiers = [
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, openai]>=1.3.10",
+    "livekit-agents[codecs, openai]>=1.4.3",
     "aiohttp",
     "livekit",
 ]

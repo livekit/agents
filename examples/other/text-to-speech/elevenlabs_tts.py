@@ -1,12 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional
 
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AgentServer, JobContext, cli
-from livekit.plugins import elevenlabs
+from livekit.agents import AgentServer, JobContext, cli, inference
 
 logger = logging.getLogger("elevenlabs-tts-demo")
 logger.setLevel(logging.INFO)
@@ -43,9 +43,10 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(job: JobContext):
-    # use another voice for this demo
-    # you can get a list of the voices using 'await tts_11labs.list_voices()'
-    tts_11labs = elevenlabs.TTS(voice_id="ODq5zmih8GrVes37Dizd", model="eleven_multilingual_v2")
+    # Using LiveKit inference for TTS, to use elevenlabs with your own API key, you can change it to:
+    # from livekit.plugins import elevenlabs
+    # tts_11labs = elevenlabs.TTS(model="elevenlabs/eleven_multilingual_v2", voice_id="ODq5zmih8GrVes37Dizd")
+    tts_11labs = inference.TTS("elevenlabs/eleven_multilingual_v2", voice="ODq5zmih8GrVes37Dizd")
 
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
@@ -75,7 +76,7 @@ async def entrypoint(job: JobContext):
     stream.flush()
     stream.end_input()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
 
     async def _synth_task():
         async for ev in stream:

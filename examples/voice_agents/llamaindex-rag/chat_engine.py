@@ -11,9 +11,18 @@ from llama_index.core import (
 from llama_index.core.chat_engine.types import ChatMode
 from llama_index.core.llms import ChatMessage, MessageRole
 
-from livekit.agents import Agent, AgentServer, AgentSession, AutoSubscribe, JobContext, cli, llm
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    AutoSubscribe,
+    JobContext,
+    cli,
+    inference,
+    llm,
+)
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -46,9 +55,9 @@ class ChatEngineAgent(Agent):
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
             vad=silero.VAD.load(),
-            stt=deepgram.STT(),
+            stt=inference.STT("deepgram/nova-3"),
             llm=DummyLLM(),  # use a dummy LLM to enable the pipeline reply
-            tts=openai.TTS(),
+            tts=inference.TTS("cartesia/sonic-3"),
         )
         self.index = index
         self.chat_engine = index.as_chat_engine(chat_mode=ChatMode.CONTEXT, llm="default")
@@ -66,8 +75,7 @@ class ChatEngineAgent(Agent):
 
         llama_chat_messages = [
             ChatMessage(content=msg.text_content, role=MessageRole(msg.role))
-            for msg in chat_ctx.items
-            if isinstance(msg, llm.ChatMessage)
+            for msg in chat_ctx.messages()
         ]
 
         stream = await self.chat_engine.astream_chat(user_query, chat_history=llama_chat_messages)

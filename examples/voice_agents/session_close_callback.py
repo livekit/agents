@@ -2,18 +2,9 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentServer,
-    AgentSession,
-    CloseEvent,
-    JobContext,
-    cli,
-    room_io,
-    utils,
-)
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli
 from livekit.agents.beta.tools import EndCallTool
-from livekit.plugins import silero
+from livekit.plugins import google, silero  # noqa: F401
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -25,26 +16,25 @@ load_dotenv()
 # or when the worker is shutting down. When closing the session, agent will be interrupted
 # and the last agent message will be added to the chat context.
 
-server = AgentServer()
-
 
 class MyAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant.",
-            tools=[EndCallTool()],
+            stt="deepgram/nova-3:en",
+            llm="openai/gpt-4.1-mini",
+            tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+            # llm=google.realtime.RealtimeModel(),
+            tools=[
+                EndCallTool(
+                    end_instructions="thanks the user for calling and tell them goodbye",
+                    delete_room=True,  # this will disconnect all remote participants, including SIP callers
+                )
+            ],
         )
 
-    @utils.log_exceptions(logger=logger)
-    async def on_exit(self) -> None:
-        logger.info("exiting the agent")
-        if self.session.current_speech:
-            await self.session.current_speech
-
-        logger.info("generating goodbye message")
-        await self.session.generate_reply(
-            instructions="say goodbye to the user", tool_choice="none"
-        )
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="say hello to the user")
 
 
 server = AgentServer()
@@ -53,22 +43,10 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt="assemblyai/universal-streaming",
-        llm="openai/gpt-4.1-mini",
-        tts="elevenlabs",
         vad=silero.VAD.load(),
     )
 
-    # session will be closed automatically when the linked participant disconnects
-    # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
-    # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
-    await session.start(
-        agent=MyAgent(),
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            delete_room_on_close=True,
-        ),
-    )
+    await session.start(agent=MyAgent(), room=ctx.room)
 
     @session.on("close")
     def on_close(ev: CloseEvent):
@@ -77,7 +55,8 @@ async def entrypoint(ctx: JobContext):
         print("Chat History:")
         for item in session.history.items:
             if item.type == "message":
-                text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
+                content = item.text_content.replace("\n", "\\n")
+                text = f"{item.role}: {content}"
                 if item.interrupted:
                     text += " (interrupted)"
 

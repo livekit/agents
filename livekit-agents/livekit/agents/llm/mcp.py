@@ -108,7 +108,10 @@ class MCPServer(ABC):
             tool_result = await self._client.call_tool(name, raw_arguments)
 
             if tool_result.isError:
-                error_str = "\n".join(str(part) for part in tool_result.content)
+                error_str = "\n".join(
+                    part.text if hasattr(part, "text") else str(part)
+                    for part in tool_result.content
+                )
                 raise ToolError(error_str)
 
             # TODO(theomonnom): handle images & binary messages
@@ -265,7 +268,7 @@ class MCPServerHTTP(MCPServer):
         if self._allowed_tools is None:
             return tools
 
-        filtered_tools = []
+        filtered_tools: list[MCPTool] = []
         for tool in tools:
             # Get tool name based on tool type
             if is_function_tool(tool):
@@ -277,7 +280,7 @@ class MCPServerHTTP(MCPServer):
                 continue
 
             if tool_name in self._allowed_tools:
-                filtered_tools.append(tool)
+                filtered_tools.append(tool)  # type: ignore[arg-type]
 
         return filtered_tools
 

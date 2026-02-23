@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Coroutine
-from typing import Any, Callable, Generic, Optional, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -9,7 +9,7 @@ class Debounced(Generic[T]):
     def __init__(self, func: Callable[[], Coroutine[Any, Any, T]], delay: float) -> None:
         self._func = func
         self._delay = delay
-        self._task: Optional[asyncio.Task[T]] = None
+        self._task: asyncio.Task[T] | None = None
 
     def schedule(self) -> asyncio.Task[T]:
         self.cancel()

@@ -59,7 +59,7 @@ lint: ## Run ruff linter
 	@if uv run ruff check .; then \
 		echo "$(BOLD)$(GREEN)✓ No linting issues found$(RESET)"; \
 	else \
-		echo "$(BOLD)$(RED)✗ Linting issues found$(RESET)"; \
+		echo "$(BOLD)$(RED)✗ Linting issues found. Run 'make fix' to automatically fix them.$(RESET)"; \
 		exit 1; \
 	fi
 
@@ -70,48 +70,7 @@ lint-fix: ## Run ruff linter and fix issues automatically
 
 type-check: ## Run mypy type checker
 	@echo "$(BOLD)$(CYAN)Running type checker...$(RESET)"
-	@uv pip install pip 2>/dev/null || true
-	@if uv run mypy --install-types --non-interactive \
-		--untyped-calls-exclude=smithy_aws_core \
-		-p livekit.agents \
-		-p livekit.plugins.openai \
-		-p livekit.plugins.anthropic \
-		-p livekit.plugins.mistralai \
-		-p livekit.plugins.assemblyai \
-		-p livekit.plugins.aws \
-		-p livekit.plugins.azure \
-		-p livekit.plugins.bey \
-		-p livekit.plugins.bithuman \
-		-p livekit.plugins.cartesia \
-		-p livekit.plugins.clova \
-		-p livekit.plugins.deepgram \
-		-p livekit.plugins.elevenlabs \
-		-p livekit.plugins.fal \
-		-p livekit.plugins.gladia \
-		-p livekit.plugins.google \
-		-p livekit.plugins.groq \
-		-p livekit.plugins.hume \
-		-p livekit.plugins.krisp \
-		-p livekit.plugins.minimal \
-		-p livekit.plugins.neuphonic \
-		-p livekit.plugins.nltk \
-		-p livekit.plugins.resemble \
-		-p livekit.plugins.rime \
-		-p livekit.plugins.silero \
-		-p livekit.plugins.speechify \
-		-p livekit.plugins.speechmatics \
-		-p livekit.plugins.tavus \
-		-p livekit.plugins.turn_detector \
-		-p livekit.plugins.hedra \
-		-p livekit.plugins.langchain \
-		-p livekit.plugins.baseten \
-		-p livekit.plugins.sarvam \
-		-p livekit.plugins.inworld \
-		-p livekit.plugins.simli \
-		-p livekit.plugins.anam \
-		-p livekit.plugins.ultravox \
-		-p livekit.plugins.fireworksai \
-		-p livekit.plugins.minimax; then \
+	@if uv run python scripts/check_types.py; then \
 		echo "$(BOLD)$(GREEN)✓ Type checking passed$(RESET)"; \
 	else \
 		echo "$(BOLD)$(RED)✗ Type checking failed$(RESET)"; \
@@ -120,6 +79,34 @@ type-check: ## Run mypy type checker
 
 check: format-check lint type-check ## Run all checks (format, lint, type-check)
 	@echo "$(BOLD)$(GREEN)✓ All checks passed!$(RESET)"
+
+fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
+
+unit-tests:
+	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
+	PYTHONPATH="$$PWD" uv run pytest \
+		tests/test_agent_session.py \
+		tests/test_aio.py \
+		tests/test_audio_decoder.py \
+		tests/test_chat_ctx.py \
+		tests/test_config.py \
+		tests/test_connection_pool.py \
+		tests/test_debounce.py \
+		tests/test_google_thought_signatures.py \
+		tests/test_inference_stt_fallback.py \
+		tests/test_inference_tts_fallback.py \
+		tests/test_ipc.py \
+		tests/test_ivr_activity.py \
+		tests/test_langgraph.py \
+		tests/test_schema_gemini.py \
+		tests/test_tts_fallback.py \
+		tests/test_stt_fallback.py \
+		tests/test_recording.py \
+		tests/test_tokenizer.py \
+		tests/test_transcription_filter.py \
+		tests/test_tools.py \
+		tests/test_aio_itertools.py \
+		tests/test_room.py
 
 # ============================================
 # Development Workflows

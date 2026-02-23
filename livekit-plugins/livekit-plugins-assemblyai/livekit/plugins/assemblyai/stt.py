@@ -51,11 +51,13 @@ class STTOptions:
     speech_model: Literal["universal-streaming-english", "universal-streaming-multilingual"] = (
         "universal-streaming-english"
     )
+    language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
+    vad_threshold: NotGivenOr[float] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -68,14 +70,28 @@ class STT(stt.STT):
         model: Literal[
             "universal-streaming-english", "universal-streaming-multilingual"
         ] = "universal-streaming-english",
+        language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
+        base_url: str = "wss://streaming.assemblyai.com",
     ):
+        """
+        Args:
+            base_url: The AssemblyAI streaming endpoint base URL. Use the EU endpoint
+                (wss://streaming.eu.assemblyai.com) for streaming in the EU. Defaults to
+                wss://streaming.assemblyai.com.
+                See https://www.assemblyai.com/docs/universal-streaming for more details.
+            vad_threshold: The threshold for voice activity detection (VAD). A value between
+                0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
+                more sensitive (detects quieter speech). Higher values make it less sensitive.
+                Defaults to 0.4.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -84,6 +100,7 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+        self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
             raise ValueError(
@@ -92,16 +109,24 @@ class STT(stt.STT):
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
         self._api_key = assemblyai_api_key
+
+        # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
+        # designed to work with LK's end of turn models
+        if not is_given(min_end_of_turn_silence_when_confident):
+            min_end_of_turn_silence_when_confident = 100
+
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
             encoding=encoding,
             speech_model=model,
+            language_detection=language_detection,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
             keyterms_prompt=keyterms_prompt,
+            vad_threshold=vad_threshold,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -142,6 +167,7 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
+            base_url=self._base_url,
         )
         self._streams.add(stream)
         return stream
@@ -153,6 +179,7 @@ class STT(stt.STT):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -164,6 +191,8 @@ class STT(stt.STT):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -171,6 +200,7 @@ class STT(stt.STT):
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
                 min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
                 max_turn_silence=max_turn_silence,
+                vad_threshold=vad_threshold,
             )
 
 
@@ -186,12 +216,14 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
+        self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._reconnect_event = asyncio.Event()
@@ -203,6 +235,7 @@ class SpeechStream(stt.SpeechStream):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -214,6 +247,8 @@ class SpeechStream(stt.SpeechStream):
             )
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
 
         self._reconnect_event.set()
 
@@ -271,7 +306,9 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
-                    )  # this will trigger a reconnection, see the _run loop
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("unexpected AssemblyAI message type %s", msg.type)
@@ -330,6 +367,14 @@ class SpeechStream(stt.SpeechStream):
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
             if is_given(self._opts.keyterms_prompt)
             else None,
+            "language_detection": self._opts.language_detection
+            if is_given(self._opts.language_detection)
+            else True
+            if "multilingual" in self._opts.speech_model
+            else False,
+            "vad_threshold": self._opts.vad_threshold
+            if is_given(self._opts.vad_threshold)
+            else None,
         }
 
         headers = {
@@ -338,126 +383,123 @@ class SpeechStream(stt.SpeechStream):
             "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
         }
 
-        ws_url = "wss://streaming.assemblyai.com/v3/ws"
         filtered_config = {
             k: ("true" if v else "false") if isinstance(v, bool) else v
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"{ws_url}?{urlencode(filtered_config)}"
+        url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
-        if message_type == "Turn":
-            words = data.get("words", [])
-            end_of_turn = data.get("end_of_turn", False)
-            turn_is_formatted = data.get("turn_is_formatted", False)
-            utterance = data.get("utterance", "")
-            transcript = data.get("transcript", "")
+        if message_type != "Turn":
+            return
+        words = data.get("words", [])
+        end_of_turn = data.get("end_of_turn", False)
+        turn_is_formatted = data.get("turn_is_formatted", False)
+        utterance = data.get("utterance", "")
+        transcript = data.get("transcript", "")
+        language = data.get("language_code", "en")
 
-            # transcript (final) and words (interim) are cumulative
-            # utterance (preflight) is chunk based
-            start_time: float = 0
-            end_time: float = 0
-            confidence: float = 0
-            # word timestamps are in milliseconds
-            # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
-            timed_words: list[TimedString] = [
-                TimedString(
-                    text=word.get("text", ""),
-                    start_time=word.get("start", 0) / 1000 + self.start_time_offset,
-                    end_time=word.get("end", 0) / 1000 + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
-                    confidence=word.get("confidence", 0),
-                )
-                for word in words
-            ]
+        # transcript (final) and words (interim) are cumulative
+        # utterance (preflight) is chunk based
+        start_time: float = 0
+        end_time: float = 0
+        confidence: float = 0
+        # word timestamps are in milliseconds
+        # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
+        timed_words: list[TimedString] = [
+            TimedString(
+                text=word.get("text", ""),
+                start_time=word.get("start", 0) / 1000 + self.start_time_offset,
+                end_time=word.get("end", 0) / 1000 + self.start_time_offset,
+                start_time_offset=self.start_time_offset,
+                confidence=word.get("confidence", 0),
+            )
+            for word in words
+        ]
 
-            # words are cumulative
-            if timed_words:
-                interim_text = " ".join(word for word in timed_words)
-                start_time = timed_words[0].start_time or start_time
-                end_time = timed_words[-1].end_time or end_time
-                confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
+        # words are cumulative
+        if timed_words:
+            interim_text = " ".join(word for word in timed_words)
+            start_time = timed_words[0].start_time or start_time
+            end_time = timed_words[-1].end_time or end_time
+            confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
 
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language="en",
-                            text=interim_text,
-                            start_time=start_time,
-                            end_time=end_time,
-                            words=timed_words,
-                            confidence=confidence,
-                        )
-                    ],
-                )
-                self._event_ch.send_nowait(interim_event)
-
-            if utterance:
-                if self._last_preflight_start_time == 0.0:
-                    self._last_preflight_start_time = start_time
-
-                # utterance is chunk based so we need to filter the words to
-                # only include the ones that are part of the current utterance
-                utterance_words = [
-                    word
-                    for word in timed_words
-                    if is_given(word.start_time)
-                    and word.start_time >= self._last_preflight_start_time
-                ]
-                utterance_confidence = sum(
-                    word.confidence or 0.0 for word in utterance_words
-                ) / max(len(utterance_words), 1)
-
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language="en",
-                            text=utterance,
-                            start_time=self._last_preflight_start_time,
-                            end_time=end_time,
-                            words=utterance_words,
-                            confidence=utterance_confidence,
-                        )
-                    ],
-                )
-                self._event_ch.send_nowait(final_event)
-                self._last_preflight_start_time = end_time
-
-            if end_of_turn and (
-                not (is_given(self._opts.format_turns) and self._opts.format_turns)
-                or turn_is_formatted
-            ):
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language="en",
-                            text=transcript,
-                            start_time=start_time,
-                            end_time=end_time,
-                            words=timed_words,
-                            confidence=confidence,
-                        )
-                    ],
-                )
-                self._event_ch.send_nowait(final_event)
-
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-
-                if self._speech_duration > 0.0:
-                    usage_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.RECOGNITION_USAGE,
-                        alternatives=[],
-                        recognition_usage=stt.RecognitionUsage(
-                            audio_duration=self._speech_duration
-                        ),
+            interim_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(
+                        language=language,
+                        text=interim_text,
+                        start_time=start_time,
+                        end_time=end_time,
+                        words=timed_words,
+                        confidence=confidence,
                     )
-                    self._event_ch.send_nowait(usage_event)
-                    self._speech_duration = 0
-                    self._last_preflight_start_time = 0.0
+                ],
+            )
+            self._event_ch.send_nowait(interim_event)
+
+        if utterance:
+            if self._last_preflight_start_time == 0.0:
+                self._last_preflight_start_time = start_time
+
+            # utterance is chunk based so we need to filter the words to
+            # only include the ones that are part of the current utterance
+            utterance_words = [
+                word
+                for word in timed_words
+                if is_given(word.start_time) and word.start_time >= self._last_preflight_start_time
+            ]
+            utterance_confidence = sum(word.confidence or 0.0 for word in utterance_words) / max(
+                len(utterance_words), 1
+            )
+
+            final_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(
+                        language=language,
+                        text=utterance,
+                        start_time=self._last_preflight_start_time,
+                        end_time=end_time,
+                        words=utterance_words,
+                        confidence=utterance_confidence,
+                    )
+                ],
+            )
+            self._event_ch.send_nowait(final_event)
+            self._last_preflight_start_time = end_time
+
+        if end_of_turn and (
+            not (is_given(self._opts.format_turns) and self._opts.format_turns) or turn_is_formatted
+        ):
+            final_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(
+                        language=language,
+                        text=transcript,
+                        start_time=start_time,
+                        end_time=end_time,
+                        words=timed_words,
+                        confidence=confidence,
+                    )
+                ],
+            )
+            self._event_ch.send_nowait(final_event)
+
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+            if self._speech_duration > 0.0:
+                usage_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    alternatives=[],
+                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                )
+                self._event_ch.send_nowait(usage_event)
+                self._speech_duration = 0
+                self._last_preflight_start_time = 0.0

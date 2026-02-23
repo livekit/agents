@@ -19,7 +19,7 @@ from livekit.agents import (
 from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
-from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter, StreamAdapter
+from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -79,16 +79,20 @@ class Kelly(Agent):
             instructions="Your name is Kelly.",
             llm=FallbackLLMAdapter(
                 llm=[
-                    inference.LLM("openai/gpt-4o-mini"),
+                    inference.LLM("openai/gpt-4.1-mini"),
                     inference.LLM("google/gemini-2.5-flash"),
                 ]
             ),
-            stt=FallbackSTTAdapter(stt=[inference.STT("deepgram"), inference.STT("cartesia")]),
+            stt=FallbackSTTAdapter(
+                stt=[
+                    inference.STT("deepgram/nova-3"),
+                    inference.STT("cartesia/ink-whisper"),
+                ]
+            ),
             tts=FallbackTTSAdapter(
                 tts=[
-                    StreamAdapter(tts=openai.TTS()),
                     inference.TTS("cartesia"),
-                    inference.TTS("elevenlabs"),
+                    inference.TTS("rime/arcana"),
                 ]
             ),
             turn_detection=MultilingualModel(),

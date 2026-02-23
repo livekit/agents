@@ -24,18 +24,22 @@ class AvatarTalkAPI:
         self._api_url = api_url or DEFAULT_API_URL
         avatartalk_api_key = api_key or os.getenv("AVATARTALK_API_KEY")
         if avatartalk_api_key is None:
-            raise AvatarTalkException("AVATARTALK_API_KEY must be set")
+            raise AvatarTalkException(
+                "AvatarTalk API key is required, either as argument or set"
+                " AVATARTALK_API_KEY environment variable"
+            )
 
         self._api_key = avatartalk_api_key
         self._headers = {"Authorization": f"Bearer {self._api_key}"}
 
-    async def _request(self, method: str, path: str, **kwargs):
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.request(
                 method, f"{self._api_url}{path}", headers=self._headers, **kwargs
             ) as response:
                 if response.ok:
-                    return await response.json()
+                    result: dict[str, Any] = await response.json()
+                    return result
                 else:
                     r = await response.json()
                     raise AvatarTalkException(f"API request failed: {response.status} {r}")

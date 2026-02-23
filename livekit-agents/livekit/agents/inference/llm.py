@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 import httpx
 import openai
@@ -32,20 +32,60 @@ from ._utils import create_access_token
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
+# Reasoning models don't support sampling parameters.
+# See: https://platform.openai.com/docs/guides/reasoning
+_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "temperature",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "n",
+}
+
+# Model prefix -> set of param names that should be dropped
+_UNSUPPORTED_PARAMS: dict[str, set[str]] = {
+    "o1": _REASONING_UNSUPPORTED_PARAMS,
+    "o3": _REASONING_UNSUPPORTED_PARAMS,
+    "o4": _REASONING_UNSUPPORTED_PARAMS,
+    "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+}
+
+
+def drop_unsupported_params(model: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Remove parameters that are not supported by the given model.
+
+    Strips any provider prefix (e.g. ``openai/o3-pro`` -> ``o3-pro``) before
+    matching against known model prefixes.
+    """
+    model_name = model.split("/")[-1] if "/" in model else model
+    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
+        if model_name.startswith(prefix):
+            return {k: v for k, v in params.items() if k not in unsupported}
+    return params
+
 
 OpenAIModels = Literal[
-    "openai/gpt-5",
-    "openai/gpt-5-mini",
-    "openai/gpt-5-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
     "openai/gpt-4.1",
     "openai/gpt-4.1-mini",
     "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.1",
+    "openai/gpt-5.1-chat-latest",
+    "openai/gpt-5.2",
+    "openai/gpt-5.2-chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
+    "google/gemini-3-pro",
+    "google/gemini-3-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
@@ -53,13 +93,14 @@ GoogleModels = Literal[
     "google/gemini-2.0-flash-lite",
 ]
 
-QwenModels = Literal["qwen/qwen3-235b-a22b-instruct"]
-
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
 
-DeepSeekModels = Literal["deepseek-ai/deepseek-v3"]
+DeepSeekModels = Literal[
+    "deepseek-ai/deepseek-v3",
+    "deepseek-ai/deepseek-v3.2",
+]
 
-LLMModels = Union[OpenAIModels, GoogleModels, QwenModels, KimiModels, DeepSeekModels]
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -164,6 +205,9 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""
@@ -258,7 +302,7 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm_v
-        self._extra_kwargs = extra_kwargs
+        self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
@@ -298,7 +342,7 @@ class LLMStream(llm.LLMStream):
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
-                tools=tool_schemas or openai.NOT_GIVEN,
+                tools=tool_schemas or openai.omit,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
@@ -319,7 +363,7 @@ class LLMStream(llm.LLMStream):
                         retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
-                        chunk = llm.ChatChunk(
+                        usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=chunk.usage.completion_tokens,
@@ -328,7 +372,7 @@ class LLMStream(llm.LLMStream):
                                 total_tokens=chunk.usage.total_tokens,
                             ),
                         )
-                        self._event_ch.send_nowait(chunk)
+                        self._event_ch.send_nowait(usage_chunk)
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None

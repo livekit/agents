@@ -18,10 +18,10 @@ import asyncio
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Union, cast, get_args
+from typing import cast, get_args
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -52,8 +52,8 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
-LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, list[LgType]]
+LgType = SpeechLanguages | str
+LanguageCode = LgType | list[LgType]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -77,7 +77,10 @@ class STTOptions:
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
+    profanity_filter: bool
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
+    speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -128,11 +131,14 @@ class STT(stt.STT):
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -153,12 +159,15 @@ class STT(stt.STT):
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
             (default: 0.65)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
+            speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
+            speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
         if not is_given(use_streaming):
@@ -189,7 +198,7 @@ class STT(stt.STT):
 
         if not is_given(credentials_file) and not is_given(credentials_info):
             try:
-                gauth_default()  # type: ignore
+                gauth_default()
             except DefaultCredentialsError:
                 raise ValueError(
                     "Application default credentials must be available "
@@ -210,9 +219,12 @@ class STT(stt.STT):
             enable_word_confidence=enable_word_confidence,
             enable_voice_activity_events=enable_voice_activity_events,
             model=model,
+            profanity_filter=profanity_filter,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
+            speech_start_timeout=speech_start_timeout,
+            speech_end_timeout=speech_end_timeout,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
@@ -260,7 +272,7 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()  # type: ignore
+            _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
@@ -298,6 +310,7 @@ class STT(stt.STT):
                     enable_spoken_punctuation=config.spoken_punctuation,
                     enable_word_time_offsets=config.enable_word_time_offsets,
                     enable_word_confidence=config.enable_word_confidence,
+                    profanity_filter=config.profanity_filter,
                 ),
                 model=config.model,
                 language_codes=config.languages,
@@ -313,6 +326,7 @@ class STT(stt.STT):
             enable_word_confidence=config.enable_word_confidence,
             enable_automatic_punctuation=config.punctuate,
             enable_spoken_punctuation=config.spoken_punctuation,
+            profanity_filter=config.profanity_filter,
             model=config.model,
         )
 
@@ -388,9 +402,12 @@ class STT(stt.STT):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -404,6 +421,8 @@ class STT(stt.STT):
             self._config.punctuate = punctuate
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
+        if is_given(profanity_filter):
+            self._config.profanity_filter = profanity_filter
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -416,6 +435,10 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(speech_start_timeout):
+            self._config.speech_start_timeout = speech_start_timeout
+        if is_given(speech_end_timeout):
+            self._config.speech_end_timeout = speech_end_timeout
 
         for stream in self._streams:
             stream.update_options(
@@ -424,8 +447,11 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 punctuate=punctuate,
                 spoken_punctuation=spoken_punctuation,
+                profanity_filter=profanity_filter,
                 model=model,
                 keywords=keywords,
+                speech_start_timeout=speech_start_timeout,
+                speech_end_timeout=speech_end_timeout,
             )
 
     async def aclose(self) -> None:
@@ -459,9 +485,12 @@ class SpeechStream(stt.SpeechStream):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
+        speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -475,6 +504,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.punctuate = punctuate
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
+        if is_given(profanity_filter):
+            self._config.profanity_filter = profanity_filter
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -484,6 +515,10 @@ class SpeechStream(stt.SpeechStream):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(speech_start_timeout):
+            self._config.speech_start_timeout = speech_start_timeout
+        if is_given(speech_end_timeout):
+            self._config.speech_end_timeout = speech_end_timeout
 
         self._reconnect_event.set()
 
@@ -491,6 +526,25 @@ class SpeechStream(stt.SpeechStream):
         self,
     ) -> cloud_speech_v2.StreamingRecognitionConfig | cloud_speech_v1.StreamingRecognitionConfig:
         if self._config.version == 2:
+            # Build voice activity timeout if either timeout is specified
+            voice_activity_timeout = None
+            if is_given(self._config.speech_start_timeout) or is_given(
+                self._config.speech_end_timeout
+            ):
+                voice_activity_timeout = (
+                    cloud_speech_v2.StreamingRecognitionFeatures.VoiceActivityTimeout()
+                )
+                if is_given(self._config.speech_start_timeout):
+                    voice_activity_timeout.speech_start_timeout = Duration(
+                        seconds=int(self._config.speech_start_timeout),
+                        nanos=int((self._config.speech_start_timeout % 1) * 1e9),
+                    )
+                if is_given(self._config.speech_end_timeout):
+                    voice_activity_timeout.speech_end_timeout = Duration(
+                        seconds=int(self._config.speech_end_timeout),
+                        nanos=int((self._config.speech_end_timeout % 1) * 1e9),
+                    )
+
             return cloud_speech_v2.StreamingRecognitionConfig(
                 config=cloud_speech_v2.RecognitionConfig(
                     explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
@@ -506,11 +560,16 @@ class SpeechStream(stt.SpeechStream):
                         enable_word_time_offsets=self._config.enable_word_time_offsets,
                         enable_spoken_punctuation=self._config.spoken_punctuation,
                         enable_word_confidence=self._config.enable_word_confidence,
+                        profanity_filter=self._config.profanity_filter,
                     ),
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                     interim_results=self._config.interim_results,
-                    enable_voice_activity_events=self._config.enable_voice_activity_events,
+                    # Auto-enable voice activity events when voice_activity_timeout is specified,
+                    # as per Google API documentation requirements
+                    enable_voice_activity_events=self._config.enable_voice_activity_events
+                    or (voice_activity_timeout is not None),
+                    voice_activity_timeout=voice_activity_timeout,
                 ),
             )
 
@@ -526,6 +585,7 @@ class SpeechStream(stt.SpeechStream):
                 enable_word_confidence=self._config.enable_word_confidence,
                 enable_automatic_punctuation=self._config.punctuate,
                 enable_spoken_punctuation=self._config.spoken_punctuation,
+                profanity_filter=self._config.profanity_filter,
                 model=self._config.model,
             ),
             interim_results=self._config.interim_results,
@@ -591,6 +651,7 @@ class SpeechStream(stt.SpeechStream):
             ],
         ) -> None:
             has_started = False
+            last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
@@ -602,10 +663,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     has_started = True
 
-                if resp.speech_event_type == (
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-                    if self._config.version == 2
-                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                if (
+                    resp.speech_event_type
+                    == (
+                        cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                        if self._config.version == 2
+                        else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                    )
+                    and resp.results
                 ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(
@@ -652,6 +717,16 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
                     has_started = False
+
+                if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=_get_request_id(resp),
+                            recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                        )
+                    )
+                    last_usage_event_time += audio_duration
 
         while True:
             audio_pushed = False
@@ -834,3 +909,32 @@ def _streaming_recognize_response_to_speech_data(
     )
 
     return data
+
+
+def _get_audio_duration(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+    last_usage_event_time: float,
+) -> float:
+    """Calculate the audio duration from the response.
+
+    References:
+        - https://docs.cloud.google.com/python/docs/reference/speech/latest/google.cloud.speech_v1.types.StreamingRecognizeResponse
+        - https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/StreamingRecognitionResult
+    """
+    # total_billed_time is only set "if this is the last response in the stream"
+    # use speech event time/offset before the last response is received
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        if resp.metadata.total_billed_duration:
+            return _duration_to_seconds(resp.metadata.total_billed_duration) - last_usage_event_time
+        return _duration_to_seconds(resp.speech_event_offset) - last_usage_event_time
+    if resp.total_billed_time:
+        return _duration_to_seconds(resp.total_billed_time) - last_usage_event_time
+    return _duration_to_seconds(resp.speech_event_time) - last_usage_event_time
+
+
+def _get_request_id(
+    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+) -> str:
+    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
+        return resp.metadata.request_id
+    return str(resp.request_id)

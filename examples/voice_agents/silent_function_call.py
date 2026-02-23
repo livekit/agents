@@ -9,9 +9,10 @@ from livekit.agents import (
     FunctionToolsExecutedEvent,
     JobContext,
     cli,
+    inference,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("silent-function-call")
 logger.setLevel(logging.INFO)
@@ -56,11 +57,10 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         vad=silero.VAD.load(),
-        # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
     @session.on("function_tools_executed")
