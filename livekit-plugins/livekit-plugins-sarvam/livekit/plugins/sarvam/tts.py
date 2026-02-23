@@ -48,28 +48,8 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
-SarvamTTSOutputAudioCodec = Literal[
-    "linear16",
-    "mulaw",
-    "alaw",
-    "opus",
-    "flac",
-    "aac",
-    "wav",
-    "mp3",
-]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 
-ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
-    "linear16",
-    "mulaw",
-    "alaw",
-    "opus",
-    "flac",
-    "aac",
-    "wav",
-    "mp3",
-}
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 
 # Supported languages in BCP-47 format
@@ -291,7 +271,6 @@ class SarvamTTSOptions:
         pace: Speech rate multiplier (0.5 to 2.0)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 1.0), used for v3 and v3-beta
-        output_audio_codec: Output audio codec
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
@@ -311,7 +290,6 @@ class SarvamTTSOptions:
     pace: float = 1.0
     loudness: float = 1.0
     temperature: float = 0.6
-    output_audio_codec: SarvamTTSOutputAudioCodec | str = "mp3"
     output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k"
     min_buffer_size: int = 50
     max_chunk_length: int = 150
@@ -340,7 +318,6 @@ class TTS(tts.TTS):
         pace: Speech rate multiplier (0.5 to 2.0)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 1.0), only used in v3 and v3-beta
-        output_audio_codec: Output audio codec (default mp3)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
@@ -363,7 +340,6 @@ class TTS(tts.TTS):
         pace: float = 1.0,
         loudness: float = 1.0,
         temperature: float = 0.6,
-        output_audio_codec: SarvamTTSOutputAudioCodec | str = "mp3",
         output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k",
         min_buffer_size: int = 50,
         max_chunk_length: int = 150,
@@ -407,10 +383,6 @@ class TTS(tts.TTS):
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 1.0:
             raise ValueError("Temperature must be between 0.01 and 1.0")
-        if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
-            raise ValueError(
-                f"output_audio_codec must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
-            )
         if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
             raise ValueError(
                 f"output_audio_bitrate must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
@@ -442,7 +414,6 @@ class TTS(tts.TTS):
             pace=pace,
             loudness=loudness,
             temperature=temperature,
-            output_audio_codec=output_audio_codec,
             output_audio_bitrate=output_audio_bitrate,
             min_buffer_size=min_buffer_size,
             max_chunk_length=max_chunk_length,
@@ -517,7 +488,6 @@ class TTS(tts.TTS):
         pace: float | None = None,
         loudness: float | None = None,
         temperature: float | None = None,
-        output_audio_codec: SarvamTTSOutputAudioCodec | str | None = None,
         output_audio_bitrate: SarvamTTSOutputAudioBitrate | str | None = None,
         min_buffer_size: int | None = None,
         max_chunk_length: int | None = None,
@@ -570,14 +540,6 @@ class TTS(tts.TTS):
             if not 0.01 <= temperature <= 1.0:
                 raise ValueError("Temperature must be between 0.01 and 1.0")
             self._opts.temperature = temperature
-
-        if output_audio_codec is not None:
-            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
-                raise ValueError(
-                    "output_audio_codec must be one of "
-                    f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
-                )
-            self._opts.output_audio_codec = output_audio_codec
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -648,7 +610,6 @@ class ChunkedStream(tts.ChunkedStream):
             "pace": self._opts.pace,
             "speech_sample_rate": self._opts.speech_sample_rate,
             "model": self._opts.model,
-            "output_audio_codec": self._opts.output_audio_codec,
             "output_audio_bitrate": self._opts.output_audio_bitrate,
             "min_buffer_size": self._opts.min_buffer_size,
             "max_chunk_length": self._opts.max_chunk_length,
@@ -802,7 +763,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
-                    "output_audio_codec": self._opts.output_audio_codec,
                     "output_audio_bitrate": self._opts.output_audio_bitrate,
                     "min_buffer_size": self._opts.min_buffer_size,
                     "max_chunk_length": self._opts.max_chunk_length,
