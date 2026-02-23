@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.4.1",
+    "livekit-agents>=1.4.3",
     "aioboto3>=14.1.0",
     "aws_sdk_transcribe_streaming>=0.2.0; python_version >= '3.12'",
 ]

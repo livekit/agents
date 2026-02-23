@@ -20,6 +20,7 @@ from ..llm import (
     ChatContext,
     StopResponse,
     ToolContext,
+    ToolError,
     utils as llm_utils,
 )
 from ..log import logger
@@ -589,7 +590,7 @@ async def _execute_tools_task(
                         bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
                         bound.apply_defaults()
 
-                        if asyncio.iscoroutinefunction(mock):
+                        if inspect.iscoroutinefunction(mock):
                             return await mock(*bound.args, **bound.kwargs)
                         else:
                             return mock(*bound.args, **bound.kwargs)
@@ -637,7 +638,16 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        if not isinstance(e, StopResponse):
+                        if isinstance(e, ToolError):
+                            logger.warning(
+                                "ToolError while executing tool: %s",
+                                e.message,
+                                extra={
+                                    "function": fnc_call.name,
+                                    "speech_id": speech_handle.id,
+                                },
+                            )
+                        elif not isinstance(e, StopResponse):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},

@@ -148,7 +148,10 @@ class STT(stt.STT):
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
-            raise ValueError("Deepgram API key is required")
+            raise ValueError(
+                "Deepgram API key is required, either as argument or set"
+                " DEEPGRAM_API_KEY environment variable"
+            )
         self._api_key = deepgram_api_key
 
         model = _validate_model(model, language)

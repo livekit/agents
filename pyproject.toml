@@ -48,9 +48,11 @@ livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-simplismart = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
+livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
+livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
@@ -60,7 +62,6 @@ livekit-plugins-xai = { workspace = true }
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
-    "livekit-plugins/livekit-plugins-browser",
     "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-durable",
 ]
@@ -69,6 +70,7 @@ exclude = [
 dev = [
     "python-dotenv>=1.0.1",
     "mypy",
+    "scikit-learn",
     "pytest",
     "ruff",
     "pytest-asyncio>=0.25.3",
@@ -76,6 +78,7 @@ dev = [
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
+    "playwright>=1.58.0",
 ]
 docs = ["pdoc3", "setuptools"]
 
@@ -108,6 +111,7 @@ convention = "google"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--import-mode=importlib", "--ignore=examples"]
+pythonpath = ["."]
 
 
 [tool.mypy]

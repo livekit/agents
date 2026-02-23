@@ -41,7 +41,10 @@ class APIError(Exception):
         self.retryable = retryable
 
     def __str__(self) -> str:
-        return f"{self.message} (body={self.body}, retryable={self.retryable})"
+        return self.message
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r})"
 
 
 class APIStatusError(APIError):
@@ -73,13 +76,13 @@ class APIStatusError(APIError):
         self.status_code = status_code
         self.request_id = request_id
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return (
-            f"{self.message} "
-            f"(status_code={self.status_code}, "
-            f"request_id={self.request_id}, "
-            f"body={self.body}, "
-            f"retryable={self.retryable})"
+            f"{self.__class__.__name__}({self.message!r}, "
+            f"status_code={self.status_code!r}, "
+            f"request_id={self.request_id!r}, "
+            f"body={self.body!r}, "
+            f"retryable={self.retryable!r})"
         )
 
 
@@ -121,3 +124,35 @@ class TextMessageError(Exception):
 
     def to_proto(self) -> agent_text.TextMessageError:
         return agent_text.TextMessageError(message=self._message, code=self._code)
+
+
+def create_api_error_from_http(
+    message: str = "",
+    *,
+    status: int,
+    request_id: str | None = None,
+    body: object | None = None,
+) -> APIStatusError:
+    """Create an APIStatusError from an HTTP status code.
+
+    When the message carries extra detail beyond the standard reason phrase,
+    both the message and the reason are shown. Otherwise just the reason.
+    """
+    from http import HTTPStatus
+
+    try:
+        reason = HTTPStatus(status).phrase
+    except ValueError:
+        reason = f"HTTP {status}"
+
+    if message and message != reason:
+        display = f"{message} ({status} {reason})"
+    else:
+        display = f"{reason} ({status})"
+
+    return APIStatusError(
+        message=display,
+        status_code=status,
+        request_id=request_id,
+        body=body,
+    )

@@ -28,6 +28,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
     tokenize,
     tts,
     utils,
@@ -48,7 +49,7 @@ class _TTSOptions:
     sample_rate: int
     voice_id: str
     speed: float | None
-    api_key: str
+    api_key: str | None
     jwt_token: str | None
     base_url: str
     word_tokenizer: tokenize.WordTokenizer
@@ -88,6 +89,7 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
             api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
+            jwt_token (str, optional): The NeuPhonic JWT token.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
             tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
@@ -100,8 +102,11 @@ class TTS(tts.TTS):
             num_channels=1,
         )
         neuphonic_api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
-        if not neuphonic_api_key:
-            raise ValueError("NEUPHONIC_API_KEY must be set")
+        if not neuphonic_api_key and not jwt_token:
+            raise ValueError(
+                "Neuphonic API key or JWT token is required, either as argument or set"
+                " NEUPHONIC_API_KEY environment variable"
+            )
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -137,7 +142,11 @@ class TTS(tts.TTS):
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
 
-        headers = {API_AUTH_HEADER: self._opts.api_key}
+        if self._opts.api_key:
+            headers = {API_AUTH_HEADER: self._opts.api_key}
+        else:
+            headers = None
+
         return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -191,6 +200,12 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
+        if not self._opts.api_key:
+            raise ValueError(
+                "Neuphonic API key is required, either as argument or set"
+                " NEUPHONIC_API_KEY environment variable"
+            )
+
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
@@ -224,9 +239,14 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            if self._opts.api_key:
+                headers = {API_AUTH_HEADER: self._opts.api_key}
+            else:
+                headers = None
+
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
-                headers={API_AUTH_HEADER: self._opts.api_key},
+                headers=headers,
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
@@ -269,9 +289,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -346,11 +364,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
+            raise create_api_error_from_http(
+                e.message, status=e.status, request_id=request_id
             ) from None
         except Exception as e:
             raise APIConnectionError() from e

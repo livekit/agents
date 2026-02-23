@@ -355,7 +355,7 @@ class AvatarSession:
         # Custom endpoints use multipart/form-data format for direct avatar worker requests
         is_custom_endpoint = not self._is_default_api_url()
 
-        if is_custom_endpoint:
+        if is_custom_endpoint and self._model == "expression":
             # Use FormData format for custom endpoints
             # Parse async parameter from URL if present
             async_mode = self._parse_async_parameter_from_url()
