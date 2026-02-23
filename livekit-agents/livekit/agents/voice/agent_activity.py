@@ -667,10 +667,11 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
-            self._on_exit_task = task = self._create_speech_task(
-                _traceable_on_exit(), name="AgentTask_on_exit"
-            )
-            _set_activity_task_info(task, inline_task=True)
+            if self._on_exit_task is None:
+                self._on_exit_task = task = self._create_speech_task(
+                    _traceable_on_exit(), name="AgentTask_on_exit"
+                )
+                _set_activity_task_info(task, inline_task=True)
 
             self._cancel_preemptive_generation()
 
@@ -803,6 +804,9 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+
+            # on_exit_task should be awaited in `drain`
+            self._on_exit_task = None
 
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
@@ -1077,14 +1081,16 @@ class AgentActivity(RecognitionHooks):
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
+            speech.interrupt(force=True)
             raise RuntimeError(
-                "cannot schedule new speech, the speech scheduling is draining/pausing"
+                "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"
             )
 
         if self._scheduling_atask and self._scheduling_atask.done():
             logger.warning(
-                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running."
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled"
             )
+            speech.interrupt(force=True)
             return
 
         while True:
@@ -2120,6 +2126,19 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            # purely used for realtime console rendering (metrics are shown
+            # as soon as the agent starts speaking, before playout finishes)
+            early_metrics: llm.MetricsReport = {}
+            if llm_gen_data.ttft is not None:
+                early_metrics["llm_node_ttft"] = llm_gen_data.ttft
+            if tts_gen_data and tts_gen_data.ttfb is not None:
+                early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            if user_metrics and "stopped_speaking_at" in user_metrics:
+                early_metrics["e2e_latency"] = (
+                    started_speaking_at - user_metrics["stopped_speaking_at"]
+                )
+            self._session._early_assistant_metrics = early_metrics
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2785,7 +2804,7 @@ class AgentActivity(RecognitionHooks):
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one AgentTask from the tool executions",
+                        "expected to receive only one Agent from the tool executions",
                     )
                     ignore_task_switch = True
 

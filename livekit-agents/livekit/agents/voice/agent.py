@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, find_function_tools
+from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -721,9 +721,20 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
+        self.__inactive_ev = asyncio.Event()
+        self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
+
+        self._old_agent: Agent | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
+
+    def cancel(self) -> None:
+        if self._activity:
+            self._activity.interrupt(force=True)
+        if self.__fut.done():
+            return
+        self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
@@ -791,6 +802,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+        self._old_agent = old_agent
 
         old_allow_interruptions = True
         if speech_handle:
@@ -823,16 +835,30 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
+        self.__inactive_ev.clear()
+        try:
+            await session._update_activity(
+                self, previous_activity="pause", blocked_tasks=blocked_tasks
+            )
 
-        # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
-        run_state = session._global_run_state
-        if speech_handle and run_state and not run_state.done():
-            # make sure to not deadlock on the current speech handle
-            run_state._unwatch_handle(speech_handle)
-            # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
-            # so handles added inside the on_enter will make sure we're not completing the run_state too early.
-            run_state._mark_done_if_needed(None)
+            if not self._activity and not self.done():
+                self.complete(
+                    ToolError(
+                        f"activity doesn't start for {self.id}, likely due to session closing"
+                    )
+                )
+
+            # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
+            run_state = session._global_run_state
+            if speech_handle and run_state and not run_state.done():
+                # make sure to not deadlock on the current speech handle
+                run_state._unwatch_handle(speech_handle)
+                # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
+                # so handles added inside the on_enter will make sure we're not completing the run_state too early.
+                run_state._mark_done_if_needed(None)
+        except Exception:
+            self.__inactive_ev.set()
+            raise
 
         try:
             return await asyncio.shield(self.__fut)
@@ -864,9 +890,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 await session._update_activity(
                     old_agent, new_activity="resume", wait_on_enter=False
                 )
+            self.__inactive_ev.set()
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
+
+    async def _wait_for_inactive(self) -> None:
+        await self.__inactive_ev.wait()
 
 
 @dataclass

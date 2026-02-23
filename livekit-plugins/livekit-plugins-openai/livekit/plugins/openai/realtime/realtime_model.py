@@ -1601,6 +1601,7 @@ class RealtimeSession(
 
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
+                    id=item_id,
                     call_id=item.call_id,
                     name=item.name,
                     arguments=item.arguments,

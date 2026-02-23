@@ -642,11 +642,22 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
-        if self._recording_initialized or not is_cloud(self._info.url):
+        if self._recording_initialized:
             self._stop_log_buffering()
             return
 
         self._recording_initialized = True
+
+        needs_cloud = (
+            options.get("traces", True)
+            or options.get("logs", True)
+            or options.get("audio", True)
+            or options.get("transcript", True)
+        )
+        if not (needs_cloud and is_cloud(self._info.url)):
+            self._stop_log_buffering()
+            return
+
         cloud_hostname = urlparse(self._info.url).hostname
         logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
         if cloud_hostname:
@@ -660,7 +671,7 @@ class JobContext:
             # init_recording is typically called during session.start(), at which point a bunch of
             # the logs would have already been emitted. we want to capture all of the logs as it
             # relates to the job
-            self._flush_early_log_buffer(replay=True)
+            self._flush_early_log_buffer(replay=options["logs"])
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:

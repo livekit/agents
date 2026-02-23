@@ -26,7 +26,7 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
-from ..llm import AgentHandoff, ChatContext
+from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..log import logger
 from ..metrics import ModelUsage, ModelUsageCollector
 from ..telemetry import trace_types, tracer
@@ -40,7 +40,7 @@ from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent
+from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
@@ -415,6 +415,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        # TODO(theomonnom): need a better way to expose early assistant metrics
+        self._early_assistant_metrics: MetricsReport | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -865,19 +867,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._closing = True
             self._cancel_user_away_timer()
 
-            if self._activity is not None:
+            activity = self._activity
+            while activity and isinstance(agent_task := activity.agent, AgentTask):
+                # notify AgentTask to complete and wait it to resume the parent agent
+                agent_task.cancel()
+                await agent_task._wait_for_inactive()
+
+                if old_agent := agent_task._old_agent:
+                    activity = old_agent._activity
+                else:
+                    break
+
+            if activity is not None:
                 if not drain:
                     try:
                         # force interrupt speeches when closing the session
-                        await self._activity.interrupt(force=True)
+                        await activity.interrupt(force=True)
                     except RuntimeError:
                         # uninterruptible speech
                         pass
-                await self._activity.drain()
+                await activity.drain()
 
                 # wait any uninterruptible speech to finish
-                if self._activity.current_speech:
-                    await self._activity.current_speech
+                if activity.current_speech:
+                    await activity.current_speech
 
                 # detach the inputs and outputs
                 self.input.audio = None
@@ -887,13 +900,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if (
                     reason != CloseReason.ERROR
-                    and (audio_recognition := self._activity._audio_recognition) is not None
+                    and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
                     audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
 
-                await self._activity.aclose()
-                self._activity = None
+                await activity.aclose()
+            self._activity = None
 
             if self._agent_speaking_span:
                 self._agent_speaking_span.end()
@@ -1156,12 +1169,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 otel_context.attach(self._root_span_context)
 
             previous_activity_v = self._activity
-            if self._activity is not None:
+            if (activity := self._activity) is not None:
                 if previous_activity == "close":
-                    await self._activity.drain()
-                    await self._activity.aclose()
+                    await activity.drain()
+                    await activity.aclose()
                 elif previous_activity == "pause":
-                    await self._activity.pause(blocked_tasks=blocked_tasks or [])
+                    await activity.pause(blocked_tasks=blocked_tasks or [])
+
+            if self._closing and new_activity == "start":
+                # disallow starting a new activity when the session is closing
+                logger.warning(
+                    f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
+                )
+                self._next_activity = None
+                self._activity = None
+                return
 
             self._activity = self._next_activity
             self._next_activity = None

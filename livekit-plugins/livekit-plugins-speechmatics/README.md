@@ -23,7 +23,7 @@ You should adjust your system instructions to inform the LLM of this format for 
 
 To use the Speechmatics end of utterance detection and speaker ID, you can use the following configuration.
 
-Note: The `turn_detection_mode` parameter tells the plugin to control the end of turn detection. The default is `ADAPTIVE`, which means that the plugin will emit finalized words after a period of silence (controlled by the `end_of_utterance_silence_trigger` value). In this example we use the default `ADAPTIVE` mode, which means that the plugin will control the end of turn detection using the plugin's own VAD detection and the pace of speech. The `turn_detection="stt"` parameter tells the plugin to use the STT engine's end of turn detection.
+Note: The `turn_detection_mode` parameter tells the plugin to control the end of turn detection. The default mode is `ADAPTIVE`, which means that the plugin will control the end of turn detection using the plugin's own VAD detection and the pace of speech. In the example below, we use the default `ADAPTIVE` mode. The `turn_detection="stt"` parameter tells the plugin to use the STT engine's end of turn detection.
 
 ```python
 from livekit.agents import AgentSession

@@ -1126,7 +1126,6 @@ class ChunkedStream(tts.ChunkedStream):
 
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
-                            output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
                             message=error.get("message"),
@@ -1134,6 +1133,7 @@ class ChunkedStream(tts.ChunkedStream):
                             request_id=x_request_id,
                             body=None,
                         )
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
