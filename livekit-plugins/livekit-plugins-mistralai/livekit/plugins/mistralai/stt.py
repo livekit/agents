@@ -72,12 +72,9 @@ from .models import STTModels
 DEFAULT_SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 CHUNK_DURATION_MS = 100
-DEFAULT_FINALIZE_DELAY_MS = (
-    100  # client-side finalize delay, not the model's transcription_delay_ms
-)
-# Idle threshold: time since last text delta before emitting FINAL_TRANSCRIPT.
-# Must exceed the model's transcription_delay_ms (default 480ms) so the model
-# has time to process trailing silence and emit final tokens. 650ms gives ~170ms margin.
+DEFAULT_FINALIZE_DELAY_MS = 100  # fallback idle finalize delay
+# Idle threshold: fallback finalization when no FlushSentinel / flush_audio() is used.
+# Must exceed the model's transcription_delay_ms (default 480ms). 650ms gives ~170ms margin.
 MIN_IDLE_FINALIZE_MS = 650
 
 
@@ -315,15 +312,12 @@ class SpeechStream(stt.RecognizeStream):
     Connections are obtained from the STT-level pool and reused across turns.
     end_audio() is reserved for final pool cleanup.
 
-    The model flushes buffered tokens when it detects silence in the audio stream.
-    The LiveKit voice pipeline keeps sending audio frames (including silence) after
-    speech ends, which gives the model the context it needs to emit final tokens.
-
     Finalization strategy:
-    1. Flush-based: FlushSentinel from caller → debounced finalize after delay.
-    2. Idle-based (primary path): no text deltas for MIN_IDLE_FINALIZE_MS →
-       emit FINAL_TRANSCRIPT. By this point the model has already flushed via
-       silence detection.
+    1. Server-driven (primary): FlushSentinel from caller → flush_audio() →
+       server emits remaining tokens + TranscriptionStreamDone. Connection
+       stays open for the next utterance.
+    2. Idle-based (fallback): no text deltas for MIN_IDLE_FINALIZE_MS →
+       emit FINAL_TRANSCRIPT.
     """
 
     def __init__(
@@ -346,9 +340,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
         self._partial_text = ""
 
-        self._pending_finalize = False
         self._last_text_time = 0.0
-        self._flush_time = 0.0
 
         self._audio_duration = 0.0
         self._data_sent = False
@@ -427,7 +419,7 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(retryable=not self._data_sent) from e
 
     def _release_connection(self, connection: RealtimeConnection) -> None:
-        if connection.is_closed or self._speaking or self._pending_finalize or bool(self._partial_text.strip()):
+        if connection.is_closed or self._speaking or bool(self._partial_text.strip()):
             self._pool.remove(connection)
             return
 
@@ -454,14 +446,16 @@ class SpeechStream(stt.RecognizeStream):
             elif isinstance(data, self._FlushSentinel):
                 for frame in audio_bstream.flush():
                     await connection.send_audio(frame.data.tobytes())
-                self._pending_finalize = True
-                self._flush_time = time.monotonic()
+                await connection.flush_audio()
 
         # Stream input exhausted (stream being torn down) — flush remaining audio
         for frame in audio_bstream.flush():
             if connection.is_closed:
                 break
             await connection.send_audio(frame.data.tobytes())
+
+        if not connection.is_closed:
+            await connection.flush_audio()
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         initial_events = getattr(connection, "_initial_events", None)
@@ -482,17 +476,26 @@ class SpeechStream(stt.RecognizeStream):
                 continue
 
             event = parse_realtime_event(data)
-            if self._process_event(event):
-                return
+            self._process_event(event)
 
-        raise APIStatusError(
-            message="Mistral realtime connection closed unexpectedly",
-            status_code=getattr(websocket, "close_code", -1) or -1,
-            request_id=self._request_id or None,
-            retryable=not self._data_sent,
-        )
+        # WebSocket closed — expected when the connection is being torn down
+        # after send_task finishes, unexpected otherwise.
+        close_code = getattr(websocket, "close_code", None)
+        if close_code and close_code != 1000:
+            raise APIStatusError(
+                message="Mistral realtime connection closed unexpectedly",
+                status_code=close_code,
+                request_id=self._request_id or None,
+                retryable=not self._data_sent,
+            )
 
     async def _finalization_checker(self) -> None:
+        """Fallback finalization via idle detection.
+
+        The primary path is server-driven: flush_audio() triggers
+        TranscriptionStreamDone. This checker handles the edge case where
+        no FlushSentinel arrives (e.g. non-VAD pipelines).
+        """
         check_interval = 0.05
         finalize_delay_s = max(self._opts.finalize_delay_ms / 1000.0, 0.05)
         idle_finalize_delay_s = max(finalize_delay_s, MIN_IDLE_FINALIZE_MS / 1000.0)
@@ -503,19 +506,6 @@ class SpeechStream(stt.RecognizeStream):
             now = time.monotonic()
             time_since_text = now - self._last_text_time if self._last_text_time > 0 else 0.0
 
-            if self._pending_finalize:
-                time_since_flush = now - self._flush_time
-                should_finalize = time_since_flush >= finalize_delay_s and (
-                    self._last_text_time == 0 or time_since_text >= finalize_delay_s
-                )
-                if should_finalize:
-                    self._finalize_utterance(reason="flush_timeout")
-                    continue
-
-            # Idle-based finalization: no text deltas for idle_finalize_delay_s.
-            # The model flushes buffered tokens when it detects silence in the
-            # audio stream (pipeline keeps sending silence frames after speech ends).
-            # By the time this fires, the model should have already emitted all tokens.
             idle_ready = (
                 self._speaking
                 and self._last_text_time > 0
@@ -547,7 +537,6 @@ class SpeechStream(stt.RecognizeStream):
 
         self._partial_text = ""
         self._last_text_time = 0.0
-        self._pending_finalize = False
 
     def _emit_usage_metrics(self, audio_duration: float | None = None) -> None:
         if self._usage_emitted:
@@ -652,7 +641,9 @@ class SpeechStream(stt.RecognizeStream):
 
             self._finalize_utterance(reason="transcription_done")
             self._emit_usage_metrics(self._provider_audio_duration(event))
-            return True
+            # Non-terminal: flush_audio() triggers TranscriptionStreamDone
+            # but the connection stays open for the next utterance.
+            return False
 
         if isinstance(event, RealtimeTranscriptionError):
             error = event.error
