@@ -44,8 +44,10 @@ __all__ = [
     "__version__",
 ]
 
+
 class KrispPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
 
 Plugin.register_plugin(KrispPlugin())

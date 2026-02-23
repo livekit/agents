@@ -327,7 +327,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 # Silently ignore errors during shutdown
                 pass
 
-    def __enter__(self) -> "KrispVivaFilterFrameProcessor":
+    def __enter__(self) -> KrispVivaFilterFrameProcessor:
         """Context manager entry."""
         return self
 
