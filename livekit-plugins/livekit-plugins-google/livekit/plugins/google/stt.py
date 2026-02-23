@@ -451,6 +451,15 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
+        new_version = (
+            (2 if model in get_args(SpeechModelsV2) else 1)
+            if is_given(model)
+            else self._config.version
+        )
+        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
+        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
+            self._validate_adaptation(effective_adaptation, new_version)
+
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -463,9 +472,6 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
-        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
-        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
-            self._validate_adaptation(effective_adaptation, self._config.version)
         if is_given(adaptation):
             if is_given(keywords) or is_given(self._config.keywords):
                 logger.warning(
