@@ -34,7 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .models import ChatModels
+from .models import ChatModels, _supports_thinking
 from .utils import CACHE_CONTROL_EPHEMERAL
 
 
@@ -48,6 +48,8 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    thinking_enabled: NotGivenOr[bool]
+    thinking_budget_tokens: NotGivenOr[int]
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -55,7 +57,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-5-sonnet-20241022",
+        model: str | ChatModels = "claude-haiku-4-5-20251001",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -66,6 +68,8 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        thinking_enabled: NotGivenOr[bool] = NOT_GIVEN,
+        thinking_budget_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -73,7 +77,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
+        model (str | ChatModels): The model to use. Defaults to "claude-haiku-4-5-20251001".
         api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
@@ -82,6 +86,8 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        thinking_enabled (bool, optional): If True, enables extended thinking. Defaults to disabled.
+        thinking_budget_tokens (int, optional): The token budget for extended thinking. Must be less than max_tokens. Defaults to 1024 when thinking is enabled.
         """  # noqa: E501
 
         super().__init__()
@@ -95,6 +101,8 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            thinking_enabled=thinking_enabled,
+            thinking_budget_tokens=thinking_budget_tokens,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -150,6 +158,24 @@ class LLM(llm.LLM):
             extra["top_k"] = self._opts.top_k
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
+
+        # Add extended thinking configuration if enabled and model supports it
+        if (
+            is_given(self._opts.thinking_enabled)
+            and self._opts.thinking_enabled
+            and _supports_thinking(self._opts.model)
+        ):
+            budget = (
+                self._opts.thinking_budget_tokens
+                if is_given(self._opts.thinking_budget_tokens)
+                else 1024
+            )
+            max_tokens = extra["max_tokens"]
+            if budget >= max_tokens:
+                raise ValueError(
+                    f"thinking_budget_tokens ({budget}) must be less than max_tokens ({max_tokens})"
+                )
+            extra["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
         if tools:
             extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
@@ -249,6 +275,7 @@ class LLMStream(llm.LLMStream):
 
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
+        self._in_thinking_block = False  # ignore extended thinking content
         self._input_tokens = 0
         self._cache_creation_tokens = 0
         self._cache_read_tokens = 0
@@ -312,6 +339,8 @@ class LLMStream(llm.LLMStream):
                 self._tool_call_id = event.content_block.id
                 self._fnc_name = event.content_block.name
                 self._fnc_raw_arguments = ""
+            elif event.content_block.type == "thinking":
+                self._in_thinking_block = True
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -335,8 +364,14 @@ class LLMStream(llm.LLMStream):
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
                 self._fnc_raw_arguments += delta.partial_json
+            elif delta.type == "thinking_delta":
+                # ignore extended thinking content, don't emit to user
+                return None
 
         elif event.type == "content_block_stop":
+            if self._in_thinking_block:
+                self._in_thinking_block = False
+                return None
             if self._tool_call_id is not None:
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
