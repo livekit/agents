@@ -341,6 +341,12 @@ class SonicEventBuilder:
                 else:
                     merged.append((role, text))
 
+            # Nova Sonic rejects history that starts with ASSISTANT.
+            # Strip leading assistant messages (e.g. orphaned greetings from handoff).
+            if merged and merged[0][0] == "ASSISTANT":
+                logger.debug("Stripping leading ASSISTANT message from history events")
+                merged.pop(0)
+
             for role, text in merged:
                 ctx_content_name = str(uuid.uuid4())
                 history_events.extend(

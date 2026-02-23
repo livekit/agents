@@ -525,6 +525,10 @@ class RealtimeSession(  # noqa: F811
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
+        # Signalled after await_output() returns (HTTP 200 received).
+        # Interactive text must wait for this to avoid being sent before
+        # audio input is flowing (Nova Sonic requires active audio to generate).
+        self._stream_ready = asyncio.Event()
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -730,6 +734,7 @@ class RealtimeSession(  # noqa: F811
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         logger.debug("[SESSION] Created fresh tool results channel")
         self._audio_end_turn_received = False
+        self._stream_ready.clear()
 
         # Step 7: Start new session with preserved state
         await self.initialize_streams(is_restart=True)
@@ -932,15 +937,17 @@ class RealtimeSession(  # noqa: F811
             # Step 1: Send session init events (session start, prompt start, system prompt)
             for event in init_events:
                 await self._send_raw_event(event)
-                logger.debug(f"Sent event: {event}")
+
+            # Start session recycling timer
+            self._session_start_time = time.time()
+            self._start_session_recycle_timer()
 
             # Step 2: Send history events with small delays between them
             for event in history_events:
                 await self._send_raw_event(event)
                 await asyncio.sleep(0.01)
-                logger.debug(f"Sent event: {event}")
 
-            # Always create audio input task (even on restart)
+            # Step 3: Create audio input task (sends AUDIO contentStart immediately)
             self._audio_input_task = asyncio.create_task(
                 self._process_audio_input(), name="RealtimeSession._process_audio_input"
             )
@@ -948,11 +955,12 @@ class RealtimeSession(  # noqa: F811
             self._response_task = asyncio.create_task(
                 self._process_responses(), name="RealtimeSession._process_responses"
             )
-            self._is_sess_active.set()
 
-            # Start session recycling timer
-            self._session_start_time = time.time()
-            self._start_session_recycle_timer()
+            # Step 4: Allow audio contentStart to be sent before unblocking
+            # interactive text (generate_reply). This avoids sending AUDIO and TEXT
+            # interactive contentStart events simultaneously.
+            await asyncio.sleep(0.05)
+            self._is_sess_active.set()
 
             logger.debug("Stream initialized successfully")
         except Exception as e:
@@ -1400,9 +1408,10 @@ class RealtimeSession(  # noqa: F811
             await self._is_sess_active.wait()
             assert self._stream_response is not None, "stream_response is None"
 
-            # note: may need another signal here to block input task until bedrock is ready
-            # TODO: save this as a field so we're not re-awaiting it every time
             _, output_stream = await self._stream_response.await_output()
+            # Stream is now fully bidirectional (HTTP 200 received).
+            # Unblock interactive text sends so they land after audio is flowing.
+            self._stream_ready.set()
             while self._is_sess_active.is_set():
                 # and not self.stream_response.output_stream.closed:
                 try:
@@ -1631,6 +1640,18 @@ class RealtimeSession(  # noqa: F811
         # Initial context setup (once)
         if not self._chat_ctx_ready.done():
             self._chat_ctx = chat_ctx.copy()
+            # Nova Sonic requires history to start with a user message.
+            # During handoff, the context may begin with an orphaned assistant
+            # greeting (from generate_reply with instructions). Strip it.
+            if (
+                self._chat_ctx.items
+                and self._chat_ctx.items[0].type == "message"
+                and self._chat_ctx.items[0].role == "assistant"
+            ):
+                removed = self._chat_ctx.items.pop(0)
+                logger.debug(
+                    "Stripped leading assistant message from context: %s", removed.id
+                )
             # Mark all initial context messages as already sent so the loop below
             # doesn't re-send them as interactive=true text. These messages are already
             # sent as non-interactive history via create_prompt_start_block during
@@ -1689,8 +1710,8 @@ class RealtimeSession(  # noqa: F811
                             text: str = text, fut: asyncio.Future = fut
                         ) -> None:
                             try:
-                                # Wait for session to be fully initialized before sending
-                                await self._is_sess_active.wait()
+                                # Wait for bidirectional stream to be fully established
+                                await self._stream_ready.wait()
                                 await self._send_text_message(text, interactive=True)
                             except Exception as e:
                                 if not fut.done():
@@ -1778,6 +1799,11 @@ class RealtimeSession(  # noqa: F811
         """Background task that feeds audio and tool results into the Bedrock stream."""
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         logger.info("Starting audio input processing loop")
+
+        # Wait for session to be marked active before entering the loop.
+        # Without this, the while-condition below evaluates to False immediately
+        # because _is_sess_active is set after an asyncio.sleep in initialize_streams.
+        await self._is_sess_active.wait()
 
         # Create tasks for both channels so we can wait on either
         audio_task = asyncio.create_task(self._audio_input_chan.recv())
@@ -1949,8 +1975,9 @@ class RealtimeSession(  # noqa: F811
             # Send text message asynchronously
             async def _send_text() -> None:
                 try:
-                    # Wait for session to be fully initialized before sending
-                    await self._is_sess_active.wait()
+                    # Wait for the bidirectional stream to be fully established
+                    # (HTTP 200 received) and audio input flowing.
+                    await self._stream_ready.wait()
                     await self._send_text_message(instructions, interactive=True)
                 except Exception as e:
                     if not fut.done():
@@ -2009,9 +2036,11 @@ class RealtimeSession(  # noqa: F811
 
         # Send event sequence: contentStart → textInput → contentEnd
         await self._send_raw_event(event)
+        await asyncio.sleep(0.01)
         await self._send_raw_event(
             self._event_builder.create_text_content_event(content_name, text)
         )
+        await asyncio.sleep(0.01)
         await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
