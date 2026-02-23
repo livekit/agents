@@ -1,5 +1,3 @@
-"""BrowserAgent — high-level AI agent that controls a browser via Anthropic computer-use."""
-
 from __future__ import annotations
 
 import asyncio
@@ -30,17 +28,6 @@ _CURSOR_TOPIC = "browser-agent-cursor"
 
 
 class BrowserAgent:
-    """Batteries-included agent that connects an LLM with computer-use to a browser.
-
-    Usage::
-
-        agent = BrowserAgent(
-            url="https://www.google.com/",
-            llm=LLM(model="claude-sonnet-4-6-20250514"),
-            instructions="You are a helpful AI that can browse the web.",
-        )
-        await agent.start(room=ctx.room)
-    """
 
     def __init__(
         self,
@@ -91,7 +78,6 @@ class BrowserAgent:
         return self._chat_ctx
 
     async def start(self, *, room: rtc.Room) -> None:
-        """Initialize browser, session, and start listening for chat messages."""
         if self._started:
             return
         self._started = True
@@ -157,11 +143,9 @@ class BrowserAgent:
         self._agent_loop_task = asyncio.create_task(self._agent_loop())
 
     async def send_message(self, text: str) -> None:
-        """Programmatically send a user message to the agent."""
         self._pending_messages.put_nowait(text)
 
     async def _agent_loop(self) -> None:
-        """Main loop: wait for messages, call LLM, execute tools, repeat."""
         assert self._chat_ctx is not None
         assert self._computer_tool is not None
         assert self._session is not None
@@ -191,7 +175,6 @@ class BrowserAgent:
                 await self._send_status("idle")
 
     async def _run_llm_loop(self) -> None:
-        """Call LLM, execute tool calls, loop until no more tool calls."""
         assert self._chat_ctx is not None
         assert self._computer_tool is not None
         assert self._session is not None
@@ -239,7 +222,6 @@ class BrowserAgent:
                         await self._send_cursor_position(
                             int(coord[0]), int(coord[1]), action
                         )
-
 
                     await self._send_status("acting")
 
@@ -305,7 +287,6 @@ class BrowserAgent:
             await self._send_status("thinking")
 
     async def _send_chat(self, text: str) -> None:
-        """Send a chat message to the frontend via data channel."""
         if self._room is None:
             return
         payload = json.dumps({"text": text, "sender": "agent"}).encode()
@@ -317,7 +298,6 @@ class BrowserAgent:
             logger.debug("failed to send chat message")
 
     async def _send_status(self, status: str) -> None:
-        """Send agent status to the frontend via data channel."""
         if self._room is None:
             return
         payload = json.dumps({"status": status}).encode()
@@ -329,7 +309,6 @@ class BrowserAgent:
             logger.debug("failed to send status")
 
     async def _send_cursor_position(self, x: int, y: int, action: str) -> None:
-        """Broadcast agent cursor position for frontend overlay."""
         if self._room is None:
             return
         payload = json.dumps(
@@ -350,7 +329,6 @@ class BrowserAgent:
             logger.debug("failed to send cursor position")
 
     async def _send_cursor_hide(self) -> None:
-        """Hide the agent cursor overlay on the frontend."""
         if self._room is None:
             return
         payload = json.dumps({"visible": False}).encode()
@@ -362,7 +340,6 @@ class BrowserAgent:
             pass
 
     async def aclose(self) -> None:
-        """Clean up everything."""
         if self._agent_loop_task:
             self._agent_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -385,7 +362,6 @@ class BrowserAgent:
 
 
 def _screenshot_content(actions: PageActions) -> list[dict[str, Any]]:
-    """Capture the current frame from PageActions and return as Anthropic image content."""
     from livekit.agents.utils.images import EncodeOptions, encode
 
     frame = actions.last_frame
