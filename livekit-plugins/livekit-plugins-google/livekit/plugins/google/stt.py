@@ -78,6 +78,10 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     profanity_filter: bool
+    denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN
+    adaptation: NotGivenOr[cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation] = (
+        NOT_GIVEN
+    )
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
@@ -89,6 +93,8 @@ class STTOptions:
     def build_adaptation(
         self,
     ) -> cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation | None:
+        if is_given(self.adaptation):
+            return self.adaptation
         if is_given(self.keywords):
             if self.version == 2:
                 return cloud_speech_v2.SpeechAdaptation(
@@ -134,6 +140,10 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
+        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[
+            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
+        ] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -163,6 +173,8 @@ class STT(stt.STT):
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
             (default: 0.65)
+            denoiser_config (DenoiserConfig): the denoiser configuration (default: None)
+            adaptation (SpeechAdaptation): speech adaptation for biasing specific words and phrases (default: None)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
@@ -170,6 +182,13 @@ class STT(stt.STT):
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
+        if is_given(adaptation):
+            if is_given(keywords):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
+            self._validate_adaptation(adaptation, 2 if model in get_args(SpeechModelsV2) else 1)
+
         if not is_given(use_streaming):
             use_streaming = True
 
@@ -222,7 +241,9 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
+            adaptation=adaptation,
             keywords=keywords,
+            denoiser_config=denoiser_config,
             speech_start_timeout=speech_start_timeout,
             speech_end_timeout=speech_end_timeout,
         )
@@ -312,6 +333,9 @@ class STT(stt.STT):
                     enable_word_confidence=config.enable_word_confidence,
                     profanity_filter=config.profanity_filter,
                 ),
+                denoiser_config=config.denoiser_config
+                if is_given(config.denoiser_config)
+                else None,
                 model=config.model,
                 language_codes=config.languages,
             )
@@ -405,6 +429,10 @@ class STT(stt.STT):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[
+            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
+        ] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -423,6 +451,15 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
+        new_version = (
+            (2 if model in get_args(SpeechModelsV2) else 1)
+            if is_given(model)
+            else self._config.version
+        )
+        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
+        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
+            self._validate_adaptation(effective_adaptation, new_version)
+
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
@@ -433,7 +470,19 @@ class STT(stt.STT):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
             self._pool.invalidate()
+        if is_given(denoiser_config):
+            self._config.denoiser_config = denoiser_config
+        if is_given(adaptation):
+            if is_given(keywords) or is_given(self._config.keywords):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
+            self._config.adaptation = adaptation
         if is_given(keywords):
+            if is_given(self._config.adaptation) and not is_given(adaptation):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
@@ -449,6 +498,8 @@ class STT(stt.STT):
                 spoken_punctuation=spoken_punctuation,
                 profanity_filter=profanity_filter,
                 model=model,
+                denoiser_config=denoiser_config,
+                adaptation=adaptation,
                 keywords=keywords,
                 speech_start_timeout=speech_start_timeout,
                 speech_end_timeout=speech_end_timeout,
@@ -457,6 +508,22 @@ class STT(stt.STT):
     async def aclose(self) -> None:
         await self._pool.aclose()
         await super().aclose()
+
+    def _validate_adaptation(
+        self,
+        adaptation: cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation,
+        api_version: int,
+    ) -> None:
+        if api_version == 2 and not isinstance(adaptation, cloud_speech_v2.SpeechAdaptation):
+            raise ValueError(
+                "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models, "
+                f"got {type(adaptation).__name__}"
+            )
+        if api_version == 1 and not isinstance(adaptation, resource_v1.SpeechAdaptation):
+            raise ValueError(
+                "adaptation must be resource_v1.SpeechAdaptation for v1 models, "
+                f"got {type(adaptation).__name__}"
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -488,6 +555,10 @@ class SpeechStream(stt.SpeechStream):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[
+            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
+        ] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -513,6 +584,10 @@ class SpeechStream(stt.SpeechStream):
                 self._pool.invalidate()
         if is_given(min_confidence_threshold):
             self._config.min_confidence_threshold = min_confidence_threshold
+        if is_given(denoiser_config):
+            self._config.denoiser_config = denoiser_config
+        if is_given(adaptation):
+            self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
@@ -562,6 +637,9 @@ class SpeechStream(stt.SpeechStream):
                         enable_word_confidence=self._config.enable_word_confidence,
                         profanity_filter=self._config.profanity_filter,
                     ),
+                    denoiser_config=self._config.denoiser_config
+                    if is_given(self._config.denoiser_config)
+                    else None,
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                     interim_results=self._config.interim_results,
