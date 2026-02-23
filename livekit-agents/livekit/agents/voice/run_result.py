@@ -195,7 +195,7 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_exception(
                         RuntimeError(
                             f"Expected output of type {self._output_type.__name__}, "
-                            f"got {type(self._final_output).__name__}"
+                            f"got {type(final_output).__name__}"
                         )
                     )
                 else:
