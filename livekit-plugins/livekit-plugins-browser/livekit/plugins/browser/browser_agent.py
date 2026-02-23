@@ -28,7 +28,6 @@ _CURSOR_TOPIC = "browser-agent-cursor"
 
 
 class BrowserAgent:
-
     def __init__(
         self,
         *,
@@ -219,15 +218,11 @@ class BrowserAgent:
                     # Broadcast cursor position for frontend overlay
                     coord = args.get("coordinate")
                     if coord and len(coord) == 2:
-                        await self._send_cursor_position(
-                            int(coord[0]), int(coord[1]), action
-                        )
+                        await self._send_cursor_position(int(coord[0]), int(coord[1]), action)
 
                     await self._send_status("acting")
 
-                    screenshot_content = await self._computer_tool.execute(
-                        action, **args
-                    )
+                    screenshot_content = await self._computer_tool.execute(action, **args)
 
                     # Wait for page to settle after clicks/typing
                     if action in (
