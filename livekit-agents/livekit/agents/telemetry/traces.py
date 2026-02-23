@@ -232,15 +232,15 @@ def _setup_cloud_tracer(
         logger_provider = LoggerProvider()
         set_logger_provider(logger_provider)
 
-    log_exporter = OTLPLogExporter(
-        endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        compression=otlp_compression,
-        session=session,
-    )
-    logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
-    logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-
     if enable_logs:
+        log_exporter = OTLPLogExporter(
+            endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+        )
+        logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+
         handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
         root = logging.getLogger()
