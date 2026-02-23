@@ -26,6 +26,7 @@ _POST_ACTION_DELAY = 0.3
 
 _CHAT_TOPIC = "browser-agent-chat"
 _STATUS_TOPIC = "browser-agent-status"
+_CURSOR_TOPIC = "browser-agent-cursor"
 
 
 class BrowserAgent:
@@ -179,12 +180,14 @@ class BrowserAgent:
 
                 await self._run_llm_loop()
 
+                await self._send_cursor_hide()
                 await self._send_status("idle")
 
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("error in agent loop")
+                await self._send_cursor_hide()
                 await self._send_status("idle")
 
     async def _run_llm_loop(self) -> None:
@@ -229,6 +232,11 @@ class BrowserAgent:
 
                     args = _json.loads(tc.arguments or "{}")
                     action = args.pop("action", "screenshot")
+
+                    # Broadcast cursor position for frontend overlay
+                    coord = args.get("coordinate")
+                    if coord and len(coord) == 2:
+                        await self._send_cursor_position(int(coord[0]), int(coord[1]), action)
 
                     await self._send_status("acting")
 
@@ -305,6 +313,39 @@ class BrowserAgent:
             )
         except Exception:
             logger.debug("failed to send status")
+
+    async def _send_cursor_position(self, x: int, y: int, action: str) -> None:
+        """Broadcast agent cursor position for frontend overlay."""
+        if self._room is None:
+            return
+        payload = json.dumps(
+            {
+                "x": x,
+                "y": y,
+                "action": action,
+                "visible": True,
+                "width": self._width,
+                "height": self._height,
+            }
+        ).encode()
+        try:
+            await self._room.local_participant.publish_data(
+                payload, reliable=True, topic=_CURSOR_TOPIC
+            )
+        except Exception:
+            logger.debug("failed to send cursor position")
+
+    async def _send_cursor_hide(self) -> None:
+        """Hide the agent cursor overlay on the frontend."""
+        if self._room is None:
+            return
+        payload = json.dumps({"visible": False}).encode()
+        try:
+            await self._room.local_participant.publish_data(
+                payload, reliable=True, topic=_CURSOR_TOPIC
+            )
+        except Exception:
+            pass
 
     async def aclose(self) -> None:
         """Clean up everything."""
