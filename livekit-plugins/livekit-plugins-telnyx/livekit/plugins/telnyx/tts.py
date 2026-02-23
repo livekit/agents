@@ -134,6 +134,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from None
         except APIConnectionError:
             raise
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -208,6 +210,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except (APIConnectionError, APIStatusError, APITimeoutError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
