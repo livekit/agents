@@ -31,6 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    Language,
     tokenize,
     tts,
     utils,
@@ -186,7 +187,7 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             enable_logging=enable_logging,
-            language=language,
+            language=Language(language) if is_given(language) else NOT_GIVEN,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
@@ -253,9 +254,11 @@ class TTS(tts.TTS):
             self._opts.voice_settings = voice_settings
             changed = True
 
-        if is_given(language) and language != self._opts.language:
-            self._opts.language = language
-            changed = True
+        if is_given(language):
+            language = Language(language)
+            if language != self._opts.language:
+                self._opts.language = language
+                changed = True
 
         if is_given(pronunciation_dictionary_locators):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
@@ -480,7 +483,7 @@ class _TTSOptions:
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[Language]
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -834,7 +837,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     params.append(f"model_id={opts.model}")
     params.append(f"output_format={opts.encoding}")
     if is_given(opts.language):
-        params.append(f"language_code={opts.language}")
+        params.append(f"language_code={opts.language.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
     params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")

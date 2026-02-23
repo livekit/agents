@@ -5,7 +5,7 @@ from time import perf_counter
 
 import aiohttp
 
-from livekit.agents import Plugin, get_job_context, llm, utils
+from livekit.agents import Language, Plugin, get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
 from .base import MAX_HISTORY_TURNS, EOUModelBase, EOUPlugin, _EUORunnerBase
@@ -34,7 +34,7 @@ class MultilingualModel(EOUModelBase):
     def _inference_method(self) -> str:
         return _EUORunnerMultilingual.INFERENCE_METHOD
 
-    async def unlikely_threshold(self, language: str | None) -> float | None:
+    async def unlikely_threshold(self, language: Language | None) -> float | None:
         if not language:
             return None
 
@@ -45,7 +45,7 @@ class MultilingualModel(EOUModelBase):
                     async with utils.http_context.http_session().post(
                         url=url,
                         json={
-                            "language": language,
+                            "language": language.iso,
                         },
                         timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
                     ) as resp:
@@ -53,7 +53,8 @@ class MultilingualModel(EOUModelBase):
                         data = await resp.json()
                         threshold = data.get("threshold")
                         if threshold:
-                            self._languages[language] = {"threshold": threshold}
+                            # cache by base language so the base class lookup finds it
+                            self._languages[language.language] = {"threshold": threshold}
             except Exception as e:
                 logger.warning("Error fetching threshold for language %s", language, exc_info=e)
 

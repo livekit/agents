@@ -23,6 +23,7 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    Language,
     stt,
     utils,
 )
@@ -72,7 +73,7 @@ class Credentials:
 @dataclass
 class STTOptions:
     sample_rate: int
-    language: str
+    language: Language
     encoding: str
     vocabulary_name: NotGivenOr[str]
     session_id: NotGivenOr[str]
@@ -126,7 +127,7 @@ class STT(stt.STT):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
 
         self._config = STTOptions(
-            language=language,
+            language=Language(language),
             sample_rate=sample_rate,
             encoding=encoding,
             vocabulary_name=vocabulary_name,
@@ -372,7 +373,7 @@ class SpeechStream(stt.SpeechStream):
             confidence = items[0].confidence or 0.0
 
         return stt.SpeechData(
-            language=resp.language_code or self._opts.language,
+            language=Language(resp.language_code or self._opts.language),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",

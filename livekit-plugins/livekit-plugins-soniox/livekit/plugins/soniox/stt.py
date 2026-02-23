@@ -28,6 +28,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -386,7 +387,7 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[
                         stt.SpeechData(
                             text=final_transcript_buffer,
-                            language=final_transcript_language,
+                            language=Language(final_transcript_language),
                             speaker_id=final_speaker_id,
                         )
                     ],
@@ -464,7 +465,7 @@ class SpeechStream(stt.SpeechStream):
                                     alternatives=[
                                         stt.SpeechData(
                                             text=final_transcript_buffer + non_final_transcription,
-                                            language=(
+                                            language=Language(
                                                 final_transcript_language
                                                 if final_transcript_language
                                                 else non_final_transcription_language

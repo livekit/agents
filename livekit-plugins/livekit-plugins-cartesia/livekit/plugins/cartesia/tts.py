@@ -31,6 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    Language,
     tokenize,
     tts,
     utils,
@@ -70,7 +71,7 @@ class _TTSOptions:
     volume: float | None
     word_timestamps: bool
     api_key: str
-    language: str | None
+    language: Language | None
     base_url: str
     api_version: str
     pronunciation_dict_id: str | None
@@ -146,7 +147,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
-            language=language,
+            language=Language(language) if language else None,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -183,7 +184,7 @@ class TTS(tts.TTS):
         if word_timestamps:
             if "preview" not in self._opts.model and (
                 self._opts.language is not None
-                and self._opts.language
+                and self._opts.language.language
                 not in {
                     "en",
                     "de",
@@ -261,7 +262,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language) if language else None
         if is_given(voice):
             self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
@@ -565,7 +566,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             "encoding": opts.encoding,
             "sample_rate": opts.sample_rate,
         },
-        "language": opts.language,
+        "language": opts.language.language if opts.language else None,
     }
 
     if opts.pronunciation_dict_id:

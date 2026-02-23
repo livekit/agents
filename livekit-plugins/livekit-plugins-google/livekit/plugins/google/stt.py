@@ -39,6 +39,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -207,7 +208,9 @@ class STT(stt.STT):
                 ) from None
 
         if isinstance(languages, str):
-            languages = [languages]
+            languages = [Language(languages)]
+        else:
+            languages = [Language(lg) for lg in languages]
 
         self._config = STTOptions(
             languages=languages,
@@ -279,7 +282,7 @@ class STT(stt.STT):
         config = dataclasses.replace(self._config)
 
         if is_given(language):
-            config.languages = [language]
+            config.languages = [Language(language)]
 
         if not isinstance(config.languages, list):
             config.languages = [config.languages]
@@ -411,8 +414,9 @@ class STT(stt.STT):
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
-                languages = [languages]
-            self._config.languages = cast(list[LgType], languages)
+                self._config.languages = [Language(languages)]
+            else:
+                self._config.languages = [Language(lg) for lg in languages]
         if is_given(detect_language):
             self._config.detect_language = detect_language
         if is_given(interim_results):
@@ -494,8 +498,9 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
-                languages = [languages]
-            self._config.languages = cast(list[LgType], languages)
+                self._config.languages = [Language(languages)]
+            else:
+                self._config.languages = [Language(lg) for lg in languages]
         if is_given(detect_language):
             self._config.detect_language = detect_language
         if is_given(interim_results):
@@ -819,7 +824,7 @@ def _recognize_response_to_speech_event(
             start_time = end_time = 0
 
         confidence /= len(resp.results)
-        lg = resp.results[0].language_code
+        lg = Language(resp.results[0].language_code)
 
         alternatives = [
             stt.SpeechData(
@@ -871,12 +876,12 @@ def _streaming_recognize_response_to_speech_data(
         text = final_result.alternatives[0].transcript
         confidence = final_result.alternatives[0].confidence
         words = list(final_result.alternatives[0].words)
-        lg = final_result.language_code
+        lg = Language(final_result.language_code)
     else:
         confidence /= len(resp.results)
         if confidence < min_confidence_threshold:
             return None
-        lg = resp.results[0].language_code
+        lg = Language(resp.results[0].language_code)
 
     if text == "" or not words:
         if text and not words:

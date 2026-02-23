@@ -23,6 +23,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
 )
 from livekit.agents.types import (
@@ -40,7 +41,7 @@ from .models import STTModels
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str | None
+    language: Language | None
 
 
 class STT(stt.STT):
@@ -70,7 +71,7 @@ class STT(stt.STT):
             )
         )
         self._opts = _STTOptions(
-            language=language,
+            language=Language(language) if language else None,
             model=model,
         )
 
@@ -104,7 +105,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
 
     async def _recognize_impl(
         self,
@@ -115,7 +116,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = language
+                self._opts.language = Language(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
             # MistralAI transcription API call
@@ -131,7 +132,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=self._opts.language if self._opts.language else "",
+                        language=Language(self._opts.language if self._opts.language else ""),
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[

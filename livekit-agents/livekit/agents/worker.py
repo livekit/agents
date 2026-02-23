@@ -858,14 +858,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not fake_job:
                     raise ValueError("room_info is None but fake_job is False")
 
-                room_info = models.Room(sid=utils.shortuuid("FAKE_RM_"), name=room)
+                room_info = models.Room(sid=utils.shortuuid("SRM_"), name=room)
 
             # room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
 
             job = agent.Job(
-                id=utils.shortuuid("simulated-job-")
-                if not fake_job
-                else utils.shortuuid("fake-job-"),
+                id=utils.shortuuid("job-") if not fake_job else utils.shortuuid("mock-job-"),
                 room=room_info,
                 type=agent.JobType.JT_ROOM,
                 participant=None,
