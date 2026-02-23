@@ -354,9 +354,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             self._session_should_close.clear()
             self._handshake_event.clear()
 
-            # Reset codec state for new connection
+            # Reset codec and audio buffer state for new connection
             self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
             self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
+            self._bstream = utils.audio.AudioByteStream(
+                SAMPLE_RATE,
+                NUM_CHANNELS,
+                samples_per_channel=SAMPLE_RATE // 10,
+            )
 
             try:
                 ws_url = self._build_ws_url()
