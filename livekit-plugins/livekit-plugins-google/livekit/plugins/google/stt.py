@@ -463,12 +463,14 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
+        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
+        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
+            self._validate_adaptation(effective_adaptation, self._config.version)
         if is_given(adaptation):
             if is_given(keywords) or is_given(self._config.keywords):
                 logger.warning(
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
-            self._validate_adaptation(adaptation, self._config.version)
             self._config.adaptation = adaptation
         if is_given(keywords):
             if is_given(self._config.adaptation) and not is_given(adaptation):
