@@ -24,6 +24,7 @@ livekit-plugins-fishaudio = { workspace = true }
 livekit-plugins-gladia = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
+livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
