@@ -404,6 +404,11 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             except Exception as e:
                 logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)
 
+                # Clean up any active generation and silence timer
+                if self._current_generation and not self._current_generation._done:
+                    self._finalize_generation(interrupted=True)
+                self._cancel_silence_timer()
+
                 is_recoverable = isinstance(
                     e, (aiohttp.ClientConnectionError, asyncio.TimeoutError, APIConnectionError)
                 )
