@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_POST_ACTION_DELAY = 0.3
+_POST_ACTION_DELAY = 0.8
 
 _CHAT_TOPIC = "browser-agent-chat"
 _STATUS_TOPIC = "browser-agent-status"
@@ -236,11 +236,25 @@ class BrowserAgent:
                     # Broadcast cursor position for frontend overlay
                     coord = args.get("coordinate")
                     if coord and len(coord) == 2:
-                        await self._send_cursor_position(int(coord[0]), int(coord[1]), action)
+                        await self._send_cursor_position(
+                            int(coord[0]), int(coord[1]), action
+                        )
+
 
                     await self._send_status("acting")
 
-                    screenshot_content = await self._computer_tool.execute(action, **args)
+                    screenshot_content = await self._computer_tool.execute(
+                        action, **args
+                    )
+
+                    # Wait for page to settle after clicks/typing
+                    if action in (
+                        "left_click",
+                        "middle_click",
+                        "key",
+                        "type",
+                    ):
+                        await asyncio.sleep(_POST_ACTION_DELAY)
 
                     fnc_call = llm.FunctionCall(
                         call_id=tc.call_id,
