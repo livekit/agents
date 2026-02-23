@@ -45,14 +45,15 @@ class ExpFilter:
         else:
             raise ValueError("sample or initial must be given.")
 
-        if is_given(self._max_val) and self._filtered > self._max_val:
+        if is_given(self._max_val) and self.filtered > self._max_val:
             self._filtered = self._max_val
 
-        if is_given(self._min_val) and self._filtered < self._min_val:
+        if is_given(self._min_val) and self.filtered < self._min_val:
             self._filtered = self._min_val
 
-        return self._filtered
+        return self.filtered
 
+    @property
     def filtered(self) -> float:
         return self._filtered if is_given(self._filtered) else -1.0
 
