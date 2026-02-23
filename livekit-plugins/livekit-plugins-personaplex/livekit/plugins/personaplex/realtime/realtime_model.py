@@ -350,7 +350,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     async def _main_task(self) -> None:
         retry_delay = INITIAL_RETRY_DELAY
 
-        while not self._msg_ch.closed:
+        while not self._closed:
             self._session_should_close.clear()
             self._handshake_event.clear()
 
@@ -392,7 +392,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     await ws_conn.close()
                     await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
 
-                if restart_wait_task not in done and self._msg_ch.closed:
+                if restart_wait_task not in done and self._closed:
                     break
 
                 if restart_wait_task in done:
@@ -408,6 +408,11 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 if self._current_generation and not self._current_generation._done:
                     self._finalize_generation(interrupted=True)
                 self._cancel_silence_timer()
+
+                # Discard stale Opus-encoded messages from the old connection
+                old_ch = self._msg_ch
+                old_ch.close()
+                self._msg_ch = utils.aio.Chan[bytes]()
 
                 is_recoverable = isinstance(
                     e, (aiohttp.ClientConnectionError, asyncio.TimeoutError, APIConnectionError)
@@ -428,7 +433,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     ),
                 )
 
-                if not is_recoverable or self._msg_ch.closed:
+                if not is_recoverable or self._closed:
                     break
 
                 logger.debug(f"Retrying in {retry_delay:.1f}s")
