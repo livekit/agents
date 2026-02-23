@@ -55,10 +55,12 @@ class DynamicEndpointing:
             if self._utterance_pause.value is not None
             else self._min_delay
         )
+        # we don't use max_delay here to avoid recursive calls
 
     @property
     def max_delay(self) -> float:
-        return self._turn_pause.value if self._turn_pause.value is not None else self._max_delay
+        turn_val = self._turn_pause.value if self._turn_pause.value is not None else self._max_delay
+        return max(turn_val, self.min_delay)
 
     @property
     def between_utterance_delay(self) -> float:
@@ -98,7 +100,8 @@ class DynamicEndpointing:
     def on_agent_speech_started(self, adjustment: float = 0.0) -> None:
         self._agent_speech_started_at = time.time() + adjustment
         logger.debug(
-            f"agent speech started at: {self._agent_speech_started_at}",
+            "agent speech started at: %s",
+            self._agent_speech_started_at,
             extra={
                 "adjustment": adjustment,
             },
@@ -120,12 +123,14 @@ class DynamicEndpointing:
             # adjust the utterance ended time to be just before the agent speech started
             self._utterance_ended_at = self._agent_speech_started_at - 1e-3
             logger.debug(
-                f"utterance ended at adjusted: {self._utterance_ended_at}",
+                "utterance ended at adjusted: %s",
+                self._utterance_ended_at,
             )
 
         self._utterance_started_at = time.time() + adjustment
         logger.debug(
-            f"utterance started at: {self._utterance_started_at}",
+            "utterance started at: %s",
+            self._utterance_started_at,
             extra={
                 "adjustment": adjustment,
                 "interruption": interruption,
@@ -144,7 +149,9 @@ class DynamicEndpointing:
                 prev_val = self.min_delay
                 self._utterance_pause.apply(1.0, pause)
                 logger.debug(
-                    f"min endpointing delay updated: {prev_val} -> {self.min_delay}",
+                    "min endpointing delay updated: %s -> %s",
+                    prev_val,
+                    self.min_delay,
                     extra={
                         "reason": "immediate interruption",
                         "interruption": interruption,
@@ -160,7 +167,9 @@ class DynamicEndpointing:
                 prev_val = self.max_delay
                 self._turn_pause.apply(1.0, pause)
                 logger.debug(
-                    f"max endpointing delay updated: {prev_val} -> {self.max_delay}",
+                    "max endpointing delay updated: %s -> %s",
+                    prev_val,
+                    self.max_delay,
                     extra={
                         "reason": "EOT (interruption)",
                         "interruption": interruption,
@@ -180,7 +189,9 @@ class DynamicEndpointing:
             prev_val = self.min_delay
             self._utterance_pause.apply(1.0, pause)
             logger.debug(
-                f"min endpointing delay updated: {prev_val} -> {self.min_delay}",
+                "min endpointing delay updated: %s -> %s",
+                prev_val,
+                self.min_delay,
                 extra={
                     "reason": "pause between utterances (case 1)",
                     "interruption": interruption,
@@ -194,7 +205,9 @@ class DynamicEndpointing:
             prev_val = self.max_delay
             self._turn_pause.apply(1.0, pause)
             logger.debug(
-                f"max endpointing delay updated due to pause: {prev_val} -> {self.max_delay}",
+                "max endpointing delay updated due to pause: %s -> %s",
+                prev_val,
+                self.max_delay,
                 extra={
                     "reason": "new turn (case 3)",
                     "pause": pause,
@@ -209,7 +222,8 @@ class DynamicEndpointing:
     def on_utterance_ended(self, adjustment: float = 0.0) -> None:
         self._utterance_ended_at = time.time() + adjustment
         logger.debug(
-            f"utterance ended at: {self._utterance_ended_at}",
+            "utterance ended at: %s",
+            self._utterance_ended_at,
             extra={
                 "adjustment": adjustment,
                 "interrupting": self._interrupting,
@@ -226,7 +240,9 @@ class DynamicEndpointing:
         if is_given(min_delay):
             self._min_delay = min_delay
             self._utterance_pause.reset(initial=self._min_delay, min_val=self._min_delay)
+            self._turn_pause.reset(min_val=self._min_delay)
 
         if is_given(max_delay):
             self._max_delay = max_delay
             self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
+            self._utterance_pause.reset(max_val=self._max_delay)

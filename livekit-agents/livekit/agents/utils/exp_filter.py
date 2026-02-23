@@ -27,7 +27,8 @@ class ExpFilter:
     ) -> None:
         if is_given(alpha):
             self._alpha = alpha
-        self._filtered = initial
+        if is_given(initial):
+            self._filtered = initial
         if is_given(min_val):
             self._min_val = min_val
         if is_given(max_val):
@@ -42,26 +43,21 @@ class ExpFilter:
         elif is_given(sample) and is_given(self._filtered):
             a = self._alpha**exp
             self._filtered = a * self._filtered + (1 - a) * sample
-        else:
-            raise ValueError("sample or initial must be given.")
 
-        if is_given(self._max_val) and self.filtered > self._max_val:
+        if not is_given(self._filtered):
+            raise ValueError("sample or initial value must be given.")
+
+        if is_given(self._max_val) and self._filtered > self._max_val:
             self._filtered = self._max_val
 
-        if is_given(self._min_val) and self.filtered < self._min_val:
+        if is_given(self._min_val) and self._filtered < self._min_val:
             self._filtered = self._min_val
 
-        return self.filtered
-
-    @property
-    def filtered(self) -> float:
-        return self._filtered if is_given(self._filtered) else -1.0
+        return self._filtered
 
     @property
     def value(self) -> float | None:
-        if not is_given(self._filtered):
-            return None
-        return self._filtered
+        return self._filtered if is_given(self._filtered) else None
 
     def update_base(self, alpha: float) -> None:
         self._alpha = alpha

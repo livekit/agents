@@ -54,8 +54,9 @@ class TestExponentialMovingAverage:
 
     def test_reset(self) -> None:
         ema = ExpFilter(alpha=0.5, initial=10.0)
+        assert ema.value == 10.0
         ema.reset()
-        assert ema.value is None
+        assert ema.value == 10.0
 
         ema = ExpFilter(alpha=0.5, initial=10.0)
         ema.reset(initial=5.0)
