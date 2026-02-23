@@ -21,7 +21,7 @@ for real-time noise suppression in LiveKit voice agents.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -44,7 +44,7 @@ if not hasattr(rtc, "FrameProcessor"):
     )
 
 try:
-    import krisp_audio
+    import krisp_audio  # type: ignore[import-not-found]
 
     KRISP_AUDIO_AVAILABLE = True
 except ModuleNotFoundError:
@@ -113,9 +113,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         """
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
-            raise RuntimeError(
-                "krisp-audio package is not installed."
-            )
+            raise RuntimeError("krisp-audio package is not installed.")
 
         # Initialize state variables first
         self._sdk_acquired = False
@@ -280,6 +278,11 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         """Check if filtering is currently enabled (required by FrameProcessor interface)."""
         return self._filtering_enabled
 
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        """Set filtering enabled state (required by FrameProcessor interface)."""
+        self._filtering_enabled = value
+
     @property
     def is_enabled(self) -> bool:
         """Check if filtering is currently enabled (backward compatibility)."""
@@ -287,7 +290,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     def _close(self) -> None:
         """Clean up processor session resources (required by FrameProcessor interface).
-        
+
         Note: This method is called during track transitions (when streams are closed/reopened),
         not just when the processor is destroyed. Therefore, we only clean up the session here,
         not the SDK reference. The SDK will be released in __del__ when the processor is
@@ -324,11 +327,13 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 # Silently ignore errors during shutdown
                 pass
 
-    def __enter__(self):
+    def __enter__(self) -> "KrispVivaFilterFrameProcessor":
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+    ) -> Literal[False]:
         """Context manager exit - clean up session."""
         self.close()
         return False

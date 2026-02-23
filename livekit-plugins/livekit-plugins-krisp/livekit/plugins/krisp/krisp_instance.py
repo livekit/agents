@@ -16,7 +16,7 @@
 
 This module provides a singleton manager for the Krisp VIVA SDK with reference
 counting, ensuring proper initialization and cleanup when multiple components
-(filter, turn detector) use the SDK.
+(filters) use the SDK.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Any
 from .log import logger
 
 try:
-    import krisp_audio
+    import krisp_audio  # type: ignore[import-not-found]
 
     KRISP_AUDIO_AVAILABLE = True
 
@@ -85,7 +85,7 @@ class KrispSDKManager:
 
     This manager ensures the Krisp SDK is initialized only once and properly
     cleaned up when all components are done using it. It uses reference counting
-    to track active users (filters, turn detectors, etc.).
+    to track active users (filters).
 
     Thread-safe implementation using a lock for all operations.
 
@@ -102,7 +102,7 @@ class KrispSDKManager:
         logger.debug(f"[Krisp {log_level}] {log_message}")
 
     @staticmethod
-    def licensing_error_callback(error, error_message):
+    def licensing_error_callback(error: Any, error_message: str) -> None:
         logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
 
     @classmethod
@@ -114,7 +114,7 @@ class KrispSDKManager:
     def acquire(cls) -> None:
         """Acquire a reference to the SDK (initializes if needed).
 
-        Call this when creating a filter or turn detector instance.
+        Call this when creating a filter instance.
         The SDK will be initialized on the first call.
 
         Raises:
@@ -125,7 +125,13 @@ class KrispSDKManager:
             if cls._reference_count == 0:
                 try:
                     license_key = cls._get_license_key()
-                    krisp_audio.globalInit("", license_key, cls.licensing_error_callback, cls._log_callback, krisp_audio.LogLevel.Off)
+                    krisp_audio.globalInit(
+                        "",
+                        license_key,
+                        cls.licensing_error_callback,
+                        cls._log_callback,
+                        krisp_audio.LogLevel.Off,
+                    )
                     cls._initialized = True
 
                     version = krisp_audio.getVersion()
@@ -146,7 +152,7 @@ class KrispSDKManager:
     def release(cls) -> None:
         """Release a reference to the SDK (destroys if last reference).
 
-        Call this when destroying a filter or turn detector instance.
+        Call this when destroying a filter instance.
         The SDK will be cleaned up when the last reference is released.
         """
         with cls._lock:

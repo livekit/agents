@@ -91,6 +91,7 @@ type-check: ## Run mypy type checker
 		-p livekit.plugins.google \
 		-p livekit.plugins.groq \
 		-p livekit.plugins.hume \
+		-p livekit.plugins.krisp \
 		-p livekit.plugins.minimal \
 		-p livekit.plugins.neuphonic \
 		-p livekit.plugins.nltk \
