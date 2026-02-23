@@ -301,7 +301,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_sambanova(
         *,
-        model: str | SambaNovaChatModels = "Meta-Llama-3.3-70B-Instruct",
+        model: str | SambaNovaChatModels = "DeepSeek-R1-0528",
         api_key: str | None = None,
         base_url: str = "https://api.sambanova.ai/v1",
         client: openai.AsyncClient | None = None,
