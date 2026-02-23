@@ -464,9 +464,17 @@ class STT(stt.STT):
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
         if is_given(adaptation):
+            if is_given(keywords) or is_given(self._config.keywords):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
             self._validate_adaptation(adaptation, self._config.version)
             self._config.adaptation = adaptation
         if is_given(keywords):
+            if is_given(self._config.adaptation) and not is_given(adaptation):
+                logger.warning(
+                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                )
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
