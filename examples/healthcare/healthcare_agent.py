@@ -33,7 +33,7 @@ from livekit.agents.beta.workflows import (
 from livekit.agents.llm import ToolError, function_tool
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -183,7 +183,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         super().__init__(
             instructions="""You will now assist the user with selecting a doctor and appointment time.
             Do not be verbose and ask for any unnecessary information unless instructed to.
-            Avoid using special characters like bullet points, maintain a natural tone.
+            Avoid using special characters like bullet points when listing out doctors and available timeslots, maintain a natural tone.
             """,
             tools=[update_record, transfer_to_human],
             chat_ctx=chat_ctx,
@@ -204,14 +204,20 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         current_tools = [t for t in self.tools if t.id != "confirm_doctor_selection"]
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
+        chat_ctx = self.chat_ctx.copy()
+        chat_ctx.add_message(
+            role="system",
+            content=f"These doctors are compatible with the user's insurance: {available_doctors}",
+        )
+        await self.update_chat_ctx(chat_ctx)
 
         if len(self._compatible_doctor_records) > 1:
             await self.session.generate_reply(
-                instructions=f"These are the doctors compatible with the user's insurance: {available_doctors}, prompt the user to choose one."
+                instructions="Inform the user of the doctors compatible to them, and prompt the user to choose one."
             )
         else:
             await self.session.generate_reply(
-                instructions=f"Inform the user that {available_doctors} accepts their insurance and confirm if they would like to select that doctor."
+                instructions="Inform the user of their compatible doctor and confirm if they would like to select that doctor."
             )
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
@@ -241,8 +247,15 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             current_tools.append(schedule_appointment_tool)
             await self.update_tools(current_tools)
 
+            chat_ctx = self.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="system",
+                content=f"The selected doctor has availabilities at {available_times}.",
+            )
+            await self.update_chat_ctx(chat_ctx)
+
             await self.session.generate_reply(
-                instructions=f"The selected doctor has availabilities at {available_times}. Ask the user which time slot they prefer."
+                instructions="Inform and ask the user which time slot they prefer, and do not list out the times using bullet points."
             )
 
         return confirm_doctor_selection
@@ -432,7 +445,7 @@ class HealthcareAgent(Agent):
             chat_ctx = task_group.chat_ctx.copy()
             chat_ctx.add_message(
                 role="system",
-                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}. After confirming, call 'update_phone_numer'.",
+                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}. After confirming, call 'update_phone_number'.",
             )
             await task_group.update_chat_ctx(chat_ctx)
         if event.task_id == "get_phone_number_task" and self._found_profile:
@@ -454,20 +467,25 @@ class HealthcareAgent(Agent):
             )
 
             task_group.add(
-                lambda: GetNameTask(last_name=True),
+                lambda: GetNameTask(
+                    last_name=True,
+                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
+                ),
                 id="get_name_task",
                 description="Gathers the user's name",
             )
             task_group.add(
                 lambda: GetDOBTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
+                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
+                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
                 ),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
             )
             task_group.add(
                 lambda: GetPhoneNumberTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
+                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
+                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
                 ),
                 id="get_phone_number_task",
                 description="Gathers the user's phone number",
@@ -635,7 +653,7 @@ async def entrypoint(ctx: JobContext):
         userdata=UserData(database=db, profile=None),
         stt=deepgram.STT(),
         llm=openai.responses.LLM(model="gpt-4.1"),
-        tts=deepgram.TTS(),
+        tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
 
