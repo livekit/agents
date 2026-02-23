@@ -177,3 +177,5 @@ docs/
 
 # Examples for development
 examples/dev/*
+
+.complex-examples

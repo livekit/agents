@@ -1,0 +1,48 @@
+# Python bytecode and artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Caches and test output
+.cache/
+.pytest_cache/
+.ruff_cache/
+coverage/
+
+# Logs and temp files
+*.log
+*.gz
+*.tgz
+.tmp
+.cache
+
+# Environment variables
+.env
+.env.*
+
+# VCS, editor, OS
+.git
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+.DS_Store
+
+# Project docs and misc
+README.md
+LICENSE
+
+# Project tests
+test/
+tests/
+eval/
+evals/
