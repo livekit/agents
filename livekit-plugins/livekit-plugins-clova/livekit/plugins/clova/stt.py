@@ -71,7 +71,7 @@ class STT(stt.STT):
         self._invoke_url = (
             invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
         )
-        normalized_language = Language(language)
+        normalized_language = Language(language).iso
         self._language = clova_languages_mapping.get(normalized_language, normalized_language)
         self._session = http_session
         if clova_secret is None:
@@ -91,7 +91,7 @@ class STT(stt.STT):
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
-            normalized = Language(language)
+            normalized = Language(language).iso
             self._language = clova_languages_mapping.get(normalized, normalized)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -112,7 +112,7 @@ class STT(stt.STT):
         try:
             url = self.url_builder()
             if is_given(language):
-                normalized = Language(language)
+                normalized = Language(language).iso
                 self._language = clova_languages_mapping.get(normalized, normalized)
             payload = json.dumps({"language": self._language, "completion": "sync"})
 
