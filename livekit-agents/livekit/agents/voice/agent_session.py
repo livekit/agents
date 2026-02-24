@@ -1054,6 +1054,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
         self._rehydrated_agents[agent.id] = agent
 
+    def _stop_durable_scheduler(self) -> None:
+        agent = self._agent
+        while agent is not None:
+            if agent._activity and agent._activity._durable_scheduler:
+                agent._activity._durable_scheduler.close()
+
+            if isinstance(agent, AgentTask):
+                agent = agent._old_agent
+            else:
+                break
+
     def update_options(
         self,
         *,

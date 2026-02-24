@@ -11,6 +11,7 @@ from livekit.agents import (
     AgentSession,
     EffectCall,
     JobContext,
+    JobExecutorType,
     RunContext,
     TextMessageContext,
     cli,
@@ -112,7 +113,7 @@ class MyAgent(Agent):
         # context.session.say("You are now registered for the weather event.")
 
 
-server = AgentServer(port=PORT)
+server = AgentServer(port=PORT, job_executor_type=JobExecutorType.THREAD)
 
 
 @server.text_handler(endpoint="weather")

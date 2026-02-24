@@ -647,7 +647,7 @@ async def _execute_tools_task(
                                     "speech_id": speech_handle.id,
                                 },
                             )
-                        elif not isinstance(e, StopResponse):
+                        elif not isinstance(e, StopResponse | asyncio.CancelledError):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},

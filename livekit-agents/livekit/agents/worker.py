@@ -144,6 +144,10 @@ class _EntrypointWrapper:
                             )
                         )
 
+            if session := ctx._primary_agent_session:
+                with contextlib.suppress(Exception):
+                    session._stop_durable_scheduler()
+                    await session.aclose()
             ctx.shutdown()
 
 

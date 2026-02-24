@@ -555,14 +555,14 @@ class AgentActivity(RecognitionHooks):
             speech_handle._clear_authorization()
 
             # unpickle the generator and catch the exception as a ToolError if it fails
-            exc: ToolError | None = None
+            unpickle_error: ToolError | None = None
             tk = _SpeechHandleContextVar.set(speech_handle)
             try:
                 task = task.unpickle_generator()
             except Exception:
                 logger.exception(f"error rehydrating durable function {task.fnc_name}")
 
-                exc = ToolError(
+                unpickle_error = ToolError(
                     "An error occurred because the tool definition changed during execution, "
                     "call the tool again if the conversation is not ended."
                 )
@@ -571,7 +571,7 @@ class AgentActivity(RecognitionHooks):
                 _SpeechHandleContextVar.reset(tk)
 
             speech_task = self._create_speech_task(
-                self._resume_durable_function(task, speech_handle, exc),
+                self._resume_durable_function(task, speech_handle, unpickle_error),
                 speech_handle=speech_handle,
                 name="AgentTask_replay_durable_function",
             )
@@ -581,7 +581,7 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _resume_durable_function(
-        self, task: DurableTask, speech_handle: SpeechHandle, exc: ToolError | None
+        self, task: DurableTask, speech_handle: SpeechHandle, unpickle_error: ToolError | None
     ) -> None:
         from .agent import ModelSettings
 
@@ -589,13 +589,12 @@ class AgentActivity(RecognitionHooks):
         fnc_call = llm.FunctionCall.model_validate_json(task.metadata.function_call)
         reset_tool_timestamp = False
         try:
-            if exc:
+            if unpickle_error:
                 # wait until the activity is resumed before raising the exception
-                # since there is no AgentTask running when rehydration failed
                 await self._activated_ev.wait()
                 if run_state := self._session._global_run_state:
                     run_state._watch_handle(speech_handle)
-                raise exc
+                raise unpickle_error
 
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
@@ -603,12 +602,17 @@ class AgentActivity(RecognitionHooks):
             val = await self.durable_scheduler.execute(task)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
 
+        except asyncio.CancelledError:
+            # in regular tool execution, we wait until user's function completes,
+            # when it's durable function, the task can be cancelled when the durable scheduler is closed
+            return
+
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-            if e is exc:
+            if e is unpickle_error:
                 # disable the tool response if durable function unpickling failed
-                # and make the tool message at the end of the chat context
+                # and move the tool message to the end of the chat context
                 reset_tool_timestamp = True
                 tool_output.reply_required = False
 
@@ -918,7 +922,7 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             if self._durable_scheduler is not None:
-                await self._durable_scheduler.aclose()
+                self._durable_scheduler.close()
                 self._durable_scheduler = None
 
             self._agent._activity = None

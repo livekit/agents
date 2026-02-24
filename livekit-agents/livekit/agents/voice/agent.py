@@ -898,9 +898,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         if self._caller_task and run_state:
             # when complete, watch the caller task
             run_state._watch_handle(self._caller_task)
-            logger.info(f"watching awaiting task: {self._caller_task.get_name()}")
+
         elif self._caller_task is None and self._old_agent:
-            # backup switch to the old agent when the AgentTask is rehydrated without being awaited
+            # fallback to switch to the old agent when the AgentTask is rehydrated without being awaited
             self._update_agent_task = asyncio.create_task(
                 self.__switch_to_old_agent(
                     old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
@@ -925,12 +925,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
             # allow re-entrant if it's rehydrated
+            self.__inactive_ev.clear()
             try:
                 return await asyncio.shield(self.__fut)
             finally:
                 await self.__switch_to_old_agent(
                     old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
                 )
+                self.__inactive_ev.set()
 
         self.__started = True
 
@@ -1031,6 +1033,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
             if speech_handle:
                 speech_handle.allow_interruptions = old_allow_interruptions
+            self.__inactive_ev.set()
 
     async def __switch_to_old_agent(
         self, *, old_agent: Agent, session: AgentSession, speech_handle: SpeechHandle | None
@@ -1064,7 +1067,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 new_activity="resume" if old_agent._activity else "start",
                 wait_on_enter=False,
             )
-            self.__inactive_ev.set()
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()

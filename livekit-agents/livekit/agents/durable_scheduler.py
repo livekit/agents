@@ -40,7 +40,7 @@ class EffectException(Exception):
         return cls(
             exc_type=type(exc).__name__,
             exc_message=str(exc),
-        )
+        ).with_traceback(exc.__traceback__)
 
     def __str__(self) -> str:
         if self.exc_message:
@@ -230,15 +230,13 @@ class DurableScheduler:
             exe_tasks.append(self.execute(task))
         return exe_tasks
 
-    async def aclose(self) -> None:
-        from livekit.agents.utils.aio import cancel_and_wait
-
-        await cancel_and_wait(*self._tasks.keys())
-        self._tasks.clear()
+    def close(self) -> None:
+        for task in self._tasks.keys():
+            task.cancel()
+        self._can_execute.set()
 
     async def _execute(self, task: DurableTask) -> Any:
-        from livekit.agents import AgentTask
-        from livekit.agents.voice.agent import _pass_through_activity_task_info
+        from .voice.agent import AgentTask, _pass_through_activity_task_info
 
         __tracebackhide__ = True
 
