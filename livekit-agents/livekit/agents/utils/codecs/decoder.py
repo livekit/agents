@@ -131,6 +131,7 @@ class StreamBuffer:
         with self._data_available:
             self._closed = True
             self._data_available.notify_all()
+            self._bio.close()
 
 
 class _WavState(enum.IntEnum):
