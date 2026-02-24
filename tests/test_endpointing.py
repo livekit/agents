@@ -362,7 +362,7 @@ class TestDynamicEndpointing:
         assert ep._utterance_ended_at is None
 
     def test_on_end_of_agent_speech_clears_state(self) -> None:
-        """on_end_of_agent_speech sets ended_at, clears started_at and overlapping."""
+        """on_end_of_agent_speech sets ended_at, preserves started_at, clears overlapping."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
 
         ep.on_start_of_agent_speech(started_at=100.0)
@@ -373,7 +373,9 @@ class TestDynamicEndpointing:
         ep.on_end_of_agent_speech(ended_at=101.0)
 
         assert ep._agent_speech_ended_at == 101.0
-        assert ep._agent_speech_started_at is None
+        # _agent_speech_started_at is intentionally preserved so that
+        # between_turn_delay can be computed in the normal end-of-speech path
+        assert ep._agent_speech_started_at == 100.0
         assert ep._overlapping is False
 
     def test_overlapping_inferred_from_agent_speech(self) -> None:
@@ -409,9 +411,9 @@ class TestDynamicEndpointing:
             # should_ignore is ignored when not overlapping
             ("no_agent/no_overlap/ignore", "none", False, True, False, True, False),
             # --- Agent speech ended (on_end_of_agent_speech called) ---
-            # agent_speech_ended_at blocks case 1, no agent_speech_started_at blocks case 3
-            ("agent_ended/no_overlap/no_ignore", "ended", False, False, False, False, False),
-            ("agent_ended/no_overlap/ignore", "ended", False, True, False, False, False),
+            # agent finished speaking → normal path, between_turn_delay > 0 → case 3 updates max
+            ("agent_ended/no_overlap/no_ignore", "ended", False, False, False, False, True),
+            ("agent_ended/no_overlap/ignore", "ended", False, True, False, False, True),
             # --- Agent speech active ---
             # Inferred interruption from agent_speech_started_at → case 3 (delayed)
             ("agent_active/no_overlap/no_ignore", "active", False, False, False, False, True),

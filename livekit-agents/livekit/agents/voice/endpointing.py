@@ -152,7 +152,8 @@ class DynamicEndpointing(BaseEndpointing):
         )
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
-        self._agent_speech_started_at = None
+        # NOTE: intentionally keep _agent_speech_started_at so that
+        # between_turn_delay can be computed in the normal end-of-speech path
         self._agent_speech_ended_at = ended_at
         self._overlapping = False
         # TODO: @chenghao-mou remove this debug log
@@ -225,8 +226,12 @@ class DynamicEndpointing(BaseEndpointing):
                 return
 
         if (
-            self._overlapping or self._agent_speech_started_at is not None
-        ):  # this is an interruption
+            self._overlapping
+            or (
+                self._agent_speech_started_at is not None
+                and self._agent_speech_ended_at is None
+            )
+        ):  # this is an interruption (agent is still speaking)
             # If this is an immediate interruption, update the min delay (case 2)
             turn_delay, interruption_delay = self.immediate_interruption_delay
             if (
