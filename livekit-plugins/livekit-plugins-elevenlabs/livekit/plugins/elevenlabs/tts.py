@@ -1030,8 +1030,12 @@ class _Connection:
                         )
                         emitter.push_timed_transcript(timed_words)
                         remaining = len(stream._text_buffer)
-                        stream._start_times_ms = stream._start_times_ms[-remaining:] if remaining else []
-                        stream._durations_ms = stream._durations_ms[-remaining:] if remaining else []
+                        stream._start_times_ms = (
+                            stream._start_times_ms[-remaining:] if remaining else []
+                        )
+                        stream._durations_ms = (
+                            stream._durations_ms[-remaining:] if remaining else []
+                        )
 
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
