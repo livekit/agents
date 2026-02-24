@@ -300,8 +300,7 @@ class ClientEventsHandler:
             self._session.off("function_tools_executed", self._on_function_tools_executed)
             self._session.off("metrics_collected", self._on_metrics_collected)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
-            self._session.off("user_interruption_detected", self._on_user_overlap_speech)
-            self._session.off("user_backchannel_detected", self._on_user_overlap_speech)
+            self._session.off("user_overlapping_speech", self._on_user_overlap_speech)
             self._session.off("error", self._on_error)
             self._event_handlers_registered = False
 
@@ -478,8 +477,7 @@ class ClientEventsHandler:
         self._session.on("function_tools_executed", self._on_function_tools_executed)
         self._session.on("metrics_collected", self._on_metrics_collected)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
-        self._session.on("user_interruption_detected", self._on_user_overlap_speech)
-        self._session.on("user_backchannel_detected", self._on_user_overlap_speech)
+        self._session.on("user_overlapping_speech", self._on_user_overlap_speech)
         self._session.on("error", self._on_error)
 
         self._event_handlers_registered = True

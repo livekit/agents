@@ -792,7 +792,7 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
-        if ev.type == "user_interruption_detected":
+        if ev.is_interruption:
             self._hooks.on_interruption(ev)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:

@@ -126,12 +126,11 @@ class InterruptionCacheEntry:
 
 
 class OverlappingSpeechEvent(BaseModel):
-    """Represents an event detected by the interruption detection model."""
+    """Represents an overlapping speech event detected during agent speech."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    type: Literal["user_interruption_detected", "user_backchannel_detected"]
-    """Type of the interruption event (e.g., interruption or backchannel)."""
+    type: Literal["user_overlapping_speech"] = "user_overlapping_speech"
 
     timestamp: float = Field(default_factory=time.time)
     """Timestamp (in seconds) when the event was fired."""
@@ -195,7 +194,7 @@ class OverlappingSpeechEvent(BaseModel):
             The initialized event.
         """
         return cls(
-            type="user_interruption_detected" if is_interruption else "user_backchannel_detected",
+            type="user_overlapping_speech",
             timestamp=ended_at or time.time(),
             is_interruption=is_interruption,
             overlap_started_at=started_at,
@@ -257,8 +256,7 @@ InterruptionDataFrameType: TypeAlias = (
 class AdaptiveInterruptionDetector(
     rtc.EventEmitter[
         Literal[
-            "user_interruption_detected",
-            "user_backchannel_detected",
+            "user_overlapping_speech",
             "error",
             "metrics_collected",
         ]

@@ -553,10 +553,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on(
-                "user_interruption_detected", self._on_overlap_speech_ended
-            )
-            self._interruption_detector.on(
-                "user_backchannel_detected", self._on_overlap_speech_ended
+                "user_overlapping_speech", self._on_overlap_speech_ended
             )
 
         if self.mcp_servers:
@@ -788,10 +785,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off(
-                "user_interruption_detected", self._on_overlap_speech_ended
-            )
-            self._interruption_detector.off(
-                "user_backchannel_detected", self._on_overlap_speech_ended
+                "user_overlapping_speech", self._on_overlap_speech_ended
             )
 
         if self._rt_session is not None:
@@ -1222,10 +1216,7 @@ class AgentActivity(RecognitionHooks):
         self._session._on_error(error)
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
-        if ev.is_interruption:
-            self._session.emit("user_interruption_detected", ev)
-        else:
-            self._session.emit("user_backchannel_detected", ev)
+        self._session.emit("user_overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None:
