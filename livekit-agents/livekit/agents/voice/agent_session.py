@@ -135,7 +135,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
-    echo_guard_duration: float | None
+    aec_warmup_duration: float | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -205,7 +205,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
-        echo_guard_duration: float | None = None,
+        aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -294,7 +294,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
-            echo_guard_duration (float, optional): The duration in seconds that the agent
+            aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
                 Default ``None``.
@@ -343,7 +343,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
-            echo_guard_duration=echo_guard_duration,
+            aec_warmup_duration=aec_warmup_duration,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -369,10 +369,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm_error_counts = 0
         self._tts_error_counts = 0
 
-        # echo guard: disable interruptions while AEC warms up
-        self._echo_guard_remaining_duration = echo_guard_duration or 0.0
-        self._echo_guard_timer: asyncio.TimerHandle | None = None
-        self._echo_guard_speaking_start: float | None = None
+        # aec warmup: disable interruptions while AEC warms up
+        self._aec_warmup_remaining = aec_warmup_duration or 0.0
+        self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -848,8 +847,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._closing = True
             self._cancel_user_away_timer()
-            self._cancel_echo_guard_timer()
-            self._on_echo_guard_expired()  # always clear echo guard when closing the session
+            self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -1281,25 +1279,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
-    def _on_echo_guard_expired(self) -> None:
-        if self._echo_guard_remaining_duration > 0:
-            logger.debug("echo guard expired, re-enabling interruptions")
+    def _on_aec_warmup_expired(self) -> None:
+        if self._aec_warmup_remaining > 0:
+            logger.debug("aec warmup expired, re-enabling interruptions")
 
-        self._echo_guard_remaining_duration = 0.0
-        self._echo_guard_timer = None
-        self._echo_guard_speaking_start = None
-
-    def _cancel_echo_guard_timer(self) -> None:
-        if self._echo_guard_timer is not None:
-            self._echo_guard_timer.cancel()
-            self._echo_guard_timer = None
-
-        if self._echo_guard_speaking_start is not None:
-            elapsed = time.time() - self._echo_guard_speaking_start
-            self._echo_guard_remaining_duration = max(
-                0.0, self._echo_guard_remaining_duration - elapsed
-            )
-            self._echo_guard_speaking_start = None
+        self._aec_warmup_remaining = 0.0
+        if self._aec_warmup_timer is not None:
+            self._aec_warmup_timer.cancel()
+            self._aec_warmup_timer = None
 
     def _update_agent_state(
         self,
@@ -1332,19 +1319,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
-        # echo guard: disable interruptions while AEC warms up
-        if state == "speaking" and self._echo_guard_remaining_duration > 0:
-            self._echo_guard_speaking_start = time.time()
-            self._echo_guard_timer = self._loop.call_later(
-                self._echo_guard_remaining_duration, self._on_echo_guard_expired
+        # aec warmup: start a one-shot wall-clock timer on the first speaking turn
+        if (
+            state == "speaking"
+            and self._aec_warmup_remaining > 0
+            and self._aec_warmup_timer is None
+        ):
+            self._aec_warmup_timer = self._loop.call_later(
+                self._aec_warmup_remaining, self._on_aec_warmup_expired
             )
             logger.debug(
-                "echo guard active, disabling interruptions for %.2fs",
-                self._echo_guard_remaining_duration,
+                "aec warmup active, disabling interruptions for %.2fs",
+                self._aec_warmup_remaining,
             )
-
-        if self._agent_state == "speaking" and state != "speaking":
-            self._cancel_echo_guard_timer()
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()

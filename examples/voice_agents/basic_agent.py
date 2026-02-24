@@ -102,7 +102,7 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
         # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
-        echo_guard_duration=3.0,
+        aec_warmup_duration=3.0,
     )
 
     # log metrics as they are emitted, and total usage after session is over
