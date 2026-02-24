@@ -601,6 +601,8 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
