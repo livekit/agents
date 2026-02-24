@@ -19,6 +19,7 @@ from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     Tool,
 )
+from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -118,7 +119,6 @@ class _ResponsesWebsocket:
                     continue
 
                 event = json.loads(msg.data)
-
                 if self._output_queue:
                     current = self._output_queue[0]
                     with contextlib.suppress(utils.aio.channel.ChanClosed):
@@ -218,6 +218,9 @@ class LLM(llm.LLM):
         self._ws: _ResponsesWebsocket | None = None
         self._ws_lock = asyncio.Lock()
 
+        self._prev_resp_id = ""
+        self._prev_chat_ctx: ChatContext | None = None
+
         if is_given(websocket_mode) and websocket_mode:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
             if not resolved_api_key:
@@ -258,7 +261,7 @@ class LLM(llm.LLM):
         async with self._ws_lock:
             if self._ws is not None and self._ws._ws_conn is None:
                 await self._ws.connect()
-        return self._ws
+        return self._ws  # type: ignore[return-value]
 
     @property
     def model(self) -> str:
@@ -306,14 +309,29 @@ class LLM(llm.LLM):
             elif tool_choice in ("auto", "required", "none"):
                 oai_tool_choice = tool_choice  # type: ignore
                 extra["tool_choice"] = oai_tool_choice
-        # TODO compute chat ctx difference and keep track of prev response id here
 
+        input_chat_ctx = chat_ctx
+        if self._prev_chat_ctx is not None and self._prev_resp_id:
+            diffops = compute_chat_ctx_diff(self._prev_chat_ctx, chat_ctx)
+            if not diffops.to_remove and not diffops.to_update:
+                # filter for new items to send with previous response id
+                if diffops.to_create:
+                    items_by_id = {item.id: item for item in chat_ctx.items}
+                    new_items = [
+                        items_by_id[item_id]
+                        for _, item_id in diffops.to_create
+                        if item_id in items_by_id
+                    ]
+                    input_chat_ctx = ChatContext(items=new_items)
+                extra["previous_response_id"] = self._prev_resp_id
+            # if the context was modified otherwise, resend the whole context and omit previous response id
+        self._prev_chat_ctx = chat_ctx
         return LLMStream(
             self,
             model=self._opts.model,
             strict_tool_schema=True,
             client=self._client if self._client else None,
-            chat_ctx=chat_ctx,
+            chat_ctx=input_chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
@@ -362,7 +380,6 @@ class LLMStream(llm.LLMStream):
                 "tools": tool_schemas,
                 **self._extra_kwargs,
             }
-
             stream = await ws.send_request(payload)
 
         else:
@@ -411,6 +428,8 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
                 retryable=retryable,
             )
+        except (APIConnectionError, APIStatusError, APITimeoutError):
+            raise
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
@@ -457,6 +476,7 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        self._llm._prev_resp_id = self._response_id
         chunk = None
         if usage := event.response.usage:
             chunk = llm.ChatChunk(
