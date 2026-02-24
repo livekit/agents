@@ -636,7 +636,9 @@ async def test_unknown_function_call() -> None:
     actions.add_llm(
         content="",
         tool_calls=[
-            FunctionToolCall(name="nonexistent_tool", arguments='{"location": "Tokyo"}', call_id="1")
+            FunctionToolCall(
+                name="nonexistent_tool", arguments='{"location": "Tokyo"}', call_id="1"
+            )
         ],
     )
     actions.add_llm(
@@ -660,7 +662,8 @@ async def test_unknown_function_call() -> None:
 
     chat_ctx_items = agent.chat_ctx.items
     error_outputs = [
-        item for item in chat_ctx_items
+        item
+        for item in chat_ctx_items
         if item.type == "function_call_output" and item.is_error is True
     ]
     assert len(error_outputs) == 1
