@@ -90,6 +90,7 @@ DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
+NON_WEBSOCKET_MODELS = {"eleven_v3"}
 
 
 class TTS(tts.TTS):
@@ -144,10 +145,19 @@ class TTS(tts.TTS):
         if not is_given(encoding):
             encoding = _DefaultEncoding
 
+        # Alignment not yet supported for HTTP streaming models
+        supports_alignment = sync_alignment and model not in NON_WEBSOCKET_MODELS
+
+        if sync_alignment and model in NON_WEBSOCKET_MODELS:
+            logger.warning(
+                f"Model '{model}' uses HTTP streaming which doesn't support alignment yet. "
+                "Disabling sync_alignment."
+            )
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=sync_alignment,
+                aligned_transcript=supports_alignment,
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
@@ -195,7 +205,7 @@ class TTS(tts.TTS):
             pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
         self._session = http_session
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams: weakref.WeakSet[SynthesizeStream | HTTPSynthesizeStream] = weakref.WeakSet()
 
         self._current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
@@ -242,8 +252,17 @@ class TTS(tts.TTS):
         changed = False
 
         if is_given(model) and model != self._opts.model:
+            old_model = self._opts.model
             self._opts.model = model
             changed = True
+
+            old_supports_ws = old_model not in NON_WEBSOCKET_MODELS
+            new_supports_ws = model not in NON_WEBSOCKET_MODELS
+
+            if old_supports_ws and not new_supports_ws:
+                logger.info(f"Switching to model '{model}' which uses HTTP streaming.")
+            elif not old_supports_ws and new_supports_ws:
+                logger.info(f"Switching to model '{model}' which uses WebSocket streaming.")
 
         if is_given(voice_id) and voice_id != self._opts.voice_id:
             self._opts.voice_id = voice_id
@@ -288,8 +307,11 @@ class TTS(tts.TTS):
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+    ) -> SynthesizeStream | HTTPSynthesizeStream:
+        if self._opts.model in NON_WEBSOCKET_MODELS:
+            stream = HTTPSynthesizeStream(tts=self, conn_options=conn_options)
+        else:
+            stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -472,6 +494,223 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+
+
+class HTTPSynthesizeStream(tts.SynthesizeStream):
+    """HTTP-based streaming for models that don't support WebSocket (e.g., eleven_v3)
+
+    Uses the /stream endpoint with chunked transfer encoding for audio streaming.
+    Note: Unlike WebSocket, this buffers all input text before making a request,
+    as the HTTP endpoint doesn't support incremental text input.
+    """
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+        self._context_id = utils.shortuuid()
+
+    async def aclose(self) -> None:
+        await super().aclose()
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=self._context_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            stream=True,
+            mime_type=_encoding_to_mimetype(self._opts.encoding),
+        )
+        output_emitter.start_segment(segment_id=self._context_id)
+
+        voice_settings = (
+            _strip_nones(dataclasses.asdict(self._opts.voice_settings))
+            if is_given(self._opts.voice_settings)
+            else None
+        )
+
+        text_buffer: list[str] = []
+
+        # Create a fresh tokenizer stream for each run (important for retries)
+        tokenizer_stream = self._opts.word_tokenizer.stream()
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    tokenizer_stream.flush()
+                    continue
+                tokenizer_stream.push_text(data)
+            tokenizer_stream.end_input()
+
+        async def _tokenizer_task() -> None:
+            async for data in tokenizer_stream:
+                text_buffer.append(data.token)
+
+        input_t = asyncio.create_task(_input_task())
+        tokenizer_t = asyncio.create_task(_tokenizer_task())
+
+        try:
+            await asyncio.gather(input_t, tokenizer_t)
+
+            if not text_buffer:
+                return
+
+            full_text = " ".join(text_buffer)
+            self._mark_started()
+
+            request_body: dict[str, Any] = {
+                "text": full_text,
+                "model_id": self._opts.model,
+            }
+
+            if voice_settings:
+                request_body["voice_settings"] = voice_settings
+
+            if is_given(self._opts.pronunciation_dictionary_locators):
+                request_body["pronunciation_dictionary_locators"] = [
+                    {
+                        "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                        "version_id": locator.version_id,
+                    }
+                    for locator in self._opts.pronunciation_dictionary_locators
+                ]
+
+            logger.info(
+                f"[HTTPSynthesizeStream] Sending request to /stream endpoint, text_length={len(full_text)} chars"
+            )
+            
+            import time
+            request_start = time.time()
+
+            # Use basic stream endpoint (alignment not yet supported for HTTP)
+            async with self._tts._ensure_session().post(
+                _synthesize_url(self._opts, with_timestamps=False),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                json=request_body,
+                timeout=aiohttp.ClientTimeout(
+                    total=None,
+                    sock_connect=self._conn_options.timeout,
+                ),
+            ) as resp:
+                resp.raise_for_status()
+
+                if not resp.content_type.startswith("audio/"):
+                    content = await resp.text()
+                    raise APIError(message="11labs returned non-audio data", body=content)
+
+                chunk_count = 0
+                total_bytes = 0
+                first_chunk_time = None
+
+                async for data, _ in resp.content.iter_chunks():
+                    if data:
+                        chunk_count += 1
+                        total_bytes += len(data)
+                        
+                        if first_chunk_time is None:
+                            first_chunk_time = time.time()
+                            ttfb_ms = (first_chunk_time - request_start) * 1000
+                            logger.info(
+                                f"[HTTPSynthesizeStream] First chunk received, ttfb={ttfb_ms:.0f}ms, size={len(data)} bytes"
+                            )
+                        
+                        output_emitter.push(data)
+                        
+                        if chunk_count <= 5 or chunk_count % 10 == 0:
+                            logger.debug(
+                                f"[HTTPSynthesizeStream] Chunk #{chunk_count}, size={len(data)} bytes, total={total_bytes} bytes"
+                            )
+
+                total_time_ms = (time.time() - request_start) * 1000
+                logger.info(
+                    f"[HTTPSynthesizeStream] Stream complete, chunks={chunk_count}, total_bytes={total_bytes}, duration={total_time_ms:.0f}ms"
+                )
+
+                output_emitter.flush()
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            output_emitter.end_segment()
+            await utils.aio.gracefully_cancel(input_t, tokenizer_t)
+            await tokenizer_stream.aclose()
+
+    async def _handle_timestamped_response(
+        self, resp: aiohttp.ClientResponse, output_emitter: tts.AudioEmitter, full_text: str
+    ) -> None:
+        """Handle response from /stream/with-timestamps endpoint (Server-Sent Events)"""
+        text_buffer = ""
+        start_times_ms: list[int] = []
+        durations_ms: list[int] = []
+
+        # Read SSE stream line by line
+        buffer = b""
+        async for chunk in resp.content.iter_any():
+            buffer += chunk
+
+            # Process complete lines
+            while b"\n" in buffer:
+                line_bytes, buffer = buffer.split(b"\n", 1)
+                line_str = line_bytes.decode("utf-8").strip()
+
+                # SSE format: "data: {...}"
+                if not line_str or not line_str.startswith("data: "):
+                    continue
+
+                try:
+                    data = json.loads(line_str[6:])
+
+                    if audio_b64 := data.get("audio_base64"):
+                        audio_bytes = base64.b64decode(audio_b64)
+                        output_emitter.push(audio_bytes)
+
+                    alignment = (
+                        data.get("normalizedAlignment")
+                        if self._opts.preferred_alignment == "normalized"
+                        else data.get("alignment")
+                    )
+
+                    if alignment:
+                        chars = alignment["chars"]
+                        starts = alignment.get("charStartTimesMs") or alignment.get(
+                            "charsStartTimesMs"
+                        )
+                        durs = alignment.get("charDurationsMs") or alignment.get("charsDurationsMs")
+
+                        if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
+                            text_buffer += "".join(chars)
+                            for char, start, dur in zip(chars, starts, durs, strict=False):
+                                if len(char) > 1:
+                                    start_times_ms += [start] * (len(char) - 1)
+                                    durations_ms += [0] * (len(char) - 1)
+                                start_times_ms.append(start)
+                                durations_ms.append(dur)
+
+                            timed_words, text_buffer = _to_timed_words(
+                                text_buffer, start_times_ms, durations_ms
+                            )
+                            output_emitter.push_timed_transcript(timed_words)
+                            start_times_ms = start_times_ms[-len(text_buffer) :]
+                            durations_ms = durations_ms[-len(text_buffer) :]
+
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Failed to parse timestamp response: {e}")
+                    continue
+
+        if text_buffer:
+            timed_words, _ = _to_timed_words(text_buffer, start_times_ms, durations_ms, flush=True)
+            output_emitter.push_timed_transcript(timed_words)
+
+        output_emitter.flush()
 
 
 @dataclass
@@ -812,13 +1051,15 @@ def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if is_given(v) and v is not None}
 
 
-def _synthesize_url(opts: _TTSOptions) -> str:
+def _synthesize_url(opts: _TTSOptions, with_timestamps: bool = False) -> str:
     base_url = opts.base_url
     voice_id = opts.voice_id
     model_id = opts.model
     output_format = opts.encoding
+
+    endpoint = "stream/with-timestamps" if with_timestamps else "stream"
     url = (
-        f"{base_url}/text-to-speech/{voice_id}/stream?"
+        f"{base_url}/text-to-speech/{voice_id}/{endpoint}?"
         f"model_id={model_id}&output_format={output_format}"
     )
     if is_given(opts.streaming_latency):
