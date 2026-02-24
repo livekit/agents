@@ -279,6 +279,13 @@ class _WavInlineDecoder:
 
         fmt = bytes(self._hdr_buf[: self._chunk_size])
         audio_format, channels, rate = struct.unpack("<HHI", fmt[:8])
+        if len(fmt) >= 16:
+            bits_per_sample = struct.unpack("<H", fmt[14:16])[0]
+            if bits_per_sample != 16:
+                raise ValueError(
+                    f"Unsupported WAV bits per sample: {bits_per_sample}"
+                    " (only 16-bit PCM supported)"
+                )
         if audio_format != 1:
             raise ValueError(f"Unsupported WAV audio format: {audio_format}")
 
@@ -366,7 +373,14 @@ class AudioStreamDecoder:
         if self._is_wav:
             if self._wav_decoder is None:
                 self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
-            self._wav_decoder.push(chunk)
+            try:
+                self._wav_decoder.push(chunk)
+            except Exception:
+                if not self._closed:
+                    logger.exception("error decoding WAV audio")
+                    self._output_ch.close()
+                    self._closed = True
+                return
             self._started = True
             return
 
@@ -380,9 +394,13 @@ class AudioStreamDecoder:
 
     def end_input(self) -> None:
         if self._is_wav:
-            if self._wav_decoder is not None:
-                self._wav_decoder.flush()
-            self._output_ch.close()
+            if self._wav_decoder is not None and not self._closed:
+                try:
+                    self._wav_decoder.flush()
+                except Exception:
+                    logger.exception("error flushing WAV audio")
+            if not self._closed:
+                self._output_ch.close()
             return
 
         if self._input_buf is not None:
