@@ -16,6 +16,7 @@ class BaseEndpointing:
     def __init__(self, min_delay: float, max_delay: float):
         self._min_delay = min_delay
         self._max_delay = max_delay
+        self._overlapping = False
 
     def update_options(
         self, *, min_delay: NotGivenOr[float] = NOT_GIVEN, max_delay: NotGivenOr[float] = NOT_GIVEN
@@ -33,11 +34,15 @@ class BaseEndpointing:
     def max_delay(self) -> float:
         return self._max_delay
 
+    @property
+    def overlapping(self) -> bool:
+        return self._overlapping
+
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
-        pass
+        self._overlapping = overlapping
 
     def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
-        pass
+        self._overlapping = False
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
         pass
@@ -86,7 +91,6 @@ class DynamicEndpointing(BaseEndpointing):
         self._utterance_ended_at: float | None = None
         self._agent_speech_started_at: float | None = None
         self._agent_speech_ended_at: float | None = None
-        self._overlapping = False
         self._speaking = False
 
     @property

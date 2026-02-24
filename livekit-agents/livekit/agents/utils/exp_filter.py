@@ -26,6 +26,7 @@ class ExpFilter:
         max_val: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(alpha):
+            assert 0 < alpha <= 1, "alpha must be in (0, 1]."
             self._alpha = alpha
         if is_given(initial):
             self._filtered = initial

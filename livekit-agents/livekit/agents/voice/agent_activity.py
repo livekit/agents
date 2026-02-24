@@ -1379,7 +1379,7 @@ class AgentActivity(RecognitionHooks):
             # only interrupt if not already interrupting
             if (
                 self._audio_recognition
-                and not self._audio_recognition._endpointing._overlapping
+                and not self._audio_recognition._endpointing.overlapping
                 and self._session.agent_state == "speaking"
             ):
                 self._audio_recognition.on_start_of_speech(
