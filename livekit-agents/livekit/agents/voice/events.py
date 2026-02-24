@@ -10,7 +10,7 @@ from typing_extensions import Self
 from ..inference.interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDetectionError,
-    InterruptionEvent,
+    OverlappingSpeechEvent,
 )
 from ..llm import (
     LLM,
@@ -93,7 +93,7 @@ EventTypes = Literal[
     "conversation_item_added",
     "agent_false_interruption",
     "user_interruption_detected",
-    "user_non_interruption_detected",
+    "user_backchannel_detected",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -245,6 +245,6 @@ AgentEvent = Annotated[
     | SpeechCreatedEvent
     | ErrorEvent
     | CloseEvent
-    | InterruptionEvent,
+    | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]

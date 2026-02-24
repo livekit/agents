@@ -100,7 +100,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "prediction_duration": round(metrics.prediction_duration, 2),
                 "detection_delay": round(metrics.detection_delay, 2),
                 "num_interruptions": metrics.num_interruptions,
-                "num_non_interruptions": metrics.num_non_interruptions,
+                "num_backchannels": metrics.num_backchannels,
                 "num_requests": metrics.num_requests,
             },
         )

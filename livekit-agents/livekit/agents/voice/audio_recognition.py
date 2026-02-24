@@ -93,7 +93,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 
 class RecognitionHooks(Protocol):
-    def on_interruption(self, ev: inference.InterruptionEvent) -> None: ...
+    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -791,7 +791,7 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
-    async def _on_interruption_event(self, ev: inference.InterruptionEvent) -> None:
+    async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.type == "user_interruption_detected":
             self._hooks.on_interruption(ev)
 
@@ -1018,7 +1018,7 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                await self._on_interruption_event(ev)
+                await self._on_overlap_speech_event(ev)
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()

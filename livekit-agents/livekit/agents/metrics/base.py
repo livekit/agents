@@ -155,8 +155,8 @@ class InterruptionMetrics(BaseModel):
     """Latest total time from the onset of the speech to the final prediction, in seconds."""
     num_interruptions: int
     """Number of interruptions detected, incrementally counted."""
-    num_non_interruptions: int
-    """Number of non-interruptions detected, incrementally counted."""
+    num_backchannels: int
+    """Number of backchannels detected, incrementally counted."""
     num_requests: int
     """Number of requests sent to the interruption detection model, incrementally counted."""
     metadata: Metadata | None = None
