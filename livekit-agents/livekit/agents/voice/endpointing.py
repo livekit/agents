@@ -1,12 +1,51 @@
-import time
+from typing import TYPE_CHECKING
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..utils.exp_filter import ExpFilter
 
+if TYPE_CHECKING:
+    from .turn import EndpointingOptions
 
-class DynamicEndpointing:
+
+class BaseEndpointing:
+    def __init__(self, min_delay: float, max_delay: float):
+        self._min_delay = min_delay
+        self._max_delay = max_delay
+        self._interrupting = False
+
+    def update_options(
+        self, *, min_delay: NotGivenOr[float] = NOT_GIVEN, max_delay: NotGivenOr[float] = NOT_GIVEN
+    ) -> None:
+        if is_given(min_delay):
+            self._min_delay = min_delay
+        if is_given(max_delay):
+            self._max_delay = max_delay
+
+    @property
+    def min_delay(self) -> float:
+        return self._min_delay
+
+    @property
+    def max_delay(self) -> float:
+        return self._max_delay
+
+    @property
+    def interrupting(self) -> bool:
+        return self._interrupting
+
+    def on_start_of_speech(self, started_at: float, interruption: bool = False) -> None:
+        self._interrupting = interruption
+
+    def on_end_of_speech(self, ended_at: float) -> None:
+        self._interrupting = False
+
+    def on_start_of_agent_speech(self, started_at: float) -> None:
+        pass
+
+
+class DynamicEndpointing(BaseEndpointing):
     def __init__(self, min_delay: float, max_delay: float, alpha: float = 0.9):
         """
         Dynamically adjust the endpointing delay based on the speech activity.
@@ -33,8 +72,7 @@ class DynamicEndpointing:
                            [agent speech]    (this could be interrupted later, but that would be the next turn)
         """
 
-        self._min_delay = min_delay
-        self._max_delay = max_delay
+        super().__init__(min_delay=min_delay, max_delay=max_delay)
 
         self._utterance_pause = ExpFilter(
             alpha=alpha, initial=min_delay, min_val=min_delay, max_val=max_delay
@@ -55,7 +93,6 @@ class DynamicEndpointing:
             if self._utterance_pause.value is not None
             else self._min_delay
         )
-        # we don't use max_delay here to avoid recursive calls
 
     @property
     def max_delay(self) -> float:
@@ -97,17 +134,14 @@ class DynamicEndpointing:
             abs(self.between_utterance_delay - self.between_turn_delay),
         )
 
-    def on_agent_speech_started(self, adjustment: float = 0.0) -> None:
-        self._agent_speech_started_at = time.time() + adjustment
+    def on_start_of_agent_speech(self, started_at: float) -> None:
+        self._agent_speech_started_at = started_at
         logger.debug(
             "agent speech started at: %s",
             self._agent_speech_started_at,
-            extra={
-                "adjustment": adjustment,
-            },
         )
 
-    def on_utterance_started(self, adjustment: float = 0.0, interruption: bool = False) -> None:
+    def on_start_of_speech(self, started_at: float, interruption: bool = False) -> None:
         if self._interrupting:
             # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
@@ -127,12 +161,11 @@ class DynamicEndpointing:
                 self._utterance_ended_at,
             )
 
-        self._utterance_started_at = time.time() + adjustment
+        self._utterance_started_at = started_at
         logger.debug(
             "utterance started at: %s",
             self._utterance_started_at,
             extra={
-                "adjustment": adjustment,
                 "interruption": interruption,
                 "interrupting": self._interrupting,
             },
@@ -219,13 +252,12 @@ class DynamicEndpointing:
         self._agent_speech_started_at = None
         self._interrupting = False
 
-    def on_utterance_ended(self, adjustment: float = 0.0) -> None:
-        self._utterance_ended_at = time.time() + adjustment
+    def on_end_of_speech(self, ended_at: float) -> None:
+        self._utterance_ended_at = ended_at
         logger.debug(
             "utterance ended at: %s",
             self._utterance_ended_at,
             extra={
-                "adjustment": adjustment,
                 "interrupting": self._interrupting,
                 "max_delay": self.max_delay,
                 "min_delay": self.min_delay,
@@ -235,7 +267,10 @@ class DynamicEndpointing:
         self._interrupting = False
 
     def update_options(
-        self, *, min_delay: NotGivenOr[float] = NOT_GIVEN, max_delay: NotGivenOr[float] = NOT_GIVEN
+        self,
+        *,
+        min_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(min_delay):
             self._min_delay = min_delay
@@ -246,3 +281,18 @@ class DynamicEndpointing:
             self._max_delay = max_delay
             self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
             self._utterance_pause.reset(max_val=self._max_delay)
+
+
+def create_endpointing_instance(endpointing: EndpointingOptions) -> BaseEndpointing:
+    """Create an instance of the endpointing class based on the endpointing mode."""
+    match endpointing["mode"]:
+        case "dynamic":
+            return DynamicEndpointing(
+                min_delay=endpointing["min_delay"],
+                max_delay=endpointing["max_delay"],
+            )
+        case "fixed":
+            return BaseEndpointing(
+                min_delay=endpointing["min_delay"],
+                max_delay=endpointing["max_delay"],
+            )
