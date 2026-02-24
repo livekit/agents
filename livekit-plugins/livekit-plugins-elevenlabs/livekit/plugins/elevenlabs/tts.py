@@ -705,8 +705,9 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
                         if timed_words:
                             output_emitter.push_timed_transcript(timed_words)
 
-                        start_times_ms = start_times_ms[-len(text_buffer) :]
-                        durations_ms = durations_ms[-len(text_buffer) :]
+                        remaining = len(text_buffer)
+                        start_times_ms = start_times_ms[-remaining:] if remaining else []
+                        durations_ms = durations_ms[-remaining:] if remaining else []
 
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning(f"[HTTPSynthesizeStream] Failed to parse response line: {e}")
@@ -777,8 +778,9 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
                                 text_buffer, start_times_ms, durations_ms
                             )
                             output_emitter.push_timed_transcript(timed_words)
-                            start_times_ms = start_times_ms[-len(text_buffer) :]
-                            durations_ms = durations_ms[-len(text_buffer) :]
+                            remaining = len(text_buffer)
+                            start_times_ms = start_times_ms[-remaining:] if remaining else []
+                            durations_ms = durations_ms[-remaining:] if remaining else []
 
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning(f"Failed to parse timestamp response: {e}")
@@ -1027,8 +1029,9 @@ class _Connection:
                             stream._text_buffer, stream._start_times_ms, stream._durations_ms
                         )
                         emitter.push_timed_transcript(timed_words)
-                        stream._start_times_ms = stream._start_times_ms[-len(stream._text_buffer) :]
-                        stream._durations_ms = stream._durations_ms[-len(stream._text_buffer) :]
+                        remaining = len(stream._text_buffer)
+                        stream._start_times_ms = stream._start_times_ms[-remaining:] if remaining else []
+                        stream._durations_ms = stream._durations_ms[-remaining:] if remaining else []
 
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
