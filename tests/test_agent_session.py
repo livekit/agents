@@ -524,6 +524,49 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
+async def test_aec_warmup() -> None:
+    """AEC warmup should block audio-activity-based interruptions during the warmup window.
+
+    Without warmup, VAD-based interruption fires at 4.0 + 0.5 = 4.5s.
+    With warmup (3.0s from speaking at 3.5s, expires at 6.5s), the VAD path is blocked.
+    The interruption is delayed to 5.5s (EOU: speech end 5.0 + 0.5 endpointing delay)
+    because FakeSTT is timer-based and still produces transcripts during warmup.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(15.0)  # playout starts at 3.5s
+    # user speaks at 4.0-5.0s — within warmup window (3.5 + 3.0 = 6.5s expiry)
+    # without warmup: VAD interruption at 4.0 + 0.5 = 4.5s
+    # with warmup: VAD blocked, falls through to EOU at 5.0 + 0.5 = 5.5s
+    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"aec_warmup_duration": 3.0},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    # interruption delayed to 5.5s (EOU), not 4.5s (VAD was blocked by warmup)
+    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
+    check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
