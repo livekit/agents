@@ -15,14 +15,7 @@ from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
-from .. import (
-    inference,
-    llm,
-    stt,
-    tts,
-    utils,
-    vad,
-)
+from .. import inference, llm, stt, tts, utils, vad
 from ..llm.tool_context import (
     FunctionToolInfo,
     RawFunctionToolInfo,
@@ -56,7 +49,7 @@ from .audio_recognition import (
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
 )
-from .endpointing import create_endpointing_instance
+from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
     ErrorEvent,
@@ -174,6 +167,7 @@ class AgentActivity(RecognitionHooks):
             self._resolve_interruption_detection()
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
+        self._interruption_detected: bool = False
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -296,7 +290,8 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
-    def endpointing(self) -> EndpointingOptions:
+    def endpointing_opts(self) -> EndpointingOptions:
+        # session should always have a valid endpointing val based on either defaults or overrides
         agent_endpointing = self._agent._turn_handling.get("endpointing", {})
         session_endpointing = self.session._opts.turn_handling["endpointing"]
         return EndpointingOptions(
@@ -307,11 +302,13 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def min_endpointing_delay(self) -> float:
-        return self.endpointing["min_delay"]
+        # this resolves to the fixed value from either agent or session instead of the dynamic one
+        return self.endpointing_opts["min_delay"]
 
     @property
     def max_endpointing_delay(self) -> float:
-        return self.endpointing["max_delay"]
+        # this resolves to the fixed value from either agent or session instead of the dynamic one
+        return self.endpointing_opts["max_delay"]
 
     @property
     def realtime_llm_session(self) -> llm.RealtimeSession | None:
@@ -407,7 +404,7 @@ class AgentActivity(RecognitionHooks):
         self,
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        endpointing: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -417,14 +414,14 @@ class AgentActivity(RecognitionHooks):
             logger.warning(
                 "min_endpointing_delay and max_endpointing_delay are deprecated, use endpointing instead"
             )
-            endpointing = EndpointingOptions(
-                mode=self.endpointing["mode"],
+            endpointing_opts = EndpointingOptions(
+                mode=self.endpointing_opts["mode"],
                 min_delay=min_endpointing_delay
                 if is_given(min_endpointing_delay)
-                else self.endpointing["min_delay"],
+                else self.endpointing_opts["min_delay"],
                 max_delay=max_endpointing_delay
                 if is_given(max_endpointing_delay)
-                else self.endpointing["max_delay"],
+                else self.endpointing_opts["max_delay"],
             )
 
         if utils.is_given(tool_choice):
@@ -450,8 +447,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition:
             self._audio_recognition.update_options(
-                endpointing=create_endpointing_instance(endpointing)
-                if is_given(endpointing)
+                endpointing=create_endpointing(endpointing_opts)
+                if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
             )
@@ -681,7 +678,7 @@ class AgentActivity(RecognitionHooks):
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
             interruption_detection=self._interruption_detector,
-            endpointing=create_endpointing_instance(self.endpointing),
+            endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
@@ -1249,8 +1246,10 @@ class AgentActivity(RecognitionHooks):
 
     def _on_overlap_speech_ended(self, ev: inference.InterruptionEvent) -> None:
         if ev.is_interruption:
+            self._interruption_detected = True
             self._session.emit("user_interruption_detected", ev)
         else:
+            self._interruption_detected = False
             self._session.emit("user_non_interruption_detected", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
@@ -1380,7 +1379,7 @@ class AgentActivity(RecognitionHooks):
             # only interrupt if not already interrupting
             if (
                 self._audio_recognition
-                and not self._audio_recognition._endpointing.interrupting
+                and not self._audio_recognition._endpointing._overlapping
                 and self._session.agent_state == "speaking"
             ):
                 self._audio_recognition.on_start_of_speech(
@@ -1417,6 +1416,7 @@ class AgentActivity(RecognitionHooks):
             )
         self._user_silence_event.clear()
         self._stt_eos_received = False
+        self._interruption_detected = False
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1432,7 +1432,11 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition:
             self._audio_recognition.on_end_of_speech(
-                ended_at=speech_end_time, user_speaking_span=self._session._user_speaking_span
+                ended_at=speech_end_time,
+                user_speaking_span=self._session._user_speaking_span,
+                interruption=self._interruption_detected
+                if self._interruption_detection_enabled
+                else NOT_GIVEN,
             )
 
         self._session._update_user_state(

@@ -15,7 +15,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
-from .turn import TurnDetectionMode, TurnHandlingOptions, _migrate_turn_handling
+from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .io import TimedString
+    from .turn import TurnDetectionMode
 
 
 @dataclass

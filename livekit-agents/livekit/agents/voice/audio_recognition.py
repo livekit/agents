@@ -192,6 +192,9 @@ class AudioRecognition:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
+        if self._agent_speaking:
+            self._endpointing.on_end_of_agent_speech(ended_at=time.time())
+
         if not self.adaptive_interruption_active:
             self._agent_speaking = False
             return
@@ -222,7 +225,7 @@ class AudioRecognition:
         user_speaking_span: trace.Span | None = None,
     ) -> None:
         self._endpointing.on_start_of_speech(
-            started_at=started_at, interruption=self._agent_speaking
+            started_at=started_at, overlapping=self._agent_speaking
         )
         if not self.adaptive_interruption_active or not self._agent_speaking:
             return
@@ -235,11 +238,17 @@ class AudioRecognition:
         )
 
     def on_end_of_speech(
-        self, ended_at: float, user_speaking_span: trace.Span | None = None
+        self,
+        ended_at: float,
+        user_speaking_span: trace.Span | None = None,
+        interruption: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if self._speaking:
             self._endpointing.on_end_of_speech(
                 ended_at=ended_at,
+                should_ignore=(
+                    is_given(interruption) and not interruption and self._agent_speaking
+                ),
             )
 
         if not self.adaptive_interruption_active or not self._agent_speaking:

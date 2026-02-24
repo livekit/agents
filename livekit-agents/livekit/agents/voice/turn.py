@@ -170,13 +170,13 @@ def _migrate_turn_handling(
     result: TurnHandlingOptions = {}
 
     # endpointing — only include keys that were explicitly provided
-    endpointing: EndpointingOptions = {}
+    endpointing_opts: EndpointingOptions = {}
     if is_given(min_endpointing_delay):
-        endpointing["min_delay"] = min_endpointing_delay
+        endpointing_opts["min_delay"] = min_endpointing_delay
     if is_given(max_endpointing_delay):
-        endpointing["max_delay"] = max_endpointing_delay
-    if endpointing:
-        result["endpointing"] = endpointing
+        endpointing_opts["max_delay"] = max_endpointing_delay
+    if endpointing_opts:
+        result["endpointing"] = endpointing_opts
 
     # interruption — only include keys that were explicitly provided
     interruption: InterruptionOptions = {}
