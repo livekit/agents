@@ -629,6 +629,44 @@ async def test_interrupt_during_on_user_turn_completed(
     assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
 
 
+async def test_unknown_function_call() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Check the weather")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="nonexistent_tool", arguments='{"location": "Tokyo"}', call_id="1")
+        ],
+    )
+    actions.add_llm(
+        content="I don't have access to that function.",
+        input="Unknown function: nonexistent_tool",
+    )
+    actions.add_tts(2.0)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].function_calls[0].name == "nonexistent_tool"
+    assert tool_executed_events[0].function_call_outputs[0].is_error is True
+    assert "Unknown function" in tool_executed_events[0].function_call_outputs[0].output
+
+    chat_ctx_items = agent.chat_ctx.items
+    error_outputs = [
+        item for item in chat_ctx_items
+        if item.type == "function_call_output" and item.is_error is True
+    ]
+    assert len(error_outputs) == 1
+    assert "Unknown function: nonexistent_tool" in error_outputs[0].output
+
+
 # helpers
 
 
