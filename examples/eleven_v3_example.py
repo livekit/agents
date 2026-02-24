@@ -23,9 +23,9 @@ async def entrypoint(ctx: JobContext):
     # Toggle between models to compare latency:
     # - eleven_v3: Uses HTTP streaming (our new implementation)
     # - eleven_turbo_v2_5: Uses WebSocket streaming (existing)
-    
+
     USE_V3 = True  # Set to False to test eleven_turbo_v2_5
-    
+
     agent = Agent(
         instructions="You are a helpful voice assistant. Keep responses very short - 1 sentence max.",
         stt=openai.STT(),  # OpenAI Whisper
