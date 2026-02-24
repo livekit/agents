@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -145,19 +146,10 @@ class TTS(tts.TTS):
         if not is_given(encoding):
             encoding = _DefaultEncoding
 
-        # Alignment not yet supported for HTTP streaming models
-        supports_alignment = sync_alignment and model not in NON_WEBSOCKET_MODELS
-
-        if sync_alignment and model in NON_WEBSOCKET_MODELS:
-            logger.warning(
-                f"Model '{model}' uses HTTP streaming which doesn't support alignment yet. "
-                "Disabling sync_alignment."
-            )
-
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=supports_alignment,
+                aligned_transcript=sync_alignment,
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
@@ -578,13 +570,15 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
             logger.info(
                 f"[HTTPSynthesizeStream] Sending request to /stream endpoint, text_length={len(full_text)} chars"
             )
-            
-            import time
+
             request_start = time.time()
 
-            # Use basic stream endpoint (alignment not yet supported for HTTP)
+            # Use with-timestamps endpoint if alignment is enabled
+            use_timestamps = self._opts.sync_alignment
+            url = _synthesize_url(self._opts, with_timestamps=use_timestamps)
+
             async with self._tts._ensure_session().post(
-                _synthesize_url(self._opts, with_timestamps=False),
+                url,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=request_body,
                 timeout=aiohttp.ClientTimeout(
@@ -594,37 +588,13 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
             ) as resp:
                 resp.raise_for_status()
 
-                if not resp.content_type.startswith("audio/"):
+                if use_timestamps:
+                    await self._handle_timestamps_response(resp, output_emitter, request_start)
+                elif resp.content_type.startswith("audio/"):
+                    await self._handle_audio_response(resp, output_emitter, request_start)
+                else:
                     content = await resp.text()
-                    raise APIError(message="11labs returned non-audio data", body=content)
-
-                chunk_count = 0
-                total_bytes = 0
-                first_chunk_time = None
-
-                async for data, _ in resp.content.iter_chunks():
-                    if data:
-                        chunk_count += 1
-                        total_bytes += len(data)
-                        
-                        if first_chunk_time is None:
-                            first_chunk_time = time.time()
-                            ttfb_ms = (first_chunk_time - request_start) * 1000
-                            logger.info(
-                                f"[HTTPSynthesizeStream] First chunk received, ttfb={ttfb_ms:.0f}ms, size={len(data)} bytes"
-                            )
-                        
-                        output_emitter.push(data)
-                        
-                        if chunk_count <= 5 or chunk_count % 10 == 0:
-                            logger.debug(
-                                f"[HTTPSynthesizeStream] Chunk #{chunk_count}, size={len(data)} bytes, total={total_bytes} bytes"
-                            )
-
-                total_time_ms = (time.time() - request_start) * 1000
-                logger.info(
-                    f"[HTTPSynthesizeStream] Stream complete, chunks={chunk_count}, total_bytes={total_bytes}, duration={total_time_ms:.0f}ms"
-                )
+                    raise APIError(message="11labs returned unexpected content type", body=content)
 
                 output_emitter.flush()
 
@@ -643,6 +613,113 @@ class HTTPSynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, tokenizer_t)
             await tokenizer_stream.aclose()
+
+    async def _handle_audio_response(
+        self, resp: aiohttp.ClientResponse, output_emitter: tts.AudioEmitter, request_start: float
+    ) -> None:
+        """Handle raw audio streaming response (no timestamps)"""
+        chunk_count = 0
+        total_bytes = 0
+        first_chunk_time = None
+
+        async for data, _ in resp.content.iter_chunks():
+            if data:
+                chunk_count += 1
+                total_bytes += len(data)
+
+                if first_chunk_time is None:
+                    first_chunk_time = time.time()
+                    ttfb_ms = (first_chunk_time - request_start) * 1000
+                    logger.info(
+                        f"[HTTPSynthesizeStream] First audio chunk, ttfb={ttfb_ms:.0f}ms, size={len(data)} bytes"
+                    )
+
+                output_emitter.push(data)
+
+                if chunk_count <= 5 or chunk_count % 10 == 0:
+                    logger.debug(
+                        f"[HTTPSynthesizeStream] Audio chunk #{chunk_count}, size={len(data)} bytes"
+                    )
+
+        total_time_ms = (time.time() - request_start) * 1000
+        logger.info(
+            f"[HTTPSynthesizeStream] Audio stream complete, chunks={chunk_count}, bytes={total_bytes}, duration={total_time_ms:.0f}ms"
+        )
+
+    async def _handle_timestamps_response(
+        self, resp: aiohttp.ClientResponse, output_emitter: tts.AudioEmitter, request_start: float
+    ) -> None:
+        """Handle NDJSON response from /stream/with-timestamps endpoint.
+
+        Response is newline-delimited JSON, each line:
+        {"audio_base64": "...", "alignment": {"characters": [...], "character_start_times_seconds": [...], "character_end_times_seconds": [...]}, "normalized_alignment": {...}}
+        """
+        text_buffer = ""
+        start_times_ms: list[int] = []
+        durations_ms: list[int] = []
+        chunk_count = 0
+        first_chunk_time = None
+
+        async for line_bytes in resp.content:
+            line = line_bytes.decode("utf-8").strip()
+            if not line:
+                continue
+
+            chunk_count += 1
+
+            try:
+                data = json.loads(line)
+
+                if audio_b64 := data.get("audio_base64"):
+                    audio_bytes = base64.b64decode(audio_b64)
+                    output_emitter.push(audio_bytes)
+
+                    if first_chunk_time is None:
+                        first_chunk_time = time.time()
+                        ttfb_ms = (first_chunk_time - request_start) * 1000
+                        logger.info(
+                            f"[HTTPSynthesizeStream] First chunk received, ttfb={ttfb_ms:.0f}ms"
+                        )
+
+                alignment = (
+                    data.get("normalized_alignment")
+                    if self._opts.preferred_alignment == "normalized"
+                    else data.get("alignment")
+                )
+
+                if alignment:
+                    chars = alignment.get("characters", [])
+                    starts_sec = alignment.get("character_start_times_seconds", [])
+                    ends_sec = alignment.get("character_end_times_seconds", [])
+
+                    if chars and starts_sec and ends_sec:
+                        for char, start_s, end_s in zip(chars, starts_sec, ends_sec, strict=False):
+                            text_buffer += char
+                            start_times_ms.append(int(start_s * 1000))
+                            durations_ms.append(int((end_s - start_s) * 1000))
+
+                        timed_words, text_buffer = _to_timed_words(
+                            text_buffer, start_times_ms, durations_ms
+                        )
+                        if timed_words:
+                            output_emitter.push_timed_transcript(timed_words)
+
+                        start_times_ms = start_times_ms[-len(text_buffer) :]
+                        durations_ms = durations_ms[-len(text_buffer) :]
+
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"[HTTPSynthesizeStream] Failed to parse response line: {e}")
+                continue
+
+        if text_buffer:
+            timed_words, _ = _to_timed_words(text_buffer, start_times_ms, durations_ms, flush=True)
+            if timed_words:
+                output_emitter.push_timed_transcript(timed_words)
+
+        total_time_ms = (time.time() - request_start) * 1000
+        logger.info(
+            f"[HTTPSynthesizeStream] Stream complete, chunks={chunk_count}, duration={total_time_ms:.0f}ms"
+        )
 
     async def _handle_timestamped_response(
         self, resp: aiohttp.ClientResponse, output_emitter: tts.AudioEmitter, full_text: str

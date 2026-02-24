@@ -22,4 +22,4 @@ All ElevenLabs TTS models are supported, including:
 - `eleven_flash_v2_5`, `eleven_flash_v2` - Ultra-fast models
 - And more...
 
-**Note:** The `eleven_v3` model uses HTTP streaming instead of WebSocket for compatibility, as it doesn't support WebSocket connections. The plugin automatically handles this difference. Aligned transcripts are not yet supported for `eleven_v3`.
+**Note:** The `eleven_v3` model uses HTTP streaming instead of WebSocket for compatibility, as it doesn't support WebSocket connections. The plugin automatically handles this difference.

@@ -108,10 +108,9 @@ class TestElevenLabsV3Support:
 
     @patch.dict("os.environ", {"ELEVEN_API_KEY": "test-key"})
     def test_alignment_capability_for_v3(self):
-        """Test that eleven_v3 doesn't support alignment yet (uses HTTP streaming)"""
-        # Alignment not yet supported for HTTP streaming models
+        """Test that eleven_v3 supports alignment via HTTP /stream/with-timestamps endpoint"""
         tts_with_alignment = elevenlabs.TTS(model="eleven_v3", sync_alignment=True)
-        assert tts_with_alignment.capabilities.aligned_transcript is False
+        assert tts_with_alignment.capabilities.aligned_transcript is True
 
         tts_without_alignment = elevenlabs.TTS(model="eleven_v3", sync_alignment=False)
         assert tts_without_alignment.capabilities.aligned_transcript is False
