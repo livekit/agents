@@ -300,6 +300,7 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream | HTTPSynthesizeStream:
+        stream: SynthesizeStream | HTTPSynthesizeStream
         if self._opts.model in NON_WEBSOCKET_MODELS:
             stream = HTTPSynthesizeStream(tts=self, conn_options=conn_options)
         else:
