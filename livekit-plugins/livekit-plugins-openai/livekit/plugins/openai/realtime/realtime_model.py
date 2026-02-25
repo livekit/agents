@@ -27,6 +27,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
 from openai.types import realtime
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
@@ -1120,9 +1121,11 @@ class RealtimeSession(
         async with self._update_chat_ctx_lock:
             chat_ctx = chat_ctx.copy(
                 exclude_handoff=True,
-                exclude_instructions=True,
                 exclude_config_update=True,
             )
+            # only remove the instructions but keep other system messages
+            remove_instructions(chat_ctx)
+
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
 
