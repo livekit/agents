@@ -485,6 +485,7 @@ class _TokenAccumulator:
         self.end_time: float = 0.0
         self._confidence_sum: float = 0.0
         self._confidence_count: int = 0
+        self._has_start_time: bool = False
 
     def update(self, token: dict[str, Any]) -> None:
         self.text += token["text"]
@@ -492,7 +493,8 @@ class _TokenAccumulator:
             self.language = token["language"]
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
-        if "start_ms" in token and self.start_time == 0.0:
+        if "start_ms" in token and not self._has_start_time:
+            self._has_start_time = True
             self.start_time = float(token["start_ms"])
         if "end_ms" in token:
             self.end_time = float(token["end_ms"])
@@ -514,6 +516,7 @@ class _TokenAccumulator:
         self.end_time = 0.0
         self._confidence_sum = 0.0
         self._confidence_count = 0
+        self._has_start_time = False
 
     def to_speech_data(self) -> stt.SpeechData:
         return stt.SpeechData(
@@ -527,7 +530,9 @@ class _TokenAccumulator:
 
     def merged_speech_data(self, other: _TokenAccumulator) -> stt.SpeechData:
         """Build a SpeechData combining self (final) with other (non-final)."""
-        candidates = [t for t in (self.start_time, other.start_time) if t > 0.0]
+        candidates = [
+            acc.start_time for acc in (self, other) if acc._has_start_time
+        ]
         start = min(candidates) if candidates else 0.0
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
