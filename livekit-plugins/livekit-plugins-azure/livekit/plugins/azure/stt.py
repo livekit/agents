@@ -283,9 +283,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg: Language | None = None
-        if res and res.language:
-            detected_lg = Language(res.language)
+        detected_lg = Language(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
@@ -312,9 +310,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg: Language | None = None
-        if res and res.language:
-            detected_lg = Language(res.language)
+        detected_lg = Language(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
