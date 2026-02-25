@@ -42,15 +42,20 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient, RTZRStatusError
 
-_DEFAULT_CHUNK_MS = 100
+_INITIAL_CHUNK_MS = 50
+_STREAMING_CHUNK_MS = 200
 _IDLE_TIMEOUT_SECONDS = 25.0
 _RECV_COMPLETION_TIMEOUT = 5.0
 _IDLE_CHECK_INTERVAL = 1.0
+# originally supported encodings from RTZR: https://developers.rtzr.ai/docs/en/stt-streaming/#supported-encodings
+# rtc.AudioFrame uses raw PCM audio frame. You should use LINEAR16 encoding.
+_SUPPORTED_PLUGIN_WS_ENCODINGS = {"LINEAR16"}
+_SUPPORTED_DOMAINS = {"CALL", "MEETING"}
 
 
 @dataclass
 class _STTOptions:
-    model_name: str = "sommers_ko"  # sommers_ko: "ko", sommers_ja: "ja"
+    model_name: str = "sommers_ko"  # sommers_ko: "ko", sommers_ja: "ja", "sommers_en": "en"
     language: Language = Language("ko")  # ko, ja, en
     sample_rate: int = DEFAULT_SAMPLE_RATE
     encoding: str = "LINEAR16"  # or "OGG_OPUS" in future
@@ -58,6 +63,9 @@ class _STTOptions:
     epd_time: float = 0.8  # endpoint detection time in seconds
     noise_threshold: float = 0.60
     active_threshold: float = 0.80
+    use_itn: bool = True
+    use_disfluency_filter: bool = False
+    use_profanity_filter: bool = False
     use_punctuation: bool = False
     keywords: list[str] | list[tuple[str, float]] | None = None
 
@@ -80,10 +88,14 @@ class STT(stt.STT):
         model: str = "sommers_ko",
         language: str = "ko",
         sample_rate: int = 8000,
+        encoding: str = "LINEAR16",
         domain: str = "CALL",
         epd_time: float = 0.8,
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
+        use_itn: bool = True,
+        use_disfluency_filter: bool = False,
+        use_profanity_filter: bool = False,
         use_punctuation: bool = False,
         keywords: list[str] | list[tuple[str, float]] | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -98,14 +110,30 @@ class STT(stt.STT):
             )
         )
 
+        normalized_encoding = encoding.upper()
+        normalized_domain = domain.upper()
+
+        if sample_rate < 8000 or sample_rate > 48000:
+            raise ValueError("RTZR sample_rate must be between 8000 and 48000 Hz")
+        if normalized_encoding not in _SUPPORTED_PLUGIN_WS_ENCODINGS:
+            raise ValueError(
+                f"Requested encoding {normalized_encoding} is not supported. Use LINEAR16."
+            )
+        if normalized_domain not in _SUPPORTED_DOMAINS:
+            raise ValueError(f"RTZR domain must be one of {', '.join(sorted(_SUPPORTED_DOMAINS))}")
+
         self._params = _STTOptions(
             model_name=model,
             language=Language(language),
             sample_rate=sample_rate,
-            domain=domain,
+            encoding=normalized_encoding,
+            domain=normalized_domain,
             epd_time=epd_time,
             noise_threshold=noise_threshold,
             active_threshold=active_threshold,
+            use_itn=use_itn,
+            use_disfluency_filter=use_disfluency_filter,
+            use_profanity_filter=use_profanity_filter,
             use_punctuation=use_punctuation,
             keywords=keywords,
         )
@@ -154,6 +182,8 @@ class SpeechStream(stt.SpeechStream):
         self._recv_task: asyncio.Task[None] | None = None
         self._state = _StreamState.IDLE
         self._connection_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self._pending_usage_audio_duration = 0.0
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at: float | None = None
         self._idle_task: asyncio.Task[None] | None = None
@@ -167,8 +197,12 @@ class SpeechStream(stt.SpeechStream):
             epd_time=self._rtzr_stt._params.epd_time,
             noise_threshold=self._rtzr_stt._params.noise_threshold,
             active_threshold=self._rtzr_stt._params.active_threshold,
+            use_itn=self._rtzr_stt._params.use_itn,
+            use_disfluency_filter=self._rtzr_stt._params.use_disfluency_filter,
+            use_profanity_filter=self._rtzr_stt._params.use_profanity_filter,
             use_punctuation=self._rtzr_stt._params.use_punctuation,
             keywords=self._rtzr_stt._params.keywords,
+            language=self._rtzr_stt._params.language,
         )
 
         try:
@@ -177,13 +211,18 @@ class SpeechStream(stt.SpeechStream):
                 timeout=self._conn_options.timeout,
             )
             logger.debug(
-                "RTZR STT WS connected (model=%s, sr=%s, epd=%.2fs, "
-                "noise=%.2f, active=%.2f, punct=%s)",
+                "RTZR STT WS connected (model=%s, sr=%s, enc=%s, domain=%s, epd=%.2fs, "
+                "noise=%.2f, active=%.2f, itn=%s, disfluency=%s, profanity=%s, punct=%s)",
                 self._rtzr_stt._params.model_name,
                 self._rtzr_stt._params.sample_rate,
+                self._rtzr_stt._params.encoding,
+                self._rtzr_stt._params.domain,
                 self._rtzr_stt._params.epd_time,
                 self._rtzr_stt._params.noise_threshold,
                 self._rtzr_stt._params.active_threshold,
+                self._rtzr_stt._params.use_itn,
+                self._rtzr_stt._params.use_disfluency_filter,
+                self._rtzr_stt._params.use_profanity_filter,
                 self._rtzr_stt._params.use_punctuation,
             )
             return ws
@@ -202,17 +241,36 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
+        # Retry runs should always start from a clean baseline.
+        self._state = _StreamState.IDLE
+        self._last_audio_at = None
+        self._pending_usage_audio_duration = 0.0
+
         send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
         self._idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
 
         try:
             await send_task
+        except asyncio.CancelledError:
+            pass
         finally:
-            self._state = _StreamState.CLOSED
-            if self._idle_task and not self._idle_task.done():
-                await utils.aio.gracefully_cancel(self._idle_task)
+            if not send_task.done():
+                await utils.aio.gracefully_cancel(send_task)
+
+            idle_task = self._idle_task
+            self._idle_task = None
+            if idle_task and not idle_task.done():
+                await utils.aio.gracefully_cancel(idle_task)
+
+            # Prefer graceful RTZR-side session close with EOS when a connection exists.
+            if self._ws:
+                await self._end_segment()
+
             await self._await_recv_completion()
             await self._cleanup_connection()
+            self._emit_usage_event_if_needed()
+            self._state = _StreamState.CLOSED
+            self._last_audio_at = None
 
     async def _ensure_connected(self) -> None:
         """Lazy connect on first audio."""
@@ -231,19 +289,51 @@ class SpeechStream(stt.SpeechStream):
 
     async def _end_segment(self) -> None:
         """Close current segment, prepare for next."""
+        ws_to_close = None
+        recv_to_wait = None
+
         async with self._connection_lock:
-            if not self._ws:
+            if not self._ws or self._state == _StreamState.CLOSING:
                 return
             self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent EOS to close audio segment")
-            except Exception:
-                logger.exception("Failed to send EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-            self._state = _StreamState.IDLE
-            self._last_audio_at = None
+            ws_to_close = self._ws
+            recv_to_wait = self._recv_task
+            self._ws = None
+            self._recv_task = None
+
+        try:
+            if ws_to_close:
+                try:
+                    async with self._send_lock:
+                        await ws_to_close.send_str("EOS")
+                    logger.debug("Sent EOS to close audio segment")
+                except Exception:
+                    logger.exception("Failed to send EOS")
+
+            if recv_to_wait:
+                try:
+                    await asyncio.wait_for(recv_to_wait, timeout=_RECV_COMPLETION_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("recv completion timed out; cancelling")
+                    await utils.aio.gracefully_cancel(recv_to_wait)
+                except Exception:
+                    logger.exception("recv task raised unexpected error")
+                    await utils.aio.gracefully_cancel(recv_to_wait)
+        finally:
+            if ws_to_close:
+                try:
+                    await ws_to_close.close()
+                except Exception:
+                    pass
+
+                self._emit_usage_event_if_needed()
+
+            async with self._connection_lock:
+                # Only reset to IDLE if we haven't started a new active connection
+                # while waiting for the old one to close
+                if self._state == _StreamState.CLOSING:
+                    self._state = _StreamState.IDLE
+                    self._last_audio_at = None
 
     async def _idle_watchdog(self) -> None:
         try:
@@ -264,27 +354,61 @@ class SpeechStream(stt.SpeechStream):
 
     async def _cleanup_connection(self) -> None:
         if self._ws:
+            ws_to_close = self._ws
             try:
-                await self._ws.close()
+                await ws_to_close.close()
+            except Exception:
+                logger.exception("Failed to close RTZR websocket during cleanup")
             finally:
                 self._ws = None
 
+            self._emit_usage_event_if_needed()
+
     async def _await_recv_completion(self) -> None:
-        if self._recv_task:
-            try:
-                await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
-            except asyncio.TimeoutError:
-                await utils.aio.gracefully_cancel(self._recv_task)
-            finally:
-                self._recv_task = None
+        recv_task = self._recv_task
+        self._recv_task = None
+        if not recv_task:
+            return
+
+        try:
+            await asyncio.wait_for(recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("recv completion timed out; cancelling")
+            await utils.aio.gracefully_cancel(recv_task)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("recv task raised unexpected error")
+            await utils.aio.gracefully_cancel(recv_task)
+
+    def _accumulate_usage(self, duration: float) -> None:
+        self._pending_usage_audio_duration += duration
+
+    def _emit_usage_event_if_needed(self) -> None:
+        if self._pending_usage_audio_duration <= 0.0:
+            return
+
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(
+                audio_duration=self._pending_usage_audio_duration
+            ),
+        )
+        self._event_ch.send_nowait(usage_event)
+        self._pending_usage_audio_duration = 0.0
 
     @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
+        sample_rate = self._rtzr_stt._params.sample_rate
+
+        # Start with _INITIAL_CHUNK_MS chunks to meet RTZR minimum initial payload requirement
         audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._rtzr_stt._params.sample_rate,
+            sample_rate=sample_rate,
             num_channels=1,
-            samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
+            samples_per_channel=sample_rate * _INITIAL_CHUNK_MS // 1000,
         )
+        switched_to_streaming = False
 
         has_ended = False
         async for data in self._input_ch:
@@ -298,28 +422,42 @@ class SpeechStream(stt.SpeechStream):
 
             if frames and not self._ws:
                 await self._ensure_connected()
+                # After initial _INITIAL_CHUNK_MS chunk sent, switch to _STREAMING_CHUNK_MS for low-latency streaming
+                if not switched_to_streaming:
+                    audio_bstream = utils.audio.AudioByteStream(
+                        sample_rate=sample_rate,
+                        num_channels=1,
+                        samples_per_channel=sample_rate * _STREAMING_CHUNK_MS // 1000,
+                    )
+                    switched_to_streaming = True
 
-            for frame in frames:
-                if self._ws:
-                    await self._ws.send_bytes(frame.data.tobytes())
-                    self._last_audio_at = time.monotonic()
+            if frames:
+                try:
+                    async with self._send_lock:
+                        for frame in frames:
+                            if self._ws and self._state == _StreamState.ACTIVE:
+                                ws = self._ws
+                                await ws.send_bytes(frame.data.tobytes())
+                                self._accumulate_usage(frame.duration)
+                                self._last_audio_at = time.monotonic()
+                except Exception:
+                    logger.warning("WS send failed; breaking segment to attempt recovery")
+                    has_ended = True
 
             if has_ended:
                 if self._ws:
                     await self._end_segment()
-                has_ended = False  # always reset - flush without active WS is a no-op
+                has_ended = False
+                # Reset to _INITIAL_CHUNK_MS for the next segment's first frame
+                audio_bstream = utils.audio.AudioByteStream(
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=sample_rate * _INITIAL_CHUNK_MS // 1000,
+                )
+                switched_to_streaming = False
 
-        # Final shutdown
-        if self._ws:
-            self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent final EOS to close audio stream")
-            except Exception:
-                logger.exception("Failed to send final EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-        self._state = _StreamState.IDLE
+        # Final shutdown — reuse _end_segment for lock consistency
+        await self._end_segment()
 
     def _parse_words(self, words: list[dict]) -> list[TimedString]:
         """Parse word timing data from RTZR response."""
@@ -417,30 +555,41 @@ class SpeechStream(stt.SpeechStream):
         in_speech = False
         speech_started_at: float | None = None
 
-        async for msg in ws:
-            if msg.type == aiohttp.WSMsgType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
-                    continue
+        try:
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
+                        continue
 
-                self._check_error_response(data)
+                    self._check_error_response(data)
 
-                events, in_speech, speech_started_at = self._process_transcript_event(
-                    data, in_speech, speech_started_at
-                )
-                for event in events:
-                    self._event_ch.send_nowait(event)
+                    events, in_speech, speech_started_at = self._process_transcript_event(
+                        data, in_speech, speech_started_at
+                    )
+                    for event in events:
+                        self._event_ch.send_nowait(event)
 
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED,
-            ):
-                break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error("WebSocket error: %s", ws.exception())
-                raise APIConnectionError("WebSocket error occurred")
-            else:
-                logger.debug("Ignored WebSocket message type: %s", msg.type)
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    logger.error("WebSocket error: %s", ws.exception())
+                    raise APIConnectionError("WebSocket error occurred")
+                else:
+                    logger.debug("Ignored WebSocket message type: %s", msg.type)
+        finally:
+            # Defense against premature / server-initiated connection close
+            # Ensure the stream isn't left stuck in ACTIVE with a dead socket
+            async with self._connection_lock:
+                if self._ws is ws:
+                    logger.debug("RTZR recv loop closed unexpectedly, resetting connection")
+                    self._ws = None
+                    self._recv_task = None
+                    self._state = _StreamState.IDLE
+                    self._last_audio_at = None
