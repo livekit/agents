@@ -38,6 +38,12 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    utterance_end_latency: float | None = None
+    """Wall-clock delay from when the audio at the transcript's end_time was pushed
+    to when FINAL_TRANSCRIPT was received.  Measures pure STT engine latency for the
+    specific audio that produced the transcript.
+    Only set for streaming STT on FINAL_TRANSCRIPT events. None when end_time is
+    unavailable from the provider."""
     metadata: Metadata | None = None
 
 

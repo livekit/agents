@@ -125,7 +125,13 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
+        # Used only for interruption timing logic in STT turn-detection mode.
         self._stt_eos_received: bool = False
+        # Latency metrics are tracked separately from EOS state to avoid coupling
+        # interruption control and per-turn metrics collection.
+        self._stt_utterance_latency_by_request_id: dict[str, float] = {}
+        self._last_unkeyed_stt_utterance_latency: float | None = None
+        self._last_user_final_stt_request_id: str | None = None
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1141,6 +1147,12 @@ class AgentActivity(RecognitionHooks):
         self,
         ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
     ) -> None:
+        if isinstance(ev, STTMetrics) and ev.utterance_end_latency is not None:
+            if ev.request_id:
+                self._stt_utterance_latency_by_request_id[ev.request_id] = ev.utterance_end_latency
+            else:
+                self._last_unkeyed_stt_utterance_latency = ev.utterance_end_latency
+
         if (speech_handle := _SpeechHandleContextVar.get(None)) and (
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):
@@ -1375,6 +1387,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
+        self._last_user_final_stt_request_id = ev.request_id or None
 
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
@@ -1594,10 +1607,24 @@ class AgentActivity(RecognitionHooks):
         if info.transcription_delay is not None:
             metrics_report["transcription_delay"] = info.transcription_delay
 
+        utterance_end_latency: float | None = None
+        if self._last_user_final_stt_request_id:
+            utterance_end_latency = self._stt_utterance_latency_by_request_id.pop(
+                self._last_user_final_stt_request_id,
+                None,
+            )
+        if utterance_end_latency is None and self._last_unkeyed_stt_utterance_latency is not None:
+            utterance_end_latency = self._last_unkeyed_stt_utterance_latency
+            self._last_unkeyed_stt_utterance_latency = None
+
+        if utterance_end_latency is not None:
+            metrics_report["utterance_end_latency"] = utterance_end_latency
+
         if info.end_of_turn_delay is not None:
             metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
 
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
+        self._last_user_final_stt_request_id = None
 
         if user_message is not None:
             user_message.metrics = metrics_report
