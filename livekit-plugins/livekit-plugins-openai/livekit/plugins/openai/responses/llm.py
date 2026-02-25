@@ -81,9 +81,7 @@ class _ResponsesWebsocket:
             self._run_ws(self._ws_conn), name="_ResponsesWebsocket._run_task"
         )
 
-
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
             while True:
@@ -113,7 +111,7 @@ class _ResponsesWebsocket:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._output_queue: # if there are no more pending requests
+                    if not self._output_queue:  # if there are no more pending requests
                         return
                     raise APIConnectionError(
                         message="OpenAI Responses WebSocket connection closed unexpectedly"
