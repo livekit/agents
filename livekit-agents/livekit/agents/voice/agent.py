@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass, field
@@ -1032,7 +1033,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 old_agent=self._old_agent, session=session, speech_handle=speech_handle
             )
             if speech_handle:
-                speech_handle.allow_interruptions = old_allow_interruptions
+                with contextlib.suppress(RuntimeError):
+                    speech_handle.allow_interruptions = old_allow_interruptions
             self.__inactive_ev.set()
 
     async def __switch_to_old_agent(

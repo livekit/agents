@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import io
+import logging
 import multiprocessing as mp
 import socket
 import time
@@ -15,6 +16,8 @@ from typing import ClassVar
 import psutil
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
+from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
+from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
 
 
@@ -412,3 +415,52 @@ async def test_job_graceful_shutdown():
     assert proc.exitcode == 0, "process should have exited cleanly"
     assert not proc.killed
     assert start_args.shutdown_counter.value == 1
+
+
+def test_log_queue_drains_before_stop():
+    """All log records must be received by the listener even when stop() is
+    called right after the sender closes its end.  This reproduces a race where
+    LogQueueListener.stop() used to close the socket *before* joining the
+    monitor thread, dropping buffered records."""
+    NUM_LOGS = 200
+    received: list[str] = []
+
+    parent_sock, child_sock = socket.socketpair()
+    parent_dup = duplex_unix._Duplex.open(parent_sock)
+    child_dup = duplex_unix._Duplex.open(child_sock)
+
+    # -- parent (listener) side --
+    class _CapturingListener(LogQueueListener):
+        def handle(self, record: logging.LogRecord) -> None:
+            received.append(record.getMessage())
+            # slow down processing so the buffer is not fully drained
+            # before stop() is called
+            time.sleep(0.001)
+
+    listener = _CapturingListener(parent_dup, lambda r: None)
+    listener.start()
+
+    # -- child (handler) side --
+    handler = LogQueueHandler(child_dup)
+    test_logger = logging.getLogger("test_log_queue_drain")
+    test_logger.addHandler(handler)
+    test_logger.setLevel(logging.DEBUG)
+    test_logger.propagate = False
+
+    for i in range(NUM_LOGS):
+        test_logger.info("msg %d", i)
+
+    # simulate the child process shutting down: close handler then its thread
+    handler.close()
+    handler.thread.join()
+    # child duplex is now closed by _forward_logs
+
+    # simulate supervised_proc._sync_run: proc.join() returned, now stop listener
+    listener.stop()
+
+    test_logger.removeHandler(handler)
+
+    assert len(received) == NUM_LOGS, (
+        f"Expected {NUM_LOGS} records, got {len(received)}. "
+        f"Lost {NUM_LOGS - len(received)} tail log records."
+    )

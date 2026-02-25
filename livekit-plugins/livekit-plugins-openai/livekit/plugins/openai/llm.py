@@ -49,6 +49,7 @@ from .models import (
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     PerplexityChatModels,
+    SambaNovaChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
@@ -279,6 +280,51 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "Cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            _strict_tool_schema=False,
+        )
+
+    @staticmethod
+    def with_sambanova(
+        *,
+        model: str | SambaNovaChatModels = "DeepSeek-R1-0528",
+        api_key: str | None = None,
+        base_url: str = "https://api.sambanova.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of SambaNova LLM (OpenAI-compatible).
+
+        ``api_key`` must be set to your SambaNova API key, either using the argument or by setting
+        the ``SAMBANOVA_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("SAMBANOVA_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable"
             )
 
         return LLM(
