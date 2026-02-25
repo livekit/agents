@@ -1242,6 +1242,11 @@ def _format_turn_metrics(
 
     # user-side metrics
     if user_metrics:
+        if "utterance_end_latency" in user_metrics:
+            stt_utterance_end_latency = user_metrics["utterance_end_latency"]
+            parts.append(("stt_utt_end: ", "dim"))
+            parts.append((_format_duration_ms(stt_utterance_end_latency), "dim"))
+
         if "end_of_turn_delay" in user_metrics:
             v = user_metrics["end_of_turn_delay"]
             parts.append(("end_of_turn: ", "dim"))
