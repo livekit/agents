@@ -705,7 +705,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
-                    telemetry.metrics._update_child_proc_count()
+                    if self._prometheus_multiproc_dir:
+                        await asyncio.get_event_loop().run_in_executor(
+                            None, telemetry.metrics._update_child_proc_count
+                        )
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
