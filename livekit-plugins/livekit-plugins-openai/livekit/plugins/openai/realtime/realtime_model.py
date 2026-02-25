@@ -1594,19 +1594,8 @@ class RealtimeSession(
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
         ):
-            item = event.item
-            assert item.call_id is not None, "call_id is None"
-            assert item.name is not None, "name is None"
-            assert item.arguments is not None, "arguments is None"
+            self._handle_function_call(event.item)
 
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    id=item_id,
-                    call_id=item.call_id,
-                    name=item.name,
-                    arguments=item.arguments,
-                )
-            )
         elif item_type == "message":
             item_generation = self._current_generation.messages[item_id]
             item_generation.text_ch.close()
@@ -1614,6 +1603,21 @@ class RealtimeSession(
             if not item_generation.modalities.done():
                 # in case message modalities is not set, this shouldn't happen
                 item_generation.modalities.set_result(self._realtime_model._opts.modalities)
+
+    def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
+        assert item.id is not None, "item.id is None"
+        assert item.call_id is not None, "call_id is None"
+        assert item.name is not None, "name is None"
+        assert item.arguments is not None, "arguments is None"
+
+        self._current_generation.function_ch.send_nowait(
+            llm.FunctionCall(
+                id=item.id,
+                call_id=item.call_id,
+                name=item.name,
+                arguments=item.arguments,
+            )
+        )
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:
