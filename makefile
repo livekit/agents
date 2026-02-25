@@ -109,7 +109,7 @@ unit-tests:
 		tests/test_room.py \
 		tests/test_utils/test_audio_array_buffer.py \
 		tests/test_utils/test_bounded_dict.py \
-		tests/test_interruption/test_interruption_event.py
+		tests/test_interruption/test_overlapping_speech_event.py
 
 # ============================================
 # Development Workflows
