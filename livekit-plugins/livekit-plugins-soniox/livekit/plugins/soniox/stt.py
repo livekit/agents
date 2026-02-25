@@ -444,7 +444,11 @@ class SpeechStream(stt.SpeechStream):
                             )
 
                         # 3) on error or finish, flush any remaining final tokens.
-                        if content.get("finished") or content.get("error_code"):
+                        if (
+                            content.get("finished")
+                            or content.get("error_code")
+                            or content.get("error_message")
+                        ):
                             send_endpoint_transcript()
                             self._report_processed_audio_duration(total_audio_proc_ms)
 
