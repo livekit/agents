@@ -1605,6 +1605,8 @@ class RealtimeSession(
                 item_generation.modalities.set_result(self._realtime_model._opts.modalities)
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
         assert item.id is not None, "item.id is None"
         assert item.call_id is not None, "call_id is None"
         assert item.name is not None, "name is None"
