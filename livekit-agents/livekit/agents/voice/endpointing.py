@@ -330,13 +330,13 @@ class DynamicEndpointing(BaseEndpointing):
 
 
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
-    match options["mode"]:
+    match options.get("mode", "fixed"):
         case "dynamic":
             return DynamicEndpointing(
                 min_delay=options["min_delay"],
                 max_delay=options["max_delay"],
             )
-        case "fixed":
+        case _:
             return BaseEndpointing(
                 min_delay=options["min_delay"],
                 max_delay=options["max_delay"],
