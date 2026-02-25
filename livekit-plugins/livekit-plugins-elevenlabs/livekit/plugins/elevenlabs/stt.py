@@ -462,8 +462,8 @@ class SpeechStream(stt.SpeechStream):
         if self._language:
             params.append(f"language_code={self._language}")
 
-        # if self._opts.include_timestamps:
-        params.append("include_timestamps=true")
+        if self._opts.include_timestamps:
+            params.append("include_timestamps=true")
 
         query_string = "&".join(params)
 
@@ -494,13 +494,16 @@ class SpeechStream(stt.SpeechStream):
         language_code = data.get("language_code", self._language)
 
         normalized_language = Language(language_code) if language_code else Language("en")
+
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
             language=normalized_language,
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
-            words=[
+        )
+        if words:
+            speech_data.words = [
                 TimedString(
                     text=word.get("text", ""),
                     start_time=word.get("start", 0) + self.start_time_offset,
@@ -508,8 +511,7 @@ class SpeechStream(stt.SpeechStream):
                     start_time_offset=self.start_time_offset,
                 )
                 for word in words
-            ],
-        )
+            ]
 
         if message_type == "partial_transcript":
             logger.debug("Received message type partial_transcript: %s", data)
@@ -556,6 +558,10 @@ class SpeechStream(stt.SpeechStream):
                 if self._speaking:
                     self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
+
+        elif message_type == "committed_transcript":
+            # if timestamps are included, these will be ignored above since we are handling committed_transcript_with_timestamps
+            pass
 
         elif message_type == "session_started":
             # Session initialization message - informational only
