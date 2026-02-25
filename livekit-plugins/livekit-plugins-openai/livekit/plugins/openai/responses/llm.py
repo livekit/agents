@@ -19,7 +19,6 @@ from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     Tool,
 )
-from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -82,17 +81,15 @@ class _ResponsesWebsocket:
             self._run_ws(self._ws_conn), name="_ResponsesWebsocket._run_task"
         )
 
+
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        closing = False
 
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
-            nonlocal closing
             while True:
                 try:
                     msg = await self._input_ch.recv()
                 except utils.aio.channel.ChanClosed:
-                    closing = True
                     await ws_conn.close()
                     return
                 try:
@@ -116,7 +113,7 @@ class _ResponsesWebsocket:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing:
+                    if not self._output_queue: # if there are no more pending requests
                         return
                     raise APIConnectionError(
                         message="OpenAI Responses WebSocket connection closed unexpectedly"
@@ -143,19 +140,16 @@ class _ResponsesWebsocket:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
+
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            await ws_conn.close()
             for ch in self._output_queue:
                 ch.close()
             self._output_queue.clear()
 
     async def aclose(self) -> None:
         self._input_ch.close()
-        for ch in self._output_queue:
-            ch.close()
-        self._output_queue.clear()
-        if self._ws_conn is not None:
-            await self._ws_conn.close()
         if self._run_task is not None:
             await utils.aio.cancel_and_wait(self._run_task)
 
@@ -245,7 +239,7 @@ class LLM(llm.LLM):
 
         else:
             self._client = client or openai.AsyncClient(
-                api_key=api_key,
+                api_key=api_key if is_given(api_key) else None,
                 base_url=base_url if is_given(base_url) else None,
                 max_retries=0,
                 http_client=httpx.AsyncClient(
@@ -272,6 +266,9 @@ class LLM(llm.LLM):
             if self._ws is not None:
                 dead = self._ws._run_task is not None and self._ws._run_task.done()
                 if self._ws._ws_conn is None or dead:
+                    if dead and self._ws._ws_conn is not None:
+                        await self._ws._ws_conn.close()
+                        self._ws._ws_conn = None
                     await self._ws.connect()
         return self._ws  # type: ignore[return-value]
 
@@ -300,6 +297,12 @@ class LLM(llm.LLM):
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
 
+        if is_given(self._opts.temperature):
+            extra["temperature"] = self._opts.temperature
+
+        if is_given(self._opts.store):
+            extra["store"] = self._opts.store
+
         if is_given(self._opts.reasoning):
             extra["reasoning"] = self._opts.reasoning
 
@@ -324,17 +327,10 @@ class LLM(llm.LLM):
 
         input_chat_ctx = chat_ctx
         if self._prev_chat_ctx is not None and self._prev_resp_id:
-            diffops = compute_chat_ctx_diff(self._prev_chat_ctx, chat_ctx)
-            if not diffops.to_remove and not diffops.to_update:
-                # filter for new items to send with previous response id
-                if diffops.to_create:
-                    items_by_id = {item.id: item for item in chat_ctx.items}
-                    new_items = [
-                        items_by_id[item_id]
-                        for _, item_id in diffops.to_create
-                        if item_id in items_by_id
-                    ]
-                    input_chat_ctx = ChatContext(items=new_items)
+            n = len(self._prev_chat_ctx.items)
+            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx):
+                # send only the new items appended since the last response
+                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
                 extra["previous_response_id"] = self._prev_resp_id
             # if the context was modified otherwise, resend the whole context and omit previous response id
         self._prev_chat_ctx = chat_ctx
@@ -496,7 +492,9 @@ class LLMStream(llm.LLMStream):
                 usage=llm.CompletionUsage(
                     completion_tokens=usage.output_tokens,
                     prompt_tokens=usage.input_tokens,
-                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens
+                    if usage.input_tokens_details
+                    else 0,
                     total_tokens=usage.total_tokens,
                 ),
             )
