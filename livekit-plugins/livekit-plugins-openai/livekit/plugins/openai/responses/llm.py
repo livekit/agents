@@ -96,7 +96,14 @@ class _ResponsesWebsocket:
                     await ws_conn.close()
                     return
                 try:
-                    await ws_conn.send_str(json.dumps(msg))
+                    await ws_conn.send_str(
+                        json.dumps(
+                            msg,
+                            default=lambda o: o.model_dump()
+                            if isinstance(o, openai.BaseModel)
+                            else None,
+                        )
+                    )
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -138,6 +145,9 @@ class _ResponsesWebsocket:
                 task.result()
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            for ch in self._output_queue:
+                ch.close()
+            self._output_queue.clear()
 
     async def aclose(self) -> None:
         self._input_ch.close()
@@ -259,8 +269,10 @@ class LLM(llm.LLM):
 
     async def _ensure_ws(self) -> _ResponsesWebsocket:
         async with self._ws_lock:
-            if self._ws is not None and self._ws._ws_conn is None:
-                await self._ws.connect()
+            if self._ws is not None:
+                dead = self._ws._run_task is not None and self._ws._run_task.done()
+                if self._ws._ws_conn is None or dead:
+                    await self._ws.connect()
         return self._ws  # type: ignore[return-value]
 
     @property
@@ -436,15 +448,15 @@ class LLMStream(llm.LLMStream):
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_construct(**event)
+            return ResponseErrorEvent.model_validate(event)
         elif event_type == "response.created":
-            return ResponseCreatedEvent.model_construct(**event)
+            return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
-            return ResponseOutputItemDoneEvent.model_construct(**event)
+            return ResponseOutputItemDoneEvent.model_validate(event)
         elif event_type == "response.output_text.delta":
-            return ResponseTextDeltaEvent.model_construct(**event)
+            return ResponseTextDeltaEvent.model_validate(event)
         elif event_type == "response.completed":
-            return ResponseCompletedEvent.model_construct(**event)
+            return ResponseCompletedEvent.model_validate(event)
         return None
 
     def _process_event(self, event: ResponseStreamEvent | None) -> None:
