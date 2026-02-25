@@ -290,6 +290,21 @@ XAIChatModels = Literal[
     "grok-2-1212",
 ]
 
+SambaNovaChatModels = Literal[
+    "DeepSeek-R1-0528",
+    "DeepSeek-V3-0324",
+    "DeepSeek-V3.1",
+    "DeepSeek-R1-Distill-Llama-70B",
+    "Meta-Llama-3.3-70B-Instruct",
+    "Meta-Llama-3.1-8B-Instruct",
+    "Llama-4-Maverick-17B-128E-Instruct",
+    "gpt-oss-120b",
+    "Qwen3-235B-A22B-Instruct-2507",
+    "Qwen3-32B",
+    "Llama-3.3-Swallow-70B-Instruct-v0.4",
+    "E5-Mistral-7B-Instruct",
+]
+
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
