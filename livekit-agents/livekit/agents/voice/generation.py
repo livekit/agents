@@ -488,6 +488,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ValueError(f"Unknown function: {fnc_call.name}"),
+                    )
+                )
                 continue
 
             if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
@@ -497,6 +504,13 @@ async def _execute_tools_task(
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
                     },
+                )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=TypeError(f"Unknown tool type: {type(function_tool)}"),
+                    )
                 )
                 continue
 
