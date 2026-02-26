@@ -5,12 +5,11 @@ Maps user identities to Backboard thread IDs. Threads are created
 on demand and cached in memory for the duration of the agent session.
 """
 
-from typing import Dict, Optional
+import logging
 
 import httpx
-from livekit.agents import utils
 
-logger = utils.log.logger
+logger = logging.getLogger("livekit.plugins.backboard")
 
 
 class SessionStore:
@@ -31,8 +30,8 @@ class SessionStore:
         self._api_key = api_key
         self._base_url = base_url
         self._assistant_id = assistant_id
-        self._cache: Dict[str, str] = {}
-        self._client: Optional[httpx.AsyncClient] = None
+        self._cache: dict[str, str] = {}
+        self._client: httpx.AsyncClient | None = None
 
     def set_assistant_id(self, assistant_id: str) -> None:
         """Update the assistant ID."""
@@ -55,7 +54,7 @@ class SessionStore:
             json={},
         )
         resp.raise_for_status()
-        return resp.json()["thread_id"]
+        return str(resp.json()["thread_id"])
 
     async def get_or_create_thread(self, user_id: str) -> str:
         """Get an existing thread or create a new one for the given user."""
@@ -71,7 +70,7 @@ class SessionStore:
         """Manually set a thread ID for a user (e.g. from external storage)."""
         self._cache[user_id] = thread_id
 
-    def get_thread(self, user_id: str) -> Optional[str]:
+    def get_thread(self, user_id: str) -> str | None:
         """Get thread_id for user from cache, or None."""
         return self._cache.get(user_id)
 

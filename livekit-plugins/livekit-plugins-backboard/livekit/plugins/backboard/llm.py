@@ -16,12 +16,14 @@ Frame Flow:
 """
 
 import json
+import logging
 import os
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import httpx
-from livekit.agents import llm, utils
+
+from livekit.agents import llm
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -33,21 +35,21 @@ from livekit.agents.llm import (
 try:
     from livekit.agents.types import (
         DEFAULT_API_CONNECT_OPTIONS,
-        APIConnectOptions,
         NOT_GIVEN,
+        APIConnectOptions,
         NotGivenOr,
     )
 except ImportError:
     from livekit.agents import (
         DEFAULT_API_CONNECT_OPTIONS,
-        APIConnectOptions,
         NOT_GIVEN,
+        APIConnectOptions,
         NotGivenOr,
     )
 
 from .session import SessionStore
 
-logger = utils.log.logger
+logger = logging.getLogger("livekit.plugins.backboard")
 
 _DEFAULT_BASE_URL = "https://app.backboard.io/api"
 
@@ -92,14 +94,14 @@ class BackboardLLM(llm.LLM):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         base_url: str = _DEFAULT_BASE_URL,
         assistant_id: str = "",
         user_id: str = "default",
         llm_provider: str = "openai",
         model_name: str = "gpt-4o",
-        memory: Optional[str] = "auto",
-        session_store: Optional[SessionStore] = None,
+        memory: str | None = "auto",
+        session_store: SessionStore | None = None,
     ) -> None:
         super().__init__()
         self._api_key = api_key or os.environ.get("BACKBOARD_API_KEY", "")
@@ -120,7 +122,7 @@ class BackboardLLM(llm.LLM):
             base_url=self._base_url,
             assistant_id=self._assistant_id,
         )
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def model(self) -> str:
@@ -206,12 +208,10 @@ class BackboardLLMStream(llm.LLMStream):
         assistant_id: str,
         llm_provider: str,
         model_name: str,
-        memory: Optional[str],
+        memory: str | None,
         session_store: SessionStore,
     ) -> None:
-        super().__init__(
-            llm_instance, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options
-        )
+        super().__init__(llm_instance, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._api_key = api_key
         self._base_url = base_url
@@ -326,17 +326,11 @@ class BackboardLLMStream(llm.LLMStream):
 
                             elif event_type in ("message_complete", "run_ended"):
                                 usage = CompletionUsage(
-                                    completion_tokens=parsed.get(
-                                        "output_tokens", total_tokens
-                                    ),
+                                    completion_tokens=parsed.get("output_tokens", total_tokens),
                                     prompt_tokens=parsed.get("input_tokens", 0),
-                                    total_tokens=parsed.get(
-                                        "total_tokens", total_tokens
-                                    ),
+                                    total_tokens=parsed.get("total_tokens", total_tokens),
                                 )
-                                self._event_ch.send_nowait(
-                                    ChatChunk(id=request_id, usage=usage)
-                                )
+                                self._event_ch.send_nowait(ChatChunk(id=request_id, usage=usage))
                                 return
 
                             elif event_type == "error":
