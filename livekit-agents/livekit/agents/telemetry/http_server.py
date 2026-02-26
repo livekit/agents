@@ -36,6 +36,6 @@ async def metrics(_request: aiohttp.web_request.Request) -> web.Response:
 
 
 class HttpServer(utils.http_server.HttpServer):
-    def __init__(self, host: str, port: int, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__(host, port, loop)
+    def __init__(self, host: str, port: int) -> None:
+        super().__init__(host, port)
         self._app.add_routes([web.get("/metrics", metrics)])

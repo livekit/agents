@@ -2,6 +2,7 @@ from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
+from livekit.agents import Language
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.types import TimedString
 from livekit.plugins.google.stt import (
@@ -271,7 +272,7 @@ async def test_recognize_response_to_speech_event_words():
     assert result.type == SpeechEventType.FINAL_TRANSCRIPT
     assert result.alternatives == [
         SpeechData(
-            language="te-ST",
+            language=Language("te-ST"),
             start_time=0.0,
             end_time=1.0,
             text="test",
@@ -310,7 +311,7 @@ async def test_recognize_response_to_speech_event_words():
     assert result.type == SpeechEventType.FINAL_TRANSCRIPT
     assert result.alternatives == [
         SpeechData(
-            language="te-ST",
+            language=Language("te-ST"),
             start_time=0.0,
             end_time=1.0,
             text="test",
@@ -322,3 +323,101 @@ async def test_recognize_response_to_speech_event_words():
             ],
         )
     ]
+
+
+async def test_voice_activity_timeout_defaults():
+    """Test voice activity timeouts are not set by default."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    stt = STT()
+    assert stt._config.speech_start_timeout is NOT_GIVEN
+    assert stt._config.speech_end_timeout is NOT_GIVEN
+
+
+async def test_voice_activity_timeout_set():
+    """Test voice activity timeouts can be set."""
+    from livekit.plugins.google import STT
+
+    stt = STT(
+        speech_start_timeout=10.0,
+        speech_end_timeout=2.5,
+    )
+    assert stt._config.speech_start_timeout == 10.0
+    assert stt._config.speech_end_timeout == 2.5
+
+
+async def test_voice_activity_timeout_fractional_seconds():
+    """Test voice activity timeouts handle fractional seconds."""
+    from livekit.plugins.google import STT
+
+    stt = STT(
+        speech_start_timeout=5.5,
+        speech_end_timeout=1.25,
+    )
+    assert stt._config.speech_start_timeout == 5.5
+    assert stt._config.speech_end_timeout == 1.25
+
+
+async def test_voice_activity_timeout_speech_start_only():
+    """Test setting only speech_start_timeout."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    stt = STT(speech_start_timeout=15.0)
+    assert stt._config.speech_start_timeout == 15.0
+    assert stt._config.speech_end_timeout is NOT_GIVEN
+
+
+async def test_voice_activity_timeout_speech_end_only():
+    """Test setting only speech_end_timeout."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    stt = STT(speech_end_timeout=3.0)
+    assert stt._config.speech_end_timeout == 3.0
+    assert stt._config.speech_start_timeout is NOT_GIVEN
+
+
+async def test_voice_activity_timeout_v2_model():
+    """Test that V2 model detection works correctly."""
+    from livekit.plugins.google import STT
+
+    stt_v2 = STT(model="chirp_3")
+    assert stt_v2._config.version == 2
+
+    stt_v1 = STT(model="default")
+    assert stt_v1._config.version == 1
+
+
+async def test_voice_activity_timeout_update():
+    """Test that timeout options can be updated dynamically."""
+    from livekit.plugins.google import STT
+
+    stt = STT(
+        speech_start_timeout=10.0,
+        speech_end_timeout=2.0,
+    )
+    stt.update_options(
+        speech_start_timeout=15.0,
+        speech_end_timeout=3.0,
+    )
+    assert stt._config.speech_start_timeout == 15.0
+    assert stt._config.speech_end_timeout == 3.0
+
+
+async def test_voice_activity_timeout_partial_update():
+    """Test updating only one timeout at a time."""
+    from livekit.plugins.google import STT
+
+    stt = STT(
+        speech_start_timeout=10.0,
+        speech_end_timeout=2.0,
+    )
+    stt.update_options(speech_start_timeout=20.0)
+    assert stt._config.speech_start_timeout == 20.0
+    assert stt._config.speech_end_timeout == 2.0
+
+    stt.update_options(speech_end_timeout=5.0)
+    assert stt._config.speech_start_timeout == 20.0
+    assert stt._config.speech_end_timeout == 5.0

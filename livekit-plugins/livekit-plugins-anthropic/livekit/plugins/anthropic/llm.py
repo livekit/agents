@@ -98,7 +98,10 @@ class LLM(llm.LLM):
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
-            raise ValueError("Anthropic API key is required")
+            raise ValueError(
+                "Anthropic API key is required, either as argument or set"
+                " ANTHROPIC_API_KEY environment variable"
+            )
 
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
@@ -148,8 +151,21 @@ class LLM(llm.LLM):
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
+        beta_flag: str | None = None
         if tools:
-            extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
+            from .tools import AnthropicTool
+
+            tool_ctx = llm.ToolContext(tools)
+            tool_schemas = tool_ctx.parse_function_tools("anthropic")
+
+            for tool in tool_ctx.provider_tools:
+                if isinstance(tool, AnthropicTool):
+                    tool_schemas.append(tool.to_dict())
+                    if tool.beta_flag:
+                        beta_flag = tool.beta_flag
+
+            extra["tools"] = tool_schemas
+
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -206,17 +222,27 @@ class LLM(llm.LLM):
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
-        stream = self._client.messages.create(
-            messages=messages,
-            model=self._opts.model,
-            stream=True,
-            timeout=conn_options.timeout,
-            **extra,
-        )
+        if beta_flag:
+            stream = self._client.beta.messages.create(
+                betas=[beta_flag],
+                messages=messages,  # type: ignore[arg-type]
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
+        else:
+            stream = self._client.messages.create(
+                messages=messages,
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
 
         return LLMStream(
             self,
-            anthropic_stream=stream,
+            anthropic_stream=stream,  # type: ignore[arg-type]
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,

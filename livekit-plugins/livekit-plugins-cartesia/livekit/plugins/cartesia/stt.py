@@ -29,6 +29,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    Language,
     stt,
     utils,
 )
@@ -44,7 +45,7 @@ from .models import STTEncoding, STTLanguages, STTModels
 @dataclass
 class STTOptions:
     model: STTModels | str
-    language: STTLanguages | str | None
+    language: Language | None
     encoding: STTEncoding
     sample_rate: int
     api_key: str
@@ -101,11 +102,14 @@ class STT(stt.STT):
 
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
-            raise ValueError("CARTESIA_API_KEY must be set")
+            raise ValueError(
+                "Cartesia API key is required, either as argument or set"
+                " CARTESIA_API_KEY environment variable"
+            )
 
         self._opts = STTOptions(
             model=model,
-            language=language,
+            language=Language(language),
             encoding=encoding,
             sample_rate=sample_rate,
             api_key=cartesia_api_key,
@@ -164,7 +168,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
 
         # Update all active streams
         for stream in self._streams:
@@ -187,7 +191,7 @@ class STT(stt.STT):
         )
 
         if is_given(language):
-            config.language = language
+            config.language = Language(language)
 
         return config
 
@@ -219,7 +223,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
 
         self._reconnect_event.set()
 
@@ -375,7 +379,7 @@ class SpeechStream(stt.SpeechStream):
             end_time = start_time + data.get("duration", 0)
             self._last_speech_end_time = end_time
             is_final = data.get("is_final", False)
-            language = data.get("language", self._opts.language or "en")
+            language = Language(data.get("language", self._opts.language or "en"))
 
             if not text and not is_final:
                 return

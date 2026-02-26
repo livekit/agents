@@ -35,6 +35,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -64,7 +65,7 @@ NUM_CHANNELS = 1
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str
+    language: Language
     detect_language: bool
     turn_detection: SessionTurnDetection
     prompt: NotGivenOr[str] = NOT_GIVEN
@@ -121,7 +122,7 @@ class STT(stt.STT):
             }
 
         self._opts = _STTOptions(
-            language=language,
+            language=Language(language),
             detect_language=detect_language,
             model=model,
             prompt=prompt,
@@ -129,6 +130,12 @@ class STT(stt.STT):
         )
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
 
         self._client = client or openai.AsyncClient(
             max_retries=0,
@@ -295,7 +302,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -329,10 +336,10 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
         if is_given(detect_language):
             self._opts.detect_language = detect_language
-            self._opts.language = ""
+            self._opts.language = Language("")
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
@@ -352,7 +359,7 @@ class STT(stt.STT):
         if prompt:
             transcription_config["prompt"] = prompt
         if self._opts.language:
-            transcription_config["language"] = self._opts.language
+            transcription_config["language"] = self._opts.language.language
 
         input_config: dict[str, Any] = {
             "format": {
@@ -410,7 +417,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = language
+                self._opts.language = Language(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.omit
 
@@ -426,7 +433,7 @@ class STT(stt.STT):
                     "audio/wav",
                 ),
                 model=self._opts.model,  # type: ignore
-                language=self._opts.language,
+                language=self._opts.language.language if self._opts.language else "",
                 prompt=prompt,
                 response_format=format,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
@@ -434,7 +441,7 @@ class STT(stt.STT):
 
             sd = stt.SpeechData(text=resp.text, language=self._opts.language)
             if isinstance(resp, TranscriptionVerbose) and resp.language:
-                sd.language = resp.language
+                sd.language = Language(resp.language)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -471,7 +478,7 @@ class SpeechStream(stt.SpeechStream):
         *,
         language: str,
     ) -> None:
-        self._language = language
+        self._language = Language(language)
         self._pool.invalidate()
         self._reconnect_event.set()
 

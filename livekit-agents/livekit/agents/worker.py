@@ -519,7 +519,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
-            self._tasks = set[asyncio.Task[Any]]()
+            self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
@@ -563,7 +563,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
             self._http_server = http_server.HttpServer(
-                self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
+                self._host, ServerEnvOption.getvalue(self._port, devmode)
             )
             self._worker_load: float = 0.0
 
@@ -596,20 +596,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._load_task: asyncio.Task[None] | None = None
 
             if not self._ws_url:
-                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+                raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
 
             if not self._api_key:
-                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+                raise ValueError("api_key is required, or set LIVEKIT_API_KEY environment variable")
 
             if not self._api_secret:
                 raise ValueError(
-                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                    "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
                 )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
                 self._prometheus_server = telemetry.http_server.HttpServer(
-                    self._host, self._prometheus_port, loop=self._loop
+                    self._host, self._prometheus_port
                 )
 
             if self._prometheus_multiproc_dir:
@@ -656,8 +656,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
-                self._tasks.add(t)
-                t.add_done_callback(self._tasks.discard)
+                self._job_lifecycle_tasks.add(t)
+                t.add_done_callback(self._job_lifecycle_tasks.discard)
 
             await self._http_server.start()
             logger.info(
@@ -705,7 +705,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
-                    telemetry.metrics._update_child_proc_count()
+                    if self._prometheus_multiproc_dir:
+                        await asyncio.get_event_loop().run_in_executor(
+                            None, telemetry.metrics._update_child_proc_count
+                        )
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
@@ -799,6 +802,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def active_jobs(self) -> list[RunningJobInfo]:
         return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
 
+    @property
+    def draining(self) -> bool:
+        return self._draining
+
     async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
         """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
 
@@ -812,17 +819,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._draining = True
             await self._update_worker_status()
 
-            async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes.copy():
-                    if proc.running_job:
+            async def _drain() -> None:
+                # wait for in-flight availability tasks to finish launching their jobs
+                await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
+                # then wait for the launched jobs to complete
+                while True:
+                    procs = [p for p in self._proc_pool.processes if p.running_job]
+                    if not procs:
+                        break
+                    for proc in procs:
                         await proc.join()
 
             if timeout:
-                await asyncio.wait_for(
-                    _join_jobs(), timeout
-                )  # raises asyncio.TimeoutError on timeout
+                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
             else:
-                await _join_jobs()
+                await _drain()
 
     @utils.log_exceptions(logger=logger)
     async def simulate_job(
@@ -849,14 +861,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not fake_job:
                     raise ValueError("room_info is None but fake_job is False")
 
-                room_info = models.Room(sid=utils.shortuuid("FAKE_RM_"), name=room)
+                room_info = models.Room(sid=utils.shortuuid("SRM_"), name=room)
 
             # room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
 
             job = agent.Job(
-                id=utils.shortuuid("simulated-job-")
-                if not fake_job
-                else utils.shortuuid("fake-job-"),
+                id=utils.shortuuid("job-") if not fake_job else utils.shortuuid("mock-job-"),
                 room=room_info,
                 type=agent.JobType.JT_ROOM,
                 participant=None,
@@ -902,6 +912,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
 
+            # let in-flight availability tasks finish launching their jobs
+            # before closing the proc pool (they accepted before shutdown)
+            await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
             await self._proc_pool.aclose()
 
             if self._inference_executor is not None:
@@ -914,8 +928,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await self._prometheus_server.aclose()
 
             await self._api.aclose()  # type: ignore
-
-            await asyncio.gather(*self._tasks, return_exceptions=True)
 
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
@@ -1079,8 +1091,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         self._handle_termination(server_msg.termination),
                         name="agent_job_termination",
                     )
-                    self._tasks.add(user_task)
-                    user_task.add_done_callback(self._tasks.discard)
+                    self._job_lifecycle_tasks.add(user_task)
+                    user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
         tasks = [
             asyncio.create_task(_load_task()),
@@ -1134,12 +1146,26 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         task = self._loop.create_task(self._answer_availability(msg))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._job_lifecycle_tasks.add(task)
+        task.add_done_callback(self._job_lifecycle_tasks.discard)
+
+    def _is_available(self) -> bool:
+        if self._draining:
+            return False
+
+        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
+        return self._worker_load < load_threshold
 
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
+
+        if not self._is_available():
+            availability_resp = agent.WorkerMessage()
+            availability_resp.availability.job_id = msg.job.id
+            availability_resp.availability.available = False
+            await self._queue_msg(availability_resp)
+            return
 
         answered = False
 
@@ -1168,15 +1194,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
-            await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()
             self._pending_assignments[job_req.id] = wait_assignment
+            await self._queue_msg(availability_resp)
 
             # the job was accepted by the user, wait for the server assignment
             try:
                 await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
             except asyncio.TimeoutError:
+                self._pending_assignments.pop(job_req.id, None)
                 logger.warning(
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req, "agent_name": self._agent_name},
@@ -1229,8 +1256,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
-        self._tasks.add(user_task)
-        user_task.add_done_callback(self._tasks.discard)
+        self._job_lifecycle_tasks.add(user_task)
+        user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
         logger.debug(

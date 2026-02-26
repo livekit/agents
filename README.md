@@ -47,12 +47,26 @@ agents that can see, hear, and understand.
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0"
+pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.4"
 ```
 
 ## Docs and guides
 
 Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents/)
+
+### Building with AI coding agents
+
+If you're using an AI coding assistant to build with LiveKit Agents, we recommend the following setup for the best results:
+
+1. **Install the [LiveKit Docs MCP server](https://docs.livekit.io/mcp)** — Gives your coding agent access to up-to-date LiveKit documentation, code search across LiveKit repositories, and working examples.
+
+2. **Install the [LiveKit Agent Skill](https://github.com/livekit/agent-skills)** — Provides your coding agent with architectural guidance and best practices for building voice AI applications, including workflow design, handoffs, tasks, and testing patterns.
+
+   ```shell
+   npx skills add livekit/agent-skills --skill livekit-agents
+   ```
+
+The Agent Skill works best alongside the MCP server: the skill teaches your agent *how to approach* building with LiveKit, while the MCP server provides the *current API details* to implement it correctly.
 
 ## Core concepts
 
@@ -305,7 +319,7 @@ async def test_no_availability() -> None:
 </td>
 <td width="50%">
 <h3>🎥 Video avatars</h3>
-<p>Add an AI avatar with Tavus, Beyond Presence, and Bithuman</p>
+<p>Add an AI avatar with Tavus, Hedra, Bithuman, LemonSlice, and more</p>
 <p>
 <a href="examples/avatar_agents/">Code</a>
 </p>

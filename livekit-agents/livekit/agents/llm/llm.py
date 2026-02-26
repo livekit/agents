@@ -172,7 +172,8 @@ class LLMStream(ABC):
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
@@ -196,7 +197,13 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        self._llm_request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+            }
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
@@ -226,8 +233,7 @@ class LLMStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
-                        exc_info=e,
+                        f"failed to generate LLM completion: {e}, retrying in {retry_interval}s",  # noqa: E501
                         extra={
                             "llm": self._llm._label,
                             "attempt": i + 1,
@@ -355,6 +361,8 @@ class LLMStream(ABC):
         if self._llm_request_span:
             self._llm_request_span.end()
             self._llm_request_span = None
+
+        await self._tee_aiter.aclose()
 
     async def __anext__(self) -> ChatChunk:
         try:

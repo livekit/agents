@@ -71,7 +71,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .speech_handle import SpeechHandle
+from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -178,13 +178,16 @@ class AgentActivity(RecognitionHooks):
         llm_model = self.llm
 
         if mode == "vad" and not vad_model:
-            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
+            logger.warning(
+                "turn_detection is set to 'vad', but no VAD model is provided. "
+                "Pass a VAD instance, e.g. Agent(vad=silero.VAD.load())"
+            )
             mode = None
 
         if mode == "stt" and not stt_model:
             logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided, "
-                "ignoring the turn_detection setting"
+                "turn_detection is set to 'stt', but no STT model is provided. "
+                "Pass an STT instance, e.g. Agent(stt=deepgram.STT())"
             )
             mode = None
 
@@ -636,14 +639,19 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
-            self._on_exit_task = task = self._create_speech_task(
-                _traceable_on_exit(), name="AgentTask_on_exit"
-            )
-            _set_activity_task_info(task, inline_task=True)
+            if self._on_exit_task is None:
+                self._on_exit_task = task = self._create_speech_task(
+                    _traceable_on_exit(), name="AgentTask_on_exit"
+                )
+                _set_activity_task_info(task, inline_task=True)
 
             self._cancel_preemptive_generation()
 
-            await self._on_exit_task
+            try:
+                await self._on_exit_task
+            except Exception:
+                pass  # already logged by @log_exceptions
+
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
@@ -769,6 +777,9 @@ class AgentActivity(RecognitionHooks):
             self._closed = True
             self._cancel_preemptive_generation()
 
+            # on_exit_task should be awaited in `drain`
+            self._on_exit_task = None
+
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
@@ -781,11 +792,11 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = bool(
+        should_discard = (
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        )
+        ) or (self._session.agent_state == "speaking" and self._session._aec_warmup_remaining > 0)
 
         if not should_discard:
             if self._rt_session is not None:
@@ -864,6 +875,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
+        input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -909,6 +921,7 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions,
+            input_details=input_details,
         )
         self._session.emit(
             "speech_created",
@@ -1040,14 +1053,16 @@ class AgentActivity(RecognitionHooks):
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
+            speech.interrupt(force=True)
             raise RuntimeError(
-                "cannot schedule new speech, the speech scheduling is draining/pausing"
+                "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"
             )
 
         if self._scheduling_atask and self._scheduling_atask.done():
             logger.warning(
-                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running."
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled"
             )
+            speech.interrupt(force=True)
             return
 
         while True:
@@ -1200,7 +1215,10 @@ class AgentActivity(RecognitionHooks):
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
-        handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
+        handle = SpeechHandle.create(
+            allow_interruptions=self.allow_interruptions,
+            input_details=InputDetails(modality="audio"),
+        )
         self._session.emit(
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=False, source="generate_reply"),
@@ -1218,6 +1236,10 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
+        if self._session._aec_warmup_remaining > 0:
+            # disable interruption from audio activity while aec warmup is active
+            return
+
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
@@ -1407,6 +1429,7 @@ class AgentActivity(RecognitionHooks):
             user_message=user_message,
             chat_ctx=chat_ctx,
             schedule_speech=False,
+            input_details=InputDetails(modality="audio"),
         )
 
         self._preemptive_generation = _PreemptiveGeneration(
@@ -1540,7 +1563,7 @@ class AgentActivity(RecognitionHooks):
         except StopResponse:
             return  # ignore this turn
         except Exception:
-            logger.exception("error occured during on_user_turn_completed")
+            logger.exception("error occurred during on_user_turn_completed")
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
@@ -1613,6 +1636,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
+                input_details=InputDetails(modality="audio"),
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():
@@ -2026,6 +2050,19 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            # purely used for realtime console rendering (metrics are shown
+            # as soon as the agent starts speaking, before playout finishes)
+            early_metrics: llm.MetricsReport = {}
+            if llm_gen_data.ttft is not None:
+                early_metrics["llm_node_ttft"] = llm_gen_data.ttft
+            if tts_gen_data and tts_gen_data.ttfb is not None:
+                early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            if user_metrics and "stopped_speaking_at" in user_metrics:
+                early_metrics["e2e_latency"] = (
+                    started_speaking_at - user_metrics["stopped_speaking_at"]
+                )
+            self._session._early_assistant_metrics = early_metrics
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2335,7 +2372,13 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self.llm.model)
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self.llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.llm.model,
+            }
+        )
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = current_span
 
@@ -2675,7 +2718,7 @@ class AgentActivity(RecognitionHooks):
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one AgentTask from the tool executions",
+                        "expected to receive only one Agent from the tool executions",
                     )
                     ignore_task_switch = True
 
@@ -2693,7 +2736,7 @@ class AgentActivity(RecognitionHooks):
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
-                # most realtime models dont't support generating multiple responses at the same time
+                # most realtime models don't support generating multiple responses at the same time
                 while self._current_speech or self._speech_q:
                     if (
                         self._current_speech

@@ -31,6 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    Language,
     tokenize,
     tts,
     utils,
@@ -70,7 +71,7 @@ class _TTSOptions:
     volume: float | None
     word_timestamps: bool
     api_key: str
-    language: str | None
+    language: Language | None
     base_url: str
     api_version: str
     pronunciation_dict_id: str | None
@@ -87,7 +88,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "sonic-2",
+        model: TTSModels | str = "sonic-3",
         language: str | None = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
@@ -109,7 +110,7 @@ class TTS(tts.TTS):
         See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the Cartesia API.
 
         Args:
-            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-3".
             language (str, optional): The language code for synthesis. Defaults to "en".
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
@@ -136,14 +137,17 @@ class TTS(tts.TTS):
         )
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
-            raise ValueError("CARTESIA_API_KEY must be set")
+            raise ValueError(
+                "Cartesia API key is required, either as argument or set"
+                " CARTESIA_API_KEY environment variable"
+            )
 
         if isinstance(emotion, str):
             emotion = [emotion]
 
         self._opts = _TTSOptions(
             model=model,
-            language=language,
+            language=Language(language) if language else None,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -180,7 +184,7 @@ class TTS(tts.TTS):
         if word_timestamps:
             if "preview" not in self._opts.model and (
                 self._opts.language is not None
-                and self._opts.language
+                and self._opts.language.language
                 not in {
                     "en",
                     "de",
@@ -248,7 +252,7 @@ class TTS(tts.TTS):
         and emotion. If any parameter is not provided, the existing value will be retained.
 
         Args:
-            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-3".
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
@@ -258,7 +262,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language) if language else None
         if is_given(voice):
             self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
@@ -562,7 +566,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             "encoding": opts.encoding,
             "sample_rate": opts.sample_rate,
         },
-        "language": opts.language,
+        "language": opts.language.language if opts.language else None,
     }
 
     if opts.pronunciation_dict_id:

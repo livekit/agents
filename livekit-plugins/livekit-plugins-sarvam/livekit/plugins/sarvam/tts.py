@@ -36,6 +36,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     tokenize,
     tts,
     utils,
@@ -47,7 +48,7 @@ SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
 # Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2"]
+SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta"]
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -74,6 +75,34 @@ SarvamTTSSpeakers = Literal[
     "abhilash",
     "karun",
     "hitesh",
+    # bulbul:v3-beta Customer Care
+    "shubh",
+    "ritu",
+    "rahul",
+    "pooja",
+    "simran",
+    "kavya",
+    "amit",
+    "ratan",
+    "rohan",
+    "dev",
+    "ishita",
+    "shreya",
+    "manan",
+    "sumit",
+    "priya",
+    # bulbul:v3-beta Content Creation
+    "aditya",
+    "kabir",
+    "neha",
+    "varun",
+    "roopa",
+    "aayan",
+    "ashutosh",
+    "advait",
+    # bulbul:v3-beta International
+    "amelia",
+    "sophia",
 ]
 
 # Model-Speaker compatibility mapping
@@ -82,7 +111,123 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    }
+    },
+    "bulbul:v3-beta": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
+    "bulbul:v3": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
 }
 
 
@@ -134,13 +279,13 @@ class SarvamTTSOptions:
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
     api_key: str  # Sarvam.ai API key
     text: str | None = None  # Will be provided by the stream adapter
-    speaker: SarvamTTSSpeakers | str = "anushka"  # Default speaker compatible with v2
+    speaker: SarvamTTSSpeakers | str | None = None
     pitch: float = 0.0
     pace: float = 1.0
     loudness: float = 1.0
     speech_sample_rate: int = 22050  # Default 22050 Hz
     enable_preprocessing: bool = False
-    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2 as it has more recent speakers
+    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
@@ -174,7 +319,7 @@ class TTS(tts.TTS):
         *,
         target_language_code: SarvamTTSLanguages | str,
         model: SarvamTTSModels | str = "bulbul:v2",
-        speaker: SarvamTTSSpeakers | str = "anushka",
+        speaker: SarvamTTSSpeakers | str | None = None,
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
         pitch: float = 0.0,
@@ -204,8 +349,12 @@ class TTS(tts.TTS):
             raise ValueError("Target language code is required and cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
-        if not speaker or not speaker.strip():
-            raise ValueError("Speaker is required and cannot be empty")
+        if speaker is None:
+            # speaker = "shubh"
+            if model == "bulbul:v3-beta" or model == "bulbul:v3":
+                speaker = "shubh"
+            else:
+                speaker = "anushka"
 
         # Validate parameter ranges
         if not -20.0 <= pitch <= 20.0:
@@ -229,7 +378,7 @@ class TTS(tts.TTS):
         word_tokenizer = tokenize.basic.SentenceTokenizer()
 
         self._opts = SarvamTTSOptions(
-            target_language_code=target_language_code,
+            target_language_code=Language(target_language_code),
             model=model,
             speaker=speaker,
             speech_sample_rate=speech_sample_rate,
@@ -306,16 +455,27 @@ class TTS(tts.TTS):
         pitch: float | None = None,
         pace: float | None = None,
         loudness: float | None = None,
-        enable_preprocessing: bool | None = False,
-        send_completion_event: bool | None = True,
+        enable_preprocessing: bool | None = None,
+        send_completion_event: bool | None = None,
     ) -> None:
         """Update TTS options with validation."""
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            if model not in ["bulbul:v2"]:
-                raise ValueError(f"Unsupported model: {model}")
             self._opts.model = model
+            if speaker is None and self._opts.speaker is not None:
+                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+                        "all", []
+                    )
+                    raise ValueError(
+                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Compatible speakers: {', '.join(compatible_speakers)}"
+                    )
+        if enable_preprocessing is not None:
+            self._opts.enable_preprocessing = enable_preprocessing
+        if send_completion_event is not None:
+            self._opts.send_completion_event = send_completion_event
 
         if speaker is not None:
             if not speaker.strip():
@@ -393,14 +553,12 @@ class ChunkedStream(tts.ChunkedStream):
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
-            "pitch": self._opts.pitch,
             "pace": self._opts.pace,
-            "loudness": self._opts.loudness,
             "speech_sample_rate": self._opts.speech_sample_rate,
             "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
         }
-        # Only include pitch and loudness for v2 model (not supported in v3-beta)
+        # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
@@ -540,18 +698,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 # Send initial config
-                config_msg = {
-                    "type": "config",
-                    "data": {
-                        "target_language_code": self._opts.target_language_code,
-                        "speaker": self._opts.speaker,
-                        "pitch": self._opts.pitch,
-                        "pace": self._opts.pace,
-                        "loudness": self._opts.loudness,
-                        "enable_preprocessing": self._opts.enable_preprocessing,
-                        "model": self._opts.model,
-                    },
+                data: dict[str, object] = {
+                    "target_language_code": self._opts.target_language_code,
+                    "speaker": self._opts.speaker,
+                    "pace": self._opts.pace,
+                    "enable_preprocessing": self._opts.enable_preprocessing,
+                    "model": self._opts.model,
                 }
+                if self._opts.model == "bulbul:v2":
+                    data["pitch"] = self._opts.pitch
+                    data["loudness"] = self._opts.loudness
+                config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
@@ -680,7 +837,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 return True
 
-            logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
+            # logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)

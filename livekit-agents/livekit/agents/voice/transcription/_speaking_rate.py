@@ -130,6 +130,16 @@ class SpeakingRateStream:
                 )
                 continue
 
+            if input_frame.num_channels > 1:
+                data = np.array(input_frame.data, dtype=np.int16)
+                mono = data.reshape(-1, input_frame.num_channels).mean(axis=1).astype(np.int16)
+                input_frame = rtc.AudioFrame(
+                    data=mono.tobytes(),
+                    sample_rate=input_frame.sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_frame.samples_per_channel,
+                )
+
             if resampler is not None:
                 inference_frames.extend(resampler.push(input_frame))
             else:
@@ -161,14 +171,15 @@ class SpeakingRateStream:
 
                 # move the window forward by the hop size
                 pub_timestamp += self._opts.step_size
-                if len(inference_i16) - self._step_size_samples > 0:
-                    data = bytes(inference_i16[self._step_size_samples :])
+                if len(inference_frame.data) - self._step_size_samples > 0:
+                    remaining = bytes(inference_frame.data[self._step_size_samples :])
+                    remaining_samples = len(remaining) // 2  # int16 = 2 bytes
                     inference_frames = [
                         rtc.AudioFrame(
-                            data=data,
+                            data=remaining,
                             sample_rate=inference_frame.sample_rate,
                             num_channels=1,
-                            samples_per_channel=len(data) // 2,
+                            samples_per_channel=remaining_samples,
                         )
                     ]
 

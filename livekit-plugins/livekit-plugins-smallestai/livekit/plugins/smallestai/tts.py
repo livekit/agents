@@ -24,8 +24,9 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
+    Language,
+    create_api_error_from_http,
     tts,
     utils,
 )
@@ -49,7 +50,7 @@ class _TTSOptions:
     consistency: float
     similarity: float
     enhancement: float
-    language: str
+    language: Language
     output_format: TTSEncoding | str
     base_url: str
 
@@ -96,7 +97,10 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("SMALLEST_API_KEY")
         if not api_key:
-            raise ValueError("SMALLEST_API_KEY must be set")
+            raise ValueError(
+                "Smallest.ai API key is required, either as argument or set"
+                " SMALLEST_API_KEY environment variable"
+            )
 
         if (consistency or similarity or enhancement) and model == "lightning":
             logger.warning(
@@ -112,7 +116,7 @@ class TTS(tts.TTS):
             consistency=consistency,
             similarity=similarity,
             enhancement=enhancement,
-            language=language,
+            language=Language(language),
             output_format=output_format,
             base_url=base_url,
         )
@@ -161,7 +165,7 @@ class TTS(tts.TTS):
         if is_given(enhancement):
             self._opts.enhancement = enhancement
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
         if is_given(output_format):
             self._opts.output_format = output_format
 
@@ -223,9 +227,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -235,4 +237,7 @@ def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
     extra_keys = ["consistency", "similarity", "enhancement"]
 
     keys = base_keys if opts.model == "lightning" else base_keys + extra_keys
-    return {key: getattr(opts, key) for key in keys}
+    result = {key: getattr(opts, key) for key in keys}
+    if "language" in result and isinstance(result["language"], Language):
+        result["language"] = result["language"].language
+    return result

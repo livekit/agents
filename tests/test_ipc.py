@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import io
+import logging
 import multiprocessing as mp
 import socket
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import ClassVar
@@ -14,6 +16,8 @@ from typing import ClassVar
 import psutil
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
+from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
+from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
 
 
@@ -181,6 +185,17 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
         start_args.update_ev.notify()
 
 
+async def _poll_until(
+    condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition_fn():
+            return
+        await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Timed out after {timeout}s waiting for condition")
+
+
 async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
     for _ in range(num_elements):
         await q.get()
@@ -193,6 +208,7 @@ async def test_proc_pool():
     pool = ipc.proc_pool.ProcPool(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
@@ -200,6 +216,7 @@ async def test_proc_pool():
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -232,7 +249,7 @@ async def test_proc_pool():
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(created_q, num_idle_processes)
     await _wait_for_elements(start_q, num_idle_processes)
@@ -273,12 +290,14 @@ async def test_slow_initialization():
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -299,16 +318,19 @@ async def test_slow_initialization():
     @pool.on("process_closed")
     def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
         close_q.put_nowait(None)
-        pids.append(proc.pid)
+        if proc.pid is not None:
+            pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
 
-    # after initialization failure, warmup should be retried
+    # retry batch should also timeout and be killed
     await _wait_for_elements(start_q, num_idle_processes)
+    await _wait_for_elements(close_q, num_idle_processes)
+
     await pool.aclose()
 
     for pid in pids:
@@ -329,6 +351,7 @@ def _create_proc(
     proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         memory_warn_mb=0,
@@ -337,6 +360,7 @@ def _create_proc(
         ping_timeout=10.0,
         high_ping_threshold=1.0,
         inference_executor=None,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -349,7 +373,6 @@ async def test_shutdown_no_job():
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
     await proc.aclose()
 
     assert proc.exitcode == 0
@@ -364,11 +387,10 @@ async def test_job_slow_shutdown():
 
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     # process is killed when there is a job with slow timeout
@@ -382,13 +404,61 @@ async def test_job_graceful_shutdown():
     start_args.shutdown_simulate_work_time = 1.0
     await proc.start()
     await proc.initialize()
-    await asyncio.sleep(1.0)
 
     fake_job = _generate_fake_job()
     await proc.launch_job(fake_job)
-    await asyncio.sleep(1.0)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
     await proc.aclose()
 
     assert proc.exitcode == 0, "process should have exited cleanly"
     assert not proc.killed
     assert start_args.shutdown_counter.value == 1
+
+
+def test_log_queue_drains_before_stop():
+    """All log records must be received by the listener even when stop() is
+    called right after the sender closes its end.  This reproduces a race where
+    LogQueueListener.stop() used to close the socket *before* joining the
+    monitor thread, dropping buffered records."""
+    NUM_LOGS = 200
+    received: list[str] = []
+
+    parent_sock, child_sock = socket.socketpair()
+    parent_dup = duplex_unix._Duplex.open(parent_sock)
+    child_dup = duplex_unix._Duplex.open(child_sock)
+
+    # -- parent (listener) side --
+    class _CapturingListener(LogQueueListener):
+        def handle(self, record: logging.LogRecord) -> None:
+            received.append(record.getMessage())
+            # slow down processing so the buffer is not fully drained
+            # before stop() is called
+            time.sleep(0.001)
+
+    listener = _CapturingListener(parent_dup, lambda r: None)
+    listener.start()
+
+    # -- child (handler) side --
+    handler = LogQueueHandler(child_dup)
+    test_logger = logging.getLogger("test_log_queue_drain")
+    test_logger.addHandler(handler)
+    test_logger.setLevel(logging.DEBUG)
+    test_logger.propagate = False
+
+    for i in range(NUM_LOGS):
+        test_logger.info("msg %d", i)
+
+    # simulate the child process shutting down: close handler then its thread
+    handler.close()
+    handler.thread.join()
+    # child duplex is now closed by _forward_logs
+
+    # simulate supervised_proc._sync_run: proc.join() returned, now stop listener
+    listener.stop()
+
+    test_logger.removeHandler(handler)
+
+    assert len(received) == NUM_LOGS, (
+        f"Expected {NUM_LOGS} records, got {len(received)}. "
+        f"Lost {NUM_LOGS - len(received)} tail log records."
+    )
