@@ -577,10 +577,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on(
-                "user_interruption_detected", self._on_overlap_speech_ended
-            )
-            self._interruption_detector.on(
-                "user_non_interruption_detected", self._on_overlap_speech_ended
+                "user_overlapping_speech", self._on_overlap_speech_ended
             )
 
         if self.mcp_servers:
@@ -811,10 +808,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off(
-                "user_interruption_detected", self._on_overlap_speech_ended
-            )
-            self._interruption_detector.off(
-                "user_non_interruption_detected", self._on_overlap_speech_ended
+                "user_overlapping_speech", self._on_overlap_speech_ended
             )
 
         if self._rt_session is not None:
@@ -1247,10 +1241,9 @@ class AgentActivity(RecognitionHooks):
     def _on_overlap_speech_ended(self, ev: inference.InterruptionEvent) -> None:
         if ev.is_interruption:
             self._interruption_detected = True
-            self._session.emit("user_interruption_detected", ev)
         else:
             self._interruption_detected = False
-            self._session.emit("user_non_interruption_detected", ev)
+        self._session.emit("user_overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None:
@@ -1479,16 +1472,16 @@ class AgentActivity(RecognitionHooks):
         else:
             self._user_silence_event.set()
 
-    def on_interruption(self, ev: inference.InterruptionEvent) -> None:
+    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         # restore interruption by audio activity and then immediately interrupt
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity(
-            ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
+            ignore_user_transcript_until=ev.overlap_started_at or ev.timestamp
         )
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition.on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
+                ignore_user_transcript_until=ev.overlap_started_at or ev.timestamp
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
