@@ -628,7 +628,8 @@ async def _execute_tools_task(
 
                     if fnc_call_out := output.fnc_call_out:
                         current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
+                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT,
+                            llm_utils.tool_output_to_text(fnc_call_out.output),
                         )
                         current_span.set_attribute(
                             trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error

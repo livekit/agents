@@ -466,7 +466,10 @@ class ChatContext:
                 if isinstance(item.output, ImageContent):
                     item.output = ""
                 elif isinstance(item.output, list):
-                    filtered = [c for c in item.output if isinstance(c, str)]
+                    filtered: list[ToolOutputContent] = []
+                    for content in item.output:
+                        if isinstance(content, str):
+                            filtered.append(content)
                     item.output = filtered if filtered else ""
 
             items.append(item)
