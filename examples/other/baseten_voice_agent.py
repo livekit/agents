@@ -49,7 +49,7 @@ async def entrypoint(ctx: agents.JobContext):
     session = AgentSession(
         stt=baseten.STT(
             api_key=BASETEN_API_KEY,
-            model_endpoint="wss://chain-jwd7ggwk.api.baseten.co/development/websocket",
+            model_endpoint="wss://model-w5ddoev3.api.baseten.co/environments/production/websocket",
         ),
         llm=openai.LLM(
             api_key=BASETEN_API_KEY,
@@ -59,7 +59,6 @@ async def entrypoint(ctx: agents.JobContext):
         ),
         tts=baseten.TTS(
             api_key=BASETEN_API_KEY,
-            # The TTS plugin will automatically convert this to websocket for streaming
             model_endpoint="wss://model-qklvjme3.api.baseten.co/environments/production/websocket",
         ),
         vad=silero.VAD.load(),

@@ -37,6 +37,9 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
+_END_SENTINEL = "__END__"
+
+
 @dataclass
 class _TTSOptions:
     language: str
@@ -150,9 +153,7 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            api_key=self._api_key,
             input_text=text,
-            model_endpoint=self._model_endpoint,
             conn_options=conn_options,
         )
 
@@ -161,8 +162,6 @@ class TTS(tts.TTS):
     ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
-            api_key=self._api_key,
-            model_endpoint=self._model_endpoint,
             conn_options=conn_options,
         )
         self._streams.add(stream)
@@ -179,8 +178,6 @@ class ChunkedStream(tts.ChunkedStream):
         self,
         *,
         tts: TTS,
-        api_key: str,
-        model_endpoint: str,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -191,16 +188,14 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         self._tts: TTS = tts
-        self._api_key = api_key
-        self._model_endpoint = model_endpoint
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
-                self._model_endpoint,
+                self._tts._model_endpoint,
                 headers={
-                    "Authorization": f"Api-Key {self._api_key}",
+                    "Authorization": f"Api-Key {self._tts._api_key}",
                 },
                 json={
                     "prompt": self._input_text,
@@ -239,8 +234,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        api_key: str,
-        model_endpoint: str,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -263,7 +256,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
                 self._mark_started()
                 await ws.send_str(data)
-            await ws.send_str('__END__')
+            await ws.send_str(_END_SENTINEL)
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             output_emitter.start_segment(segment_id=request_id)
@@ -282,8 +275,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._ensure_session().ws_connect(
-                self._model_endpoint,
-                headers={"Authorization": f"Api-Key {self._api_key}"},
+                self._tts._model_endpoint,
+                headers={"Authorization": f"Api-Key {self._tts._api_key}"},
                 ssl=ssl_context,
             ) as ws:
                 await ws.send_json(
