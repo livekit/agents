@@ -84,7 +84,7 @@ class ContextObject:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v3"
+    model: str = "stt-rt-v4"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -132,7 +132,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                aligned_transcript=False,
+                aligned_transcript="chunk",
                 offline_recognize=False,
                 diarization=params.enable_speaker_diarization,
             )
@@ -366,39 +366,27 @@ class SpeechStream(stt.SpeechStream):
     async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
 
-        # Transcription frame will be only sent after we get the "endpoint" event.
-        final_transcript_buffer = ""
-        # Language code sent by Soniox if language detection is enabled (e.g. "en", "de", "fr")
-        final_transcript_language: str = ""
-        final_speaker_id: str | None = None
-
+        # final tokens are accumulated across messages until an endpoint is detected.
+        final = _TokenAccumulator()
         is_speaking = False
 
         def send_endpoint_transcript() -> None:
-            nonlocal \
-                final_transcript_buffer, \
-                final_transcript_language, \
-                final_speaker_id, \
-                is_speaking
-            if final_transcript_buffer:
-                event = stt.SpeechEvent(
-                    type=SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            text=final_transcript_buffer,
-                            language=final_transcript_language,
-                            speaker_id=final_speaker_id,
-                        )
-                    ],
+            nonlocal is_speaking
+            if final.text:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[final.to_speech_data(self.start_time_offset)],
+                    )
                 )
-                self._event_ch.send_nowait(event)
-
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=SpeechEventType.END_OF_SPEECH,
+                    )
+                )
 
                 # Reset buffers.
-                final_transcript_buffer = ""
-                final_transcript_language = ""
-                final_speaker_id = None
+                final.reset()
 
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
@@ -407,108 +395,155 @@ class SpeechStream(stt.SpeechStream):
         while self._ws:
             try:
                 async for msg in self._ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            content = json.loads(msg.data)
-                            tokens = content["tokens"]
-
-                            # We will only send the final tokens after we get the "endpoint" event.
-                            non_final_transcription = ""
-                            non_final_transcription_language: str = ""
-                            non_final_speaker_id: str | None = None
-
-                            total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
-
-                            for token in tokens:
-                                if token["is_final"]:
-                                    if is_end_token(token):
-                                        # Found an endpoint, tokens until here will be sent as
-                                        # transcript, the rest will be sent as interim tokens
-                                        # (even final tokens).
-                                        send_endpoint_transcript()
-                                        self._report_processed_audio_duration(total_audio_proc_ms)
-                                    else:
-                                        final_transcript_buffer += token["text"]
-
-                                        # Soniox provides language for each token,
-                                        # LiveKit requires only a single language for the entire transcription chunk.
-                                        # Current heuristic is to take the first language we see.
-                                        if token.get("language") and not final_transcript_language:
-                                            final_transcript_language = token.get("language")
-
-                                        if "speaker" in token and final_speaker_id is None:
-                                            final_speaker_id = str(token["speaker"])
-                                else:
-                                    non_final_transcription += token["text"]
-                                    if (
-                                        token.get("language")
-                                        and not non_final_transcription_language
-                                    ):
-                                        non_final_transcription_language = token.get("language")
-
-                                    if "speaker" in token and non_final_speaker_id is None:
-                                        non_final_speaker_id = str(token["speaker"])
-
-                            if final_transcript_buffer or non_final_transcription:
-                                if not is_speaking:
-                                    # Send START_OF_SPEECH if this is the first transcript.
-                                    is_speaking = True
-                                    self._event_ch.send_nowait(
-                                        stt.SpeechEvent(
-                                            type=SpeechEventType.START_OF_SPEECH,
-                                        )
-                                    )
-
-                                event = stt.SpeechEvent(
-                                    type=SpeechEventType.INTERIM_TRANSCRIPT,
-                                    alternatives=[
-                                        stt.SpeechData(
-                                            text=final_transcript_buffer + non_final_transcription,
-                                            language=(
-                                                final_transcript_language
-                                                if final_transcript_language
-                                                else non_final_transcription_language
-                                            ),
-                                            speaker_id=(
-                                                final_speaker_id
-                                                if final_speaker_id is not None
-                                                else non_final_speaker_id
-                                            ),
-                                        )
-                                    ],
-                                )
-                                self._event_ch.send_nowait(event)
-
-                            error_code = content.get("error_code")
-                            error_message = content.get("error_message")
-
-                            if error_code or error_message:
-                                # In case of error, still send the final transcript.
-                                send_endpoint_transcript()
-                                self._report_processed_audio_duration(total_audio_proc_ms)
-                                logger.error(f"WebSocket error: {error_code} - {error_message}")
-
-                            finished = content.get("finished")
-
-                            if finished:
-                                # When finished, still send the final transcript.
-                                send_endpoint_transcript()
-                                self._report_processed_audio_duration(total_audio_proc_ms)
-                                logger.debug("Transcription finished")
-
-                        except Exception as e:
-                            logger.exception(f"Error processing message: {e}")
-                    elif msg.type in (
+                    if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
                         break
-                    else:
+
+                    if msg.type != aiohttp.WSMsgType.TEXT:
                         logger.warning(
                             f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
                         )
+                        continue
+
+                    try:
+                        content = json.loads(msg.data)
+                        tokens = content["tokens"]
+
+                        non_final = _TokenAccumulator()
+                        total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+
+                        # 1) process tokens: accumulate final/non-final,
+                        #    flush immediately on endpoint tokens.
+                        for token in tokens:
+                            if token["is_final"]:
+                                if is_end_token(token):
+                                    send_endpoint_transcript()
+                                    self._report_processed_audio_duration(
+                                        total_audio_proc_ms,
+                                    )
+                                else:
+                                    final.update(token)
+                            else:
+                                non_final.update(token)
+
+                        # 2) emit START_OF_SPEECH + interim for remaining content.
+                        if final.text or non_final.text:
+                            if not is_speaking:
+                                is_speaking = True
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                                )
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=SpeechEventType.INTERIM_TRANSCRIPT,
+                                    alternatives=[
+                                        final.merged_speech_data(non_final, self.start_time_offset)
+                                    ],
+                                )
+                            )
+
+                        # 3) on error or finish, flush any remaining final tokens.
+                        if (
+                            content.get("finished")
+                            or content.get("error_code")
+                            or content.get("error_message")
+                        ):
+                            send_endpoint_transcript()
+                            self._report_processed_audio_duration(total_audio_proc_ms)
+
+                        if content.get("error_code") or content.get("error_message"):
+                            logger.error(
+                                f"WebSocket error: {content.get('error_code')}"
+                                f" - {content.get('error_message')}"
+                            )
+
+                        if content.get("finished"):
+                            logger.debug("Transcription finished")
+
+                    except Exception as e:
+                        logger.exception(f"Error processing message: {e}")
+
             except aiohttp.ClientError as e:
                 logger.error(f"WebSocket error while receiving: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error while receiving messages: {e}")
+
+
+class _TokenAccumulator:
+    """Accumulates token metadata (text, language, speaker, timing, confidence).
+
+    Tokens are assumed to arrive in chronological order, so start_time is taken
+    from the first token and end_time is continuously overwritten by the latest.
+    """
+
+    def __init__(self) -> None:
+        self.text: str = ""
+        self.language: str = ""
+        self.speaker_id: str | None = None
+        self.start_time: float = 0.0
+        self.end_time: float = 0.0
+        self._confidence_sum: float = 0.0
+        self._confidence_count: int = 0
+        self._has_start_time: bool = False
+
+    def update(self, token: dict[str, Any]) -> None:
+        self.text += token["text"]
+        if token.get("language") and not self.language:
+            self.language = token["language"]
+        if "speaker" in token and self.speaker_id is None:
+            self.speaker_id = str(token["speaker"])
+        if "start_ms" in token and not self._has_start_time:
+            self._has_start_time = True
+            self.start_time = float(token["start_ms"])
+        if "end_ms" in token:
+            self.end_time = float(token["end_ms"])
+        if "confidence" in token:
+            self._confidence_sum += token["confidence"]
+            self._confidence_count += 1
+
+    @property
+    def confidence(self) -> float:
+        if self._confidence_count == 0:
+            return 0.0
+        return self._confidence_sum / self._confidence_count
+
+    def reset(self) -> None:
+        self.text = ""
+        self.language = ""
+        self.speaker_id = None
+        self.start_time = 0.0
+        self.end_time = 0.0
+        self._confidence_sum = 0.0
+        self._confidence_count = 0
+        self._has_start_time = False
+
+    def to_speech_data(self, start_time_offset: float = 0.0) -> stt.SpeechData:
+        return stt.SpeechData(
+            text=self.text,
+            language=self.language,
+            speaker_id=self.speaker_id,
+            start_time=self.start_time / 1000 + start_time_offset,
+            end_time=self.end_time / 1000 + start_time_offset,
+            confidence=self.confidence,
+        )
+
+    def merged_speech_data(
+        self, other: _TokenAccumulator, start_time_offset: float = 0.0
+    ) -> stt.SpeechData:
+        """Build a SpeechData combining self (final) with other (non-final)."""
+        candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
+        start = min(candidates) if candidates else 0.0
+        end = max(self.end_time, other.end_time)
+        total_count = self._confidence_count + other._confidence_count
+        total_sum = self._confidence_sum + other._confidence_sum
+        return stt.SpeechData(
+            text=self.text + other.text,
+            language=self.language if self.language else other.language,
+            speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
+            start_time=start / 1000 + start_time_offset,
+            end_time=end / 1000 + start_time_offset,
+            confidence=total_sum / total_count if total_count > 0 else 0.0,
+        )
