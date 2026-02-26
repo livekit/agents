@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING, Any, get_type_hints
 
 import aiohttp
 import aiohttp.typedefs
@@ -15,59 +18,119 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from livekit.protocol import agent
 from livekit.protocol.agent_pb import agent_text
 
-from . import utils
-from ._exceptions import TextMessageError
 from .log import logger
+from .types import NOT_GIVEN, NotGivenOr
+from .utils import is_given
 from .utils.http_server import HttpServer
 from .version import __version__
 
 if TYPE_CHECKING:
     from .worker import AgentServer
 
-_CORS_HEADERS = {
+
+class _ParamSource(Enum):
+    REQUEST = "request"
+    AGENT_SERVER = "agent_server"
+    VALUE = "value"
+
+
+_MISSING: Any = object()
+
+
+@dataclass
+class _ParamSpec:
+    name: str
+    source: _ParamSource
+    default: Any = _MISSING
+
+
+@dataclass
+class _HttpEndpointInfo:
+    handler: Callable[..., Awaitable[Any]]
+    path: str
+    methods: list[str] = field(default_factory=lambda: ["GET"])
+    headers: dict[str, str] | None = None
+
+
+DEFAULT_HEADERS: dict[str, str] = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
 
 
-@web.middleware
-async def _cors_middleware(
-    request: web.Request, handler: aiohttp.typedefs.Handler
-) -> web.StreamResponse:
-    try:
-        resp = await handler(request)
-    except web.HTTPException as exc:
-        for k, v in _CORS_HEADERS.items():
-            exc.headers[k] = v
-        raise
-    for k, v in _CORS_HEADERS.items():
-        resp.headers[k] = v
-    return resp
-
-
 class AgentHttpServer(HttpServer):
     """HTTP server that handles health checks, worker info, and text message endpoints."""
 
-    def __init__(self, agent_server: AgentServer, *, host: str, port: int) -> None:
+    RESERVED_PATHS: set[str] = {"/"}
+    RESERVED_PATH_PREFIXES: tuple[str, ...] = ("/worker", "/text")
+
+    def __init__(
+        self,
+        agent_server: AgentServer,
+        *,
+        host: str,
+        port: int,
+        default_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+    ) -> None:
         super().__init__(host, port)
         self._agent_server = agent_server
+        self._default_headers = default_headers if is_given(default_headers) else DEFAULT_HEADERS
 
-        self._app.middlewares.append(_cors_middleware)
+        if self._default_headers:
+            headers = self._default_headers
+
+            @web.middleware
+            async def _headers_middleware(
+                request: web.Request, handler: aiohttp.typedefs.Handler
+            ) -> web.StreamResponse:
+                try:
+                    resp = await handler(request)
+                except web.HTTPException as exc:
+                    for k, v in headers.items():
+                        exc.headers[k] = v
+                    raise
+                for k, v in headers.items():
+                    resp.headers[k] = v
+                return resp
+
+            self._app.middlewares.append(_headers_middleware)
+
         self._app.add_routes(
             [
                 web.get("/", self._health_check),
                 web.get("/worker", self._worker_info),
-                web.options("/{path:.*}", self._handle_cors_preflight),
-                web.post("/text", self._handle_text_request),
-                web.post("/text/sessions/{session_id}", self._handle_text_request),
-                web.post("/text/{endpoint}", self._handle_text_request),
-                web.post("/text/{endpoint}/sessions/{session_id}", self._handle_text_request),
             ]
         )
 
-    async def _handle_cors_preflight(self, _: web.Request) -> web.Response:
-        return web.Response(headers={**_CORS_HEADERS, "Access-Control-Max-Age": "3600"})
+        if "Access-Control-Allow-Origin" in self._default_headers:
+
+            async def _handle_cors_preflight(request: web.Request) -> web.Response:
+                return web.Response(
+                    headers={**self._default_headers, "Access-Control-Max-Age": "3600"}
+                )
+
+            self._app.router.add_route("OPTIONS", "/{path:.*}", _handle_cors_preflight)
+
+        # text routes (reserved)
+        from .text_job import _handle_text_request
+
+        text_handler = self._wrap_user_handler(
+            _handle_text_request, {"Content-Type": "application/x-ndjson"}
+        )
+        for path in [
+            "/text",
+            "/text/sessions/{session_id}",
+            "/text/{endpoint}",
+            "/text/{endpoint}/sessions/{session_id}",
+        ]:
+            self._app.router.add_route("POST", path, text_handler)
+
+        # user-defined endpoints
+        for ep in agent_server._http_endpoints:
+            wrapped = self._wrap_user_handler(ep.handler, ep.headers)
+            for method in ep.methods:
+                self._app.router.add_route(method, ep.path, wrapped)
 
     async def _health_check(self, _: web.Request) -> web.Response:
         """Health check endpoint - returns 200 if server is healthy."""
@@ -96,154 +159,142 @@ class AgentHttpServer(HttpServer):
         )
         return web.Response(body=body, content_type="application/json")
 
-    async def _handle_text_request(self, request: web.Request) -> web.StreamResponse:
-        """Handle POST /text/{endpoint}[/sessions/{session_id}]
+    def _wrap_user_handler(
+        self,
+        handler: Callable[..., Awaitable[Any]],
+        endpoint_headers: dict[str, str] | None = None,
+    ) -> Callable[[web.Request], Awaitable[web.StreamResponse]]:
+        params = self._build_injection_plan(handler)
 
-        Request body is a JSON object that is parsed as `agent_text.TextMessageRequest`:
-        ```json
-        {
-            "text": "user message",
-            "metadata": {"key": "value"},  // optional
-            "session_state": {  // optional
-                "version": 1,
-                "snapshot": "base64...",
-                "delta": "base64..."
-            }
-        }
-        ```
-
-        Response as streaming NDJSON of `agent_text.TextMessageResponse` events:
-        ```json
-        {
-            "session_id": "...",
-            "message_id": "...",
-            "message|function_call|function_call_output|agent_handoff": {...},
-            "complete": {
-                "session_state": {...},
-                "error": {
-                    "message": "...",
-                    "code": "..."
-                }
-            }
-        }
-        ```
-        """
-        logger.info(f"handling text request: {request.method} {request.path}")
-        endpoint, text_request = await self._parse_text_request(request)
-
-        response = web.StreamResponse(
-            status=200,
-            reason="OK",
-            headers={
-                "Content-Type": "application/x-ndjson",
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                **_CORS_HEADERS,
-            },
-        )
-        await response.prepare(request)
-
-        completed = False
-
-        async def _stream_message(msg: agent_text.TextMessageResponse) -> None:
-            nonlocal completed
-
-            msg_json = json.dumps(MessageToDict(msg, preserving_proto_field_name=True))
-            if completed:
-                logger.warning("received message after completion", extra={"message": msg_json})
-                return
-
-            await response.write(msg_json.encode() + b"\n")
-            if msg.WhichOneof("event") == "complete":
-                completed = True
-
-        try:
-            session_info = await self._agent_server._launch_text_job(endpoint, text_request)
-
-            # stream response events
-            async for ev in session_info.event_ch:
-                await _stream_message(ev)
-
-        except TextMessageError as e:
-            logger.error(
-                "error processing text request",
-                extra={
-                    "session_id": text_request.session_id,
-                    "error": e.message,
-                    "error_code": agent_text.TextMessageErrorCode.Name(e.code),
-                },
-            )
-            if not completed:
-                await _stream_message(
-                    agent_text.TextMessageResponse(
-                        session_id=text_request.session_id,
-                        message_id=text_request.message_id,
-                        complete=agent_text.TextMessageComplete(error=e.to_proto()),
-                    )
+        async def _handler(request: web.Request) -> web.StreamResponse:
+            kwargs = await self._resolve_kwargs(request, params)
+            try:
+                result = await handler(**kwargs)
+            except web.HTTPException:
+                raise
+            except Exception:
+                logger.exception(
+                    "error in user http endpoint handler",
+                    extra={"path": request.path},
                 )
+                return web.json_response({"error": "internal server error"}, status=500)
+
+            try:
+                return await self._result_to_response(result, request, endpoint_headers)
+            except Exception:
+                logger.exception(
+                    "error converting handler return value",
+                    extra={"path": request.path},
+                )
+                return web.json_response({"error": "internal server error"}, status=500)
+
+        return _handler
+
+    def _build_injection_plan(self, handler: Callable[..., Awaitable[Any]]) -> list[_ParamSpec]:
+        """Introspect handler once at wrap time. Returns params."""
+        try:
+            # localns needed because AgentServer is TYPE_CHECKING-only import
+            hints = get_type_hints(handler, localns={"AgentServer": type(self._agent_server)})
         except Exception:
-            logger.exception(
-                "unexpected error processing text request",
-                extra={"session_id": text_request.session_id},
-            )
-            if not completed:
-                await _stream_message(
-                    agent_text.TextMessageResponse(
-                        session_id=text_request.session_id,
-                        message_id=text_request.message_id,
-                        complete=agent_text.TextMessageComplete(
-                            error=TextMessageError("internal error").to_proto()
-                        ),
-                    )
+            hints = {}
+
+        agent_server_type = type(self._agent_server)
+        sig = inspect.signature(handler)
+        params: list[_ParamSpec] = []
+        for name, param in sig.parameters.items():
+            hint = hints.get(name, inspect.Parameter.empty)
+            default = param.default if param.default is not inspect.Parameter.empty else _MISSING
+            if hint is web.Request:
+                params.append(_ParamSpec(name, _ParamSource.REQUEST))
+            elif hint is not inspect.Parameter.empty and (
+                hint is agent_server_type
+                or (isinstance(hint, type) and issubclass(hint, agent_server_type))
+            ):
+                params.append(_ParamSpec(name, _ParamSource.AGENT_SERVER))
+            else:
+                params.append(_ParamSpec(name, _ParamSource.VALUE, default))
+
+        return params
+
+    async def _resolve_kwargs(
+        self, request: web.Request, params: list[_ParamSpec]
+    ) -> dict[str, Any]:
+        """Resolve handler kwargs from request data. Called per request."""
+        values: dict[str, Any] = {}
+        if any(p.source is _ParamSource.VALUE for p in params):
+            if request.method in {"POST", "PUT", "PATCH"}:
+                try:
+                    body = await request.json()
+                except Exception as e:
+                    raise web.HTTPBadRequest(
+                        reason=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
+                        content_type="application/json",
+                    ) from e
+                values.update(body)
+            else:
+                values.update(request.query)
+
+            # match_info contains path parameters, overrides others
+            values.update(dict(request.match_info))
+
+        kwargs: dict[str, Any] = {}
+        for p in params:
+            if p.source is _ParamSource.REQUEST:
+                kwargs[p.name] = request
+            elif p.source is _ParamSource.AGENT_SERVER:
+                kwargs[p.name] = self._agent_server
+            elif p.name in values:
+                kwargs[p.name] = values[p.name]
+            elif p.default is not _MISSING:
+                kwargs[p.name] = p.default
+            else:
+                raise web.HTTPBadRequest(
+                    reason=json.dumps({"error": f"Missing required parameter: '{p.name}'"}),
+                    content_type="application/json",
                 )
-        finally:
-            await response.write_eof()
+        return kwargs
 
-        return response
+    async def _result_to_response(
+        self, result: Any, request: web.Request, endpoint_headers: dict[str, str] | None
+    ) -> web.StreamResponse:
+        """Convert handler return value to web.StreamResponse."""
+        if isinstance(result, web.StreamResponse):
+            return result
 
-    async def _parse_text_request(
-        self, request: web.Request
-    ) -> tuple[str, agent_text.TextMessageRequest]:
-        endpoint = request.match_info.get("endpoint", "")
-        session_id = request.match_info.get("session_id")
-        logger.info(f"parsing text request: {endpoint} {session_id}")
+        # streaming: must include default_headers before prepare() since
+        # the middleware runs after the handler returns — too late for
+        # headers that were already sent via prepare().
+        if isinstance(result, AsyncIterator):
+            headers = dict(self._default_headers)
+            if endpoint_headers:
+                headers.update(endpoint_headers)
+            headers.setdefault("Content-Type", "application/octet-stream")
 
-        if endpoint not in self._agent_server._text_handler_fncs:
-            raise web.HTTPNotFound(
-                reason=json.dumps({"error": f"Service '{endpoint}' not found"}),
-                content_type="application/json",
+            resp = web.StreamResponse(status=200, headers=headers)
+            await resp.prepare(request)
+            async for chunk in result:
+                await resp.write(chunk.encode() if isinstance(chunk, str) else chunk)
+            await resp.write_eof()
+            return resp
+
+        # non-streaming: middleware handles default_headers; only apply
+        # endpoint-specific headers here.
+        if isinstance(result, dict):
+            resp = web.json_response(result)
+        elif isinstance(result, str):
+            resp = web.Response(text=result)
+        elif isinstance(result, bytes):
+            resp = web.Response(body=result)
+        else:
+            logger.error(
+                "unsupported return type from http endpoint handler",
+                extra={"path": request.path, "type": type(result).__name__},
             )
-        try:
-            body = await request.json()
-        except Exception as e:
-            raise web.HTTPBadRequest(
-                reason=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
-                content_type="application/json",
-            ) from e
+            return web.json_response({"error": "internal server error"}, status=500)
 
-        if "text" not in body:
-            raise web.HTTPBadRequest(
-                reason=json.dumps({"error": "Missing 'text' field"}),
-                content_type="application/json",
-            )
-
-        if "message_id" not in body:
-            body["message_id"] = utils.shortuuid("text_msg_")
-        if "agent_name" not in body:
-            body["agent_name"] = self._agent_server._agent_name
-        body["session_id"] = session_id or utils.shortuuid("text_session_")
-
-        try:
-            text_request = ParseDict(
-                body, agent_text.TextMessageRequest(), ignore_unknown_fields=True
-            )
-        except Exception as e:
-            raise web.HTTPBadRequest(
-                reason=json.dumps({"error": f"Invalid request body: {str(e)}"}),
-                content_type="application/json",
-            ) from e
-
-        return endpoint, text_request
+        if endpoint_headers:
+            resp.headers.update(endpoint_headers)
+        return resp
 
 
 class AgentHttpClient:

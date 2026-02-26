@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import pickle
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -102,7 +103,7 @@ class StartJobRequest:
         channel.write_string(b, self.running_job.token)
         channel.write_string(b, self.running_job.worker_id)
         channel.write_bool(b, self.running_job.fake_job)
-        channel.write_string(b, self.running_job.text_endpoint)
+        channel.write_bytes(b, pickle.dumps(self.running_job.entrypoint_fnc))
         channel.write_bool(b, self.running_job.text_request is not None)
         if self.running_job.text_request is not None:
             channel.write_bytes(b, self.running_job.text_request.SerializeToString())
@@ -121,7 +122,7 @@ class StartJobRequest:
             token=channel.read_string(b),
             worker_id=channel.read_string(b),
             fake_job=channel.read_bool(b),
-            text_endpoint=channel.read_string(b),
+            entrypoint_fnc=pickle.loads(channel.read_bytes(b)),
             text_request=None,
         )
         has_text_request = channel.read_bool(b)
