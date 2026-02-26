@@ -563,7 +563,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
             self._http_server = http_server.HttpServer(
-                self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
+                self._host, ServerEnvOption.getvalue(self._port, devmode)
             )
             self._worker_load: float = 0.0
 
@@ -609,7 +609,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
                 self._prometheus_server = telemetry.http_server.HttpServer(
-                    self._host, self._prometheus_port, loop=self._loop
+                    self._host, self._prometheus_port
                 )
 
             if self._prometheus_multiproc_dir:
