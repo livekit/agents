@@ -42,7 +42,6 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
-from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
 from .events import (
     AgentEvent,
@@ -64,6 +63,7 @@ from .speech_handle import InputDetails, SpeechHandle
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
+    TurnDetectionMode,
     TurnHandlingOptions,
     _migrate_turn_handling,
     _resolve_endpointing,

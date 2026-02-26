@@ -26,7 +26,7 @@ from ...voice.background_audio import (
 )
 
 if TYPE_CHECKING:
-    from ...voice.audio_recognition import TurnDetectionMode
+    from ...voice.turn import TurnDetectionMode
 
 
 BASE_INSTRUCTIONS = """
