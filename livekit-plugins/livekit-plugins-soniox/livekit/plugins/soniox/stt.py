@@ -28,6 +28,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -523,7 +524,7 @@ class _TokenAccumulator:
     def to_speech_data(self, start_time_offset: float = 0.0) -> stt.SpeechData:
         return stt.SpeechData(
             text=self.text,
-            language=self.language,
+            language=Language(self.language),
             speaker_id=self.speaker_id,
             start_time=self.start_time / 1000 + start_time_offset,
             end_time=self.end_time / 1000 + start_time_offset,
@@ -541,7 +542,7 @@ class _TokenAccumulator:
         total_sum = self._confidence_sum + other._confidence_sum
         return stt.SpeechData(
             text=self.text + other.text,
-            language=self.language if self.language else other.language,
+            language=Language(self.language if self.language else other.language),
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,

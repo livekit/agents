@@ -18,7 +18,7 @@ import os
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
@@ -26,6 +26,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    Language,
     stt,
     utils,
 )
@@ -114,7 +115,9 @@ class STT(stt.STT):
             language = ["en-US"]
 
         if isinstance(language, str):
-            language = [language]
+            language = [Language(language)]
+        else:
+            language = [Language(lg) for lg in language]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST") or NOT_GIVEN
@@ -183,7 +186,7 @@ class STT(stt.STT):
     ) -> SpeechStream:
         config = deepcopy(self._config)
         if is_given(language):
-            config.language = [language]
+            config.language = [Language(language)]
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -191,8 +194,9 @@ class STT(stt.STT):
     def update_options(self, *, language: NotGivenOr[list[str] | str] = NOT_GIVEN) -> None:
         if is_given(language):
             if isinstance(language, str):
-                language = [language]
-            language = cast(list[str], language)
+                language = [Language(language)]
+            else:
+                language = [Language(lg) for lg in language]
             self._config.language = language
             for stream in self._streams:
                 stream.update_options(language=language)
@@ -278,13 +282,14 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
+        detected_lg = Language(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
 
         if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
+            detected_lg = Language(self._opts.language[0])
 
         # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
@@ -304,13 +309,14 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
+        detected_lg = Language(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
 
         if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
+            detected_lg = Language(self._opts.language[0])
 
         interim_data = stt.SpeechData(
             language=detected_lg,

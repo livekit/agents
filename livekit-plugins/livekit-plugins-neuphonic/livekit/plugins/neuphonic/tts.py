@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents import Language
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -44,7 +45,7 @@ API_AUTH_HEADER = "x-api-key"
 
 @dataclass
 class _TTSOptions:
-    lang_code: TTSLangCodes | str
+    lang_code: Language
     encoding: str
     sample_rate: int
     voice_id: str
@@ -112,7 +113,7 @@ class TTS(tts.TTS):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            lang_code=lang_code,
+            lang_code=Language(lang_code),
             encoding=encoding,
             sample_rate=sample_rate,
             voice_id=voice_id,
@@ -137,7 +138,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
+            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
@@ -188,7 +189,7 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed.
         """
         if is_given(lang_code):
-            self._opts.lang_code = lang_code
+            self._opts.lang_code = Language(lang_code)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(speed):
@@ -245,12 +246,12 @@ class ChunkedStream(tts.ChunkedStream):
                 headers = None
 
             async with self._tts._ensure_session().post(
-                f"{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
+                f"{self._opts.base_url}/sse/speak/{self._opts.lang_code.language}",
                 headers=headers,
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
-                    "lang_code": self._opts.lang_code,
+                    "lang_code": self._opts.lang_code.language,
                     "encoding": "pcm_linear",
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
