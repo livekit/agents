@@ -220,7 +220,6 @@ class SpeechStream(stt.SpeechStream):
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: list[SpeechEvent] = []
         self._reconnect_event = asyncio.Event()
-        self._speaking = False  # Track speaking state for START/END_OF_SPEECH events
 
     def update_options(
         self,
@@ -328,14 +327,6 @@ class SpeechStream(stt.SpeechStream):
 
                     if not is_final:
                         if text:
-                            # Emit START_OF_SPEECH on first transcript
-                            if not self._speaking:
-                                self._speaking = True
-                                start_event = stt.SpeechEvent(
-                                    type=stt.SpeechEventType.START_OF_SPEECH
-                                )
-                                self._event_ch.send_nowait(start_event)
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
@@ -355,14 +346,6 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language_code", self._opts.language)
 
                         if text:
-                            # Emit START_OF_SPEECH if we haven't yet
-                            if not self._speaking:
-                                self._speaking = True
-                                start_event = stt.SpeechEvent(
-                                    type=stt.SpeechEventType.START_OF_SPEECH
-                                )
-                                self._event_ch.send_nowait(start_event)
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[
@@ -378,11 +361,6 @@ class SpeechStream(stt.SpeechStream):
                             )
                             self._final_events.append(event)
                             self._event_ch.send_nowait(event)
-
-                            # Emit END_OF_SPEECH after final transcript for turn detection
-                            self._speaking = False
-                            end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                            self._event_ch.send_nowait(end_event)
 
                     else:
                         logger.warning("Unknown message type from Baseten")
@@ -428,19 +406,17 @@ class SpeechStream(stt.SpeechStream):
         ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
 
         # Build and send the metadata payload as the first message
-        # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
+        # Note: Baseten server expects 'vad_params' and 'streaming_whisper_params' field names
         metadata = {
-            "streaming_vad_config": {
+            "vad_params": {
                 "threshold": self._opts.vad_threshold,
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_params": {
+            "streaming_whisper_params": {
                 "encoding": self._opts.encoding,
                 "sample_rate": self._opts.sample_rate,
-                "enable_partial_transcripts": True,
-            },
-            "whisper_params": {
+                "enable_partial_transcripts": False,
                 "audio_language": self._opts.language,
                 "show_word_timestamps": True,
             },

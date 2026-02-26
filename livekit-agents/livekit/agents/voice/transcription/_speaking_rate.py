@@ -83,17 +83,13 @@ class SpeakingRateStream:
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
                     frame = rtc.combine_audio_frames(inference_frames)
-                    # Use actual data length to handle multi-channel audio correctly
-                    frame_f32_data = np.empty(len(frame.data), dtype=np.float32)
+                    frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
                     np.divide(
                         frame.data,
                         np.iinfo(np.int16).max,
                         out=frame_f32_data,
                         dtype=np.float32,
                     )
-                    # If stereo, convert to mono by averaging channels
-                    if frame.num_channels > 1:
-                        frame_f32_data = frame_f32_data.reshape(-1, frame.num_channels).mean(axis=1)
 
                     sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
                     pub_timestamp += frame.duration

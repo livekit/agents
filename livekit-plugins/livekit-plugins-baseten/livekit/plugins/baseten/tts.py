@@ -54,26 +54,6 @@ class _TTSOptions:
     api_key: str
     model_endpoint: str
 
-    def get_ws_url(self) -> str:
-        """Convert HTTP endpoint to WebSocket URL."""
-        # model_endpoint is typically like:
-        # https://model-{id}.api.baseten.co/environments/production/predict
-        # We need: wss://model-{id}.api.baseten.co/environments/production/websocket
-        url = self.model_endpoint
-        if url.startswith("https://"):
-            url = "wss://" + url[8:]
-        elif url.startswith("http://"):
-            url = "ws://" + url[7:]
-
-        # Replace /predict with /websocket if present
-        if url.endswith("/predict"):
-            url = url[:-8] + "/websocket"
-        elif not url.endswith("/websocket"):
-            # Append /websocket if not already there
-            url = url.rstrip("/") + "/websocket"
-
-        return url
-
 
 class TTS(tts.TTS):
     def __init__(
@@ -87,7 +67,6 @@ class TTS(tts.TTS):
         max_tokens: int = 2000,
         buffer_size: int = 10,
         http_session: aiohttp.ClientSession | None = None,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
         Initialize the Baseten TTS with streaming support.
@@ -103,7 +82,6 @@ class TTS(tts.TTS):
             max_tokens (int): Maximum tokens for generation. Defaults to 2000.
             buffer_size (int): Words per chunk for streaming. Defaults to 10.
             http_session: Optional aiohttp session for connection pooling.
-            tokenizer: Optional sentence tokenizer for streaming input.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
