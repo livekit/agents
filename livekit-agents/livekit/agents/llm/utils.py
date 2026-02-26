@@ -506,7 +506,7 @@ def normalize_function_output_value(output: Any) -> FunctionCallOutputValue:
     if isinstance(output, (str, ImageContent)):
         return output
 
-    if isinstance(output, list):
+    if isinstance(output, (list, tuple, set, frozenset)):
         normalized: list[ToolOutputContent] = []
         for item in output:
             if isinstance(item, (str, ImageContent)):
@@ -515,7 +515,7 @@ def normalize_function_output_value(output: Any) -> FunctionCallOutputValue:
                 normalized.append(str(item))
         return normalized
 
-    return str(output or "")
+    return str(output) if output is not None else ""
 
 
 def tool_output_parts(output: Any) -> list[ToolOutputContent]:

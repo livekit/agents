@@ -63,6 +63,19 @@ def test_normalize_function_output_value_preserves_image_in_mixed_list() -> None
     assert normalized == [image, "42", "{'k': 'v'}", "tail"]
 
 
+def test_normalize_function_output_value_preserves_image_in_mixed_tuple() -> None:
+    image = ImageContent(image="https://example.com/image.jpg")
+    normalized = utils.normalize_function_output_value(("head", image, 7))
+    assert normalized == ["head", image, "7"]
+
+
+def test_normalize_function_output_value_preserves_falsy_scalars() -> None:
+    assert utils.normalize_function_output_value(0) == "0"
+    assert utils.normalize_function_output_value(False) == "False"
+    assert utils.normalize_function_output_value(0.0) == "0.0"
+    assert utils.normalize_function_output_value(None) == ""
+
+
 def test_chat_context_to_dict_excludes_images_in_tool_output() -> None:
     image = ImageContent(image="https://example.com/image.jpg")
     chat_ctx = ChatContext(
