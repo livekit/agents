@@ -204,7 +204,7 @@ class AudioRecognition:
         if self._agent_speaking:
             # no interruption is detected, end the inference (idempotent)
             if not is_given(self._ignore_user_transcript_until):
-                self.on_end_of_speech(ended_at=time.time())
+                self.on_end_of_overlap_speech(ended_at=time.time())
             self._ignore_user_transcript_until = (
                 ignore_user_transcript_until
                 if not is_given(self._ignore_user_transcript_until)
@@ -251,6 +251,14 @@ class AudioRecognition:
                 ),
             )
 
+        self.on_end_of_overlap_speech(ended_at=ended_at, user_speaking_span=user_speaking_span)
+
+    def on_end_of_overlap_speech(
+        self,
+        ended_at: float,
+        user_speaking_span: trace.Span | None = None,
+    ) -> None:
+        """End interruption inference when agent is speaking and overlap speech ends."""
         if not self.adaptive_interruption_active or not self._agent_speaking:
             return
 

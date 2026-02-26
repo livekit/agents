@@ -1915,9 +1915,7 @@ class AgentActivity(RecognitionHooks):
                 otel_context=speech_handle._agent_turn_context,
             )
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(
-                    started_at=started_speaking_at,
-                )
+                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._interruption_by_audio_activity_enabled = False
 
@@ -2222,9 +2220,7 @@ class AgentActivity(RecognitionHooks):
             )
 
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(
-                    started_at=started_speaking_at,
-                )
+                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._interruption_by_audio_activity_enabled = False
 
@@ -2589,9 +2585,9 @@ class AgentActivity(RecognitionHooks):
                 otel_context=speech_handle._agent_turn_context,
             )
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(
-                    started_at=started_speaking_at,
-                )
+                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
+            if self.interruption_enabled:
+                self._interruption_by_audio_activity_enabled = False
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2763,6 +2759,12 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             self._session._update_agent_state("listening")
+            if self._audio_recognition:
+                self._audio_recognition.on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
+            if self.interruption_enabled:
+                self._restore_interruption_by_audio_activity()
             current_span.set_attribute(
                 trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
             )

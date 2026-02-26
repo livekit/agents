@@ -145,22 +145,17 @@ class DynamicEndpointing(BaseEndpointing):
         self._agent_speech_started_at = started_at
         self._agent_speech_ended_at = None
         self._overlapping = False
-        # TODO: @chenghao-mou remove this debug log
-        logger.debug(
-            "agent speech started at: %s",
-            self._agent_speech_started_at,
-        )
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
         # NOTE: intentionally keep _agent_speech_started_at so that
         # between_turn_delay can be computed in the normal end-of-speech path
-        self._agent_speech_ended_at = ended_at
+        # NOTE: we also guard against duplicate calls from pipeline reply and pipeline reply done
+        if self._agent_speech_started_at is not None and (
+            self._agent_speech_ended_at is None
+            or self._agent_speech_ended_at < self._agent_speech_started_at
+        ):
+            self._agent_speech_ended_at = ended_at
         self._overlapping = False
-        # TODO: @chenghao-mou remove this debug log
-        logger.debug(
-            "agent speech ended at: %s",
-            ended_at,
-        )
 
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
         if self._overlapping:
@@ -177,7 +172,7 @@ class DynamicEndpointing(BaseEndpointing):
             and overlapping
         ):
             self._utterance_ended_at = self._agent_speech_started_at - 1e-3
-            logger.debug(
+            logger.trace(
                 "utterance ended at adjusted: %s",
                 self._utterance_ended_at,
             )
@@ -186,20 +181,7 @@ class DynamicEndpointing(BaseEndpointing):
         self._overlapping = overlapping
         self._speaking = True
 
-        # TODO: @chenghao-mou remove this debug log
-        logger.debug(
-            "on_start_of_speech: %s, overlapping: %s",
-            started_at,
-            overlapping,
-        )
-
     def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
-        # TODO: @chenghao-mou remove this debug log
-        logger.debug(
-            "on_end_of_speech: %s, should_ignore: %s",
-            ended_at,
-            should_ignore,
-        )
         if should_ignore and self._overlapping:
             # If user speech started within _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD of agent speech,
             # don't ignore — TTS leading silence can cause the agent speech timestamp
@@ -208,13 +190,13 @@ class DynamicEndpointing(BaseEndpointing):
             if (
                 self._utterance_started_at is not None
                 and self._agent_speech_started_at is not None
-                and self._utterance_started_at - self._agent_speech_started_at
+                and abs(self._utterance_started_at - self._agent_speech_started_at)
                 < _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD
             ):
-                logger.debug(
-                    "ignoring should_ignore=True: user speech started %.3fs after agent speech "
+                logger.trace(
+                    "ignoring should_ignore=True: user speech started within %.3fs of agent speech "
                     "(within grace period of %.3fs)",
-                    self._utterance_started_at - self._agent_speech_started_at,
+                    abs(self._utterance_started_at - self._agent_speech_started_at),
                     _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD,
                 )
             else:
