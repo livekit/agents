@@ -247,7 +247,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 str,
                 Field(
                     description="The names of the available doctors",
-                    json_schema_extra={"items": {"enum": available_doctors}},
+                    json_schema_extra={"enum": available_doctors},
                 ),
             ],
         ) -> None:
@@ -299,7 +299,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 str,
                 Field(
                     description="The available appointment times in ISO format",
-                    json_schema_extra={"items": {"enum": iso_times}},
+                    json_schema_extra={"enum": iso_times},
                 ),
             ],
         ):
