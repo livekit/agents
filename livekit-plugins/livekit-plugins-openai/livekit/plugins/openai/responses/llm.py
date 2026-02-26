@@ -226,6 +226,7 @@ class LLM(llm.LLM):
 
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
+        self._pending_chat_ctx: ChatContext | None = None
 
         if is_given(websocket_mode) and websocket_mode:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -327,6 +328,7 @@ class LLM(llm.LLM):
                 oai_tool_choice = tool_choice  # type: ignore
                 extra["tool_choice"] = oai_tool_choice
 
+        self._pending_chat_ctx = chat_ctx
         input_chat_ctx = chat_ctx
         if self._prev_chat_ctx is not None and self._prev_resp_id:
             n = len(self._prev_chat_ctx.items)
@@ -396,6 +398,7 @@ class LLMStream(llm.LLMStream):
                 }
                 ws_stream = await ws.send_request(payload)
 
+<<<<<<< HEAD
                 async for raw_event in ws_stream:
                     parsed_ev = self._parse_ws_event(raw_event)
                     self._process_event(parsed_ev)
@@ -404,6 +407,20 @@ class LLMStream(llm.LLMStream):
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
+=======
+            payload = {
+                "type": "response.create",
+                "model": self._model,
+                "input": chat_ctx,
+                "tools": tool_schemas,
+                **self._extra_kwargs,
+            }
+            ws_stream = await ws.send_request(payload)
+
+            async for raw_event in ws_stream:
+                parsed_ev = self._parse_ws_event(raw_event)
+                self._process_event(parsed_ev)
+>>>>>>> 378e49bed6c7b141e1e44546a97bf98d253465b1
 
         else:
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
@@ -424,7 +441,10 @@ class LLMStream(llm.LLMStream):
                 async with stream:
                     async for event in stream:
                         self._process_event(event)
+<<<<<<< HEAD
                         retryable = False
+=======
+>>>>>>> 378e49bed6c7b141e1e44546a97bf98d253465b1
 
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
@@ -492,7 +512,11 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+<<<<<<< HEAD
         self._llm._prev_chat_ctx = self._full_chat_ctx
+=======
+        self._llm._prev_chat_ctx = self._llm._pending_chat_ctx
+>>>>>>> 378e49bed6c7b141e1e44546a97bf98d253465b1
         self._llm._prev_resp_id = self._response_id
 
         chunk = None
