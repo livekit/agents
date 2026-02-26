@@ -10,6 +10,7 @@ livekit-plugins-avatario = { workspace = true }
 livekit-plugins-asyncai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
+livekit-plugins-backboard = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
