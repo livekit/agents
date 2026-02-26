@@ -32,7 +32,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: list[llm.Tool | llm.Toolset] | None = None,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -97,12 +97,13 @@ class GetNameTask(AgentTask[GetNameResult]):
                 )
                 + "If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
+                "Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools,
+            tools=tools or [],
             stt=stt,
             vad=vad,
             llm=llm,

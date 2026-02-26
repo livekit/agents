@@ -124,6 +124,12 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         Args:
             card_number (int): The credit card number
         """
+        if card_number < 0:
+            self.session.generate_reply(
+                instructions="The card number cannot be negative, ask the user to repeat their card number."
+            )
+            return None
+
         if len(str(card_number)) < 13 or len(str(card_number)) > 19:
             self.session.generate_reply(
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
