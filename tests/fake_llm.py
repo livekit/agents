@@ -16,6 +16,7 @@ from livekit.agents.llm import (
     LLMStream,
     Tool,
     ToolChoice,
+    utils as llm_utils,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -131,6 +132,6 @@ class FakeLLMStream(LLMStream):
 
         # if the last item is a function call output, use the tool output
         if items[-1].type == "function_call_output":
-            return items[-1].output
+            return llm_utils.tool_output_to_text(items[-1].output)
 
         raise ValueError("No input text found")

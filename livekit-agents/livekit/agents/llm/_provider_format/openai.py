@@ -88,7 +88,7 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         return {
             "role": "tool",
             "tool_call_id": msg.call_id,
-            "content": msg.output,
+            "content": llm.utils.tool_output_to_text(msg.output),
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
@@ -184,7 +184,7 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         return {
             "type": "function_call_output",
             "call_id": msg.call_id,
-            "output": msg.output,
+            "output": _to_responses_tool_output(msg.output),
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
@@ -210,6 +210,21 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
             schemas.append(schema)
 
     return schemas
+
+
+def _to_responses_tool_output(output: Any) -> str | list[dict[str, Any]]:
+    normalized = llm.utils.normalize_function_output_value(output)
+    if isinstance(normalized, str):
+        return normalized
+
+    parts: list[dict[str, Any]] = []
+    for part in llm.utils.tool_output_parts(normalized):
+        if isinstance(part, str):
+            parts.append({"type": "input_text", "text": part})
+        else:
+            parts.append(_to_responses_image_content(part))
+
+    return parts or ""
 
 
 def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:

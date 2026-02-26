@@ -68,16 +68,33 @@ def to_chat_ctx(
                 fc_part["thought_signature"] = sig
             parts.append(fc_part)
         elif msg.type == "function_call_output":
-            response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
-            parts.append(
-                {
-                    "function_response": {
-                        "id": msg.call_id,
-                        "name": msg.name,
-                        "response": response,
+            if msg.is_error:
+                response = {"error": llm.utils.tool_output_to_text(msg.output)}
+                parts.append(
+                    {
+                        "function_response": {
+                            "id": msg.call_id,
+                            "name": msg.name,
+                            "response": response,
+                        }
                     }
+                )
+            else:
+                text_output = llm.utils.tool_output_to_text(
+                    msg.output, include_image_placeholder=False
+                )
+                _, image_parts = llm.utils.split_tool_output_parts(msg.output)
+                response_payload: dict[str, Any] = {}
+                if text_output:
+                    response_payload["output"] = text_output
+                function_response: dict[str, Any] = {
+                    "id": msg.call_id,
+                    "name": msg.name,
+                    "response": response_payload,
                 }
-            )
+                if image_parts:
+                    function_response["parts"] = [_to_image_part(image) for image in image_parts]
+                parts.append({"function_response": function_response})
 
     if current_role is not None and parts:
         turns.append({"role": current_role, "parts": parts})

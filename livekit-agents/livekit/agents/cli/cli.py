@@ -1300,7 +1300,7 @@ def _print_run_event(
             )
         )
     elif event.type == "function_call_output":
-        output = event.item.output
+        output = llm.utils.tool_output_to_text(event.item.output)
         display_output = output
         is_error = output.lower().startswith("error") or output.lower().startswith("exception")
 

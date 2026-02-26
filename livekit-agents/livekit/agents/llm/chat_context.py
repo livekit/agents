@@ -174,6 +174,8 @@ class ChatMessage(BaseModel):
 
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
+ToolOutputContent: TypeAlias = str | ImageContent
+FunctionCallOutputValue: TypeAlias = ToolOutputContent | list[ToolOutputContent]
 
 
 class FunctionCall(BaseModel):
@@ -197,7 +199,7 @@ class FunctionCallOutput(BaseModel):
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
     call_id: str
-    output: str
+    output: FunctionCallOutputValue
     is_error: bool
     created_at: float = Field(default_factory=time.time)
 
@@ -459,6 +461,13 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+            elif item.type == "function_call_output" and exclude_image:
+                item = item.model_copy()
+                if isinstance(item.output, ImageContent):
+                    item.output = ""
+                elif isinstance(item.output, list):
+                    filtered = [c for c in item.output if isinstance(c, str)]
+                    item.output = filtered if filtered else ""
 
             items.append(item)
 
