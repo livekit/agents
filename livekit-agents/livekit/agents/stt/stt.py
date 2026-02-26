@@ -62,7 +62,7 @@ class SpeechData:
     words: list[TimedString] | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.language, Language):
+        if not isinstance(self.language, Language) and isinstance(self.language, str):
             self.language = Language(self.language)
 
 
