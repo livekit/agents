@@ -215,18 +215,22 @@ class STT(stt.STT):
 
         # Resolve the WebSocket endpoint URL.
         # Priority: model_endpoint > model_id > chain_id > env var
-        endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
+        endpoint: str | None = None
+        if model_endpoint:
+            endpoint = model_endpoint
+        elif model_id:
+            endpoint = self._TRUSS_URL_TEMPLATE.format(model_id=model_id)
+        elif chain_id:
+            endpoint = self._CHAIN_URL_TEMPLATE.format(chain_id=chain_id)
+        else:
+            endpoint = os.environ.get("BASETEN_MODEL_ENDPOINT")
+
         if not endpoint:
-            if model_id:
-                endpoint = self._TRUSS_URL_TEMPLATE.format(model_id=model_id)
-            elif chain_id:
-                endpoint = self._CHAIN_URL_TEMPLATE.format(chain_id=chain_id)
-            else:
-                raise ValueError(
-                    "A Baseten endpoint is required.  Provide one of: "
-                    "model_endpoint, model_id, or chain_id.  "
-                    "Alternatively, set the BASETEN_MODEL_ENDPOINT environment variable."
-                )
+            raise ValueError(
+                "A Baseten endpoint is required.  Provide one of: "
+                "model_endpoint, model_id, or chain_id.  "
+                "Alternatively, set the BASETEN_MODEL_ENDPOINT environment variable."
+            )
 
         self._model_endpoint = endpoint
 
