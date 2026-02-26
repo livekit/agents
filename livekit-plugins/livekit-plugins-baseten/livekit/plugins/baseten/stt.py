@@ -569,7 +569,6 @@ class SpeechStream(stt.SpeechStream):
         - ``whisper_params``  – Whisper model parameters (language, word timestamps, …)
         - ``streaming_params`` – encoding, sample rate, partial transcript settings
         - ``streaming_vad_config`` – server-side Silero VAD configuration
-        - ``streaming_diarization_config`` – diarization settings (empty dict to disable)
         """
         headers = {
             "Authorization": f"Api-Key {self._api_key}",
@@ -596,7 +595,6 @@ class SpeechStream(stt.SpeechStream):
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_diarization_config": {},
         }
 
         await ws.send_str(json.dumps(metadata))
