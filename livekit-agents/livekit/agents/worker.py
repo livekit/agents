@@ -535,49 +535,26 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         return decorator
 
-    @overload
     def http_endpoint(
         self,
-        func: Callable[..., Awaitable[Any]],
-        *,
         path: str,
-        methods: list[str] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> Callable[..., Awaitable[Any]]: ...
-
-    @overload
-    def http_endpoint(
-        self,
         *,
-        path: str,
         methods: list[str] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]: ...
-
-    def http_endpoint(
-        self,
-        func: Callable[..., Awaitable[Any]] | None = None,
-        *,
-        path: str = "",
-        methods: list[str] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> (
-        Callable[..., Awaitable[Any]]
-        | Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]
-    ):
+    ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
         """Decorator to register an HTTP endpoint on the agent server.
 
         Usage:
-            @server.http_endpoint(path="/api/health")
+            @server.http_endpoint("/api/health")
             async def health(request: web.Request):
                 return {"status": "ok"}
 
-            @server.http_endpoint(path="/api/jobs", methods=["GET"])
+            @server.http_endpoint("/api/jobs", methods=["GET"])
             async def list_jobs(request: web.Request, agent_server: AgentServer):
                 return {"active_jobs": len(agent_server.active_jobs)}
 
             @server.http_endpoint(
-                path="/api/stream",
+                "/api/stream",
                 methods=["POST"],
                 headers={"Content-Type": "text/event-stream"},
             )
@@ -589,44 +566,41 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if methods is None:
             methods = ["GET"]
 
+        if not path:
+            raise ValueError("path is required for http_endpoint")
+        if not path.startswith("/"):
+            raise ValueError(f"http_endpoint path must start with '/': {path}")
+
+        # check reserved paths
+        if path in AgentHttpServer.RESERVED_PATHS:
+            raise ValueError(f"http_endpoint path '{path}' is reserved")
+        for prefix in AgentHttpServer.RESERVED_PATH_PREFIXES:
+            if path == prefix or path.startswith(prefix + "/"):
+                raise ValueError(
+                    f"http_endpoint path '{path}' conflicts with reserved prefix '{prefix}'"
+                )
+
+        # check for duplicate path+method
+        for m in methods:
+            for ep in self._http_endpoints:
+                if ep.path == path and m in ep.methods:
+                    raise ValueError(f"http_endpoint '{m} {path}' is already registered")
+
         def decorator(
             f: Callable[..., Awaitable[Any]],
         ) -> Callable[..., Awaitable[Any]]:
-            if not path:
-                raise ValueError("path is required for http_endpoint")
-            if not path.startswith("/"):
-                raise ValueError(f"http_endpoint path must start with '/': {path}")
             if not asyncio.iscoroutinefunction(f):
                 raise TypeError(f"http_endpoint handler must be async: {f.__name__}")
-
-            # check reserved paths
-            if path in AgentHttpServer.RESERVED_PATHS:
-                raise ValueError(f"http_endpoint path '{path}' is reserved")
-            for prefix in AgentHttpServer.RESERVED_PATH_PREFIXES:
-                if path == prefix or path.startswith(prefix + "/"):
-                    raise ValueError(
-                        f"http_endpoint path '{path}' conflicts with reserved prefix '{prefix}'"
-                    )
-
-            # check for duplicate path+method
-            assert methods is not None
-            for m in methods:
-                for ep in self._http_endpoints:
-                    if ep.path == path and m in ep.methods:
-                        raise ValueError(f"http_endpoint '{m} {path}' is already registered")
 
             self._http_endpoints.append(
                 _HttpEndpointInfo(
                     handler=f,
                     path=path,
-                    methods=methods,
+                    methods=methods or ["GET"],
                     headers=headers,
                 )
             )
             return f
-
-        if func is not None:
-            return decorator(func)
 
         return decorator
 

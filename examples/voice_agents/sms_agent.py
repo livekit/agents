@@ -17,6 +17,7 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.beta.workflows import GetEmailTask
+from livekit.agents.http_server import AgentHttpClient
 from livekit.agents.llm import ToolFlag, function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -136,6 +137,55 @@ async def text_handler(ctx: TextMessageContext):
     logger.info(f"running session with text input: {ctx.text}")
     async for ev in session.run(user_input=ctx.text):
         await ctx.send_response(ev)
+
+
+@server.http_endpoint(
+    "/api/webhooks/twilio-sms",
+    methods=["POST"],
+    headers={"Content-Type": "text/xml"},
+)
+async def twilio_sms_webhook(Body: str, From: str, *, agent_server: AgentServer) -> str:
+    """Twilio inbound SMS webhook — receives an SMS and replies via the text handler.
+
+    Twilio POSTs form-encoded data with From, To, Body, MessageSid, etc.
+    The framework auto-parses form fields into function parameters.
+    We forward the message through the /text endpoint (which runs the agent),
+    collect the reply, and return TwiML XML so Twilio sends it back as SMS.
+    """
+
+    if not Body:
+        return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+    # use the sender's phone number as session_id for conversation continuity
+    session_id = From.lstrip("+")
+
+    # TODO: fetch saved session_state for this session_id from your store
+    # and pass it to send_text(..., session_state=saved_state)
+
+    # forward to the text handler via the internal HTTP API
+    reply_parts: list[str] = []
+    async with AgentHttpClient(f"http://localhost:{agent_server.worker_info.http_port}") as client:
+        async for ev in client.send_text(
+            Body,
+            endpoint="weather",
+            session_id=session_id,
+        ):
+            which_oneof = ev.WhichOneof("event")
+            if which_oneof == "message":
+                for part in ev.message.content:
+                    if part.HasField("text"):
+                        reply_parts.append(part.text)
+            elif which_oneof == "complete":
+                if ev.complete.HasField("session_state"):
+                    # TODO: save ev.complete.session_state for this session_id
+                    # so the next message from this number resumes the conversation
+                    pass
+
+    reply = "".join(reply_parts) or "Sorry, I could not process your message."
+    # escape XML special characters
+    reply = reply.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
 
 
 @server.rtc_session()

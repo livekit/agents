@@ -116,7 +116,11 @@ class AgentHttpServer(HttpServer):
         from .text_job import _handle_text_request
 
         text_handler = self._wrap_user_handler(
-            _handle_text_request, {"Content-Type": "application/x-ndjson"}
+            _handle_text_request,
+            endpoint_headers={
+                "Content-Type": "application/x-ndjson",
+                "Cache-Control": "no-cache",
+            },
         )
         for path in [
             "/text",
@@ -223,14 +227,20 @@ class AgentHttpServer(HttpServer):
         values: dict[str, Any] = {}
         if any(p.source is _ParamSource.VALUE for p in params):
             if request.method in {"POST", "PUT", "PATCH"}:
-                try:
-                    body = await request.json()
-                except Exception as e:
-                    raise web.HTTPBadRequest(
-                        reason=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
-                        content_type="application/json",
-                    ) from e
-                values.update(body)
+                content_type = request.content_type or ""
+                if "application/x-www-form-urlencoded" in content_type:
+                    form = await request.post()
+                    values.update(form)
+                else:
+                    try:
+                        body = await request.json()
+                    except Exception as e:
+                        raise web.HTTPBadRequest(
+                            reason=json.dumps({"error": f"Invalid JSON: {str(e)}"}),
+                            content_type="application/json",
+                        ) from e
+                    if isinstance(body, dict):
+                        values.update(body)
             else:
                 values.update(request.query)
 
