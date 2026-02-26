@@ -233,7 +233,7 @@ class LLM(llm.LLM):
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
 
-        if is_given(websocket_mode) and websocket_mode:
+        if not is_given(websocket_mode) or websocket_mode:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
             if not resolved_api_key:
                 raise ValueError(
@@ -372,12 +372,14 @@ class LLMStream(llm.LLMStream):
         self._model = model
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
+        self._response_completed: bool = False
         self._client = client
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
+        self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
 
         self._tool_ctx = llm.ToolContext(self.tools)
@@ -388,7 +390,7 @@ class LLMStream(llm.LLMStream):
             ),
         )
 
-        if self._llm._opts.websocket_mode:
+        if self._llm._opts.websocket_mode is not False:
             retryable = True
             try:
                 ws = await self._llm._ensure_ws()
@@ -407,7 +409,7 @@ class LLMStream(llm.LLMStream):
                     self._process_event(parsed_ev)
                     retryable = False
 
-                if not self._response_id:
+                if not self._response_completed:
                     raise APIConnectionError(retryable=True)
             except (APIConnectionError, APIStatusError, APITimeoutError):
                 raise
@@ -505,6 +507,7 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
 
