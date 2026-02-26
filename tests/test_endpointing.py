@@ -334,7 +334,6 @@ class TestDynamicEndpointing:
         # user starts speaking 0.1s after agent (within 0.25s grace period)
         ep.on_start_of_speech(started_at=100.6, overlapping=True)
 
-        prev_min = ep.min_delay
         ep.on_end_of_speech(ended_at=100.8, should_ignore=True)
 
         # grace period should override should_ignore, so the interruption path runs

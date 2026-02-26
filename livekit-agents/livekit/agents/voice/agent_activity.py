@@ -576,9 +576,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
-            self._interruption_detector.on(
-                "user_overlapping_speech", self._on_overlap_speech_ended
-            )
+            self._interruption_detector.on("user_overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
 
@@ -1238,7 +1236,7 @@ class AgentActivity(RecognitionHooks):
 
         self._session._on_error(error)
 
-    def _on_overlap_speech_ended(self, ev: inference.InterruptionEvent) -> None:
+    def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
             self._interruption_detected = True
         else:

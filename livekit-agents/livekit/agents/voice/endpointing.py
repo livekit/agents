@@ -225,12 +225,8 @@ class DynamicEndpointing(BaseEndpointing):
                 self._utterance_ended_at = None
                 return
 
-        if (
-            self._overlapping
-            or (
-                self._agent_speech_started_at is not None
-                and self._agent_speech_ended_at is None
-            )
+        if self._overlapping or (
+            self._agent_speech_started_at is not None and self._agent_speech_ended_at is None
         ):  # this is an interruption (agent is still speaking)
             # If this is an immediate interruption, update the min delay (case 2)
             turn_delay, interruption_delay = self.immediate_interruption_delay
