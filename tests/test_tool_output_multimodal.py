@@ -127,7 +127,9 @@ def test_provider_formats_tool_output_with_images() -> None:
     assert output[0] == {"type": "input_text", "text": "caption"}
     assert output[1]["type"] == "input_image"
 
-    anthropic_messages, _ = chat_ctx.to_provider_format("anthropic", inject_dummy_user_message=False)
+    anthropic_messages, _ = chat_ctx.to_provider_format(
+        "anthropic", inject_dummy_user_message=False
+    )
     tool_result = next(
         block
         for message in anthropic_messages

@@ -413,9 +413,7 @@ class RealtimeSession(
                         llm.utils.tool_output_to_text(getattr(item, "output", ""))
                     )
                 else:
-                    tool_result.result = llm.utils.tool_output_to_text(
-                        getattr(item, "output", "")
-                    )
+                    tool_result.result = llm.utils.tool_output_to_text(getattr(item, "output", ""))
 
                 self._send_client_event(tool_result)
 

@@ -146,7 +146,9 @@ def _to_chat_tool_output_content(output: Any) -> str | list[dict[str, Any]]:
         try:
             parts.append(_to_image_content(image))
         except ValueError as e:
-            logger.warning("Failed to serialize tool output image for openai chat format", exc_info=e)
+            logger.warning(
+                "Failed to serialize tool output image for openai chat format", exc_info=e
+            )
             parts.append({"type": "text", "text": llm.utils.TOOL_OUTPUT_IMAGE_PLACEHOLDER})
 
     return parts
