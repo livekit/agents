@@ -7,7 +7,10 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
+
+if TYPE_CHECKING:
+    from ..voice.audio_recognition import TurnDetectionMode
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -295,7 +298,7 @@ class RecognizeStream(ABC):
         self._resampler: rtc.AudioResampler | None = None
 
         self._start_time_offset: float = 0.0
-        self._turn_detection: str | None = None
+        self._turn_detection: TurnDetectionMode | None = None
 
     @property
     def start_time_offset(self) -> float:
@@ -308,17 +311,18 @@ class RecognizeStream(ABC):
         self._start_time_offset = value
 
     @property
-    def turn_detection(self) -> str | None:
-        """The turn detection mode set by the voice pipeline, if any.
+    def turn_detection(self) -> TurnDetectionMode | None:
+        """The turn detection configuration set by the voice pipeline, if any.
 
         Automatically set by the framework when the stream is used within
-        an AgentSession. Possible values: "stt", "vad", "realtime_llm",
-        "manual", or None if not configured.
+        an AgentSession. Possible values: a string mode ("stt", "vad",
+        "realtime_llm", "manual"), a _TurnDetector instance (e.g.
+        EnglishModel), or None if not configured.
         """
         return self._turn_detection
 
     @turn_detection.setter
-    def turn_detection(self, value: str | None) -> None:
+    def turn_detection(self, value: TurnDetectionMode | None) -> None:
         self._turn_detection = value
 
     @abstractmethod

@@ -30,8 +30,9 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
-    turn_detection: str | None = None
-    """The resolved turn detection mode ("stt", "vad", "realtime_llm", "manual"), or None."""
+    turn_detection: TurnDetectionMode | None = None
+    """The turn detection configuration. A string mode ("stt", "vad", "realtime_llm",
+    "manual"), a _TurnDetector instance (e.g. EnglishModel), or None if not set."""
 
 
 class Agent:
