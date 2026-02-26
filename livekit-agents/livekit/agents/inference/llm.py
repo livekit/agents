@@ -93,6 +93,12 @@ GoogleModels = Literal[
     "google/gemini-2.0-flash-lite",
 ]
 
+AnthropicModels = Literal[
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+]
+
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
 
 DeepSeekModels = Literal[
@@ -100,7 +106,7 @@ DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
+LLMModels = OpenAIModels | GoogleModels | AnthropicModels | KimiModels | DeepSeekModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):
