@@ -184,6 +184,36 @@ def test_openai_chat_supports_multimodal_tool_output_when_enabled() -> None:
     assert content[1]["type"] == "image_url"
 
 
+def test_openai_chat_preserves_multimodal_tool_output_order_when_enabled() -> None:
+    image_1 = ImageContent(image="data:image/png;base64,aW1nMQ==")
+    image_2 = ImageContent(image="data:image/png;base64,aW1nMg==")
+    chat_ctx = ChatContext(
+        items=[
+            _fnc_call(),
+            FunctionCallOutput(
+                name="capture",
+                call_id="call_1",
+                output=["before", image_1, "middle", image_2, "after"],
+                is_error=False,
+            ),
+        ]
+    )
+
+    openai_messages, _ = chat_ctx.to_provider_format(
+        "openai",
+        inject_dummy_user_message=False,
+        supports_tool_image_output=True,
+    )
+    content = openai_messages[1]["content"]
+    assert isinstance(content, list)
+    assert [part["type"] for part in content] == ["text", "image_url", "text", "image_url", "text"]
+    assert content[0]["text"] == "before"
+    assert content[1]["image_url"]["url"].endswith("aW1nMQ==")
+    assert content[2]["text"] == "middle"
+    assert content[3]["image_url"]["url"].endswith("aW1nMg==")
+    assert content[4]["text"] == "after"
+
+
 def test_openai_chat_keeps_text_tool_output_as_string_when_enabled() -> None:
     chat_ctx = ChatContext(
         items=[

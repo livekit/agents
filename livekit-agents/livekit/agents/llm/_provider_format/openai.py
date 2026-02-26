@@ -141,10 +141,13 @@ def _to_chat_tool_output_content(output: Any) -> str | list[dict[str, Any]]:
     if not image_parts:
         return llm.utils.tool_output_to_text(output, include_image_placeholder=False)
 
-    parts: list[dict[str, Any]] = [{"type": "text", "text": text} for text in text_parts]
-    for image in image_parts:
+    parts: list[dict[str, Any]] = []
+    for part in llm.utils.tool_output_parts(output):
+        if isinstance(part, str):
+            parts.append({"type": "text", "text": part})
+            continue
         try:
-            parts.append(_to_image_content(image))
+            parts.append(_to_image_content(part))
         except ValueError as e:
             logger.warning(
                 "Failed to serialize tool output image for openai chat format", exc_info=e
