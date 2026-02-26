@@ -53,6 +53,11 @@ def create_session(
         interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
 
     stt = FakeSTT(fake_user_speeches=user_speeches)
+
+    extra_kwargs = extra_kwargs or {}
+    if "aec_warmup_duration" not in extra_kwargs:
+        extra_kwargs["aec_warmup_duration"] = None  # disable aec warmup by default
+
     session = AgentSession[None](
         vad=FakeVAD(
             fake_user_speeches=user_speeches,
@@ -69,7 +74,7 @@ def create_session(
             ),
             interruption=InterruptionOptions(**interruption_dict),
         ),
-        **extra,
+        **extra_kwargs,
     )
 
     # setup io with transcription sync

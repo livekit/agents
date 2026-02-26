@@ -139,6 +139,7 @@ class AgentSessionOptions:
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    aec_warmup_duration: float | None
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -224,8 +225,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        ivr_detection: bool = False,
         preemptive_generation: bool = False,
+        aec_warmup_duration: float | None = 3.0,
+        ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -296,6 +298,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            aec_warmup_duration (float, optional): The duration in seconds that the agent
+                will ignore user's audio interruptions after the agent starts speaking.
+                This is useful to prevent the agent from being interrupted by echo before AEC is ready.
+                Set to ``None`` to disable. Default ``3.0`` s.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -362,6 +368,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            aec_warmup_duration=aec_warmup_duration,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -388,6 +395,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm_error_counts = 0
         self._tts_error_counts = 0
         self._interruption_detection_error_counts = 0
+
+        # aec warmup: disable interruptions while AEC warms up
+        self._aec_warmup_remaining = aec_warmup_duration or 0.0
+        self._aec_warmup_timer: asyncio.TimerHandle | None = None
+
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
         self._output = io.AgentOutput(
@@ -876,6 +888,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._closing = True
             self._cancel_user_away_timer()
+            self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -1319,6 +1332,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
+    def _on_aec_warmup_expired(self) -> None:
+        if self._aec_warmup_remaining > 0:
+            logger.debug("aec warmup expired, re-enabling interruptions")
+
+        self._aec_warmup_remaining = 0.0
+        if self._aec_warmup_timer is not None:
+            self._aec_warmup_timer.cancel()
+            self._aec_warmup_timer = None
+
     def _update_agent_state(
         self,
         state: AgentState,
@@ -1350,6 +1372,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
+
+        # aec warmup: start a one-shot wall-clock timer on the first speaking turn
+        if (
+            state == "speaking"
+            and self._aec_warmup_remaining > 0
+            and self._aec_warmup_timer is None
+        ):
+            self._aec_warmup_timer = self._loop.call_later(
+                self._aec_warmup_remaining, self._on_aec_warmup_expired
+            )
+            logger.debug(
+                "aec warmup active, disabling interruptions for %.2fs",
+                self._aec_warmup_remaining,
+            )
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()

@@ -21,6 +21,7 @@ from ..inference.interruption import (
     _OverlapSpeechEndedSentinel,
     _OverlapSpeechStartedSentinel,
 )
+from ..language import Language
 from ..log import logger
 from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
@@ -118,7 +119,7 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
-        self._last_language: str | None = None
+        self._last_language: Language | None = None
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -540,7 +541,9 @@ class AudioRecognition:
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         alternatives=[
-                            stt.SpeechData(language="", text=self._audio_interim_transcript)
+                            stt.SpeechData(
+                                language=Language(""), text=self._audio_interim_transcript
+                            )
                         ],
                     )
                 )

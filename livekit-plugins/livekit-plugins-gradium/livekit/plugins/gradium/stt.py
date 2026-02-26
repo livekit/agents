@@ -30,6 +30,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
+    Language,
     stt,
     utils,
 )
@@ -57,7 +58,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     # TODO(laurent): support language detection
-    language: str = "en"
+    language: Language = Language("en")
     vad_threshold: float = 0.6
     vad_bucket: int | None = 2
     # When set, we flush the stt state on the first time the VAD triggers

@@ -4,6 +4,7 @@ from typing import Literal, Protocol
 
 from typing_extensions import TypedDict
 
+from ..language import Language
 from ..llm import ChatContext
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -19,8 +20,8 @@ class _TurnDetector(Protocol):
         return "unknown"
 
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: str | None) -> float | None: ...
-    async def supports_language(self, language: str | None) -> bool: ...
+    async def unlikely_threshold(self, language: Language | None) -> float | None: ...
+    async def supports_language(self, language: Language | None) -> bool: ...
 
     async def predict_end_of_turn(
         self, chat_ctx: ChatContext, *, timeout: float | None = None

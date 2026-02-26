@@ -7,7 +7,7 @@ format `[SPEAKER_ID]TEXT[/SPEAKER_ID]` for testing.
 
 import re
 
-from livekit.agents import stt
+from livekit.agents import Language, stt
 
 
 class TestSpeakerIdGrouping:
@@ -30,7 +30,7 @@ class TestSpeakerIdGrouping:
             speech_data = stt.SpeechData(
                 text=self._format_text(text, speaker_id),
                 speaker_id=speaker_id,
-                language="en",
+                language=Language("en"),
                 start_time=0,
                 end_time=0,
                 confidence=1.0,

@@ -4,6 +4,7 @@ from typing import Any
 
 import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
+from openai.types.realtime import RealtimeConversationItemFunctionCall
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -18,6 +19,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
 
+from ..log import logger
 from ..tools import XAITool
 from .types import GrokVoices
 
@@ -114,3 +116,10 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
         event["session"]["tools"] += xai_tools
         return event
+
+    def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
+        if not self._tools.get_function_tool(item.name):
+            logger.warning(f"unknown function tool: {item.name}, ignoring")
+            return
+
+        super()._handle_function_call(item)

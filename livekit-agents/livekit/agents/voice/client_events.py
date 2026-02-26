@@ -10,6 +10,7 @@ from livekit import rtc
 from livekit.agents.inference.interruption import OverlappingSpeechEvent
 
 from .. import utils
+from ..language import Language
 from ..llm import (
     ChatItem,
     ChatMessage,
@@ -73,7 +74,7 @@ class ClientUserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
-    language: str | None
+    language: Language | None
     created_at: float
 
 

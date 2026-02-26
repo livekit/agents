@@ -855,11 +855,11 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = bool(
+        should_discard = (
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.interruption["discard_audio_if_uninterruptible"]
-        )
+        ) or (self._session.agent_state == "speaking" and self._session._aec_warmup_remaining > 0)
 
         if not should_discard:
             if self._rt_session is not None:
@@ -1335,6 +1335,10 @@ class AgentActivity(RecognitionHooks):
                 If None, the user transcript will be ignored until the current time.
         """
         if not self._interruption_by_audio_activity_enabled:
+            return
+
+        if self._session._aec_warmup_remaining > 0:
+            # disable interruption from audio activity while aec warmup is active
             return
 
         opt = self._session.options

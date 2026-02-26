@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -870,7 +871,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         finally:
             if speech_handle:
-                speech_handle.allow_interruptions = old_allow_interruptions
+                with contextlib.suppress(RuntimeError):
+                    speech_handle.allow_interruptions = old_allow_interruptions
 
             # run_state could have changed after self.__fut
             run_state = session._global_run_state

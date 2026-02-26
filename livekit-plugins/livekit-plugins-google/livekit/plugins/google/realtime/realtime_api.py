@@ -14,7 +14,7 @@ from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, Language, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -121,7 +121,7 @@ class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[Language]
     response_modalities: list[types.Modality]
     vertexai: bool
     project: str | None
@@ -341,7 +341,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
-            language=language,
+            language=Language(language) if isinstance(language, str) else language,
             image_encode_options=image_encode_options,
             enable_affective_dialog=enable_affective_dialog,
             proactivity=proactivity,

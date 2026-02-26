@@ -12,7 +12,7 @@ from typing import Any
 
 from huggingface_hub import errors
 
-from livekit.agents import Plugin, llm
+from livekit.agents import Language, Plugin, llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
@@ -233,18 +233,16 @@ class EOUModelBase(ABC):
     @abstractmethod
     def _inference_method(self) -> str: ...
 
-    async def unlikely_threshold(self, language: str | None) -> float | None:
+    async def unlikely_threshold(self, language: Language | None) -> float | None:
         if language is None:
             return None
 
         # try the full language code first
-        lang = language.lower()
-        lang_data = self._languages.get(lang)
+        lang_data = self._languages.get(language.iso)
 
         # try the base language if the full language code is not found
-        if lang_data is None and "-" in lang:
-            base_lang = lang.split("-")[0]
-            lang_data = self._languages.get(base_lang)
+        if lang_data is None:
+            lang_data = self._languages.get(language.language)
 
         if not lang_data:
             return None
@@ -255,7 +253,7 @@ class EOUModelBase(ABC):
         else:
             return lang_data["threshold"]  # type: ignore
 
-    async def supports_language(self, language: str | None) -> bool:
+    async def supports_language(self, language: Language | None) -> bool:
         return await self.unlikely_threshold(language) is not None
 
     # our EOU model inference should be fast, 3 seconds is more than enough
