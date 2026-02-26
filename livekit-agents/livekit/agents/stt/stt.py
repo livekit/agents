@@ -295,6 +295,7 @@ class RecognizeStream(ABC):
         self._resampler: rtc.AudioResampler | None = None
 
         self._start_time_offset: float = 0.0
+        self._turn_detection: str | None = None
 
     @property
     def start_time_offset(self) -> float:
@@ -305,6 +306,20 @@ class RecognizeStream(ABC):
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
         self._start_time_offset = value
+
+    @property
+    def turn_detection(self) -> str | None:
+        """The turn detection mode set by the voice pipeline, if any.
+
+        Automatically set by the framework when the stream is used within
+        an AgentSession. Possible values: "stt", "vad", "realtime_llm",
+        "manual", or None if not configured.
+        """
+        return self._turn_detection
+
+    @turn_detection.setter
+    def turn_detection(self, value: str | None) -> None:
+        self._turn_detection = value
 
     @abstractmethod
     async def _run(self) -> None: ...

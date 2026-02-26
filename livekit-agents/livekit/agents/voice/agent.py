@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
+    turn_detection: str | None = None
+    """The resolved turn detection mode ("stt", "vad", "realtime_llm", "manual"), or None."""
 
 
 class Agent:
@@ -387,6 +389,7 @@ class Agent:
                     else time.time()
                 )
                 stream.start_time_offset = time.time() - _audio_input_started_at
+                stream.turn_detection = model_settings.turn_detection
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
