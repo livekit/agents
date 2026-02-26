@@ -9,8 +9,10 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentSession,
+    EndpointingOptions,
+    InterruptionOptions,
     NotGivenOr,
-    TurnHandlingConfig,
+    TurnHandlingOptions,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
@@ -46,7 +48,7 @@ def create_session(
         interruption_dict["min_words"] = extra.pop("min_interruption_words")
     if "allow_interruptions" in extra:
         if extra.pop("allow_interruptions") is False:
-            interruption_dict["mode"] = False
+            interruption_dict["enabled"] = False
     if "resume_false_interruption" in extra:
         interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
 
@@ -60,12 +62,12 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        turn_handling=TurnHandlingConfig(
-            endpointing={
-                "min_delay": 0.5 / speed_factor,
-                "max_delay": 6.0 / speed_factor,
-            },
-            interruption=interruption_dict,
+        turn_handling=TurnHandlingOptions(
+            endpointing=EndpointingOptions(
+                min_delay=0.5 / speed_factor,
+                max_delay=6.0 / speed_factor,
+            ),
+            interruption=InterruptionOptions(**interruption_dict),
         ),
         **extra,
     )

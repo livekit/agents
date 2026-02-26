@@ -10,7 +10,6 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
-    TurnHandlingConfig,
     cli,
     inference,
     metrics,
@@ -95,17 +94,17 @@ async def entrypoint(ctx: JobContext) -> None:
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         vad=ctx.proc.userdata["vad"],
-        turn_handling=TurnHandlingConfig(
+        turn_handling={
             # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
             # See more at https://docs.livekit.io/agents/build/turns
-            turn_detection=MultilingualModel(),
-            interruption={
+            "turn_detection": MultilingualModel(),
+            "interruption": {
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
-        ),
+        },
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,

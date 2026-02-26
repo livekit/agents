@@ -1,7 +1,7 @@
 from livekit import rtc
 
 from . import aio, audio, codecs, http_context, http_server, hw, images
-from .audio import AudioBuffer, combine_frames, merge_frames
+from .audio import AudioArrayBuffer, AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
@@ -14,6 +14,7 @@ EventEmitter = rtc.EventEmitter
 
 __all__ = [
     "AudioBuffer",
+    "AudioArrayBuffer",
     "merge_frames",
     "combine_frames",
     "time_ms",
