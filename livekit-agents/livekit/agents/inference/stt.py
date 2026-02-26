@@ -47,6 +47,7 @@ CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
+    "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
@@ -76,6 +77,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+    prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -437,6 +439,21 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+
+    async def update_session(self, *, extra_kwargs: dict[str, Any]) -> None:
+        """Send a mid-stream session.update to change STT parameters without reconnecting.
+
+        Supported by providers that accept mid-stream configuration changes
+        (e.g. AssemblyAI UpdateConfiguration, Deepgram Flux Configure).
+        Providers that don't support it will silently ignore the message.
+        """
+        update_msg = {
+            "type": "session.update",
+            "settings": {"extra": extra_kwargs},
+        }
+        if self._ws is not None and not self._ws.closed:
+            await self._ws.send_str(json.dumps(update_msg))
 
     def update_options(
         self,
@@ -532,6 +549,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._ws = ws
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -558,6 +576,7 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
             finally:
+                self._ws = None
                 if ws is not None:
                     await ws.close()
 
