@@ -77,6 +77,7 @@ class _ResponsesWebsocket:
             raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
 
     async def connect(self) -> None:
+        self._input_ch = utils.aio.Chan[dict]()
         self._ws_conn = await self._create_ws_conn()
         self._run_task = asyncio.create_task(
             self._run_ws(self._ws_conn), name="_ResponsesWebsocket._run_task"
@@ -146,6 +147,11 @@ class _ResponsesWebsocket:
             for ch in self._output_queue:
                 ch.close()
             self._output_queue.clear()
+            while not self._input_ch.empty():
+                try:
+                    self._input_ch.recv_nowait()
+                except (utils.aio.channel.ChanClosed, utils.aio.channel.ChanEmpty):
+                    break
 
     async def aclose(self) -> None:
         self._input_ch.close()
@@ -439,6 +445,8 @@ class LLMStream(llm.LLMStream):
                     body=e.body,
                     retryable=retryable,
                 )
+            except (APIConnectionError, APIStatusError, APITimeoutError):
+                raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
 
