@@ -144,4 +144,30 @@ class RealtimeModelMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-AgentMetrics = STTMetrics | LLMMetrics | TTSMetrics | VADMetrics | EOUMetrics | RealtimeModelMetrics
+class InterruptionMetrics(BaseModel):
+    type: Literal["interruption_metrics"] = "interruption_metrics"
+    timestamp: float
+    total_duration: float
+    """Latest RTT (Round Trip Time) time taken to perform the inference, in seconds."""
+    prediction_duration: float
+    """Latest time taken to perform the inference from the model side, in seconds."""
+    detection_delay: float
+    """Latest total time from the onset of the speech to the final prediction, in seconds."""
+    num_interruptions: int
+    """Number of interruptions detected, incrementally counted."""
+    num_backchannels: int
+    """Number of backchannels detected, incrementally counted."""
+    num_requests: int
+    """Number of requests sent to the interruption detection model, incrementally counted."""
+    metadata: Metadata | None = None
+
+
+AgentMetrics = (
+    STTMetrics
+    | LLMMetrics
+    | TTSMetrics
+    | VADMetrics
+    | EOUMetrics
+    | RealtimeModelMetrics
+    | InterruptionMetrics
+)

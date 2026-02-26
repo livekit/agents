@@ -1,12 +1,46 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol
 
 from typing_extensions import TypedDict
 
+from ..llm import ChatContext
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .audio_recognition import TurnDetectionMode
+
+
+class _TurnDetector(Protocol):
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "unknown"
+
+    # TODO: Move those two functions to EOU ctor (capabilities dataclass)
+    async def unlikely_threshold(self, language: str | None) -> float | None: ...
+    async def supports_language(self, language: str | None) -> bool: ...
+
+    async def predict_end_of_turn(
+        self, chat_ctx: ChatContext, *, timeout: float | None = None
+    ) -> float: ...
+
+
+TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- _TurnDetector: use the default mode with the provided turn detector
+
+(default) If not provided, automatically choose the best mode based on
+    available models (realtime_llm -> vad -> stt -> manual)
+If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+"""
 
 
 class EndpointingOptions(TypedDict, total=False):
@@ -17,6 +51,8 @@ class EndpointingOptions(TypedDict, total=False):
     (at the ``AgentSession`` level).
     """
 
+    mode: Literal["fixed", "dynamic"]
+    """Endpointing mode. ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay. Defaults to ``"fixed"``."""
     min_delay: float
     """Minimum time (s) since last detected speech before declaring the
     user's turn complete. Defaults to ``0.5``."""
@@ -26,6 +62,7 @@ class EndpointingOptions(TypedDict, total=False):
 
 
 _ENDPOINTING_DEFAULTS: EndpointingOptions = {
+    "mode": "fixed",
     "min_delay": 0.5,
     "max_delay": 3.0,
 }
@@ -133,13 +170,13 @@ def _migrate_turn_handling(
     result: TurnHandlingOptions = {}
 
     # endpointing — only include keys that were explicitly provided
-    endpointing: EndpointingOptions = {}
+    endpointing_opts: EndpointingOptions = {}
     if is_given(min_endpointing_delay):
-        endpointing["min_delay"] = min_endpointing_delay
+        endpointing_opts["min_delay"] = min_endpointing_delay
     if is_given(max_endpointing_delay):
-        endpointing["max_delay"] = max_endpointing_delay
-    if endpointing:
-        result["endpointing"] = endpointing
+        endpointing_opts["max_delay"] = max_endpointing_delay
+    if endpointing_opts:
+        result["endpointing"] = endpointing_opts
 
     # interruption — only include keys that were explicitly provided
     interruption: InterruptionOptions = {}

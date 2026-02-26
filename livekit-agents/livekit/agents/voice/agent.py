@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
-    from .audio_recognition import TurnDetectionMode
     from .io import TimedString
+    from .turn import TurnDetectionMode
 
 
 @dataclass
@@ -102,6 +102,7 @@ class Agent:
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
+        self._turn_handling = turn_handling
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)

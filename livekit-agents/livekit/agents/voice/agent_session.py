@@ -42,7 +42,6 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
-from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
 from .events import (
     AgentEvent,
@@ -64,6 +63,7 @@ from .speech_handle import InputDetails, SpeechHandle
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
+    TurnDetectionMode,
     TurnHandlingOptions,
     _migrate_turn_handling,
     _resolve_endpointing,
@@ -387,7 +387,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
         self._tts_error_counts = 0
-
+        self._interruption_detection_error_counts = 0
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
         self._output = io.AgentOutput(
@@ -857,7 +857,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         reason: CloseReason,
         drain: bool = False,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError
+        | None = None,
     ) -> None:
         if self._root_span_context:
             # make `activity.drain` and `on_exit` under the root span
@@ -930,6 +935,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent_state = "initializing"
             self._llm_error_counts = 0
             self._tts_error_counts = 0
+            self._interruption_detection_error_counts = 0
             self._root_span_context = None
 
             # close client events handler before room io
@@ -1205,7 +1211,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_error(
         self,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError,
     ) -> None:
         if self._closing_task or error.recoverable:
             return
@@ -1217,6 +1227,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif error.type == "tts_error":
             self._tts_error_counts += 1
             if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+        elif error.type == "interruption_detection_error":
+            self._interruption_detection_error_counts += 1
+            if (
+                self._interruption_detection_error_counts
+                <= self.conn_options.max_unrecoverable_errors
+            ):
                 return
 
         if isinstance(error.error, APIError):
@@ -1295,6 +1312,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if state == "speaking":
             self._llm_error_counts = 0
             self._tts_error_counts = 0
+            self._interruption_detection_error_counts = 0
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span(
