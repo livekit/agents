@@ -241,7 +241,7 @@ class DynamicEndpointing(BaseEndpointing):
                     prev_val,
                     self.max_delay,
                     extra={
-                        "reason": "EOT (interruption)",
+                        "reason": "new turn (interruption)",
                         "pause": pause,
                         "max_delay": self.max_delay,
                         "min_delay": self.min_delay,
@@ -259,7 +259,7 @@ class DynamicEndpointing(BaseEndpointing):
                     prev_val,
                     self.max_delay,
                     extra={
-                        "reason": "new turn (case 3)",
+                        "reason": "new turn",
                         "pause": pause,
                         "max_delay": self.max_delay,
                         "min_delay": self.min_delay,
@@ -277,7 +277,7 @@ class DynamicEndpointing(BaseEndpointing):
                     prev_val,
                     self.min_delay,
                     extra={
-                        "reason": "pause between utterances (case 1)",
+                        "reason": "pause between utterances",
                         "pause": pause,
                         "max_delay": self.max_delay,
                         "min_delay": self.min_delay,
