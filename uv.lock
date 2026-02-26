@@ -2700,7 +2700,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "speechmatics-voice", extras = ["smart"], specifier = "~=0.2.8" },
+    { name = "speechmatics-voice", extras = ["smart"], specifier = ">=0.2.8" },
 ]
 
 [[package]]

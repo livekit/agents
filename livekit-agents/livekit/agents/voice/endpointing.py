@@ -1,13 +1,8 @@
-from typing import TYPE_CHECKING
-
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..utils.exp_filter import ExpFilter
-
-if TYPE_CHECKING:
-    from .turn import EndpointingOptions
-
+from .turn import EndpointingOptions
 
 _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD = 0.25  # seconds
 
