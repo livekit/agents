@@ -463,7 +463,7 @@ class TTS(tts.TTS):
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = target_language_code
+            self._opts.target_language_code = Language(target_language_code)
 
         if model is not None:
             if not model.strip():
