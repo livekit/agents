@@ -226,7 +226,6 @@ class LLM(llm.LLM):
 
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
-        self._pending_chat_ctx: ChatContext | None = None
 
         if is_given(websocket_mode) and websocket_mode:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -328,7 +327,6 @@ class LLM(llm.LLM):
                 oai_tool_choice = tool_choice  # type: ignore
                 extra["tool_choice"] = oai_tool_choice
 
-        self._pending_chat_ctx = chat_ctx
         input_chat_ctx = chat_ctx
         if self._prev_chat_ctx is not None and self._prev_resp_id:
             n = len(self._prev_chat_ctx.items)
@@ -371,7 +369,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
-        self._full_chat_ctx = full_chat_ctx
+        self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
@@ -402,6 +400,9 @@ class LLMStream(llm.LLMStream):
                     parsed_ev = self._parse_ws_event(raw_event)
                     self._process_event(parsed_ev)
                     retryable = False
+
+                if not self._response_id:
+                    raise APIConnectionError(retryable=True)
             except (APIConnectionError, APIStatusError, APITimeoutError):
                 raise
             except Exception as e:
@@ -438,6 +439,8 @@ class LLMStream(llm.LLMStream):
                     body=e.body,
                     retryable=retryable,
                 )
+            except Exception as e:
+                raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type", "")
@@ -524,7 +527,7 @@ class LLMStream(llm.LLMStream):
                         llm.FunctionToolCall(
                             arguments=event.item.arguments,
                             name=event.item.name,
-                            call_id=event.item.id,
+                            call_id=event.item.call_id,
                         )
                     ],
                 ),
