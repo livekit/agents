@@ -37,8 +37,6 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-_END_SENTINEL = "__END__"
-
 @dataclass
 class _TTSOptions:
     language: str
@@ -265,7 +263,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
                 self._mark_started()
                 await ws.send_str(data)
-            await ws.send_str(_END_SENTINEL)
+            await ws.send_str('__END__')
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             output_emitter.start_segment(segment_id=request_id)
