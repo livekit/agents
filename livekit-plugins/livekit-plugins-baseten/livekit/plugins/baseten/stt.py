@@ -170,12 +170,8 @@ class STT(stt.STT):
     """
 
     # URL templates for auto-constructing endpoints from model/chain IDs.
-    _TRUSS_URL_TEMPLATE = (
-        "wss://model-{model_id}.api.baseten.co/environments/production/websocket"
-    )
-    _CHAIN_URL_TEMPLATE = (
-        "wss://chain-{chain_id}.api.baseten.co/environments/production/run_remote"
-    )
+    _TRUSS_URL_TEMPLATE = "wss://model-{model_id}.api.baseten.co/environments/production/websocket"
+    _CHAIN_URL_TEMPLATE = "wss://chain-{chain_id}.api.baseten.co/environments/production/websocket"
 
     def __init__(
         self,
