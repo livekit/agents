@@ -31,6 +31,7 @@ from openai.types.responses import (
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseErrorEvent,
+    ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
@@ -94,9 +95,9 @@ class _ResponsesWebsocket:
                     await ws_conn.send_str(
                         json.dumps(
                             msg,
-                            default=lambda o: o.model_dump()
-                            if isinstance(o, openai.BaseModel)
-                            else None,
+                            default=lambda o: (
+                                o.model_dump() if isinstance(o, openai.BaseModel) else None
+                            ),
                         )
                     )
                 except Exception:
@@ -154,8 +155,11 @@ class _ResponsesWebsocket:
     async def send_request(self, msg: dict) -> utils.aio.Chan[dict]:
         output_ch = utils.aio.Chan[dict]()
         self._output_queue.append(output_ch)
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        try:
             await self._input_ch.send(msg)
+        except utils.aio.channel.ChanClosed:
+            self._output_queue.remove(output_ch)
+            raise
         return output_ch
 
 
@@ -268,7 +272,7 @@ class LLM(llm.LLM):
                         await self._ws._ws_conn.close()
                         self._ws._ws_conn = None
                     await self._ws.connect()
-        return self._ws  # type: ignore[return-value]
+        return self._ws  # type: ignore
 
     @property
     def model(self) -> str:
@@ -331,7 +335,6 @@ class LLM(llm.LLM):
                 input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
                 extra["previous_response_id"] = self._prev_resp_id
             # if the context was modified otherwise, resend the whole context and omit previous response id
-        self._prev_chat_ctx = chat_ctx
         return LLMStream(
             self,
             model=self._opts.model,
@@ -341,6 +344,7 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            full_chat_ctx=chat_ctx,
         )
 
 
@@ -356,14 +360,16 @@ class LLMStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
+        full_chat_ctx: llm.ChatContext,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._client = client
-        self._llm = llm
+        self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
+        self._full_chat_ctx = full_chat_ctx
 
     async def _run(self) -> None:
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
@@ -377,24 +383,35 @@ class LLMStream(llm.LLMStream):
         )
 
         if self._llm._opts.websocket_mode:
-            ws = await self._llm._ensure_ws()
+            retryable = True
+            try:
+                ws = await self._llm._ensure_ws()
 
-            payload = {
-                "type": "response.create",
-                "model": self._model,
-                "input": chat_ctx,
-                "tools": tool_schemas,
-                **self._extra_kwargs,
-            }
-            stream = await ws.send_request(payload)
+                payload = {
+                    "type": "response.create",
+                    "model": self._model,
+                    "input": chat_ctx,
+                    "tools": tool_schemas,
+                    **self._extra_kwargs,
+                }
+                ws_stream = await ws.send_request(payload)
+
+                async for raw_event in ws_stream:
+                    parsed_ev = self._parse_ws_event(raw_event)
+                    self._process_event(parsed_ev)
+                    retryable = False
+            except (APIConnectionError, APIStatusError, APITimeoutError):
+                raise
+            except Exception as e:
+                raise APIConnectionError(retryable=retryable) from e
 
         else:
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
-
+            retryable = True
             try:
                 self._oai_stream = stream = cast(
                     openai.AsyncStream[ResponseStreamEvent],
-                    await self._client.responses.create(
+                    await self._client.responses.create(  # type: ignore
                         model=self._model,
                         tools=tool_schemas,
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
@@ -403,41 +420,22 @@ class LLMStream(llm.LLMStream):
                         **self._extra_kwargs,
                     ),
                 )
+
+                async with stream:
+                    async for event in stream:
+                        self._process_event(event)
+                        retryable = False
+
             except openai.APITimeoutError:
-                raise APITimeoutError(retryable=True)  # noqa: B904
+                raise APITimeoutError(retryable=retryable)  # noqa: B904
             except openai.APIStatusError as e:
                 raise APIStatusError(  # noqa: B904
                     e.message,
                     status_code=e.status_code,
                     request_id=e.request_id,
                     body=e.body,
-                    retryable=True,
+                    retryable=retryable,
                 )
-        retryable = True
-        try:
-            if self._llm._opts.websocket_mode:
-                async for event in stream:
-                    self._process_event(self._parse_ws_event(event))
-            else:
-                async with stream:
-                    async for event in stream:
-                        retryable = False
-                        self._process_event(event)
-
-        except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)  # noqa: B904
-        except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
-            )
-        except (APIConnectionError, APIStatusError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type", "")
@@ -451,6 +449,8 @@ class LLMStream(llm.LLMStream):
             return ResponseTextDeltaEvent.model_validate(event)
         elif event_type == "response.completed":
             return ResponseCompletedEvent.model_validate(event)
+        elif event_type == "response.failed":
+            return ResponseFailedEvent.model_validate(event)
         return None
 
     def _process_event(self, event: ResponseStreamEvent | None) -> None:
@@ -467,6 +467,8 @@ class LLMStream(llm.LLMStream):
             chunk = self._handle_response_output_text_delta(event)
         if isinstance(event, ResponseCompletedEvent):
             chunk = self._handle_response_completed(event)
+        if isinstance(event, ResponseFailedEvent):
+            self._handle_response_failed(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
 
@@ -478,11 +480,21 @@ class LLMStream(llm.LLMStream):
             pass
         raise APIStatusError(event.message, status_code=error_code, retryable=False)
 
+    def _handle_response_failed(self, event: ResponseFailedEvent) -> None:
+        err = event.response.error
+        raise APIStatusError(
+            err.message if err else "response.failed",
+            status_code=-1,
+            retryable=False,
+        )
+
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
+
         chunk = None
         if usage := event.response.usage:
             chunk = llm.ChatChunk(
