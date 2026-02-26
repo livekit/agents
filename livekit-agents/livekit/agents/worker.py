@@ -700,10 +700,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._worker_load: float = 0.0
 
             self._http_server = AgentHttpServer(
-                self,
-                host=self._host,
-                port=ServerEnvOption.getvalue(self._port, devmode),
-                loop=self._loop,
+                self, host=self._host, port=ServerEnvOption.getvalue(self._port, devmode)
             )
 
             self._conn_task: asyncio.Task[None] | None = None
@@ -724,7 +721,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
                 self._prometheus_server = telemetry.http_server.HttpServer(
-                    self._host, self._prometheus_port, loop=self._loop
+                    self._host, self._prometheus_port
                 )
 
             if self._prometheus_multiproc_dir:

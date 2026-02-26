@@ -49,15 +49,8 @@ async def _cors_middleware(
 class AgentHttpServer(HttpServer):
     """HTTP server that handles health checks, worker info, and text message endpoints."""
 
-    def __init__(
-        self,
-        agent_server: AgentServer,
-        *,
-        host: str,
-        port: int,
-        loop: asyncio.AbstractEventLoop | None = None,
-    ) -> None:
-        super().__init__(host, port, loop)
+    def __init__(self, agent_server: AgentServer, *, host: str, port: int) -> None:
+        super().__init__(host, port)
         self._agent_server = agent_server
 
         self._app.middlewares.append(_cors_middleware)
