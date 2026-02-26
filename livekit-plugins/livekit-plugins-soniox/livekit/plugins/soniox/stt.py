@@ -542,7 +542,7 @@ class _TokenAccumulator:
         total_sum = self._confidence_sum + other._confidence_sum
         return stt.SpeechData(
             text=self.text + other.text,
-            language=self.language if self.language else other.language,
+            language=Language(self.language if self.language else other.language),
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,
