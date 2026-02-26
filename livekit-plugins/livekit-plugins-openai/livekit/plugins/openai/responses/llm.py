@@ -328,7 +328,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
-        if self._opts.store is not True and self._prev_chat_ctx is not None and self._prev_resp_id:
+        if self._opts.store is not False and self._prev_chat_ctx is not None and self._prev_resp_id:
             n = len(self._prev_chat_ctx.items)
             if ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx):
                 # send only the new items appended since the last response
