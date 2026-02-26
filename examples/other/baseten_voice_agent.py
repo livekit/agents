@@ -52,10 +52,10 @@ async def entrypoint(ctx: agents.JobContext):
             model_endpoint="wss://chain-jwd7ggwk.api.baseten.co/development/websocket",
         ),
         llm=openai.LLM(
-            api_key="mOyrTJ6p.E4q8mieCXTu9ztbHeVJsNMH1cR5SphM6",
+            api_key=BASETEN_API_KEY,
             base_url="https://inference.baseten.co/v1",
             model="openai/gpt-oss-120b",
-            tool_choice="auto",  # This is important if you want to do tool calls reliably
+            tool_choice="auto",
         ),
         tts=baseten.TTS(
             api_key=BASETEN_API_KEY,
