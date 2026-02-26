@@ -5,6 +5,7 @@ Maps user identities to Backboard thread IDs. Threads are created
 on demand and cached in memory for the duration of the agent session.
 """
 
+import asyncio
 import logging
 
 import httpx
@@ -31,6 +32,7 @@ class SessionStore:
         self._base_url = base_url
         self._assistant_id = assistant_id
         self._cache: dict[str, str] = {}
+        self._lock = asyncio.Lock()
         self._client: httpx.AsyncClient | None = None
 
     def set_assistant_id(self, assistant_id: str) -> None:
@@ -60,11 +62,13 @@ class SessionStore:
         """Get an existing thread or create a new one for the given user."""
         if user_id in self._cache:
             return self._cache[user_id]
-
-        thread_id = await self._create_thread()
-        self._cache[user_id] = thread_id
-        logger.info(f"Created Backboard thread {thread_id} for user {user_id}")
-        return thread_id
+        async with self._lock:
+            if user_id in self._cache:
+                return self._cache[user_id]
+            thread_id = await self._create_thread()
+            self._cache[user_id] = thread_id
+            logger.info(f"Created Backboard thread {thread_id} for user {user_id}")
+            return thread_id
 
     def set_thread(self, user_id: str, thread_id: str) -> None:
         """Manually set a thread ID for a user (e.g. from external storage)."""
