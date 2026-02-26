@@ -84,7 +84,7 @@ class ContextObject:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v3"
+    model: str = "stt-rt-v4"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -132,7 +132,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                aligned_transcript=False,
+                aligned_transcript="chunk",
                 offline_recognize=False,
                 diarization=params.enable_speaker_diarization,
             )
@@ -376,7 +376,7 @@ class SpeechStream(stt.SpeechStream):
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[final.to_speech_data()],
+                        alternatives=[final.to_speech_data(self.start_time_offset)],
                     )
                 )
                 self._event_ch.send_nowait(
@@ -439,7 +439,9 @@ class SpeechStream(stt.SpeechStream):
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=SpeechEventType.INTERIM_TRANSCRIPT,
-                                    alternatives=[final.merged_speech_data(non_final)],
+                                    alternatives=[
+                                        final.merged_speech_data(non_final, self.start_time_offset)
+                                    ],
                                 )
                             )
 
@@ -518,21 +520,21 @@ class _TokenAccumulator:
         self._confidence_count = 0
         self._has_start_time = False
 
-    def to_speech_data(self) -> stt.SpeechData:
+    def to_speech_data(self, start_time_offset: float = 0.0) -> stt.SpeechData:
         return stt.SpeechData(
             text=self.text,
             language=self.language,
             speaker_id=self.speaker_id,
-            start_time=self.start_time / 1000,
-            end_time=self.end_time / 1000,
+            start_time=self.start_time / 1000 + start_time_offset,
+            end_time=self.end_time / 1000 + start_time_offset,
             confidence=self.confidence,
         )
 
-    def merged_speech_data(self, other: _TokenAccumulator) -> stt.SpeechData:
+    def merged_speech_data(
+        self, other: _TokenAccumulator, start_time_offset: float = 0.0
+    ) -> stt.SpeechData:
         """Build a SpeechData combining self (final) with other (non-final)."""
-        candidates = [
-            acc.start_time for acc in (self, other) if acc._has_start_time
-        ]
+        candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
         start = min(candidates) if candidates else 0.0
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
@@ -541,7 +543,7 @@ class _TokenAccumulator:
             text=self.text + other.text,
             language=self.language if self.language else other.language,
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
-            start_time=start / 1000,
-            end_time=end / 1000,
+            start_time=start / 1000 + start_time_offset,
+            end_time=end / 1000 + start_time_offset,
             confidence=total_sum / total_count if total_count > 0 else 0.0,
         )
