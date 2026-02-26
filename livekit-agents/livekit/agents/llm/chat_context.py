@@ -492,7 +492,16 @@ class ChatContext:
     @overload
     def to_provider_format(
         self,
-        format: Literal["openai", "openai.responses"],
+        format: Literal["openai"],
+        *,
+        inject_dummy_user_message: bool = True,
+        supports_tool_image_output: bool = False,
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
+    def to_provider_format(
+        self,
+        format: Literal["openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
     ) -> tuple[list[dict], Literal[None]]: ...

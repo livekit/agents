@@ -4,12 +4,16 @@ import base64
 from typing import Any, Literal
 
 from livekit.agents import llm
+from livekit.agents.log import logger
 
 from .utils import group_tool_calls
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    supports_tool_image_output: bool = False,
 ) -> tuple[list[dict], Literal[None]]:
     item_groups = group_tool_calls(chat_ctx)
     messages = []
@@ -36,7 +40,12 @@ def to_chat_ctx(
 
         # append tool outputs following the tool calls
         for tool_output in group.tool_outputs:
-            messages.append(_to_chat_item(tool_output))
+            messages.append(
+                _to_chat_tool_output_item(
+                    tool_output,
+                    supports_tool_image_output=supports_tool_image_output,
+                )
+            )
 
     return messages, None
 
@@ -84,14 +93,26 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
             "tool_calls": [tc],
         }
 
-    elif msg.type == "function_call_output":
-        return {
-            "role": "tool",
-            "tool_call_id": msg.call_id,
-            "content": llm.utils.tool_output_to_text(msg.output),
-        }
-
     raise ValueError(f"unsupported message type: {msg.type}")
+
+
+def _to_chat_tool_output_item(
+    msg: llm.ChatItem, *, supports_tool_image_output: bool
+) -> dict[str, Any]:
+    if msg.type != "function_call_output":
+        raise ValueError(f"unsupported message type: {msg.type}")
+
+    content: str | list[dict[str, Any]]
+    if supports_tool_image_output:
+        content = _to_chat_tool_output_content(msg.output)
+    else:
+        content = llm.utils.tool_output_to_text(msg.output)
+
+    return {
+        "role": "tool",
+        "tool_call_id": msg.call_id,
+        "content": content,
+    }
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
@@ -113,6 +134,22 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "detail": img.inference_detail,
         },
     }
+
+
+def _to_chat_tool_output_content(output: Any) -> str | list[dict[str, Any]]:
+    text_parts, image_parts = llm.utils.split_tool_output_parts(output)
+    if not image_parts:
+        return llm.utils.tool_output_to_text(output, include_image_placeholder=False)
+
+    parts: list[dict[str, Any]] = [{"type": "text", "text": text} for text in text_parts]
+    for image in image_parts:
+        try:
+            parts.append(_to_image_content(image))
+        except ValueError as e:
+            logger.warning("Failed to serialize tool output image for openai chat format", exc_info=e)
+            parts.append({"type": "text", "text": llm.utils.TOOL_OUTPUT_IMAGE_PLACEHOLDER})
+
+    return parts
 
 
 def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:

@@ -156,6 +156,53 @@ def test_provider_formats_tool_output_with_images() -> None:
     assert tool_result_content[1]["image"]["format"] == "png"
 
 
+def test_openai_chat_supports_multimodal_tool_output_when_enabled() -> None:
+    image = ImageContent(image="data:image/png;base64,aW1n")
+    chat_ctx = ChatContext(
+        items=[
+            _fnc_call(),
+            FunctionCallOutput(
+                name="capture",
+                call_id="call_1",
+                output=["caption", image],
+                is_error=False,
+            ),
+        ]
+    )
+
+    openai_messages, _ = chat_ctx.to_provider_format(
+        "openai",
+        inject_dummy_user_message=False,
+        supports_tool_image_output=True,
+    )
+    assert openai_messages[1]["role"] == "tool"
+    content = openai_messages[1]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "caption"}
+    assert content[1]["type"] == "image_url"
+
+
+def test_openai_chat_keeps_text_tool_output_as_string_when_enabled() -> None:
+    chat_ctx = ChatContext(
+        items=[
+            _fnc_call(),
+            FunctionCallOutput(
+                name="capture",
+                call_id="call_1",
+                output="done",
+                is_error=False,
+            ),
+        ]
+    )
+
+    openai_messages, _ = chat_ctx.to_provider_format(
+        "openai",
+        inject_dummy_user_message=False,
+        supports_tool_image_output=True,
+    )
+    assert openai_messages[1]["content"] == "done"
+
+
 def test_google_provider_pure_image_tool_output_omits_empty_output_key() -> None:
     image = ImageContent(image="data:image/png;base64,aW1n")
     chat_ctx = ChatContext(
