@@ -2691,9 +2691,9 @@ class AgentActivity(RecognitionHooks):
         self._background_speeches.add(speech_handle)
         try:
             await exe_task
-            _notify_fc_processed(function_calls)
         finally:
             self._background_speeches.discard(speech_handle)
+            _notify_fc_processed(function_calls)
 
         # important: no agent output should be used after this point
 
