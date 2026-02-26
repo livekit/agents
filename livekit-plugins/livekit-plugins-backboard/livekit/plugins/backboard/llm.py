@@ -23,7 +23,7 @@ from typing import Any
 
 import httpx
 
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -348,11 +348,12 @@ class BackboardLLMStream(llm.LLMStream):
                                 return
 
         except httpx.TimeoutException as e:
-            logger.error(f"Backboard timeout: {e}")
-            raise
+            raise APITimeoutError() from e
         except httpx.HTTPStatusError as e:
-            logger.error(f"Backboard HTTP {e.response.status_code}: {e}")
-            raise
+            raise APIStatusError(
+                message=str(e),
+                status_code=e.response.status_code,
+                body=e.response.text,
+            ) from e
         except Exception as e:
-            logger.error(f"Backboard stream error: {e}")
-            raise
+            raise APIConnectionError() from e
