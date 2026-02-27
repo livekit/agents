@@ -50,7 +50,7 @@ class STTOptions:
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
     speech_model: Literal[
-        "universal-streaming-english", "universal-streaming-multilingual", "u3-pro"
+        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro"
     ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -70,7 +70,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
         model: Literal[
-            "universal-streaming-english", "universal-streaming-multilingual", "u3-pro"
+            "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro"
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -98,13 +98,13 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=False,
+                interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
         )
-        if is_given(prompt) and model != "u3-pro":
-            raise ValueError("The 'prompt' parameter is only supported with the 'u3-pro' model.")
+        if is_given(prompt) and model != "u3-rt-pro":
+            raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -187,6 +187,7 @@ class STT(stt.STT):
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
@@ -201,6 +202,8 @@ class STT(stt.STT):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(keyterms_prompt):
+            self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
@@ -211,6 +214,7 @@ class STT(stt.STT):
                 min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
                 max_turn_silence=max_turn_silence,
                 prompt=prompt,
+                keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
             )
 
@@ -237,7 +241,7 @@ class SpeechStream(stt.SpeechStream):
         self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
-        self._reconnect_event = asyncio.Event()
+        self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
 
     def update_options(
         self,
@@ -247,6 +251,7 @@ class SpeechStream(stt.SpeechStream):
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(buffer_size_seconds):
@@ -261,17 +266,37 @@ class SpeechStream(stt.SpeechStream):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(keyterms_prompt):
+            self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
-        self._reconnect_event.set()
+        # Send UpdateConfiguration message over the active websocket
+        config_msg: dict = {"type": "UpdateConfiguration"}
+        if is_given(prompt):
+            config_msg["prompt"] = prompt
+        if is_given(keyterms_prompt):
+            config_msg["keyterms_prompt"] = keyterms_prompt
+        if is_given(max_turn_silence):
+            config_msg["max_turn_silence"] = max_turn_silence
+        if is_given(min_end_of_turn_silence_when_confident):
+            config_msg["min_end_of_turn_silence_when_confident"] = (
+                min_end_of_turn_silence_when_confident
+            )
+        if is_given(end_of_turn_confidence_threshold):
+            config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
+        if is_given(vad_threshold):
+            config_msg["vad_threshold"] = vad_threshold
+
+        if len(config_msg) > 1:
+            self._config_update_queue.put_nowait(config_msg)
+
+    def force_endpoint(self) -> None:
+        """Force-finalize the current turn immediately."""
+        self._config_update_queue.put_nowait({"type": "ForceEndpoint"})
 
     async def _run(self) -> None:
-        """
-        Run a single websocket connection to AssemblyAI and make sure to reconnect
-        when something went wrong.
-        """
-
+        """Run a single websocket connection to AssemblyAI."""
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -296,6 +321,14 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+
+                # Send any pending config updates over the active websocket
+                while not self._config_update_queue.empty():
+                    try:
+                        config_msg = self._config_update_queue.get_nowait()
+                        await ws.send_str(json.dumps(config_msg))
+                    except asyncio.QueueEmpty:
+                        break
 
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
@@ -334,34 +367,19 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process AssemblyAI message")
 
         ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        try:
+            ws = await self._connect_ws()
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
@@ -409,6 +427,11 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type == "SpeechStarted":
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            return
+
         if message_type != "Turn":
             return
         words = data.get("words", [])
