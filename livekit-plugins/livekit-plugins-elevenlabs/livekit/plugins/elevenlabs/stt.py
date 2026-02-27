@@ -72,6 +72,7 @@ class STTOptions:
     include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
+    keyterms: NotGivenOr[list[str]]
 
 
 class STT(stt.STT):
@@ -88,6 +89,7 @@ class STT(stt.STT):
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -105,6 +107,10 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
+                Each keyterm can contain at most 5 words and must be less than 50 characters.
+                Maximum of 100 keyterms. Only supported for Scribe v1 and v2 batch recognition
+                (not realtime streaming). Usage incurs additional costs.
         """
 
         if is_given(use_realtime):
@@ -149,6 +155,7 @@ class STT(stt.STT):
             server_vad=server_vad,
             include_timestamps=include_timestamps,
             model_id=model_id,
+            keyterms=keyterms,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -184,6 +191,9 @@ class STT(stt.STT):
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
         if self._opts.language_code:
             form.add_field("language_code", self._opts.language_code)
+        if is_given(self._opts.keyterms):
+            for keyterm in self._opts.keyterms:
+                form.add_field("keyterms", keyterm)
 
         try:
             async with self._ensure_session().post(
@@ -268,12 +278,16 @@ class STT(stt.STT):
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
 
         for stream in self._streams:
             stream.update_options(server_vad=server_vad)
