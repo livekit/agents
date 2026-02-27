@@ -59,8 +59,12 @@ class AvatarSession:
         if has_id == has_slug:
             raise KeyframeException("Provide exactly one of persona_id or persona_slug")
 
-        self._persona_id = persona_id if has_id else None
-        self._persona_slug = persona_slug if has_slug else None
+        self._persona_id: str | None = None
+        self._persona_slug: str | None = None
+        if utils.is_given(persona_id):
+            self._persona_id = persona_id
+        if utils.is_given(persona_slug):
+            self._persona_slug = persona_slug
 
         # Resolve API config
         api_url_val = (
