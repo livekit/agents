@@ -109,7 +109,7 @@ class STT(stt.STT):
                 be selected based on parameters provided.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Only supported for Scribe v1 and v2 batch recognition
+                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
                 (not realtime streaming). Usage incurs additional costs.
         """
 
