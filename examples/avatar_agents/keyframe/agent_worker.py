@@ -12,8 +12,9 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import inference, keyframe, silero
+from livekit.plugins import keyframe, silero
 from livekit.plugins.keyframe import Emotion
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
