@@ -172,20 +172,6 @@ async def get_user(user_id: str) -> dict:
     return {"user_id": user_id, "name": "Jane Doe", "plan": "pro"}
 
 
-@server.http_endpoint("/api/user", methods=["POST"])
-async def create_user(name: str, email: str) -> dict:
-    """POST with JSON body parsing.
-
-    JSON body fields are automatically mapped to function arguments by name.
-    Return a dict and the framework serialises it as JSON.
-
-    Example:
-        POST /api/user  {"name": "Jane", "email": "jane@example.com"}
-    """
-    # replace with a real DB insert
-    return {"ok": True, "user": {"name": name, "email": email}}
-
-
 @server.http_endpoint(
     "/api/stream",
     methods=["GET"],
