@@ -647,16 +647,12 @@ async def bank_ivr_session(ctx: JobContext) -> None:
         userdata=state,
     )
 
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
     async def log_usage() -> None:
-        summary = usage_collector.get_summary()
-        logger.info("Usage summary: %s", summary)
+        logger.info("Usage summary: %s", session.usage)
 
     ctx.add_shutdown_callback(log_usage)
 

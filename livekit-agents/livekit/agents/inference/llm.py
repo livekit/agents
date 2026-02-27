@@ -28,7 +28,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -135,9 +135,6 @@ class ChatCompletionOptions(TypedDict, total=False):
     # response_format: completion_create_params.ResponseFormat
 
 
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
-
-
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
@@ -161,9 +158,7 @@ class LLM(llm.LLM):
     ) -> None:
         super().__init__()
 
-        lk_base_url = (
-            base_url if base_url else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if base_url else get_default_inference_url()
 
         lk_api_key = (
             api_key

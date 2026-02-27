@@ -8,22 +8,10 @@ format `[SPEAKER_ID]TEXT[/SPEAKER_ID]` for testing.
 import re
 
 from livekit.agents import Language, stt
-from livekit.agents.voice.audio_recognition import AudioRecognition
 
 
 class TestSpeakerIdGrouping:
     """Test cases for speaker ID grouping functionality."""
-
-    def setup_method(self):
-        """Set up a fresh AudioRecognition instance for each test."""
-        self.audio_recognition = AudioRecognition(
-            hooks=None,  # type: ignore
-            stt=None,
-            vad=None,
-            min_endpointing_delay=0.5,
-            max_endpointing_delay=2.0,
-            turn_detection=None,
-        )
 
     def _format_text(self, text, speaker_id):
         if speaker_id:

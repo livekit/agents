@@ -109,16 +109,12 @@ async def dtmf_session(ctx: JobContext) -> None:
     )
     logger.info(f"==> User request: {user_request}")
 
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
     async def log_usage() -> None:
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        logger.info(f"Usage: {session.usage}")
 
     ctx.add_shutdown_callback(log_usage)
 

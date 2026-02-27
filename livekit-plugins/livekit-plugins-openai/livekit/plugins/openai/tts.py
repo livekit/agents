@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -41,6 +43,9 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
 RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
+
+# Models that use audio stream format (character-based billing)
+AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
 
 
 @dataclass
@@ -190,8 +195,12 @@ class TTS(tts.TTS):
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+    ) -> tts.ChunkedStream:
+        # Use audio stream format for tts-1/tts-1-hd (character-based billing)
+        # Use SSE stream format for newer models like gpt-4o-mini-tts (token-based billing)
+        if self._opts.model in AUDIO_STREAM_MODELS:
+            return AudioChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return SSEChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def prewarm(self) -> None:
         async def _prewarm() -> None:
@@ -207,7 +216,9 @@ class TTS(tts.TTS):
             await aio.cancel_and_wait(self._prewarm_task)
 
 
-class ChunkedStream(tts.ChunkedStream):
+class AudioChunkedStream(tts.ChunkedStream):
+    """ChunkedStream for tts-1 and tts-1-hd models using audio stream format."""
+
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -221,6 +232,7 @@ class ChunkedStream(tts.ChunkedStream):
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.omit,
+            stream_format="audio",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
@@ -235,6 +247,81 @@ class ChunkedStream(tts.ChunkedStream):
 
                 async for data in stream.iter_bytes():
                     output_emitter.push(data)
+
+            output_emitter.flush()
+
+        except openai.APITimeoutError:
+            raise APITimeoutError() from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+
+
+class SSEChunkedStream(tts.ChunkedStream):
+    """ChunkedStream for gpt-4o-mini-tts and newer models using SSE stream format."""
+
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
+            input=self.input_text,
+            model=self._opts.model,
+            voice=self._opts.voice,
+            response_format=self._opts.response_format,  # type: ignore
+            speed=self._opts.speed,
+            instructions=self._opts.instructions or openai.omit,
+            stream_format="sse",
+            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+        )
+
+        try:
+            async with oai_stream as stream:
+                output_emitter.initialize(
+                    request_id=stream.request_id or "",
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=f"audio/{self._opts.response_format}",
+                )
+
+                # Parse SSE events from the stream
+                async for line in stream.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+
+                    data = line[6:]  # Remove "data: " prefix
+                    if data == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_type = event.get("type", "")
+
+                    if event_type == "speech.audio.delta":
+                        # Decode base64 audio and push to emitter
+                        audio_b64 = event.get("delta", "") or event.get("audio", "")
+                        if audio_b64:
+                            audio_data = base64.b64decode(audio_b64)
+                            output_emitter.push(audio_data)
+
+                    elif event_type == "speech.audio.done":
+                        # Extract token usage from the done event
+                        usage = event.get("usage", {})
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+                        if input_tokens or output_tokens:
+                            self._set_token_usage(
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                            )
 
             output_emitter.flush()
 

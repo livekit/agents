@@ -182,6 +182,8 @@ class ChunkedStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._input_tokens = 0
+        self._output_tokens = 0
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -213,6 +215,10 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
+    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
 
@@ -239,6 +245,8 @@ class ChunkedStream(ABC):
             ttfb=ttfb,
             duration=duration,
             characters_count=len(self._input_text),
+            input_tokens=self._input_tokens,
+            output_tokens=self._output_tokens,
             audio_duration=audio_duration,
             cancelled=self._synthesize_task.cancelled(),
             label=self._tts._label,
@@ -431,8 +439,14 @@ class SynthesizeStream(ABC):
         self._mtc_pending_texts: list[str] = []
         self._mtc_text = ""
         self._num_segments = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
 
         self._tts_request_span: trace.Span | None = None
+
+    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -541,6 +555,8 @@ class SynthesizeStream(ABC):
                 ttfb=ttfb,
                 duration=duration,
                 characters_count=len(text),
+                input_tokens=self._input_tokens,
+                output_tokens=self._output_tokens,
                 audio_duration=audio_duration,
                 cancelled=self._task.cancelled(),
                 label=self._tts._label,

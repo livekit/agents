@@ -18,7 +18,6 @@ from livekit.agents import (
     cli,
     inference,
     llm,
-    metrics,
     room_io,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
@@ -347,11 +346,8 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    usage_collector = metrics.UsageCollector()
-
     async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        logger.info(f"Usage: {session.usage}")
 
     ctx.add_shutdown_callback(log_usage)
 

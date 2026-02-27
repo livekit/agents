@@ -31,7 +31,7 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 DeepgramModels = Literal[
     "deepgram/flux-general",
@@ -144,7 +144,6 @@ STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -300,11 +299,7 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
@@ -531,6 +526,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                closing_ws = False
                 ws = await self._connect_ws()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -554,11 +550,19 @@ class SpeechStream(stt.SpeechStream):
 
                     self._reconnect_event.clear()
                 finally:
+                    closing_ws = True
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    try:
+                        tasks_group.exception()  # retrieve the exception
+                    except asyncio.CancelledError:
+                        pass
             finally:
-                if ws is not None:
+                closing_ws = True
+                if ws is not None and not ws.closed:
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:

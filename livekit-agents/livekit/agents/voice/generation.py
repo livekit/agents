@@ -60,12 +60,14 @@ def perform_llm_inference(
     chat_ctx: ChatContext,
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data)
+        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -87,6 +89,8 @@ async def _llm_inference_task(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
     data: _LLMGenerationData,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     current_span = trace.get_current_span()
@@ -95,23 +99,24 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.flatten()
 
-    current_span.set_attributes(
-        {
-            trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(
-                    exclude_audio=True,
-                    exclude_image=True,
-                    exclude_timestamp=True,
-                    exclude_metrics=True,
-                )
-            ),
-            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
-            trace_types.ATTR_PROVIDER_TOOLS: [
-                type(tool).__name__ for tool in tool_ctx.provider_tools
-            ],
-            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
-        }
-    )
+    attrs: dict[str, Any] = {
+        trace_types.ATTR_CHAT_CTX: json.dumps(
+            chat_ctx.to_dict(
+                exclude_audio=True,
+                exclude_image=True,
+                exclude_timestamp=True,
+                exclude_metrics=True,
+            )
+        ),
+        trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+        trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
+        trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
+    }
+    if model:
+        attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
+    if provider:
+        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
+    current_span.set_attributes(attrs)
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -182,6 +187,8 @@ async def _llm_inference_task(
             [fnc.model_dump(exclude={"type", "created_at"}) for fnc in data.generated_functions]
         ),
     )
+    if data.ttft is not None:
+        current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     return True
 
 
@@ -198,13 +205,15 @@ def perform_tts_inference(
     input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
-        _tts_inference_task(node, input, model_settings, data, text_transforms)
+        _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
@@ -225,12 +234,20 @@ async def _tts_inference_task(
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> bool:
     start_time: float | None = None
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
 
     @tracer.start_as_current_span("tts_node")
     async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
+        # set model/provider attributes on the span
+        current_span = trace.get_current_span()
+        if model:
+            current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+        if provider:
+            current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
         if text_transforms:
             input = apply_text_transforms(input, text_transforms)
 
@@ -253,6 +270,8 @@ async def _tts_inference_task(
         async for audio_frame in tts_node:
             if start_time is not None and data.ttfb is None:
                 data.ttfb = time.perf_counter() - start_time
+                current_span = trace.get_current_span()
+                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
 
             if timed_text_ch is not None:
                 for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):

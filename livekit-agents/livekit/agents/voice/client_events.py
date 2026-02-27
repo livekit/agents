@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import asdict
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from livekit import rtc
+from livekit.agents.inference.interruption import OverlappingSpeechEvent
 
 from .. import utils
 from ..language import Language
@@ -21,7 +21,7 @@ from ..llm import (
     Toolset,
 )
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import AgentMetrics, AgentSessionUsage
 from ..types import (
     RPC_GET_AGENT_INFO,
     RPC_GET_CHAT_HISTORY,
@@ -97,6 +97,21 @@ class ClientErrorEvent(BaseModel):
     created_at: float
 
 
+class ClientUserOverlappingSpeechEvent(BaseModel):
+    type: Literal["user_overlapping_speech"] = "user_overlapping_speech"
+    is_interruption: bool
+    created_at: float
+    sent_at: float
+    detection_delay: float
+    overlap_started_at: float | None
+
+
+class ClientSessionUsageEvent(BaseModel):
+    type: Literal["session_usage"] = "session_usage"
+    usage: AgentSessionUsage
+    created_at: float
+
+
 ClientEvent = Annotated[
     ClientAgentStateChangedEvent
     | ClientUserStateChangedEvent
@@ -104,7 +119,9 @@ ClientEvent = Annotated[
     | ClientUserInputTranscribedEvent
     | ClientFunctionToolsExecutedEvent
     | ClientMetricsCollectedEvent
-    | ClientErrorEvent,
+    | ClientErrorEvent
+    | ClientUserOverlappingSpeechEvent
+    | ClientSessionUsageEvent,
     Field(discriminator="type"),
 ]
 
@@ -148,6 +165,24 @@ class SendMessageResponse(BaseModel):
     items: list[ChatItem]
 
 
+class GetRTCStatsRequest(BaseModel):
+    pass
+
+
+class GetRTCStatsResponse(BaseModel):
+    publisher_stats: list[dict[str, Any]]
+    subscriber_stats: list[dict[str, Any]]
+
+
+class GetSessionUsageRequest(BaseModel):
+    pass
+
+
+class GetSessionUsageResponse(BaseModel):
+    usage: AgentSessionUsage
+    created_at: float
+
+
 # Text stream request/response protocol (no size limit unlike RPC)
 class StreamRequest(BaseModel):
     """Request sent via text stream."""
@@ -163,6 +198,19 @@ class StreamResponse(BaseModel):
     request_id: str
     payload: str  # JSON-encoded method-specific response
     error: str | None = None
+
+
+def _serialize_options(opts: Any) -> dict[str, Any]:
+    return {
+        "endpointing": dict(opts.endpointing),
+        "interruption": dict(opts.interruption),
+        "max_tool_steps": opts.max_tool_steps,
+        "user_away_timeout": opts.user_away_timeout,
+        "preemptive_generation": opts.preemptive_generation,
+        "min_consecutive_speech_delay": opts.min_consecutive_speech_delay,
+        "use_tts_aligned_transcript": opts.use_tts_aligned_transcript,
+        "ivr_detection": opts.ivr_detection,
+    }
 
 
 def _tool_names(tools: list[Any]) -> list[str]:
@@ -253,6 +301,7 @@ class ClientEventsHandler:
             self._session.off("function_tools_executed", self._on_function_tools_executed)
             self._session.off("metrics_collected", self._on_metrics_collected)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
+            self._session.off("user_overlapping_speech", self._on_user_overlap_speech)
             self._session.off("error", self._on_error)
             self._event_handlers_registered = False
 
@@ -332,6 +381,10 @@ class ClientEventsHandler:
                     response_payload = await self._stream_get_agent_info(request.payload)
                 elif request.method == "send_message":
                     response_payload = await self._stream_send_message(request.payload)
+                elif request.method == "get_rtc_stats":
+                    response_payload = await self._stream_get_rtc_stats(request.payload)
+                elif request.method == "get_session_usage":
+                    response_payload = await self._stream_get_session_usage(request.payload)
                 else:
                     response_payload = ""
                     error = f"Unknown method: {request.method}"
@@ -362,7 +415,7 @@ class ClientEventsHandler:
             agent_state=self._session.agent_state,
             user_state=self._session.user_state,
             agent_id=agent.id,
-            options=asdict(self._session.options),
+            options=_serialize_options(self._session.options),
             created_at=self._session._started_at or time.time(),
         )
         return response.model_dump_json()
@@ -397,6 +450,24 @@ class ClientEventsHandler:
         response = SendMessageResponse(items=items)
         return response.model_dump_json()
 
+    async def _stream_get_rtc_stats(self, payload: str) -> str:
+        """Handle get_rtc_stats via text stream."""
+        from google.protobuf.json_format import MessageToDict
+
+        rtc_stats = await self._room.get_rtc_stats()
+        response = GetRTCStatsResponse(
+            publisher_stats=[MessageToDict(s) for s in rtc_stats.publisher_stats],
+            subscriber_stats=[MessageToDict(s) for s in rtc_stats.subscriber_stats],
+        )
+        return response.model_dump_json()
+
+    async def _stream_get_session_usage(self, payload: str) -> str:
+        response = GetSessionUsageResponse(
+            usage=self._session.usage,
+            created_at=time.time(),
+        )
+        return response.model_dump_json()
+
     def _register_event_handlers(self) -> None:
         if self._event_handlers_registered:
             return
@@ -407,9 +478,20 @@ class ClientEventsHandler:
         self._session.on("function_tools_executed", self._on_function_tools_executed)
         self._session.on("metrics_collected", self._on_metrics_collected)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
+        self._session.on("user_overlapping_speech", self._on_user_overlap_speech)
         self._session.on("error", self._on_error)
 
         self._event_handlers_registered = True
+
+    def _on_user_overlap_speech(self, event: OverlappingSpeechEvent) -> None:
+        client_event = ClientUserOverlappingSpeechEvent(
+            is_interruption=event.is_interruption,
+            created_at=event.timestamp,
+            overlap_started_at=event.overlap_started_at,
+            detection_delay=event.detection_delay,
+            sent_at=time.time(),
+        )
+        self._stream_client_event(client_event)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         client_event = ClientAgentStateChangedEvent(
@@ -458,11 +540,17 @@ class ClientEventsHandler:
         if event.metrics is None:
             return
 
-        client_event = ClientMetricsCollectedEvent(
+        metrics_event = ClientMetricsCollectedEvent(
             metrics=event.metrics,
             created_at=event.created_at,
         )
-        self._stream_client_event(client_event)
+        self._stream_client_event(metrics_event)
+
+        usage_event = ClientSessionUsageEvent(
+            usage=self._session.usage,
+            created_at=time.time(),
+        )
+        self._stream_client_event(usage_event)
 
     def _on_error(self, event: ErrorEvent) -> None:
         client_event = ClientErrorEvent(
@@ -522,7 +610,7 @@ class ClientEventsHandler:
             agent_state=self._session.agent_state,
             user_state=self._session.user_state,
             agent_id=agent.id,
-            options=asdict(self._session.options),
+            options=_serialize_options(self._session.options),
             created_at=self._session._started_at or time.time(),
         )
 
@@ -593,6 +681,8 @@ RemoteSessionEventTypes = Literal[
     "user_input_transcribed",
     "function_tools_executed",
     "metrics_collected",
+    "user_overlapping_speech",
+    "session_usage",
     "error",
 ]
 
@@ -778,3 +868,19 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             timeout=response_timeout,
         )
         return SendMessageResponse.model_validate_json(response)
+
+    async def fetch_rtc_stats(self) -> GetRTCStatsResponse:
+        request = GetRTCStatsRequest()
+        response = await self._send_request(
+            method="get_rtc_stats",
+            payload=request.model_dump_json(),
+        )
+        return GetRTCStatsResponse.model_validate_json(response)
+
+    async def fetch_session_usage(self) -> GetSessionUsageResponse:
+        request = GetSessionUsageRequest()
+        response = await self._send_request(
+            method="get_session_usage",
+            payload=request.model_dump_json(),
+        )
+        return GetSessionUsageResponse.model_validate_json(response)

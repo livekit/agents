@@ -1,5 +1,8 @@
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, TypeVar
+from typing import Any, Literal, TypeAlias, TypeVar
+
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema, core_schema
 
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
@@ -83,11 +86,19 @@ class FlushSentinel:
 
 
 class NotGiven:
+    __slots__ = ()
+
     def __bool__(self) -> Literal[False]:
         return False
 
     def __repr__(self) -> str:
         return "NOT_GIVEN"
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.is_instance_schema(cls)
 
 
 NotGivenOr: TypeAlias = _T | NotGiven

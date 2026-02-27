@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
+from ..inference.interruption import (
+    AdaptiveInterruptionDetector,
+    InterruptionDetectionError,
+    OverlappingSpeechEvent,
+)
 from ..language import Language
 from ..llm import (
     LLM,
@@ -88,6 +93,7 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
+    "user_overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -205,8 +211,8 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | Any
-    source: LLM | STT | TTS | RealtimeModel | Any
+    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 
 
@@ -221,7 +227,9 @@ class CloseReason(str, Enum):
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | RealtimeModelError | None = None
+    error: (
+        LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None
+    ) = None
     reason: CloseReason
     created_at: float = Field(default_factory=time.time)
 
@@ -236,6 +244,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ErrorEvent
-    | CloseEvent,
+    | CloseEvent
+    | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]
