@@ -117,7 +117,7 @@ class GetNameTask(AgentTask[GetNameResult]):
 
     async def on_enter(self) -> None:
         self.session.generate_reply(
-            instructions=f"Ask the user to provide their name in this format: {self._name_format}."
+            instructions=f"Ask the user for their name, follow this order '{self._name_format}' but do not mention the format."
         )
 
     @function_tool()

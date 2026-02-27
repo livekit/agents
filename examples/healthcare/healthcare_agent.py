@@ -127,17 +127,19 @@ async def transfer_to_human(context: RunContext) -> None:
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
-    def __init__(self):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = True):
         super().__init__(
             instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
         """,
             tools=[transfer_to_human],
+            chat_ctx=chat_ctx,
         )
+        self._require_confirmation = require_confirmation
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Collect the user's health insurance and inform them of the accepted insurance options."
+            instructions="Collect the user's health insurance, inform them of the accepted insurances if they ask."
         )
 
     @function_tool()
@@ -158,11 +160,13 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
 async def update_record(
     context: RunContext,
     field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "phone", "insurance"]})],
+    updated_detail: str,
 ):
-    """Call when the user requests to modify information in their existing patient record.
+    """Call when the user requests to modify information in their existing patient record
 
     Args:
         field (str): The field to update
+        updated_detail (str): The new field to be updated to
     """
     if field == "name":
         await context.session.generate_reply(instructions="The user may not change their name.")
@@ -172,9 +176,12 @@ async def update_record(
         "phone": (GetPhoneNumberTask, "phone_number"),
         "insurance": (GetInsuranceTask, "insurance"),
     }
-
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(
+        role="system", content=f"The user provided the new field: {updated_detail}"
+    )
     task_class, attr = field_map.get(field)
-    result = await task_class()
+    result = await task_class(require_confirmation=False, chat_ctx=chat_ctx)
     value = getattr(result, attr)
 
     name = context.session.userdata.profile["name"]
@@ -224,20 +231,13 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             content=f"These doctors are compatible with the user's insurance: {available_doctors}",
         )
         await self.update_chat_ctx(chat_ctx)
-        extra = (
-            " Avoid special notation when listing out the doctors, this will be read out. "
-            if self.session.current_speech.input_details.modality == "audio"
-            else ""
-        )
         if len(self._compatible_doctor_records) > 1:
             await self.session.generate_reply(
-                instructions="Inform the user of the doctors compatible to them, and prompt the user to choose one."
-                + extra
+                instructions="Inform the user of the doctors compatible to them, and prompt the user to choose one. Avoid special notation when listing out the doctors."
             )
         else:
             await self.session.generate_reply(
-                instructions="Inform the user of their compatible doctor and confirm if they would like to select that doctor."
-                + extra
+                instructions="Inform the user of their compatible doctor and confirm if they would like to select that doctor. Avoid special notation when listing out the doctors.."
             )
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
@@ -273,15 +273,8 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 content=f"The selected doctor has availabilities at {available_times}.",
             )
             await self.update_chat_ctx(chat_ctx)
-            extra = (
-                " Avoid special notation when listing out the available time slots, this will be read out. "
-                if self.session.current_speech.input_details.modality == "audio"
-                else ""
-            )
-
             await self.session.generate_reply(
-                instructions="Inform and ask the user which time slot they prefer, and do not list out the times using bullet points."
-                + extra
+                instructions="Inform and ask the user which time slot they prefer, and do not list out the times using bullet points. Avoid special notation when listing out the available time slots."
             )
 
         return confirm_doctor_selection
@@ -314,7 +307,6 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             current_tools = [t for t in self.tools if t.id != "confirm_visit_reason"]
             current_tools.append(visit_reason_tool)
             await self.update_tools(current_tools)
-
             await self.session.generate_reply(
                 instructions="Prompt the user for the reason for their visit."
             )
@@ -345,7 +337,9 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
         super().__init__(
             instructions="""You will now assist the user with modifying their appointment.
             Do not be verbose and ask for any unnecessary information unless instructed to.
-            Avoid using special characters like bullet points, maintain a natural tone."""
+            Avoid using special characters like bullet points, maintain a natural tone.
+            Do not preemptively ask for information and refrain from listing made-up appointment times.
+            """
             + GLOBAL_INSTRUCTIONS,
             chat_ctx=chat_ctx,
             tools=[
@@ -384,16 +378,8 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                 content=f"The user has these outstanding appointments: {json.dumps(appointments, default=str)} and requested to {self._function} one.",
             )
             await self.update_chat_ctx(chat_ctx)
-
-            extra = (
-                " Avoid special notation when listing out the appointments, this will be read out. "
-                if self.session.current_speech.input_details.modality == "audio"
-                else ""
-            )
-
             await self.session.generate_reply(
-                instructions="Prompt the user to choose one of the appointments to modify, and confirm if they would either like to reschedule or cancel it."
-                + extra
+                instructions="Prompt the user to choose one of the appointments to modify, and confirm if they would either like to reschedule or cancel it. Avoid using special notations. Call 'confirm_appointment_selection' to carry out the execution."
             )
 
     def _build_modify_appt_tool(self, *, available_appts: list[dict]) -> FunctionTool:
@@ -427,7 +413,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                     ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
-                result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
+                result = await ScheduleAppointmentTask()
                 self.complete(
                     ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
@@ -441,7 +427,8 @@ class HealthcareAgent(Agent):
             instructions=(
                 "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
                 "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
-                "Call 'schedule_appointment' to schedule a new appointment." + GLOBAL_INSTRUCTIONS
+                "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'."
+                + GLOBAL_INSTRUCTIONS
             ),
             tools=[
                 EndCallTool(
@@ -508,7 +495,6 @@ class HealthcareAgent(Agent):
             task_group.add(
                 lambda: GetNameTask(
                     last_name=True,
-                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
                 ),
                 id="get_name_task",
                 description="Gathers the user's name",
@@ -516,7 +502,6 @@ class HealthcareAgent(Agent):
             task_group.add(
                 lambda: GetDOBTask(
                     require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
-                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
                 ),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
@@ -524,7 +509,6 @@ class HealthcareAgent(Agent):
             task_group.add(
                 lambda: GetPhoneNumberTask(
                     require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
-                    extra_instructions="Do not be verbose and ask for any unnecessary information unless instructed to.",
                 ),
                 id="get_phone_number_task",
                 description="Gathers the user's phone number",
@@ -585,7 +569,7 @@ class HealthcareAgent(Agent):
             ),
         ],
     ):
-        """Call if the user requests to reschedule or cancel an existing appointment"""
+        """Call if the user requests to reschedule or cancel an existing appointment. Do not ask for any information in advance."""
         await self.profile_authenticator()
 
         result = await ModifyAppointmentTask(function=function, chat_ctx=self.chat_ctx)
@@ -703,6 +687,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.responses.LLM(model="gpt-4.1"),  # switch to Websocket Mode once merged
         tts=inference.TTS("inworld/inworld-tts-1"),
         vad=silero.VAD.load(),
+        preemptive_generation=True,
     )
 
     async def on_session_close() -> None:

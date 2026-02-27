@@ -72,6 +72,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 + "When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.\n"
                 "If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
+                "Avoid verbosity by not sharing example dates or formats unless prompted to do so. Do not deviate from the goal of collecting the user's birthday.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
             ),
@@ -104,7 +105,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         day: int,
         ctx: RunContext,
     ) -> str | None:
-        """Update the date of birth provided by the user.
+        """Update the date of birth provided by the user. Given a spoken month and year (e.g., 'July 2030'), return its numerical representation (7/2030).
 
         Args:
             year: The birth year (e.g., 1990)
