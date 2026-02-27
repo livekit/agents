@@ -70,7 +70,7 @@ class VoiceSettings:
     stability: float  # [0.0 - 1.0]
     similarity_boost: float  # [0.0 - 1.0]
     style: NotGivenOr[float] = NOT_GIVEN  # [0.0 - 1.0]
-    speed: NotGivenOr[float] = NOT_GIVEN  # [0.8 - 1.2]
+    speed: NotGivenOr[float] = NOT_GIVEN  # [0.7 - 1.2]
     use_speaker_boost: NotGivenOr[bool] = NOT_GIVEN
 
 
@@ -91,6 +91,30 @@ DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
+
+
+def _validate_voice_settings(settings: VoiceSettings) -> None:
+    """Log warnings for VoiceSettings parameters outside documented ElevenLabs API ranges."""
+    if not (0.0 <= settings.stability <= 1.0):
+        logger.warning(
+            "voice_settings.stability must be between 0.0 and 1.0",
+            extra={"stability": settings.stability},
+        )
+    if not (0.0 <= settings.similarity_boost <= 1.0):
+        logger.warning(
+            "voice_settings.similarity_boost must be between 0.0 and 1.0",
+            extra={"similarity_boost": settings.similarity_boost},
+        )
+    if is_given(settings.style) and not (0.0 <= settings.style <= 1.0):
+        logger.warning(
+            "voice_settings.style must be between 0.0 and 1.0",
+            extra={"style": settings.style},
+        )
+    if is_given(settings.speed) and not (0.7 <= settings.speed <= 1.2):
+        logger.warning(
+            "voice_settings.speed must be between 0.7 and 1.2",
+            extra={"speed": settings.speed},
+        )
 
 
 class TTS(tts.TTS):
@@ -174,6 +198,10 @@ class TTS(tts.TTS):
                 "auto_mode is enabled, it expects full sentences or phrases, "
                 "please provide a SentenceTokenizer instead of a WordTokenizer."
             )
+
+        if is_given(voice_settings):
+            _validate_voice_settings(voice_settings)
+
         self._opts = _TTSOptions(
             voice_id=voice_id,
             voice_settings=voice_settings,
@@ -251,6 +279,7 @@ class TTS(tts.TTS):
             changed = True
 
         if is_given(voice_settings):
+            _validate_voice_settings(voice_settings)
             self._opts.voice_settings = voice_settings
             changed = True
 
