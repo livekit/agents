@@ -13,8 +13,9 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import keyframe, openai
+from livekit.plugins import inference, keyframe, silero
 from livekit.plugins.keyframe import Emotion
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -45,10 +46,15 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(voice="marin"),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        tts=inference.TTS("cartesia/sonic-3"),
+        resume_false_interruption=False,
+        vad=silero.VAD.load(),
+        turn_detection=MultilingualModel(),
     )
 
-    avatar = keyframe.AvatarSession(persona_slug="public:lyra_persona-1.5-live")
+    avatar = keyframe.AvatarSession(persona_slug="public:cosmo_persona-1.5-live")
     await avatar.start(session, room=ctx.room)
 
     await session.start(
