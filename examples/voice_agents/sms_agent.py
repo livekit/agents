@@ -1,8 +1,11 @@
+import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Any, override
 
 import aiohttp
+from aiohttp import web
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -17,7 +20,6 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.beta.workflows import GetEmailTask
-from livekit.agents.http_server import AgentHttpClient
 from livekit.agents.llm import ToolFlag, function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -119,7 +121,7 @@ server = AgentServer(port=PORT, job_executor_type=JobExecutorType.THREAD)
 
 @server.text_handler(endpoint="weather")
 async def text_handler(ctx: TextMessageContext):
-    logger.info(f"text message received: {ctx.text}")
+    logger.info(f"text message received: {ctx.text}", extra={"session_id": ctx.session_id})
 
     session = AgentSession(
         llm="openai/gpt-4.1-mini",
@@ -139,55 +141,6 @@ async def text_handler(ctx: TextMessageContext):
         await ctx.send_response(ev)
 
 
-@server.http_endpoint(
-    "/api/webhooks/twilio-sms",
-    methods=["POST"],
-    headers={"Content-Type": "text/xml"},
-)
-async def twilio_sms_webhook(Body: str, From: str, *, agent_server: AgentServer) -> str:
-    """Twilio inbound SMS webhook — receives an SMS and replies via the text handler.
-
-    Twilio POSTs form-encoded data with From, To, Body, MessageSid, etc.
-    The framework auto-parses form fields into function parameters.
-    We forward the message through the /text endpoint (which runs the agent),
-    collect the reply, and return TwiML XML so Twilio sends it back as SMS.
-    """
-
-    if not Body:
-        return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-
-    # use the sender's phone number as session_id for conversation continuity
-    session_id = From.lstrip("+")
-
-    # TODO: fetch saved session_state for this session_id from your store
-    # and pass it to send_text(..., session_state=saved_state)
-
-    # forward to the text handler via the internal HTTP API
-    reply_parts: list[str] = []
-    async with AgentHttpClient(f"http://localhost:{agent_server.worker_info.http_port}") as client:
-        async for ev in client.send_text(
-            Body,
-            endpoint="weather",
-            session_id=session_id,
-        ):
-            which_oneof = ev.WhichOneof("event")
-            if which_oneof == "message":
-                for part in ev.message.content:
-                    if part.HasField("text"):
-                        reply_parts.append(part.text)
-            elif which_oneof == "complete":
-                if ev.complete.HasField("session_state"):
-                    # TODO: save ev.complete.session_state for this session_id
-                    # so the next message from this number resumes the conversation
-                    pass
-
-    reply = "".join(reply_parts) or "Sorry, I could not process your message."
-    # escape XML special characters
-    reply = reply.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
@@ -200,6 +153,89 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(agent=MyAgent(text_mode=False), room=ctx.room)
+
+
+# --- HTTP endpoint examples ---
+
+
+@server.http_endpoint("/api/user/{user_id}", methods=["GET"])
+async def get_user(user_id: str) -> dict:
+    """GET with query-parameter parsing.
+
+    Query parameters are mapped to function arguments by name.
+    Return a dict and the framework serialises it as JSON.
+
+    Example:
+        GET /api/user/abc123
+    """
+    # replace with a real DB lookup
+    return {"user_id": user_id, "name": "Jane Doe", "plan": "pro"}
+
+
+@server.http_endpoint("/api/user", methods=["POST"])
+async def create_user(name: str, email: str) -> dict:
+    """POST with JSON body parsing.
+
+    JSON body fields are automatically mapped to function arguments by name.
+    Return a dict and the framework serialises it as JSON.
+
+    Example:
+        POST /api/user  {"name": "Jane", "email": "jane@example.com"}
+    """
+    # replace with a real DB insert
+    return {"ok": True, "user": {"name": name, "email": email}}
+
+
+@server.http_endpoint(
+    "/api/stream",
+    methods=["GET"],
+    headers={"Content-Type": "text/event-stream"},
+)
+async def stream_events() -> AsyncIterator[str]:
+    """Streaming response via an async iterator.
+
+    Yield strings (or bytes) and the framework streams them chunk-by-chunk
+    to the client.  Useful for SSE, progress updates, or large payloads.
+
+    Example:
+        GET /api/stream
+    """
+
+    async def _generate():
+        for i in range(5):
+            yield f"data: event {i}\n\n"
+            await asyncio.sleep(0.5)
+
+    return _generate()
+
+
+@server.http_endpoint("/api/upload", methods=["POST"])
+async def upload_file(request: web.Request) -> web.Response:
+    """Raw request / response — full control over the HTTP exchange.
+
+    Accept `web.Request` to read headers, multipart uploads, raw bytes, etc.
+    Return a `web.Response` (or `web.StreamResponse`) for custom status codes,
+    headers, and body.
+
+    Example:
+        POST /api/upload  (multipart form with a "file" field)
+    """
+    reader = await request.multipart()
+    field = await reader.next()
+
+    if field is None or field.name != "file":
+        return web.json_response({"error": "missing 'file' field"}, status=400)
+
+    contents = await field.read()  # type: ignore
+    filename = field.filename or "upload"
+
+    # replace with real storage (S3, GCS, local disk, etc.)
+    logger.info(f"received file '{filename}' ({len(contents)} bytes)")
+
+    return web.json_response(
+        {"ok": True, "filename": filename, "size": len(contents)},
+        status=201,
+    )
 
 
 if __name__ == "__main__":
