@@ -322,14 +322,6 @@ class SpeechStream(stt.SpeechStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                # Send any pending config updates over the active websocket
-                while not self._config_update_queue.empty():
-                    try:
-                        config_msg = self._config_update_queue.get_nowait()
-                        await ws.send_str(json.dumps(config_msg))
-                    except asyncio.QueueEmpty:
-                        break
-
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
@@ -366,11 +358,18 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
+        async def send_config_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            """Send config updates and control messages immediately, independent of audio."""
+            while True:
+                config_msg = await self._config_update_queue.get()
+                await ws.send_str(json.dumps(config_msg))
+
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
             tasks = [
                 asyncio.create_task(send_task(ws)),
+                asyncio.create_task(send_config_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
             try:
