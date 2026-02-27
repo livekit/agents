@@ -367,15 +367,15 @@ class SpeechStream(stt.SpeechStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
+            config_task = asyncio.create_task(send_config_task(ws))
             tasks = [
                 asyncio.create_task(send_task(ws)),
-                asyncio.create_task(send_config_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.gracefully_cancel(config_task, *tasks)
         finally:
             if ws is not None:
                 await ws.close()
@@ -401,7 +401,7 @@ class SpeechStream(stt.SpeechStream):
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)
             else True
-            if "multilingual" in self._opts.speech_model
+            if "multilingual" in self._opts.speech_model or self._opts.speech_model == "u3-rt-pro"
             else False,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "vad_threshold": self._opts.vad_threshold
