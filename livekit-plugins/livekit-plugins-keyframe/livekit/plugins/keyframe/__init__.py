@@ -14,14 +14,13 @@
 
 from .avatar import AvatarSession
 from .errors import KeyframeException
-from .types import Emotion, PersonaConfig
+from .types import Emotion
 from .version import __version__
 
 __all__ = [
     "AvatarSession",
     "Emotion",
     "KeyframeException",
-    "PersonaConfig",
     "__version__",
 ]
 

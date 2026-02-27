@@ -37,7 +37,7 @@ await avatar.set_emotion("happy")  # "neutral", "happy", "sad", "angry"
 To let the LLM control the avatar's expression, register it as a tool:
 
 ```python
-@session.tool()
+@function_tool()
 async def set_avatar_emotion(emotion: keyframe.Emotion):
     """Set the avatar's facial expression and demeanor."""
     await avatar.set_emotion(emotion)
