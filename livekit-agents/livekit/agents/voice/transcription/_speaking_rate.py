@@ -83,9 +83,10 @@ class SpeakingRateStream:
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
                     frame = rtc.combine_audio_frames(inference_frames)
+                    frame_i16 = np.frombuffer(frame.data, dtype=np.int16)
                     frame_f32_data = np.empty(frame.samples_per_channel, dtype=np.float32)
                     np.divide(
-                        frame.data,
+                        frame_i16,
                         np.iinfo(np.int16).max,
                         out=frame_f32_data,
                         dtype=np.float32,
@@ -150,8 +151,9 @@ class SpeakingRateStream:
                     break
 
                 inference_frame = rtc.combine_audio_frames(inference_frames)
+                inference_i16 = np.frombuffer(inference_frame.data, dtype=np.int16)
                 np.divide(
-                    inference_frame.data[: self._window_size_samples],
+                    inference_i16[: self._window_size_samples],
                     np.iinfo(np.int16).max,
                     out=inference_f32_data,
                     dtype=np.float32,
