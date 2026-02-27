@@ -353,7 +353,7 @@ class BackboardLLMStream(llm.LLMStream):
             raise APIStatusError(
                 message=str(e),
                 status_code=e.response.status_code,
-                body=e.response.text,
+                body=None,
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
