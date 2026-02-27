@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import functools
 import inspect
 import math
 import multiprocessing as mp
@@ -39,7 +40,7 @@ from livekit.protocol.agent_pb import agent_text
 
 from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError, TextMessageError
-from .http_server import AgentHttpServer
+from .http_server import AgentHttpServer, _HttpEndpointInfo
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -48,10 +49,10 @@ from .job import (
     JobProcess,
     JobRequest,
     RunningJobInfo,
-    TextMessageContext,
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
+from .text_job import TextMessageContext, _text_job_entrypoint
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.hw import get_cpu_monitor
@@ -73,82 +74,25 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
 
 
 class _EntrypointWrapper:
-    """Entrypoint wrapper that handles regular RTC sessions and SMS jobs."""
+    """Entrypoint wrapper that dispatches to per-job entrypoints or the default RTC entrypoint."""
 
     def __init__(
         self,
-        entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
-        text_handler_fncs: dict[str, Callable[[TextMessageContext], Awaitable[None]]],
+        default_entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
     ) -> None:
-        self._entrypoint_fnc = entrypoint_fnc
-        self._text_handler_fncs = text_handler_fncs
+        self._default_entrypoint_fnc = default_entrypoint_fnc
 
     async def __call__(self, ctx: JobContext) -> None:
-        if ctx.text_message_context is None:
-            await self._handle_rtc_session(ctx)
-        else:
-            await self._handle_text_message(ctx)
-
-    async def _handle_rtc_session(self, ctx: JobContext) -> None:
-        if not self._entrypoint_fnc:
+        entrypoint = ctx._info.entrypoint_fnc or self._default_entrypoint_fnc
+        if entrypoint is None:
             raise RuntimeError(
-                "No RTC session entrypoint has been registered.\n"
+                "No entrypoint function registered.\n"
                 "Define one using the @server.rtc_session() decorator, for example:\n"
                 '    @server.rtc_session(agent_name="my_agent")\n'
                 "    async def my_agent(ctx: JobContext):\n"
                 "        ...\n"
             )
-        await self._entrypoint_fnc(ctx)
-
-    async def _handle_text_message(self, ctx: JobContext) -> None:
-        assert ctx.text_message_context is not None
-
-        exc: TextMessageError | None = None
-        try:
-            endpoint = ctx.text_message_context.endpoint
-            if (text_handler_fnc := self._text_handler_fncs.get(endpoint)) is None:
-                raise RuntimeError(
-                    f"No text handler has been registered for endpoint '{endpoint}'.\n"
-                    "Define one using the @server.text_handler() decorator, for example:\n"
-                    f'    @server.text_handler(endpoint="{endpoint}")\n'
-                    "    async def my_text_handler(ctx: TextMessageContext):\n"
-                    "        ...\n"
-                )
-
-            await text_handler_fnc(ctx.text_message_context)
-        except TextMessageError as e:
-            exc = e
-        except Exception as e:
-            exc = TextMessageError(
-                f"error in text handler: {str(e)}",
-                code=agent_text.TEXT_HANDLER_ERROR,
-            )
-            logger.exception(
-                "error in text handler",
-                extra={"session_id": ctx.text_message_context.session_id},
-            )
-        finally:
-            try:
-                await ctx.text_message_context._complete(exc)
-            except Exception as e:
-                logger.exception(
-                    "error occurred while completing text session",
-                    extra={"session_id": ctx.text_message_context.session_id},
-                )
-                if exc is None:
-                    # try again with an error message
-                    with contextlib.suppress(Exception):
-                        await ctx.text_message_context._complete(
-                            TextMessageError(
-                                f"error occurred while completing text session: {str(e)}",
-                            )
-                        )
-
-            if session := ctx._primary_agent_session:
-                with contextlib.suppress(Exception):
-                    session._stop_durable_scheduler()
-                    await session.aclose()
-            ctx.shutdown()
+        await entrypoint(ctx)
 
 
 @dataclass
@@ -427,6 +371,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
         )
         self._http_server: AgentHttpServer | None = None
+        self._http_endpoints: list[_HttpEndpointInfo] = []
 
         self._lock = asyncio.Lock()
 
@@ -590,6 +535,75 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         return decorator
 
+    def http_endpoint(
+        self,
+        path: str,
+        *,
+        methods: list[str] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+        """Decorator to register an HTTP endpoint on the agent server.
+
+        Usage:
+            @server.http_endpoint("/api/health")
+            async def health(request: web.Request):
+                return {"status": "ok"}
+
+            @server.http_endpoint("/api/jobs", methods=["GET"])
+            async def list_jobs(request: web.Request, agent_server: AgentServer):
+                return {"active_jobs": len(agent_server.active_jobs)}
+
+            @server.http_endpoint(
+                "/api/stream",
+                methods=["POST"],
+                headers={"Content-Type": "text/event-stream"},
+            )
+            async def stream(request: web.Request):
+                async def _gen():
+                    yield "data: hello\\n\\n"
+                return _gen()
+        """
+        if methods is None:
+            methods = ["GET"]
+
+        if not path:
+            raise ValueError("path is required for http_endpoint")
+        if not path.startswith("/"):
+            raise ValueError(f"http_endpoint path must start with '/': {path}")
+
+        # check reserved paths
+        if path in AgentHttpServer.RESERVED_PATHS:
+            raise ValueError(f"http_endpoint path '{path}' is reserved")
+        for prefix in AgentHttpServer.RESERVED_PATH_PREFIXES:
+            if path == prefix or path.startswith(prefix + "/"):
+                raise ValueError(
+                    f"http_endpoint path '{path}' conflicts with reserved prefix '{prefix}'"
+                )
+
+        # check for duplicate path+method
+        for m in methods:
+            for ep in self._http_endpoints:
+                if ep.path == path and m in ep.methods:
+                    raise ValueError(f"http_endpoint '{m} {path}' is already registered")
+
+        def decorator(
+            f: Callable[..., Awaitable[Any]],
+        ) -> Callable[..., Awaitable[Any]]:
+            if not asyncio.iscoroutinefunction(f):
+                raise TypeError(f"http_endpoint handler must be async: {f.__name__}")
+
+            self._http_endpoints.append(
+                _HttpEndpointInfo(
+                    handler=f,
+                    path=path,
+                    methods=methods or ["GET"],
+                    headers=headers,
+                )
+            )
+            return f
+
+        return decorator
+
     @property
     def worker_info(self) -> WorkerInfo:
         return WorkerInfo(
@@ -671,9 +685,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=_EntrypointWrapper(
-                    self._entrypoint_fnc, self._text_handler_fncs
-                ),
+                job_entrypoint_fnc=_EntrypointWrapper(self._entrypoint_fnc),
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
@@ -954,7 +966,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
         token: str | None = None,
-        text_endpoint: str = "",
+        entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None,
         text_request: agent_text.TextMessageRequest | None = None,
     ) -> None:
         async with self._lock:
@@ -999,7 +1011,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=fake_job,
-                text_endpoint=text_endpoint,
+                entrypoint_fnc=entrypoint_fnc,
                 text_request=text_request,
             )
 
@@ -1249,7 +1261,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=jwt.encode(decoded, self._api_secret, algorithm="HS256"),
                 worker_id=aj.worker_id,
                 fake_job=aj.fake_job,
-                text_endpoint=aj.text_endpoint,
+                entrypoint_fnc=aj.entrypoint_fnc,
                 text_request=aj.text_request,
             )
             await self._proc_pool.launch_job(running_info)
@@ -1407,7 +1419,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
 
     async def _launch_text_job(
-        self, endpoint: str, request: agent_text.TextMessageRequest
+        self,
+        endpoint: str,
+        request: agent_text.TextMessageRequest,
+        handler_fnc: Callable[[TextMessageContext], Awaitable[None]],
     ) -> _TextSession:
         """Launch a text message job and track the session."""
         session_id = request.session_id
@@ -1466,8 +1481,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=False,
-                text_endpoint=endpoint,
                 text_request=request,
+                entrypoint_fnc=functools.partial(_text_job_entrypoint, handler_fnc),
             )
             proc_id = await self._proc_pool.launch_job(running_info)
 

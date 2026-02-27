@@ -36,7 +36,6 @@ from .job import (
     JobExecutorType,
     JobProcess,
     JobRequest,
-    TextMessageContext,
     get_job_context,
 )
 from .llm.chat_context import (
@@ -60,6 +59,7 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .text_job import TextMessageContext
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

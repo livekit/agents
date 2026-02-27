@@ -1,8 +1,11 @@
+import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Any, override
 
 import aiohttp
+from aiohttp import web
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -118,7 +121,7 @@ server = AgentServer(port=PORT, job_executor_type=JobExecutorType.THREAD)
 
 @server.text_handler(endpoint="weather")
 async def text_handler(ctx: TextMessageContext):
-    logger.info(f"text message received: {ctx.text}")
+    logger.info(f"text message received: {ctx.text}", extra={"session_id": ctx.session_id})
 
     session = AgentSession(
         llm="openai/gpt-4.1-mini",
@@ -150,6 +153,75 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(agent=MyAgent(text_mode=False), room=ctx.room)
+
+
+# --- HTTP endpoint examples ---
+
+
+@server.http_endpoint("/api/user/{user_id}", methods=["GET"])
+async def get_user(user_id: str) -> dict:
+    """GET with query-parameter parsing.
+
+    Query parameters are mapped to function arguments by name.
+    Return a dict and the framework serialises it as JSON.
+
+    Example:
+        GET /api/user/abc123
+    """
+    # replace with a real DB lookup
+    return {"user_id": user_id, "name": "Jane Doe", "plan": "pro"}
+
+
+@server.http_endpoint(
+    "/api/stream",
+    methods=["GET"],
+    headers={"Content-Type": "text/event-stream"},
+)
+async def stream_events() -> AsyncIterator[str]:
+    """Streaming response via an async iterator.
+
+    Yield strings (or bytes) and the framework streams them chunk-by-chunk
+    to the client.  Useful for SSE, progress updates, or large payloads.
+
+    Example:
+        GET /api/stream
+    """
+
+    async def _generate():
+        for i in range(5):
+            yield f"data: event {i}\n\n"
+            await asyncio.sleep(0.5)
+
+    return _generate()
+
+
+@server.http_endpoint("/api/upload", methods=["POST"])
+async def upload_file(request: web.Request) -> web.Response:
+    """Raw request / response — full control over the HTTP exchange.
+
+    Accept `web.Request` to read headers, multipart uploads, raw bytes, etc.
+    Return a `web.Response` (or `web.StreamResponse`) for custom status codes,
+    headers, and body.
+
+    Example:
+        POST /api/upload  (multipart form with a "file" field)
+    """
+    reader = await request.multipart()
+    field = await reader.next()
+
+    if field is None or field.name != "file":
+        return web.json_response({"error": "missing 'file' field"}, status=400)
+
+    contents = await field.read()  # type: ignore
+    filename = field.filename or "upload"
+
+    # replace with real storage (S3, GCS, local disk, etc.)
+    logger.info(f"received file '{filename}' ({len(contents)} bytes)")
+
+    return web.json_response(
+        {"ok": True, "filename": filename, "size": len(contents)},
+        status=201,
+    )
 
 
 if __name__ == "__main__":
