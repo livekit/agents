@@ -50,7 +50,7 @@ class STTOptions:
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
     speech_model: Literal[
-        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro"
+        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro", "u3-pro"
     ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -70,7 +70,10 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
         model: Literal[
-            "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro"
+            "universal-streaming-english",
+            "universal-streaming-multilingual",
+            "u3-rt-pro",
+            "u3-pro",
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -103,6 +106,10 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+        if model == "u3-pro":
+            logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
+            model = "u3-rt-pro"
+
         if is_given(prompt) and model != "u3-rt-pro":
             raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
 
@@ -381,6 +388,28 @@ class SpeechStream(stt.SpeechStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        if self._opts.speech_model == "u3-rt-pro":
+            min_silence = (
+                self._opts.min_end_of_turn_silence_when_confident
+                if is_given(self._opts.min_end_of_turn_silence_when_confident)
+                else 100
+            )
+            max_silence = (
+                self._opts.max_turn_silence
+                if is_given(self._opts.max_turn_silence)
+                else min_silence
+            )
+        else:
+            min_silence = (
+                self._opts.min_end_of_turn_silence_when_confident
+                if is_given(self._opts.min_end_of_turn_silence_when_confident)
+                else None
+            )
+            max_silence = (
+                self._opts.max_turn_silence if is_given(self._opts.max_turn_silence) else None
+            )
+
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "encoding": self._opts.encoding,
@@ -389,12 +418,8 @@ class SpeechStream(stt.SpeechStream):
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
-            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident  # noqa: E501
-            if is_given(self._opts.min_end_of_turn_silence_when_confident)
-            else None,
-            "max_turn_silence": self._opts.max_turn_silence
-            if is_given(self._opts.max_turn_silence)
-            else None,
+            "min_end_of_turn_silence_when_confident": min_silence,
+            "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
             if is_given(self._opts.keyterms_prompt)
             else None,
