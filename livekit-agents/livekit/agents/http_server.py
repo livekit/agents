@@ -19,6 +19,7 @@ from livekit.protocol import agent
 from livekit.protocol.agent_pb import agent_text
 
 from .log import logger
+from .text_job import _handle_text_request
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.http_server import HttpServer
@@ -113,7 +114,6 @@ class AgentHttpServer(HttpServer):
             self._app.router.add_route("OPTIONS", "/{path:.*}", _handle_cors_preflight)
 
         # text routes (reserved)
-        from .text_job import _handle_text_request
 
         text_handler = self._wrap_user_handler(
             _handle_text_request,

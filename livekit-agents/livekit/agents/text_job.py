@@ -126,6 +126,48 @@ class TextMessageContext:
         await self._job_ctx._ipc_client.send(msg)
 
 
+async def _text_job_entrypoint(
+    handler_fnc: Callable[[TextMessageContext], Awaitable[None]],
+    ctx: JobContext,
+) -> None:
+    """Module-level text job entrypoint (picklable via functools.partial)."""
+    assert ctx.text_message_context is not None
+
+    exc: TextMessageError | None = None
+    try:
+        await handler_fnc(ctx.text_message_context)
+    except TextMessageError as e:
+        exc = e
+    except Exception as e:
+        exc = TextMessageError(
+            f"error in text handler: {str(e)}",
+            code=agent_text.TEXT_HANDLER_ERROR,
+        )
+        logger.exception(
+            "error in text handler",
+            extra={"session_id": ctx.text_message_context.session_id},
+        )
+    finally:
+        try:
+            await ctx.text_message_context._complete(exc)
+        except Exception as e:
+            logger.exception(
+                "error completing text session",
+                extra={"session_id": ctx.text_message_context.session_id},
+            )
+            if exc is None:
+                with contextlib.suppress(Exception):
+                    await ctx.text_message_context._complete(
+                        TextMessageError(f"error completing: {str(e)}")
+                    )
+
+        if session := ctx._primary_agent_session:
+            with contextlib.suppress(Exception):
+                session._stop_durable_scheduler()
+                await session.aclose()
+        ctx.shutdown()
+
+
 async def _handle_text_request(
     text: str,
     endpoint: str = "",
@@ -217,45 +259,3 @@ async def _handle_text_request(
                 )
 
     return _stream()
-
-
-async def _text_job_entrypoint(
-    handler_fnc: Callable[[TextMessageContext], Awaitable[None]],
-    ctx: JobContext,
-) -> None:
-    """Module-level text job entrypoint (picklable via functools.partial)."""
-    assert ctx.text_message_context is not None
-
-    exc: TextMessageError | None = None
-    try:
-        await handler_fnc(ctx.text_message_context)
-    except TextMessageError as e:
-        exc = e
-    except Exception as e:
-        exc = TextMessageError(
-            f"error in text handler: {str(e)}",
-            code=agent_text.TEXT_HANDLER_ERROR,
-        )
-        logger.exception(
-            "error in text handler",
-            extra={"session_id": ctx.text_message_context.session_id},
-        )
-    finally:
-        try:
-            await ctx.text_message_context._complete(exc)
-        except Exception as e:
-            logger.exception(
-                "error completing text session",
-                extra={"session_id": ctx.text_message_context.session_id},
-            )
-            if exc is None:
-                with contextlib.suppress(Exception):
-                    await ctx.text_message_context._complete(
-                        TextMessageError(f"error completing: {str(e)}")
-                    )
-
-        if session := ctx._primary_agent_session:
-            with contextlib.suppress(Exception):
-                session._stop_durable_scheduler()
-                await session.aclose()
-        ctx.shutdown()
