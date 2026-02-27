@@ -48,9 +48,13 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 
 class _ResponsesWebsocket:
-    def __init__(self, api_key: str | None, timeout: httpx.Timeout | None) -> None:
+    def __init__(
+        self, api_key: str | None, timeout: httpx.Timeout | None, base_url: str | None = None
+    ) -> None:
         self._api_key = api_key
         self._timeout = timeout
+        self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
+
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
         self._session: aiohttp.ClientSession | None = None
         self._input_ch = utils.aio.Chan[dict]()
@@ -66,7 +70,7 @@ class _ResponsesWebsocket:
         try:
             return await asyncio.wait_for(
                 self._ensure_http_session().ws_connect(
-                    OPENAI_RESPONSES_WS_URL,
+                    self._base_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ),
                 timeout=self._timeout.connect if self._timeout else None,
@@ -93,14 +97,18 @@ class _ResponsesWebsocket:
                     await ws_conn.close()
                     return
                 try:
-                    await ws_conn.send_str(
-                        json.dumps(
-                            msg,
-                            default=lambda o: (
-                                o.model_dump() if isinstance(o, openai.BaseModel) else None
-                            ),
-                        )
-                    )
+
+                    def _default(o: object) -> object:
+                        if isinstance(o, openai.BaseModel):
+                            return o.model_dump()
+                        raise TypeError(f"unexpected type {type(o)}")
+
+                    data = json.dumps(msg, default=_default)
+                except TypeError as e:
+                    logger.warning("skipping ws message, failed to serialize: %s", e)
+                    continue
+                try:
+                    await ws_conn.send_str(data)
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -179,7 +187,7 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
-    websocket_mode: NotGivenOr[bool]
+    use_websocket: bool
 
 
 class LLM(llm.LLM):
@@ -190,7 +198,7 @@ class LLM(llm.LLM):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
-        websocket_mode: NotGivenOr[bool] = NOT_GIVEN,
+        use_websocket: bool = True,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -223,7 +231,7 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
             reasoning=reasoning,
-            websocket_mode=websocket_mode,
+            use_websocket=use_websocket,
         )
         self._client = client
         self._owns_client = client is None
@@ -233,7 +241,7 @@ class LLM(llm.LLM):
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
 
-        if not is_given(websocket_mode) or websocket_mode:
+        if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
             if not resolved_api_key:
                 raise ValueError(
@@ -243,6 +251,7 @@ class LLM(llm.LLM):
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
                 timeout=timeout,
+                base_url=base_url if is_given(base_url) else None,
             )
 
         else:
@@ -390,7 +399,7 @@ class LLMStream(llm.LLMStream):
             ),
         )
 
-        if self._llm._opts.websocket_mode is not False:
+        if self._llm._opts.use_websocket is not False:
             retryable = True
             try:
                 ws = await self._llm._ensure_ws()
