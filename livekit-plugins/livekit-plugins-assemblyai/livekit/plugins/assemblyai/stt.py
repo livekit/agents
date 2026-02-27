@@ -389,6 +389,8 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        min_silence: int | None
+        max_silence: int | None
         if self._opts.speech_model == "u3-rt-pro":
             min_silence = (
                 self._opts.min_end_of_turn_silence_when_confident
