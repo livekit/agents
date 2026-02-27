@@ -279,15 +279,16 @@ class LLM(llm.LLM):
             await self._client.close()
 
     async def _ensure_ws(self) -> _ResponsesWebsocket:
+        if self._ws is None:
+            raise RuntimeError("_ensure_ws called but self._ws is None")
         async with self._ws_lock:
-            if self._ws is not None:
-                dead = self._ws._run_task is not None and self._ws._run_task.done()
-                if self._ws._ws_conn is None or dead:
-                    if dead and self._ws._ws_conn is not None:
-                        await self._ws._ws_conn.close()
-                        self._ws._ws_conn = None
-                    await self._ws.connect()
-        return self._ws  # type: ignore
+            dead = self._ws._run_task is not None and self._ws._run_task.done()
+            if self._ws._ws_conn is None or dead:
+                if dead and self._ws._ws_conn is not None:
+                    await self._ws._ws_conn.close()
+                    self._ws._ws_conn = None
+                await self._ws.connect()
+        return self._ws
 
     @property
     def model(self) -> str:
