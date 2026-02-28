@@ -391,9 +391,8 @@ def _try_repair_json(raw: str) -> Any:
     if quote_count % 2 != 0:
         repaired += '"'
 
-    # Close open brackets/braces
-    open_braces = 0
-    open_brackets = 0
+    # Close open brackets/braces in correct nesting order
+    nesting_stack: list[str] = []
     in_string = False
     in_escape = False
     for ch in repaired:
@@ -409,16 +408,13 @@ def _try_repair_json(raw: str) -> Any:
         if in_string:
             continue
         if ch == "{":
-            open_braces += 1
-        elif ch == "}":
-            open_braces -= 1
+            nesting_stack.append("}")
         elif ch == "[":
-            open_brackets += 1
-        elif ch == "]":
-            open_brackets -= 1
+            nesting_stack.append("]")
+        elif ch in ("}", "]") and nesting_stack and nesting_stack[-1] == ch:
+            nesting_stack.pop()
 
-    repaired += "]" * max(0, open_brackets)
-    repaired += "}" * max(0, open_braces)
+    repaired += "".join(reversed(nesting_stack))
 
     return json.loads(repaired)
 
