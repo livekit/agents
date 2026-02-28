@@ -333,6 +333,10 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
     ) -> None:
+        # Fix: correct default sample rate for v3/v3-beta before passing to parent
+        if speech_sample_rate == 22050 and (model == "bulbul:v3-beta" or model == "bulbul:v3"):
+            speech_sample_rate = 24000
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=speech_sample_rate,
@@ -354,10 +358,6 @@ class TTS(tts.TTS):
                 speaker = "shubh"
             else:
                 speaker = "anushka"
-
-        # Fix: default sample rate for v3-beta should be 24000, not 22050
-        if speech_sample_rate == 22050 and (model == "bulbul:v3-beta" or model == "bulbul:v3"):
-            speech_sample_rate = 24000
 
         # Validate parameter ranges
         # Fix: pitch suitable range is -0.75 to 0.75 per Sarvam docs
@@ -516,13 +516,17 @@ class TTS(tts.TTS):
             self._opts.speaker = speaker
 
         if pitch is not None:
-            if not -20.0 <= pitch <= 20.0:
-                raise ValueError("Pitch must be between -20.0 and 20.0")
+            if not -0.75 <= pitch <= 0.75:
+                raise ValueError("Pitch must be between -0.75 and 0.75")
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.5 <= pace <= 2.0:
-                raise ValueError("Pace must be between 0.5 and 2.0")
+            if self._opts.model == "bulbul:v2":
+                if not 0.3 <= pace <= 3.0:
+                    raise ValueError("Pace must be between 0.3 and 3.0 for bulbul:v2")
+            else:
+                if not 0.5 <= pace <= 2.0:
+                    raise ValueError("Pace must be between 0.5 and 2.0 for bulbul:v3/v3-beta")
             self._opts.pace = pace
 
         if loudness is not None:
