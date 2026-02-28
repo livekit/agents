@@ -429,3 +429,10 @@ class TestTruncatedJsonRepair:
                 fnc=mock_tool_1,
                 json_arguments="this is not json at all",
             )
+
+    def test_nested_object_in_array_repair(self):
+        """Object inside array should close in correct nesting order."""
+        from livekit.agents.llm.utils import _try_repair_json
+
+        result = _try_repair_json('{"arr": [{"a": 1')
+        assert result == {"arr": [{"a": 1}]}
