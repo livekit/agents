@@ -60,6 +60,8 @@ class STTOptions:
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
+    speaker_labels: NotGivenOr[bool] = NOT_GIVEN
+    max_speakers: NotGivenOr[int] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -83,6 +85,8 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
+        max_speakers: NotGivenOr[int] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -141,6 +145,8 @@ class STT(stt.STT):
             keyterms_prompt=keyterms_prompt,
             prompt=prompt,
             vad_threshold=vad_threshold,
+            speaker_labels=speaker_labels,
+            max_speakers=max_speakers,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -433,6 +439,12 @@ class SpeechStream(stt.SpeechStream):
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
+            else None,
+            "speaker_labels": self._opts.speaker_labels
+            if is_given(self._opts.speaker_labels)
+            else None,
+            "max_speakers": self._opts.max_speakers
+            if is_given(self._opts.max_speakers)
             else None,
         }
 
