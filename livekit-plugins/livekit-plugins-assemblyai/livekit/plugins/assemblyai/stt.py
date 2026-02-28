@@ -443,9 +443,7 @@ class SpeechStream(stt.SpeechStream):
             "speaker_labels": self._opts.speaker_labels
             if is_given(self._opts.speaker_labels)
             else None,
-            "max_speakers": self._opts.max_speakers
-            if is_given(self._opts.max_speakers)
-            else None,
+            "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
         }
 
         headers = {
