@@ -61,9 +61,20 @@ SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
-ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {"linear16", "mulaw", "alaw", "opus", "flac", "aac", "wav", "mp3"}
+ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
+    "linear16",
+    "mulaw",
+    "alaw",
+    "opus",
+    "flac",
+    "aac",
+    "wav",
+    "mp3",
+}
 
-SarvamTTSOutputAudioCodec = Literal["linear16", "mulaw", "alaw", "opus", "flac", "aac", "wav", "mp3"]
+SarvamTTSOutputAudioCodec = Literal[
+    "linear16", "mulaw", "alaw", "opus", "flac", "aac", "wav", "mp3"
+]
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -753,7 +764,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 while True:
                     await asyncio.sleep(KEEPALIVE_INTERVAL)
                     if ws.closed:
-                        logger.debug("Keepalive: WS already closed, stopping", extra=self._build_log_context())
+                        logger.debug(
+                            "Keepalive: WS already closed, stopping",
+                            extra=self._build_log_context(),
+                        )
                         break
                     await ws.send_str(ping_msg)
                     logger.debug("Keepalive ping sent", extra=self._build_log_context())
@@ -761,6 +775,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 pass  # Normal — cancelled when send_task takes over or session ends
             except Exception as e:
                 logger.warning(f"Keepalive ping failed: {e}", extra=self._build_log_context())
+
         # ------------------------------------------------------------------
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
