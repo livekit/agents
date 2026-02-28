@@ -405,7 +405,11 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_config_update: bool = False,
     ) -> ChatContext:
-        """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
+        """Add messages from `other_chat_ctx` into this one, avoiding duplicates.
+
+        New items are appended in the order they appear in `other_chat_ctx`, preserving
+        the natural conversation order.
+        """
         existing_ids = {item.id for item in self._items}
 
         for item in other_chat_ctx.items:
@@ -426,8 +430,7 @@ class ChatContext:
                 continue
 
             if item.id not in existing_ids:
-                idx = self.find_insertion_index(created_at=item.created_at)
-                self._items.insert(idx, item)
+                self._items.append(item)
                 existing_ids.add(item.id)
 
         return self

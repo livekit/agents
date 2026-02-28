@@ -242,6 +242,70 @@ async def test_summarize():
         print(json.dumps(summary.to_dict(), indent=2))
 
 
+# --- merge tests ---
+
+
+def test_merge_preserves_conversation_order_over_timestamps():
+    """
+    Regression test: merge() must preserve the source order from other_chat_ctx,
+    not re-sort by created_at.
+
+    Simulates the Gemini native audio scenario where the assistant starts speaking
+    (created_at = started_speaking_at = 32.7) before the user's transcript is
+    finalised (created_at = 36.8), but both are appended to the task's chat_ctx
+    in correct conversational order via items.append().
+
+    Before the fix, merge() would call find_insertion_index() and insert assistant2
+    before the user message, giving [assistant1, assistant2, user].
+    After the fix, merge() appends in source order, giving [assistant1, user, assistant2].
+    """
+    from livekit.agents.llm import ChatContext, ChatMessage
+
+    task_ctx = ChatContext()
+
+    assistant1 = ChatMessage(role="assistant", content=["Hey there! What's your name?"])
+    assistant1.created_at = 23.9
+    task_ctx._items.append(assistant1)
+
+    user_msg = ChatMessage(role="user", content=["Hey, I'm John."])
+    user_msg.created_at = 36.8  # transcript finalised after assistant2 started speaking
+    task_ctx._items.append(user_msg)
+
+    assistant2 = ChatMessage(role="assistant", content=["Oh cool!"])
+    assistant2.created_at = 32.7  # started_speaking_at — earlier than user's created_at
+    task_ctx._items.append(assistant2)
+
+    old_agent_ctx = ChatContext()
+    old_agent_ctx.merge(task_ctx)
+
+    result_ids = [item.id for item in old_agent_ctx.items]
+    assert result_ids == [assistant1.id, user_msg.id, assistant2.id], (
+        f"merge() reordered items by created_at instead of preserving conversation order: "
+        f"{[item.role for item in old_agent_ctx.items]}"
+    )
+
+
+def test_merge_deduplicates_existing_items():
+    """merge() must not add items that are already present in the target context."""
+    from livekit.agents.llm import ChatContext, ChatMessage
+
+    shared_msg = ChatMessage(role="user", content=["Hello"])
+    new_msg = ChatMessage(role="assistant", content=["Hi"])
+
+    base_ctx = ChatContext()
+    base_ctx._items.append(shared_msg)
+
+    other_ctx = ChatContext()
+    other_ctx._items.append(shared_msg)
+    other_ctx._items.append(new_msg)
+
+    base_ctx.merge(other_ctx)
+
+    assert len(base_ctx.items) == 2
+    assert base_ctx.items[0].id == shared_msg.id
+    assert base_ctx.items[1].id == new_msg.id
+
+
 # --- truncate tests ---
 
 
