@@ -114,25 +114,57 @@ def _normalize_fallback(
 
 class CartesiaOptions(TypedDict, total=False):
     emotion: str
-    speed: Literal["slow", "normal", "fast"]
+    speed: Literal["slow", "normal", "fast"] | float
     volume: float
+    duration: float
+    max_buffer_delay_ms: int
+    add_timestamps: bool
+    add_phoneme_timestamps: bool
+    use_normalized_timestamps: bool
 
 
 class DeepgramOptions(TypedDict, total=False):
-    pass
+    mip_opt_out: bool  # default: False
 
 
 class ElevenlabsOptions(TypedDict, total=False):
-    inactivity_timeout: int  # default: 60
+    inactivity_timeout: int  # default: 60, range 5-180
     apply_text_normalization: Literal["auto", "off", "on"]  # default: "auto"
+    auto_mode: bool
+    enable_logging: bool
+    enable_ssml_parsing: bool
+    sync_alignment: bool
+    language_code: str
+    stability: float  # range 0-1
+    similarity_boost: float  # range 0-1
+    style: float  # range 0-1
+    speed: float  # range 0.25-4
+    use_speaker_boost: bool
+    chunk_length_schedule: list[float]
+    preferred_alignment: str
 
 
 class RimeOptions(TypedDict, total=False):
-    pass
+    # Universal
+    reduceLatency: bool
+    # Mistv2-specific
+    pauseBetweenBrackets: bool
+    phonemizeBetweenBrackets: bool
+    inlineSpeedAlpha: str
+    noTextNormalization: bool
+    speedAlpha: float
+    # Arcana-specific
+    repetition_penalty: float  # range 1-2
+    temperature: float  # range 0-1
+    top_p: float  # range 0-1
+    max_tokens: int  # range 200-5000
 
 
 class InworldOptions(TypedDict, total=False):
-    pass
+    speaking_rate: float  # range >0.5, <=1.5
+    temperature: float  # range 0-2
+    timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
+    apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
 
 TTSEncoding = Literal["pcm_s16le"]
