@@ -51,6 +51,7 @@ members = [
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
     "livekit-plugins-rtzr",
+    "livekit-plugins-sambanova",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
     "livekit-plugins-simli",
@@ -2600,6 +2601,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-sambanova"
+source = { editable = "livekit-plugins/livekit-plugins-sambanova" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-sarvam"
