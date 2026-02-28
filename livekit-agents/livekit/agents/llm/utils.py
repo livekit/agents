@@ -389,6 +389,10 @@ def _try_repair_json(raw: str) -> Any:
         if ch == '"':
             quote_count += 1
     if quote_count % 2 != 0:
+        # Strip trailing unescaped backslash (truncated escape sequence)
+        # so we don't produce '\"' instead of a real closing quote.
+        if repaired.endswith("\\") and not repaired.endswith("\\\\"):
+            repaired = repaired[:-1]
         repaired += '"'
 
     # Close open brackets/braces in correct nesting order
