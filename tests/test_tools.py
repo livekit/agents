@@ -392,3 +392,41 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestTruncatedJsonRepair:
+    """Test repair of truncated JSON from LLM tool call arguments."""
+
+    def test_truncated_string_value(self):
+        """LLM returns JSON with an unfinished string — should repair and parse."""
+        # Real-world example from issue #4240: GPT-4.1 on Azure
+        truncated = '{"success":true,"reason":"The message explicitly asks the user'
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_1,
+            json_arguments='{"arg1":"The message explicitly asks the user',
+        )
+        assert "The message explicitly asks the user" in args[0]
+
+    def test_truncated_closing_brace(self):
+        """JSON missing closing brace — should repair."""
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_1,
+            json_arguments='{"arg1": "hello"',
+        )
+        assert args == ("hello", None)
+
+    def test_valid_json_not_affected(self):
+        """Valid JSON should still work unchanged."""
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_1,
+            json_arguments='{"arg1": "test"}',
+        )
+        assert args == ("test", None)
+
+    def test_completely_invalid_json_raises(self):
+        """Completely broken JSON should still raise ValueError."""
+        with pytest.raises(ValueError):
+            prepare_function_arguments(
+                fnc=mock_tool_1,
+                json_arguments="this is not json at all",
+            )
