@@ -400,7 +400,6 @@ class TestTruncatedJsonRepair:
     def test_truncated_string_value(self):
         """LLM returns JSON with an unfinished string — should repair and parse."""
         # Real-world example from issue #4240: GPT-4.1 on Azure
-        truncated = '{"success":true,"reason":"The message explicitly asks the user'
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1,
             json_arguments='{"arg1":"The message explicitly asks the user',
