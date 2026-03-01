@@ -140,6 +140,8 @@ class STTOptions:
 
 def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     """Build the streaming configuration for Gladia API."""
+    # Filter out empty strings from languages list
+    languages = [lang for lang in (opts.language_config.languages or []) if lang]
     streaming_config: dict[str, Any] = {
         "region": opts.region,
         "encoding": opts.encoding,
@@ -150,7 +152,7 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         "bit_depth": opts.bit_depth,
         "channels": opts.channels,
         "language_config": {
-            "languages": opts.language_config.languages or [],
+            "languages": languages,
             "code_switching": opts.language_config.code_switching,
         },
         "realtime_processing": {
@@ -926,6 +928,9 @@ class SpeechStream(stt.SpeechStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as res:
+                if res.status != 200:
+                    body = await res.text()
+                    logger.error(f"Gladia API error response: {body}")
                 res.raise_for_status()
                 return await res.json()  # type: ignore
 
