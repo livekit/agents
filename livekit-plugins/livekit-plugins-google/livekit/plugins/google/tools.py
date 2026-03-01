@@ -10,7 +10,7 @@ class GeminiTool(llm.ProviderTool, ABC):
     def to_tool_config(self) -> types.Tool: ...
 
 
-@dataclass
+@dataclass(eq=False)
 class GoogleSearch(GeminiTool):
     exclude_domains: list[str] | None = None
     blocking_confidence: types.PhishBlockThreshold | None = None
@@ -29,7 +29,7 @@ class GoogleSearch(GeminiTool):
         )
 
 
-@dataclass
+@dataclass(eq=False)
 class GoogleMaps(GeminiTool):
     auth_config: types.AuthConfig | None = None
     enable_widget: bool | None = None
@@ -56,7 +56,7 @@ class URLContext(GeminiTool):
         )
 
 
-@dataclass
+@dataclass(eq=False)
 class FileSearch(GeminiTool):
     file_search_store_names: list[str]
     top_k: int | None = None

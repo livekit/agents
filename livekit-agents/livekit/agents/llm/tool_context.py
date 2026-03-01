@@ -46,6 +46,14 @@ class ProviderTool(Tool):
     def id(self) -> str:
         return self._id
 
+    def __eq__(self, other: object) -> bool:
+        if type(self) is not type(other):
+            return False
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
 
 class Toolset(ABC):
     @dataclass
@@ -420,12 +428,7 @@ class ToolContext:
             if self._fnc_tools_map[name] is not other._fnc_tools_map[name]:
                 return False
 
-        if len(self._provider_tools) != len(other._provider_tools):
-            return False
-
-        self_provider_ids = {id(tool) for tool in self._provider_tools}
-        other_provider_ids = {id(tool) for tool in other._provider_tools}
-        if self_provider_ids != other_provider_ids:
+        if set(self._provider_tools) != set(other._provider_tools):
             return False
 
         self_tool_set_ids = {id(tool_set) for tool_set in self._tool_sets}
