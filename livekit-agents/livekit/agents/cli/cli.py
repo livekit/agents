@@ -36,6 +36,7 @@ from rich.theme import Theme
 
 from livekit import api, rtc
 
+from .. import llm
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
@@ -305,6 +306,9 @@ class AgentsConsole:
         self._enabled = False
         self._record = False
 
+        self._last_metrics_text: Text | None = None
+        self._last_user_metrics: llm.MetricsReport | None = None
+
         self._text_mode_log_filter = TextModeLogFilter()
         self._log_handler = RichLoggingHandler(self)
 
@@ -336,6 +340,36 @@ class AgentsConsole:
             self._io_session = session
 
         if session:
+            from ..voice.events import (
+                AgentStateChangedEvent,
+                ConversationItemAddedEvent,
+            )
+
+            @session.on("conversation_item_added")
+            def _on_conversation_item_added(event: ConversationItemAddedEvent) -> None:
+                if not isinstance(event.item, llm.ChatMessage):
+                    return
+
+                if event.item.role == "user":
+                    self._last_user_metrics = event.item.metrics
+                elif event.item.role == "assistant":
+                    self._last_metrics_text = _format_turn_metrics(
+                        self._last_user_metrics, event.item.metrics
+                    )
+                    self._last_user_metrics = None
+
+            @session.on("agent_state_changed")
+            def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
+                if event.new_state == "speaking":
+                    early = session._early_assistant_metrics
+                    if early:
+                        self._last_metrics_text = _format_turn_metrics(
+                            self._last_user_metrics, early
+                        )
+                        session._early_assistant_metrics = None
+                elif event.new_state == "thinking":
+                    self._last_metrics_text = None
+
             self._update_sess_io(
                 session,
                 self.console_mode,
@@ -710,10 +744,17 @@ class FrequencyVisualizer:
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
 
     def __rich__(self) -> RenderableType:
-        table = Table.grid(padding=0)
+        table = Table.grid(padding=0, expand=True)
         table.add_column()
 
         label = f"   {self.label}  "
+        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
+        style = self.c.console.get_style("label")
+        label_seg = Text(label, style=style)
+
+        metrics_text = self.c._last_metrics_text
+        left_width = len(label) + len(bar)
+
         inner_table = Table.grid(
             Column(width=len(label), no_wrap=True),
             Column(no_wrap=True, overflow="fold"),
@@ -721,13 +762,34 @@ class FrequencyVisualizer:
             collapse_padding=True,
             pad_edge=False,
         )
-
-        style = self.c.console.get_style("label")
-        label_seg = Text(label, style=style)
-
-        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
         inner_table.add_row(Group(label_seg), Group(bar))
         table.add_row(inner_table)
+
+        if metrics_text is not None:
+            metrics_width = len(metrics_text.plain)
+            console_width = self.c.console.width
+
+            if left_width + metrics_width + 4 <= console_width:
+                # fits on the same row — re-do as 3-column layout
+                table = Table.grid(padding=0, expand=True)
+                table.add_column()
+                wide_table = Table.grid(
+                    Column(width=len(label), no_wrap=True),
+                    Column(no_wrap=True, overflow="fold"),
+                    Column(no_wrap=True, justify="right"),
+                    padding=(0, 0, 0, 0),
+                    collapse_padding=True,
+                    pad_edge=False,
+                    expand=True,
+                )
+                wide_table.add_row(Group(label_seg), Group(bar), metrics_text)
+                table.add_row(wide_table)
+            else:
+                # metrics on a separate line, right-aligned
+                right_metrics = metrics_text.copy()
+                right_metrics.justify = "right"
+                table.add_row(right_metrics)
+
         table.add_row(Text(""))
 
         if self.show_shortcuts:
@@ -1109,7 +1171,7 @@ def _text_mode(c: AgentsConsole) -> None:
             task = asyncio.create_task(_generate(text))
             task.add_done_callback(_done_callback)
 
-        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        h: asyncio.Future[list[RunEvent]] = c.io_loop.create_future()
         c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
 
         c.console.print()
@@ -1126,8 +1188,11 @@ def _text_mode(c: AgentsConsole) -> None:
             while not h.done():
                 time.sleep(0.1)
 
+        last_user_metrics: llm.MetricsReport | None = None
         for event in h.result():
-            _print_run_event(c, event)
+            if event.type == "message" and event.item.role == "user":
+                last_user_metrics = event.item.metrics
+            _print_run_event(c, event, last_user_metrics)
 
 
 AGENT_PALETTE: list[str] = [
@@ -1159,7 +1224,73 @@ def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
     return "\n".join(head + ["..."] + tail)
 
 
-def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
+def _format_duration_ms(seconds: float) -> str:
+    ms = seconds * 1000
+    if ms >= 10:
+        return f"{ms:.0f}ms"
+    elif ms >= 1:
+        return f"{ms:.1f}ms"
+    else:
+        return f"{ms:.2f}ms"
+
+
+def _format_turn_metrics(
+    user_metrics: llm.MetricsReport | None,
+    assistant_metrics: llm.MetricsReport | None,
+) -> Text | None:
+    parts: list[tuple[str, str]] = []
+
+    # user-side metrics
+    if user_metrics:
+        if "end_of_turn_delay" in user_metrics:
+            v = user_metrics["end_of_turn_delay"]
+            parts.append(("end_of_turn: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "on_user_turn_completed_delay" in user_metrics:
+            v = user_metrics["on_user_turn_completed_delay"]
+            parts.append(("turn_completed_cb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+
+    # assistant-side metrics
+    if assistant_metrics:
+        if "llm_node_ttft" in assistant_metrics:
+            v = assistant_metrics["llm_node_ttft"]
+            parts.append(("llm_ttft: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "tts_node_ttfb" in assistant_metrics:
+            v = assistant_metrics["tts_node_ttfb"]
+            parts.append(("tts_ttfb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+    e2e_parts: list[tuple[str, str]] = []
+    if assistant_metrics and "e2e_latency" in assistant_metrics:
+        v = assistant_metrics["e2e_latency"]
+        e2e_parts.append(("e2e: ", "dim"))
+        e2e_parts.append((_format_duration_ms(v), "red" if v >= 1.0 else "dim"))
+
+    if not parts and not e2e_parts:
+        return None
+
+    assembled: list[tuple[str, str]] = []
+    pair_count = len(parts) // 2
+    for i in range(pair_count):
+        if i > 0:
+            assembled.append((" \u00b7 ", "dim"))
+        assembled.append(parts[i * 2])  # label
+        assembled.append(parts[i * 2 + 1])  # value
+
+    if e2e_parts:
+        if assembled:
+            assembled.append(("  \u2500  ", "dim"))
+        assembled.extend(e2e_parts)
+
+    return Text.assemble(*assembled)
+
+
+def _print_run_event(
+    c: AgentsConsole,
+    event: RunEvent,
+    last_user_metrics: llm.MetricsReport | None = None,
+) -> None:
     if event.type == "function_call":
         c.console.print()
         c.console.print(
@@ -1233,6 +1364,15 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
             )
             for line in event.item.text_content.split("\n"):
                 c.console.print(Text(f"    {line}"))
+
+            metrics_text = _format_turn_metrics(
+                last_user_metrics if event.item.role == "assistant" else None,
+                event.item.metrics if event.item.role == "assistant" else None,
+            )
+            if metrics_text is not None:
+                metrics_line = Text("    ")
+                metrics_line.append_text(metrics_text)
+                c.console.print(metrics_line)
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 

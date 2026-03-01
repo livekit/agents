@@ -406,6 +406,9 @@ class ToolContext:
         tools.extend(self._provider_tools)
         return tools
 
+    def get_function_tool(self, name: str) -> FunctionTool | RawFunctionTool | None:
+        return self._fnc_tools_map.get(name)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ToolContext):
             return False

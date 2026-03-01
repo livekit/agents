@@ -792,11 +792,11 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = bool(
+        should_discard = (
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        )
+        ) or (self._session.agent_state == "speaking" and self._session._aec_warmup_remaining > 0)
 
         if not should_discard:
             if self._rt_session is not None:
@@ -1236,6 +1236,10 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
+        if self._session._aec_warmup_remaining > 0:
+            # disable interruption from audio activity while aec warmup is active
+            return
+
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
@@ -2045,6 +2049,19 @@ class AgentActivity(RecognitionHooks):
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
                 return
+
+            # purely used for realtime console rendering (metrics are shown
+            # as soon as the agent starts speaking, before playout finishes)
+            early_metrics: llm.MetricsReport = {}
+            if llm_gen_data.ttft is not None:
+                early_metrics["llm_node_ttft"] = llm_gen_data.ttft
+            if tts_gen_data and tts_gen_data.ttfb is not None:
+                early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            if user_metrics and "stopped_speaking_at" in user_metrics:
+                early_metrics["e2e_latency"] = (
+                    started_speaking_at - user_metrics["stopped_speaking_at"]
+                )
+            self._session._early_assistant_metrics = early_metrics
 
             self._session._update_agent_state(
                 "speaking",

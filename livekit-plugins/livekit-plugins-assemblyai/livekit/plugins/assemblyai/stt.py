@@ -30,6 +30,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
+    Language,
     stt,
     utils,
 )
@@ -401,7 +402,7 @@ class SpeechStream(stt.SpeechStream):
         turn_is_formatted = data.get("turn_is_formatted", False)
         utterance = data.get("utterance", "")
         transcript = data.get("transcript", "")
-        language = data.get("language_code", "en")
+        language = Language(data.get("language_code", "en"))
 
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based

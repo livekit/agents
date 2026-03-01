@@ -38,6 +38,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     __version__ as livekit_version,
+    Language,
     tokenize,
     tts,
     utils,
@@ -410,7 +411,7 @@ class TTS(tts.TTS):
         word_tokenizer = tokenize.basic.SentenceTokenizer()
 
         self._opts = SarvamTTSOptions(
-            target_language_code=target_language_code,
+            target_language_code=Language(target_language_code),
             model=model,
             speaker=speaker,
             speech_sample_rate=speech_sample_rate,
