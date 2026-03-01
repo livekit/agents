@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import sys
 from itertools import cycle
 from typing import Annotated
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import StreamWriter
 from typing_extensions import TypedDict
 
 from livekit.agents.llm import ChatContext
+from livekit.agents.types import FlushSentinel
 from livekit.plugins.langchain import LLMAdapter
 
 # --- State definitions ---
@@ -31,16 +34,20 @@ class CustomState(TypedDict):
 # --- Graph builders ---
 
 
+def _llm_chain():
+    """Build a Runnable chain that LangGraph can intercept for message streaming."""
+    fake_llm = GenericFakeChatModel(messages=cycle([AIMessage(content="Hello world from fake")]))
+    return (
+        RunnableLambda(lambda state: state["messages"])
+        | fake_llm
+        | RunnableLambda(lambda msg: {"messages": [msg]})
+    )
+
+
 def build_messages_graph():
     """Graph with fake LLM that streams AIMessageChunk tokens."""
-    fake_llm = GenericFakeChatModel(messages=cycle([AIMessage(content="Hello world from fake")]))
-
-    def chat_node(state: MessagesState):
-        response = fake_llm.invoke(state["messages"])
-        return {"messages": [response]}
-
     graph = StateGraph(MessagesState)
-    graph.add_node("chat", chat_node)
+    graph.add_node("chat", _llm_chain())
     graph.add_edge(START, "chat")
     graph.add_edge("chat", END)
     return graph.compile()
@@ -65,17 +72,18 @@ def build_custom_graph():
 def build_combined_graph():
     """Graph with both fake LLM and StreamWriter for multi-mode testing."""
     fake_llm = GenericFakeChatModel(messages=cycle([AIMessage(content="LLM response")]))
-
-    def chat_node(state: CustomState):
-        response = fake_llm.invoke(state["messages"])
-        return {"messages": [response]}
+    chain = (
+        RunnableLambda(lambda state: state["messages"])
+        | fake_llm
+        | RunnableLambda(lambda msg: {"messages": [msg]})
+    )
 
     def stream_node(state: CustomState, writer: StreamWriter):
         writer("custom chunk")
         return {"custom_output": "done"}
 
     graph = StateGraph(CustomState)
-    graph.add_node("chat", chat_node)
+    graph.add_node("chat", chain)
     graph.add_node("stream", stream_node)
     graph.add_edge(START, "chat")
     graph.add_edge("chat", "stream")
@@ -90,9 +98,19 @@ async def collect_chunks(stream) -> list[str]:
     """Collect all content chunks from a stream."""
     chunks = []
     async for chunk in stream:
+        if isinstance(chunk, FlushSentinel):
+            continue
         if chunk.delta and chunk.delta.content:
             chunks.append(chunk.delta.content)
     return chunks
+
+
+async def collect_raw_events(stream) -> list:
+    """Collect all raw events from a stream, including FlushSentinel."""
+    events = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 # --- Tests: messages mode ---
@@ -136,6 +154,7 @@ async def test_messages_mode_is_default():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="StreamWriter requires Python 3.11+")
 async def test_custom_mode_string():
     """Test stream_mode='custom' with string payloads from StreamWriter."""
     graph = build_custom_graph()
@@ -151,6 +170,7 @@ async def test_custom_mode_string():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="StreamWriter requires Python 3.11+")
 async def test_custom_mode_dict():
     """Test stream_mode='custom' with dict payload containing 'content' key."""
     graph = build_custom_graph()
@@ -169,6 +189,7 @@ async def test_custom_mode_dict():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="StreamWriter requires Python 3.11+")
 async def test_multi_mode():
     """Test stream_mode=['messages', 'custom'] handles both formats."""
     graph = build_combined_graph()
@@ -218,6 +239,7 @@ def test_validation_accepts_supported_modes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="StreamWriter requires Python 3.11+")
 async def test_empty_stream_mode_disables_streaming():
     """Test stream_mode=[] produces no output (opt-out of streaming)."""
     graph = build_combined_graph()  # Has both LLM and StreamWriter
@@ -246,6 +268,7 @@ async def test_custom_mode_no_messages_output():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="StreamWriter requires Python 3.11+")
 async def test_messages_mode_no_custom_output():
     """Test stream_mode='messages' produces nothing when graph only has StreamWriter."""
     graph = build_custom_graph()  # StreamWriter only, no LLM
@@ -257,3 +280,166 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+
+# --- Tests: subgraph namespace stripping ---
+# These tests use a mock graph to verify the namespace stripping logic
+# with the exact tuple shapes LangGraph emits when subgraphs=True.
+#
+# Real LangGraph tuple shapes:
+#   subgraphs=True, single mode:
+#     ((),            data)               — root graph
+#     (('sub:uuid',), data)               — subgraph
+#   subgraphs=True, multi mode:
+#     ((),            'mode_name', data)   — root graph
+#     (('sub:uuid',), 'mode_name', data)  — subgraph
+
+
+class MockGraph:
+    """Mock graph that yields pre-defined items from astream()."""
+
+    def __init__(self, items: list):
+        self._items = items
+
+    async def astream(self, state, config=None, **kwargs):
+        for item in self._items:
+            yield item
+
+
+@pytest.mark.asyncio
+async def test_subgraph_messages_mode():
+    """Test namespace stripping for messages mode with subgraphs=True."""
+    meta = {"langgraph_step": 1}
+    chunk_root = AIMessageChunk(content="root", id="r1")
+    chunk_sub = AIMessageChunk(content="sub", id="s1")
+
+    # Exact shapes from LangGraph: (namespace_tuple, (message, metadata))
+    mock = MockGraph(
+        [
+            ((), (chunk_root, meta)),
+            (("node_2:abc123",), (chunk_sub, meta)),
+        ]
+    )
+    adapter = LLMAdapter(mock, stream_mode="messages", subgraphs=True)
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert "root" in chunks
+    assert "sub" in chunks
+
+
+@pytest.mark.asyncio
+async def test_subgraph_custom_mode():
+    """Test namespace stripping for custom mode with subgraphs=True."""
+    # Exact shapes: (namespace_tuple, raw_value)
+    mock = MockGraph(
+        [
+            ((), "root_chunk"),
+            (("node_2:abc123",), "sub_chunk"),
+            (("node_2:abc123",), {"content": "sub_dict"}),
+        ]
+    )
+    adapter = LLMAdapter(mock, stream_mode="custom", subgraphs=True)
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert "root_chunk" in chunks
+    assert "sub_chunk" in chunks
+    assert "sub_dict" in chunks
+
+
+@pytest.mark.asyncio
+async def test_subgraph_multi_mode():
+    """Test namespace stripping for multi-mode with subgraphs=True."""
+    meta = {"langgraph_step": 1}
+    chunk = AIMessageChunk(content="msg", id="m1")
+
+    # Exact shapes: (namespace_tuple, mode_string, data)
+    mock = MockGraph(
+        [
+            ((), "messages", (chunk, meta)),
+            ((), "custom", "custom_root"),
+            (("node_2:abc123",), "messages", (chunk, meta)),
+            (("node_2:abc123",), "custom", "custom_sub"),
+        ]
+    )
+    adapter = LLMAdapter(mock, stream_mode=["messages", "custom"], subgraphs=True)
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert "msg" in chunks
+    assert "custom_root" in chunks
+    assert "custom_sub" in chunks
+
+
+# --- Tests: FlushSentinel support ---
+
+
+@pytest.mark.asyncio
+async def test_flush_sentinel_custom_mode():
+    """Test FlushSentinel passes through in custom stream mode."""
+    sentinel = FlushSentinel()
+    mock = MockGraph(["chunk1", sentinel, "chunk2"])
+    adapter = LLMAdapter(mock, stream_mode="custom")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    events = await collect_raw_events(stream)
+
+    sentinels = [e for e in events if isinstance(e, FlushSentinel)]
+    text_chunks = [e.delta.content for e in events if not isinstance(e, FlushSentinel)]
+    assert len(sentinels) == 1
+    assert "chunk1" in text_chunks
+    assert "chunk2" in text_chunks
+
+
+@pytest.mark.asyncio
+async def test_flush_sentinel_multi_mode():
+    """Test FlushSentinel passes through in multi stream mode."""
+    sentinel = FlushSentinel()
+    mock = MockGraph(
+        [
+            ("custom", "before"),
+            ("custom", sentinel),
+            ("custom", "after"),
+        ]
+    )
+    adapter = LLMAdapter(mock, stream_mode=["messages", "custom"])
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    events = await collect_raw_events(stream)
+
+    sentinels = [e for e in events if isinstance(e, FlushSentinel)]
+    text_chunks = [e.delta.content for e in events if not isinstance(e, FlushSentinel)]
+    assert len(sentinels) == 1
+    assert "before" in text_chunks
+    assert "after" in text_chunks
+
+
+@pytest.mark.asyncio
+async def test_non_flush_custom_items_still_work():
+    """Test that non-FlushSentinel custom items are handled normally."""
+    mock = MockGraph(["text", {"content": "dict_val"}, 42])
+    adapter = LLMAdapter(mock, stream_mode="custom")
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+    chunks = await collect_chunks(stream)
+
+    assert "text" in chunks
+    assert "dict_val" in chunks
+    # 42 (non-text) should be silently skipped
+    assert len(chunks) == 2
