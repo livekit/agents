@@ -41,8 +41,8 @@ class SimliConfig:
             Maximum duration the avatar is not speaking for before the avatar disconnects.
     """
 
-    api_key: str
-    face_id: str
+    api_key: str = os.getenv("SIMLI_API_KEY")
+    face_id: str = os.getenv("SIMLI_FACE_ID")
     emotion_id: str = "92f24a0c-f046-45df-8df0-af7449c04571"
     max_session_length: int = 600
     max_idle_time: int = 30

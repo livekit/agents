@@ -23,13 +23,9 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=False,
     )
 
-    simliAPIKey = os.getenv("SIMLI_API_KEY")
-    simliFaceID = os.getenv("SIMLI_FACE_ID")
-
     simli_avatar = simli.AvatarSession(
         simli_config=simli.SimliConfig(
-            api_key=simliAPIKey,
-            face_id=simliFaceID,
+            face_id="cace3ef7-a4c4-425d-a8cf-a5358eb0c427",
         ),
     )
     await simli_avatar.start(session, room=ctx.room)
