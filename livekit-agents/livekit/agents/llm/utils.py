@@ -373,7 +373,6 @@ def _try_repair_json(raw: str) -> Any:
     '{"success":true,"reason":"The message explicitly asks the user'
     This function tries to close open strings, arrays, and objects.
     """
-    import json
 
     repaired = raw
     # Close any open string literal
