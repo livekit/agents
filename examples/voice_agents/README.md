@@ -86,7 +86,7 @@ session = AgentSession(
 
 ### 📊 Tracing & Error Handling
 
-- [`langfuse_trace.py`](./langfuse_trace.py) - LangFuse integration for conversation tracing
+- [`langfuse_trace.py`](./langfuse_trace.py) - LangFuse integration for conversation tracing. It uses OpenTelemetry OTLP export, so you can also send traces to Opik by setting OTLP endpoint/headers ([Opik OTLP docs](https://www.comet.com/docs/opik/integrations/opentelemetry)).
 - [`error_callback.py`](./error_callback.py) - Error handling callback
 - [`session_close_callback.py`](./session_close_callback.py) - Session lifecycle management
 
