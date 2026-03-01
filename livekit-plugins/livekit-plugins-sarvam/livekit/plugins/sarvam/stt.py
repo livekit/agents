@@ -39,8 +39,8 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    __version__ as livekit_version,
     Language,
+    __version__ as livekit_version,
     stt,
     utils,
 )
