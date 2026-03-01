@@ -772,9 +772,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
-                    "output_audio_bitrate": self._opts.output_audio_bitrate,
-                    "min_buffer_size": self._opts.min_buffer_size,
-                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
@@ -782,6 +779,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
+                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
+                    data["min_buffer_size"] = self._opts.min_buffer_size
+                    data["max_chunk_length"] = self._opts.max_chunk_length
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
