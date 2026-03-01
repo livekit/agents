@@ -52,7 +52,7 @@ Look at the `examples/` directory to get a sense of all the different features a
 
 ## Typechecking, linting and formatting
 
-The CI validates this but to do checks locally see the following example commmands:
+The CI validates this but to do checks locally see the following example commands:
 
 ### Typechecking
 
@@ -75,6 +75,7 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
     -p livekit.plugins.gladia \
     -p livekit.plugins.google \
     -p livekit.plugins.groq \
+    -p livekit.plugins.hathora \
     -p livekit.plugins.hume \
     -p livekit.plugins.minimal \
     -p livekit.plugins.neuphonic \
@@ -103,7 +104,7 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
 uv run ruff check --output-format=github .
 ```
 
-### Formating
+### Formatting
 
 ```bash
 uv run ruff format .
