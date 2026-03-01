@@ -24,6 +24,7 @@ import base64
 import enum
 import json
 import os
+import platform
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -36,12 +37,15 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    __version__ as livekit_version,
     tokenize,
     tts,
     utils,
 )
 
 from .log import logger
+
+USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -438,7 +442,7 @@ class TTS(tts.TTS):
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
-            "User-Agent": "LiveKit-Sarvam-TTS/1.0",
+            "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
@@ -625,6 +629,7 @@ class ChunkedStream(tts.ChunkedStream):
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         }
         try:
             async with self._tts._ensure_session().post(
@@ -753,7 +758,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        logger.info("Starting TTS WebSocket session", extra=self._build_log_context())
+        logger.info(
+            "Starting TTS WebSocket session",
+            extra={**self._build_log_context(), "user-agent": USER_AGENT},
+        )
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
