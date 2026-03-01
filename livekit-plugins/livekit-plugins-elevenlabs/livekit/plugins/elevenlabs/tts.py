@@ -874,9 +874,14 @@ def _to_timed_words(
     if not text:
         return [], ""
 
-    timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
+    if not start_times_ms or not durations_ms:
+        return [], "" if flush else text
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], "" if flush else text
+
+    timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
     timed_words = []
     _, start_indices, _ = zip(*words, strict=False)
     end = 0
