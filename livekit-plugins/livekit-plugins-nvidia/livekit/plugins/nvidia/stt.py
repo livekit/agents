@@ -186,15 +186,43 @@ class SpeechStream(stt.SpeechStream):
                 break
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
+        max_retries = 3
+        retry_count = 0
+
         try:
-            audio_generator = self._audio_chunk_generator()
+            while retry_count < max_retries:
+                try:
+                    audio_generator = self._audio_chunk_generator()
 
-            response_generator = self._asr_service.streaming_response_generator(
-                audio_generator, config
-            )
+                    response_generator = self._asr_service.streaming_response_generator(
+                        audio_generator, config
+                    )
 
-            for response in response_generator:
-                self._handle_response(response)
+                    for response in response_generator:
+                        self._handle_response(response)
+                        retry_count = 0  # Reset on successful response
+
+                    # Normal completion, exit the retry loop
+                    break
+
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "start flag" in error_msg or "sequence" in error_msg:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            logger.warning(
+                                f"Riva sequence timeout detected, recreating ASR service "
+                                f"(attempt {retry_count}/{max_retries}): {e}"
+                            )
+                            self._asr_service = riva.client.ASRService(self._auth)
+                            continue
+                        else:
+                            logger.error(
+                                f"Max retries ({max_retries}) exceeded for Riva sequence timeout"
+                            )
+                            raise
+                    else:
+                        raise
 
         except Exception:
             logger.exception("Error in NVIDIA recognition thread")
