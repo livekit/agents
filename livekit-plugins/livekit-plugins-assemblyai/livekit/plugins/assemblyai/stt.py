@@ -54,7 +54,7 @@ class STTOptions:
     ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
-    min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
+    min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
@@ -79,7 +79,7 @@ class STT(stt.STT):
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -90,6 +90,8 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Args:
@@ -101,6 +103,8 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
+            min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -127,10 +131,19 @@ class STT(stt.STT):
             )
         self._api_key = assemblyai_api_key
 
+        # Handle deprecated min_end_of_turn_silence_when_confident
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
         # designed to work with LK's end of turn models
-        if not is_given(min_end_of_turn_silence_when_confident):
-            min_end_of_turn_silence_when_confident = 100
+        if not is_given(min_turn_silence):
+            min_turn_silence = 100
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -139,7 +152,7 @@ class STT(stt.STT):
             speech_model=model,
             language_detection=language_detection,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
-            min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+            min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
             keyterms_prompt=keyterms_prompt,
@@ -197,20 +210,28 @@ class STT(stt.STT):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
-        if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+        if is_given(min_turn_silence):
+            self._opts.min_turn_silence = min_turn_silence
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
@@ -224,7 +245,7 @@ class STT(stt.STT):
             stream.update_options(
                 buffer_size_seconds=buffer_size_seconds,
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
-                min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+                min_turn_silence=min_turn_silence,
                 max_turn_silence=max_turn_silence,
                 prompt=prompt,
                 keyterms_prompt=keyterms_prompt,
@@ -261,20 +282,28 @@ class SpeechStream(stt.SpeechStream):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
-        if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+        if is_given(min_turn_silence):
+            self._opts.min_turn_silence = min_turn_silence
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
@@ -292,10 +321,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["keyterms_prompt"] = keyterms_prompt
         if is_given(max_turn_silence):
             config_msg["max_turn_silence"] = max_turn_silence
-        if is_given(min_end_of_turn_silence_when_confident):
-            config_msg["min_end_of_turn_silence_when_confident"] = (
-                min_end_of_turn_silence_when_confident
-            )
+        if is_given(min_turn_silence):
+            config_msg["min_turn_silence"] = min_turn_silence
         if is_given(end_of_turn_confidence_threshold):
             config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
         if is_given(vad_threshold):
@@ -399,9 +426,7 @@ class SpeechStream(stt.SpeechStream):
         max_silence: int | None
         if self._opts.speech_model == "u3-rt-pro":
             min_silence = (
-                self._opts.min_end_of_turn_silence_when_confident
-                if is_given(self._opts.min_end_of_turn_silence_when_confident)
-                else 100
+                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
             )
             max_silence = (
                 self._opts.max_turn_silence
@@ -410,9 +435,7 @@ class SpeechStream(stt.SpeechStream):
             )
         else:
             min_silence = (
-                self._opts.min_end_of_turn_silence_when_confident
-                if is_given(self._opts.min_end_of_turn_silence_when_confident)
-                else None
+                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else None
             )
             max_silence = (
                 self._opts.max_turn_silence if is_given(self._opts.max_turn_silence) else None
@@ -426,7 +449,7 @@ class SpeechStream(stt.SpeechStream):
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
-            "min_end_of_turn_silence_when_confident": min_silence,
+            "min_turn_silence": min_silence,
             "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
             if is_given(self._opts.keyterms_prompt)
