@@ -422,7 +422,7 @@ def _try_repair_json(raw: str) -> Any:
 
     repaired += "".join(reversed(nesting_stack))
 
-    return json.loads(repaired)
+    return from_json(repaired)
 
 
 def prepare_function_arguments(
@@ -447,7 +447,10 @@ def prepare_function_arguments(
             args_dict = _try_repair_json(json_arguments)
             logger.warning(
                 "repaired truncated JSON in tool call arguments",
-                extra={"raw_arguments": json_arguments},
+                extra={
+                    "raw_arguments_preview": json_arguments[:200],
+                    "raw_arguments_length": len(json_arguments),
+                },
             )
         except Exception:
             raise ValueError(
