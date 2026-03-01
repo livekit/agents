@@ -438,7 +438,7 @@ class TestTruncatedJsonRepair:
         assert result == {"arr": [{"a": 1}]}
 
     def test_triple_trailing_backslash_repair(self):
-        """Odd number (>=3) of trailing backslashes should strip the last one."""
+        """Odd number of trailing backslashes (including 1) should strip the last one."""
         from livekit.agents.llm.utils import _try_repair_json
 
         result = _try_repair_json('{"path": "C:\\\\Users\\\\name\\')
