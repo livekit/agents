@@ -283,7 +283,10 @@ class EOUModelBase(ABC):
         result = await asyncio.wait_for(
             self._executor.do_inference(self._inference_method(), json_data), timeout=timeout
         )
-        assert result is not None, "end_of_utterance prediction should always returns a result"
+
+        if result is None:
+            logger.warning("Inference executor returned None, using default probability")
+            return 1.0  # Default to indicating no end-of-turn
 
         result_json: dict[str, Any] = json.loads(result.decode())
         logger.debug("eou prediction", extra=result_json)
