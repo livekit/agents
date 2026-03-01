@@ -183,6 +183,7 @@ class RoomIO:
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
+        self._room.off("participant_disconnected", self._on_participant_disconnected)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
