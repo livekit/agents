@@ -906,6 +906,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._closed = True
 
+            for _, fut in list(self._pending_assignments.items()):
+                if not fut.done():
+                    fut.cancel()
+            self._pending_assignments.clear()
+
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
 
@@ -1209,6 +1214,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
                 raise AssignmentTimeoutError() from None
+            except asyncio.CancelledError:
+                self._pending_assignments.pop(job_req.id, None)
+                logger.debug(
+                    f"assignment for job {job_req.id} was cancelled",
+                    extra={"job_request": job_req, "agent_name": self._agent_name},
+                )
+                raise
+            except Exception:
+                self._pending_assignments.pop(job_req.id, None)
+                raise
 
             job_assign = wait_assignment.result()
             running_info = RunningJobInfo(
