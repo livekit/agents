@@ -12,14 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AsyncAgent — Agent subclass that supports @async_function_tool decorated async generators.
-
-AsyncFunctionTools are converted into regular FunctionTools at construction time.
-The first yield from the generator becomes the immediate tool return.
-Subsequent yields run in the background and are delivered as notifications
-based on the tool's reply_mode (when_idle, interrupt, silent).
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -29,14 +21,9 @@ import logging
 import os
 import sys
 import typing
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from livekit.agents import Agent, RunContext, llm
-from livekit.agents.llm.tool_context import FunctionTool, FunctionToolInfo, ToolFlag
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.voice.events import AgentStateChangedEvent
 
 from async_function_tool import (
     AgentNotification,
@@ -45,16 +32,56 @@ from async_function_tool import (
     find_async_function_tools,
 )
 
+from livekit.agents import Agent, RunContext, llm, stt, tts, vad
+from livekit.agents.llm.tool_context import FunctionTool, FunctionToolInfo, ToolFlag
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.voice.events import AgentStateChangedEvent
+
+if TYPE_CHECKING:
+    from livekit.agents.inference import LLMModels, STTModels, TTSModels
+    from livekit.agents.llm import mcp
+    from livekit.agents.voice.audio_recognition import TurnDetectionMode
+
 logger = logging.getLogger(__name__)
 
 
 class AsyncAgent(Agent):
-    """Agent subclass that supports @async_function_tool decorated async generators.
+    """``Agent`` subclass that supports ``@async_function_tool`` decorated async generators.
 
-    AsyncFunctionTools are converted into regular FunctionTools at construction time.
-    The first yield from the generator becomes the immediate tool return.
-    Subsequent yields run in the background and are delivered as notifications
-    based on the tool's reply_mode (when_idle, interrupt, silent).
+    ``AsyncAgent`` extends the standard ``Agent`` with support for long-running tool
+    functions that can yield intermediate results. It works by converting
+    ``@async_function_tool`` decorated methods into regular ``FunctionTool`` instances
+    at construction time.
+
+    How it works:
+
+    1. The **first yield** from an async tool becomes the immediate tool return
+       (sent to the LLM as a normal ``FunctionCallOutput``). This is **not** affected
+       by ``reply_mode``.
+    2. A background task is spawned for **subsequent yields** (second yield onward).
+       These are notifications scheduled as speech based on the tool's ``reply_mode``:
+
+       - ``"when_idle"``: Wait for the agent to finish speaking, then trigger a reply.
+       - ``"interrupt"``: Interrupt the agent's speech and trigger an immediate reply.
+       - ``"silent"``: Update the chat context without triggering a reply.
+
+    3. Each notification includes the original ``tool_call_id`` so the LLM can
+       correlate background updates back to the original tool call.
+
+    Usage::
+
+        from async_agent import AsyncAgent
+        from async_function_tool import async_function_tool, notify
+
+        class MyAgent(AsyncAgent):
+            def __init__(self):
+                super().__init__(instructions="You are helpful.")
+
+            @async_function_tool(reply_mode="when_idle")
+            async def search_web(self, query: str):
+                yield f"Searching for '{query}'..."   # first yield = immediate tool return
+                await asyncio.sleep(5)
+                yield f"Found results for '{query}'"  # second yield = notification (scheduled when idle)
     """
 
     def __init__(
@@ -64,8 +91,43 @@ class AsyncAgent(Agent):
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        **kwargs: Any,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
+        use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        """Initialize an ``AsyncAgent``.
+
+        Accepts all the same arguments as ``Agent``. ``AsyncFunctionTool`` instances
+        in the ``tools`` list and ``@async_function_tool`` decorated methods on the
+        class are automatically discovered and converted into regular ``FunctionTool``
+        instances.
+
+        Args:
+            instructions: System instructions for the agent.
+            id: Optional agent identifier.
+            chat_ctx: Initial ``ChatContext``.
+            tools: List of tools. ``AsyncFunctionTool`` instances are automatically
+                converted; regular tools are passed through unchanged.
+            turn_detection: ``TurnDetectionMode`` configuration.
+            stt: ``STT`` engine or model string.
+            vad: ``VAD`` engine.
+            llm: ``LLM`` engine, ``RealtimeModel``, or model string.
+            tts: ``TTS`` engine or model string.
+            mcp_servers: List of ``MCPServer`` instances for tool discovery.
+            allow_interruptions: Whether user speech can interrupt the agent.
+            min_consecutive_speech_delay: Min delay between consecutive speech segments.
+            use_tts_aligned_transcript: Whether to use TTS-aligned transcripts.
+            min_endpointing_delay: Minimum endpointing delay in seconds.
+            max_endpointing_delay: Maximum endpointing delay in seconds.
+        """
         tools = tools or []
 
         # Discover @async_function_tool methods on this instance
@@ -90,19 +152,30 @@ class AsyncAgent(Agent):
             id=id,
             chat_ctx=chat_ctx,
             tools=[*regular_tools, *wrapped_tools],
-            **kwargs,
+            turn_detection=turn_detection,
+            stt=stt,
+            vad=vad,
+            llm=llm,
+            tts=tts,
+            mcp_servers=mcp_servers,
+            allow_interruptions=allow_interruptions,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
+            use_tts_aligned_transcript=use_tts_aligned_transcript,
+            min_endpointing_delay=min_endpointing_delay,
+            max_endpointing_delay=max_endpointing_delay,
         )
 
         self._background_tasks: dict[str, asyncio.Task[None]] = {}
 
     def _wrap_async_tool(self, async_tool: AsyncFunctionTool) -> FunctionTool:
-        """Convert an AsyncFunctionTool into a regular FunctionTool.
+        """Convert an ``AsyncFunctionTool`` into a regular ``FunctionTool``.
 
         The wrapped tool:
-        1. Starts the async generator
-        2. Awaits the first yield as the immediate tool return
-        3. Spawns a background task for remaining yields
-        4. Returns the first yield value
+        1. Starts the async generator.
+        2. Awaits the first yield as the immediate tool return.
+        3. Spawns a background task for remaining yields (second yield onward),
+           scheduled as speech based on ``reply_mode``.
+        4. Returns the first yield value.
         """
         info = async_tool.info
         reply_mode = info.reply_mode
@@ -119,7 +192,7 @@ class AsyncAgent(Agent):
         original_hints.pop("self", None)
         original_hints.pop("return", None)
 
-        # e.g. user wrote "fuck_you: RunContext" -> user_ctx_param_name = "fuck_you"
+        # e.g. user wrote "ctx: RunContext" -> user_ctx_param_name = "ctx"
         user_ctx_param_name: str | None = None
         for param_name, param_type in original_hints.items():
             if param_type is RunContext:
@@ -145,7 +218,7 @@ class AsyncAgent(Agent):
                     break
 
             if run_ctx is None:
-                for k, v in kwargs.items():
+                for v in kwargs.values():
                     if isinstance(v, RunContext):
                         run_ctx = v
                         break
@@ -161,7 +234,7 @@ class AsyncAgent(Agent):
             # If user's function does NOT expect RunContext, strip it before forwarding
             if user_ctx_param_name is None:
                 if ctx_idx is not None:
-                    args = args[:ctx_idx] + args[ctx_idx + 1:]
+                    args = args[:ctx_idx] + args[ctx_idx + 1 :]
                 else:
                     kwargs = {k: v for k, v in kwargs.items() if not isinstance(v, RunContext)}
 
@@ -273,12 +346,40 @@ class AsyncAgent(Agent):
 
             # Handle final result with the tool's reply_mode
             if latest_output is not None:
-                await self._handle_notification(
-                    tool_name, tool_call_id, latest_output, reply_mode
-                )
+                await self._handle_notification(tool_name, tool_call_id, latest_output, reply_mode)
 
         task = asyncio.create_task(_run_background(), name=f"async_tool_{task_id}")
         self._background_tasks[task_id] = task
+
+    def render_notification(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        value: Any,
+        mode: ToolReplyMode,
+    ) -> str:
+        """Render a tool notification into a message string for the chat context.
+
+        Override this method to customize how async tool notifications appear in the
+        conversation. The returned string is added as a user message to the chat context
+        so the LLM can see it.
+
+        Args:
+            tool_name: Name of the async tool that produced this notification.
+            tool_call_id: The original ``tool_call_id`` so the LLM can correlate
+                this update back to the tool call.
+            value: The notification payload (already the raw value from the yield).
+            mode: The ``ToolReplyMode`` for this notification (``"when_idle"``,
+                ``"interrupt"``, or ``"silent"``).
+
+        Returns:
+            The rendered message string to insert into the chat context.
+        """
+        str_value = value if isinstance(value, str) else json.dumps(value, default=str)
+        return (
+            f"[Async tool update] tool_name={tool_name} tool_call_id={tool_call_id}\n"
+            f"Output: {str_value}"
+        )
 
     async def _handle_notification(
         self,
@@ -287,11 +388,7 @@ class AsyncAgent(Agent):
         value: Any,
         mode: ToolReplyMode,
     ) -> None:
-        str_value = value if isinstance(value, str) else json.dumps(value, default=str)
-        message = (
-            f"[Async tool update] tool_name={tool_name} tool_call_id={tool_call_id}\n"
-            f"Output: {str_value}"
-        )
+        message = self.render_notification(tool_name, tool_call_id, value, mode)
 
         logger.debug(
             "async tool notification",

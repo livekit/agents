@@ -24,14 +24,16 @@ Run with:
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
+from typing import Any
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from async_agent import AsyncAgent
-from async_function_tool import async_function_tool, notify
+from async_function_tool import ToolReplyMode, async_function_tool, notify
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -54,6 +56,23 @@ class ResearchAssistant(AsyncAgent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful research assistant.",
+        )
+
+    def render_notification(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        value: Any,
+        mode: ToolReplyMode,
+    ) -> str:
+        str_value = value if isinstance(value, str) else json.dumps(value, default=str)
+        return (
+            f"<async_tool_notification>\n"
+            f"  <tool_name>{tool_name}</tool_name>\n"
+            f"  <tool_call_id>{tool_call_id}</tool_call_id>\n"
+            f"  <mode>{mode}</mode>\n"
+            f"  <output>{str_value}</output>\n"
+            f"</async_tool_notification>"
         )
 
     @async_function_tool(reply_mode="when_idle")
@@ -94,13 +113,16 @@ class ResearchAssistant(AsyncAgent):
         """
         yield f"Starting report on '{topic}'..."
 
-        for i in range(30):
-            await asyncio.sleep(2)
+        for i in range(10):
+            await asyncio.sleep(3)
             # Silent notification — just updates context, agent won't speak about it
-            yield notify(f"Report progress: section {i + 1}/30 done", "silent")
+            # We want to interrupt the agent's speech after 5 sections to deliver the intermediate result
+            yield notify(
+                f"Report progress: section {i + 1}/10 done", "silent" if i != 5 else "interrupt"
+            )
 
         # Final yield uses the tool's default reply_mode ("when_idle")
-        yield f"Report on '{topic}' is complete with 3 sections."
+        yield f"Report on '{topic}' is complete with 10 sections."
 
     async def on_enter(self) -> None:
         self.session.generate_reply(user_input="Greet the user")
