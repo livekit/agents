@@ -332,13 +332,15 @@ class LLM(llm.LLM):
             is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
-            # Extract both parameters
+            _include_thoughts = None
             _budget = None
             _level: str | types.ThinkingLevel | None = None
             if isinstance(thinking_cfg, dict):
+                _include_thoughts = thinking_cfg.get("include_thoughts")
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
             elif isinstance(thinking_cfg, types.ThinkingConfig):
+                _include_thoughts = thinking_cfg.include_thoughts
                 _budget = thinking_cfg.thinking_budget
                 _level = getattr(thinking_cfg, "thinking_level", None)
 
@@ -356,7 +358,10 @@ class LLM(llm.LLM):
                     else:
                         _level = "low"
                 # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                extra["thinking_config"] = {"thinking_level": _level}
+                extra["thinking_config"] = {
+                    "thinking_level": _level,
+                    "include_thoughts": _include_thoughts,
+                }
 
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget
@@ -367,7 +372,9 @@ class LLM(llm.LLM):
                     )
                 if _budget is not None:
                     # Use thinking_budget only
-                    extra["thinking_config"] = types.ThinkingConfig(thinking_budget=_budget)
+                    extra["thinking_config"] = types.ThinkingConfig(
+                        thinking_budget=_budget, include_thoughts=_include_thoughts
+                    )
                 else:
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
@@ -567,10 +574,16 @@ class LLMStream(llm.LLMStream):
             )
             return chat_chunk
 
-        if not part.text:
+        # Strip thinking tokens
+        content = part.text if not part.thought else None
+        delta_extra = None
+        if part.thought:
+            delta_extra = {"google": {"thinking": part.text}}
+
+        if not content and not delta_extra:
             return None
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=part.text, role="assistant"),
+            delta=llm.ChoiceDelta(content=content, role="assistant", extra=delta_extra),
         )
