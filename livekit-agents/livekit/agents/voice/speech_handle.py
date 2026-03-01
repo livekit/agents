@@ -256,7 +256,12 @@ class SpeechHandle:
         if not self._generations:
             raise RuntimeError("cannot use wait_for_generation: no active generation is running.")
 
-        await asyncio.shield(self._generations[step_idx])
+        # Race against the interrupt future to avoid hanging when speech is interrupted
+        # before the generation completes
+        await asyncio.wait(
+            [asyncio.shield(self._generations[step_idx]), self._interrupt_fut],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
     async def _wait_for_scheduled(self) -> None:
         await asyncio.shield(self._scheduled_fut)
