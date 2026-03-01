@@ -1,0 +1,8 @@
+# Example-specific dependencies
+# Base requirements are defined in pyproject.toml
+
+# LiveKit Agents core dependencies are installed via uv sync from root
+# This file is for example-specific notes
+
+# No additional dependencies required for this example
+# All required packages are managed by the main project
