@@ -93,10 +93,12 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[
+            aiohttp.ClientWebSocketResponse
+        ](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
+            max_session_duration=300,  # 5 minutes (reduced from 1 hour to prevent dangling connections)
             mark_refreshed_on_get=False,
         )
 
@@ -120,6 +122,7 @@ class TTS(tts.TTS):
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
+                heartbeat=30.0,  # Send ping every 30 seconds to prevent connection timeout
             ),
             timeout,
         )
