@@ -43,7 +43,7 @@ from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
-from ..voice.run_result import RunEvent
+from ..voice.run_result import RunEvent, RunResult
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
@@ -302,6 +302,8 @@ class AgentsConsole:
         self._lock = threading.Lock()
         self._io_acquired = False
         self._io_acquired_event = threading.Event()
+        self._io_initial_run_fut: asyncio.Future[RunResult] | None = None
+        self._exit_flag = threading.Event()
 
         self._enabled = False
         self._record = False
@@ -336,6 +338,9 @@ class AgentsConsole:
                 next_in_chain_audio=self._io_audio_output,
                 next_in_chain_text=None,
             )
+            # create a future for the initial run result in text mode
+            if self._console_mode == "text":
+                self._io_initial_run_fut = loop.create_future()
             self._io_acquired_event.set()
             self._io_session = session
 
@@ -426,6 +431,17 @@ class AgentsConsole:
 
     def wait_for_io_acquisition(self) -> None:
         self._io_acquired_event.wait()
+
+    def _set_initial_run(self, run: RunResult) -> None:
+        if self._io_initial_run_fut is not None and not self._io_initial_run_fut.done():
+            self._io_loop.call_soon_threadsafe(self._io_initial_run_fut.set_result, run)
+
+    def signal_exit(self) -> None:
+        self._exit_flag.set()
+
+    @property
+    def should_exit(self) -> bool:
+        return self._exit_flag.is_set()
 
     @property
     def input_name(self) -> str | None:
@@ -1142,7 +1158,43 @@ def _text_mode(c: AgentsConsole) -> None:
         if ch == key.CTRL_T:
             raise _ToggleMode()
 
+    initial_run_fut = c._io_initial_run_fut
+    if initial_run_fut is not None:
+
+        async def _await_initial_run() -> list[RunEvent]:
+            run_result = await initial_run_fut
+            await run_result
+            return run_result.events.copy()
+
+        cf = asyncio.run_coroutine_threadsafe(_await_initial_run(), c.io_loop)
+        try:
+            with live_status(c.console, Text.from_markup("  [dim]Initializing...[/dim]")):
+                while True:
+                    if c.should_exit:
+                        cf.cancel()
+                        with contextlib.suppress(Exception):
+                            cf.result()
+                        raise _ExitCli()
+                    try:
+                        events = cf.result(timeout=0.1)
+                        c._io_initial_run_fut = None
+                        for event in events:
+                            _print_run_event(c, event)
+                        break
+                    except TimeoutError:
+                        continue
+        except KeyboardInterrupt:
+            cf.cancel()
+            with contextlib.suppress(Exception):
+                cf.result()
+            raise _ExitCli() from None
+        except Exception:
+            pass
+
     while True:
+        if c.should_exit:
+            raise _ExitCli()
+
         try:
             text = prompt(
                 Text.from_markup("  [bold]User input[/bold]: "),
@@ -1151,7 +1203,7 @@ def _text_mode(c: AgentsConsole) -> None:
                 placeholder="Type to talk to your agent",
             )
         except KeyboardInterrupt:
-            break
+            raise _ExitCli() from None
 
         if not text.strip():
             c.console.bell()
@@ -1186,6 +1238,8 @@ def _text_mode(c: AgentsConsole) -> None:
 
         with live_status(c.console, Text.from_markup("  [dim]Thinking...[/dim]")):
             while not h.done():
+                if c.should_exit:
+                    raise _ExitCli()
                 time.sleep(0.1)
 
         last_user_metrics: llm.MetricsReport | None = None
@@ -1505,6 +1559,7 @@ def _run_console(
 
         def _handle_exit(sig: int, frame: FrameType | None) -> None:
             nonlocal exit_triggered
+            c.signal_exit()
             if not exit_triggered:
                 exit_triggered = True
                 raise _ExitCli()

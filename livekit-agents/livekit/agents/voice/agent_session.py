@@ -705,7 +705,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._job_context_cb_registered = True
 
             run_state: RunResult | None = None
-            if capture_run:
+            # capture_run for text mode console to get the initial agent response
+            text_mode_capture = c._io_initial_run_fut is not None
+            if capture_run or text_mode_capture:
                 if self._global_run_state is not None and not self._global_run_state.done():
                     raise RuntimeError("nested runs are not supported")
 
@@ -794,7 +796,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             if run_state:
-                await run_state
+                if text_mode_capture:
+                    # pass the run_state to the console so it can display initial events
+                    c._set_initial_run(run_state)
+
+                if capture_run:
+                    await run_state
 
             return run_state
 
