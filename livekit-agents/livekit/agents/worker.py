@@ -692,9 +692,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 while True:
                     await interval.tick()
 
-                    self._worker_load = await asyncio.get_event_loop().run_in_executor(
-                        None, self._run_load_fnc_sync
-                    )
+                    self._worker_load = await self._invoke_load_fnc()
 
                     telemetry.metrics._update_worker_load(self._worker_load)
                     telemetry.metrics._update_child_proc_count()
@@ -1140,14 +1138,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
-    def _run_load_fnc_sync(self) -> float:
+    async def _invoke_load_fnc(self) -> float:
         """Run load_fnc in executor. Uses signature to call with or without self."""
-        assert self._load_fnc is not None
-        signature = inspect.signature(self._load_fnc)
-        parameters = list(signature.parameters.values())
-        if len(parameters) == 0:
-            return self._load_fnc()  # type: ignore
-        return self._load_fnc(self)  # type: ignore
+
+        def load_fnc() -> float:
+            assert self._load_fnc is not None
+            signature = inspect.signature(self._load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._load_fnc()  # type: ignore
+            return self._load_fnc(self)  # type: ignore
+
+        return await asyncio.get_event_loop().run_in_executor(None, load_fnc)
 
     async def _refresh_worker_load(self) -> None:
         """Refresh _worker_load by running load_fnc. Used before availability checks
@@ -1156,9 +1158,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if self._load_fnc is None:
             return
 
-        self._worker_load = await asyncio.get_event_loop().run_in_executor(
-            None, self._run_load_fnc_sync
-        )
+        self._worker_load = await self._invoke_load_fnc()
         telemetry.metrics._update_worker_load(self._worker_load)
 
     def _get_effective_load(self) -> float:
