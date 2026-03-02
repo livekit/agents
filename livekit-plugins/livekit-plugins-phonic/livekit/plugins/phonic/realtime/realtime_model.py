@@ -18,11 +18,10 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import audio as audio_utils
+from livekit.agents.utils import audio as audio_utils, is_given
 from phonic import AsyncPhonic
 from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
-    ConversationsSocketClientResponse,
 )
 from phonic.types import (
     AudioChunkPayload,
@@ -144,8 +143,8 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
-        api_key = api_key or os.environ.get("PHONIC_API_KEY")
-        if not api_key:
+        api_key = api_key or os.environ.get("PHONIC_API_KEY", NOT_GIVEN)
+        if not is_given(api_key):
             raise ValueError(
                 "Phonic API key is required. Provide `api_key` or "
                 "set PHONIC_API_KEY environment variable."
@@ -388,7 +387,7 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._config_sent = True
 
-            tools_payload = []
+            tools_payload: list[dict | str] = []
             if self._opts.phonic_tools is not NOT_GIVEN and self._opts.phonic_tools:
                 tools_payload.extend(self._opts.phonic_tools)
             tools_payload.extend(self._tool_definitions)
@@ -413,8 +412,11 @@ class RealtimeSession(llm.RealtimeSession):
                 "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
             }
             # Filter out NOT_GIVEN values
-            config = {k: v for k, v in config.items() if v is not NOT_GIVEN}
-            await self._socket.send_config(ConfigPayload(**config))
+            config_filtered = typing.cast(
+                dict[str, typing.Any],
+                {k: v for k, v in config.items() if v is not NOT_GIVEN},
+            )
+            await self._socket.send_config(ConfigPayload(**config_filtered))
 
             # Instead of using `start_listening` which uses EventEmitter paradigm,
             # we will consume the async iterator directly for better task integration
@@ -449,7 +451,6 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _recv_task(self, socket: AsyncConversationsSocketClient) -> None:
         try:
-            message: ConversationsSocketClientResponse
             async for message in socket:
                 if self._session_should_close.is_set():
                     break
@@ -610,6 +611,10 @@ class RealtimeSession(llm.RealtimeSession):
         if self._current_generation is None:
             logger.warning("Encountered tool call but no active generation. Starting new turn.")
             self._start_new_assistant_turn()
+
+        assert self._current_generation is not None, (
+            "current_generation should not be None when handling tool call"
+        )
 
         self._current_generation.function_ch.send_nowait(
             llm.FunctionCall(
