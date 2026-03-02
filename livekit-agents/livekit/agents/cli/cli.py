@@ -10,9 +10,11 @@ import json
 import logging
 import os
 import pathlib
+import queue
 import re
 import signal
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -35,10 +37,13 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import api, rtc
+from livekit.protocol.agent_pb import agent_text
 
 from .. import llm
 from .._exceptions import CLIError
+from ..http_server import AgentHttpClient
 from ..job import JobExecutorType
+from ..llm import ChatItem
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
@@ -302,6 +307,12 @@ class AgentsConsole:
         self._lock = threading.Lock()
         self._io_acquired = False
         self._io_acquired_event = threading.Event()
+        self._io_loop: asyncio.AbstractEventLoop | None = None
+        self._io_context: contextvars.Context | None = None
+
+        self._io_audio_input: ConsoleAudioInput | None = None
+        self._io_audio_output: ConsoleAudioOutput | None = None
+        self._io_transcription_sync: TranscriptSynchronizer | None = None
 
         self._enabled = False
         self._record = False
@@ -317,7 +328,7 @@ class AgentsConsole:
             f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
         )
 
-    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
+    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession | None) -> None:
         with self._lock:
             if self._io_acquired:
                 raise RuntimeError("the ConsoleIO was already acquired by another session")
@@ -330,12 +341,14 @@ class AgentsConsole:
             self._io_acquired = True
             self._io_loop = loop
             self._io_context = contextvars.copy_context()
+
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_transcription_sync = TranscriptSynchronizer(
                 next_in_chain_audio=self._io_audio_output,
                 next_in_chain_text=None,
             )
+
             self._io_acquired_event.set()
             self._io_session = session
 
@@ -378,6 +391,29 @@ class AgentsConsole:
                 self._io_transcription_sync.text_output,
             )
 
+    def release_io(self) -> None:
+        with self._lock:
+            if not self._io_acquired:
+                return
+
+            self.set_microphone_enabled(False)
+            self.set_speaker_enabled(False)
+
+            if self._io_transcription_sync:
+                asyncio.run_coroutine_threadsafe(
+                    self._io_transcription_sync.aclose(),
+                    self.io_loop,
+                )
+                self._io_transcription_sync = None
+
+            self._io_acquired = False
+            self._io_session = None
+            self._io_loop = None
+            self._io_context = None
+            self._io_audio_input = None
+            self._io_audio_output = None
+            self._io_acquired_event.clear()
+
     @property
     def enabled(self) -> bool:
         return self._enabled
@@ -405,21 +441,21 @@ class AgentsConsole:
 
     @property
     def io_session(self) -> AgentSession:
-        if not self._io_acquired:
+        if not self._io_acquired or not self._io_session:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_session
 
     @property
     def io_loop(self) -> asyncio.AbstractEventLoop:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_loop is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
 
     @property
     def io_context(self) -> contextvars.Context:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_context is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_context
@@ -446,6 +482,9 @@ class AgentsConsole:
 
             if not self._io_acquired:
                 return
+
+            assert self._io_audio_input is not None
+            assert self._io_transcription_sync is not None
 
             self.io_loop.call_soon_threadsafe(
                 self._update_sess_io,
@@ -616,6 +655,9 @@ class AgentsConsole:
             ) from None
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time: Any, *_: Any) -> None:
+        assert self._io_audio_input is not None
+        assert self._io_loop is not None
+
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
 
@@ -688,6 +730,7 @@ class AgentsConsole:
             outdata[:] = 0
             return
 
+        assert self._io_audio_output is not None
         self._output_delay = time.outputBufferDacTime - time.currentTime
 
         FRAME_SAMPLES = 240
@@ -1192,7 +1235,138 @@ def _text_mode(c: AgentsConsole) -> None:
         for event in h.result():
             if event.type == "message" and event.item.role == "user":
                 last_user_metrics = event.item.metrics
-            _print_run_event(c, event, last_user_metrics)
+            _print_chat_item(c, event.item, last_user_metrics)
+
+
+def _sms_text_mode(
+    c: AgentsConsole, client: AgentHttpClient, *, endpoint: str, sess_data_file: str
+) -> None:
+    from ..llm.chat_context import chat_item_from_proto
+    from ..utils.session_store import SessionStore
+
+    session_id: str | None = None
+    target_version: int | None = None  # hot sync if version specified
+    while True:
+        try:
+            text = prompt(
+                Text.from_markup("  [bold]User input[/bold]: "),
+                console=c.console,
+                placeholder="Type to talk to your agent",
+            )
+        except KeyboardInterrupt:
+            break
+
+        if not text.strip():
+            c.console.bell()
+            continue
+
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u25cf ", "#1FD5F9"),
+                ("You", "bold #1FD5F9"),
+            )
+        )
+        for line in text.split("\n"):
+            c.console.print(Text(f"    {line}"))
+
+        session_state: agent_text.AgentSessionState | None = None
+        if target_version is None and os.path.exists(sess_data_file):
+            with SessionStore(db_file=sess_data_file) as store:
+                session_state = agent_text.AgentSessionState(
+                    version=store.version,
+                    snapshot=store.export_snapshot(),
+                )
+        elif target_version is not None:
+            session_state = agent_text.AgentSessionState(version=target_version)
+
+        response_queue = queue.Queue[agent_text.TextMessageResponse | None]()
+
+        def async_worker(
+            session_id: str,
+            user_text: str,
+            user_endpoint: str,
+            user_session_state: agent_text.AgentSessionState | None,
+            user_response_queue: queue.Queue[agent_text.TextMessageResponse | None],
+        ) -> None:
+            """Run async code in a separate thread with its own event loop."""
+
+            async def fetch_responses() -> None:
+                logger.info(f"sending text stream: {user_text} {user_endpoint}")
+                try:
+                    async for response in client.send_text(
+                        user_text,
+                        endpoint=user_endpoint,
+                        session_id=session_id,
+                        session_state=user_session_state,
+                    ):
+                        user_response_queue.put(response, block=False)
+                finally:
+                    user_response_queue.put(None)
+
+            client.loop.run_until_complete(fetch_responses())
+
+        worker_thread = threading.Thread(
+            target=async_worker,
+            args=(session_id, text, endpoint, session_state, response_queue),
+            daemon=True,
+        )
+        worker_thread.start()
+
+        while True:
+            resp: agent_text.TextMessageResponse | None = None
+            with live_status(c.console, Text.from_markup("   [dim]Thinking...[/dim]")):
+                while True:
+                    try:
+                        resp = response_queue.get(timeout=0.1)
+                        break
+                    except queue.Empty:
+                        pass
+
+            if resp is None:
+                break
+
+            if session_id is None and resp.session_id:
+                session_id = resp.session_id
+
+            if resp.WhichOneof("event") == "complete":
+                if resp.complete.WhichOneof("result") == "error":
+                    logger.error(
+                        "error processing text",
+                        extra={
+                            "session_data_file": sess_data_file,
+                            "error": resp.complete.error.message,
+                            "error_code": resp.complete.error.code,
+                        },
+                    )
+                    break
+
+                # save session state to file
+                else:
+                    version = resp.complete.session_state.version
+                    which_oneof = resp.complete.session_state.WhichOneof("data")
+                    if which_oneof == "snapshot":
+                        with open(sess_data_file, "wb") as wf:
+                            wf.write(resp.complete.session_state.snapshot)
+                    elif which_oneof == "delta":
+                        with SessionStore(db_file=sess_data_file) as store:
+                            store.apply_changeset(
+                                resp.complete.session_state.delta, version=version
+                            )
+                    logger.debug(
+                        "session state updated",
+                        extra={"session_data_file": sess_data_file, "version": version},
+                    )
+                    target_version = version  # save for hot sync
+
+                break
+
+            else:
+                _print_chat_item(c, chat_item_from_proto(resp))
+
+        worker_thread.join()
+        # release the console for next run
+        c.release_io()
 
 
 AGENT_PALETTE: list[str] = [
@@ -1286,21 +1460,19 @@ def _format_turn_metrics(
     return Text.assemble(*assembled)
 
 
-def _print_run_event(
-    c: AgentsConsole,
-    event: RunEvent,
-    last_user_metrics: llm.MetricsReport | None = None,
+def _print_chat_item(
+    c: AgentsConsole, item: ChatItem, last_user_metrics: llm.MetricsReport | None = None
 ) -> None:
-    if event.type == "function_call":
+    if item.type == "function_call":
         c.console.print()
         c.console.print(
             Text.assemble(
                 ("  \u279c ", "#1FD5F9"),
-                (event.item.name, "bold #1FD5F9"),
+                (item.name, "bold #1FD5F9"),
             )
         )
-    elif event.type == "function_call_output":
-        output = event.item.output
+    elif item.type == "function_call_output":
+        output = item.output
         display_output = output
         is_error = output.lower().startswith("error") or output.lower().startswith("exception")
 
@@ -1337,24 +1509,24 @@ def _print_run_event(
                     (display_output, "dim"),
                 )
             )
-    elif event.type == "agent_handoff":
-        old_agent = event.old_agent
-        new_agent = event.new_agent
+    elif item.type == "agent_handoff":
+        old_agent = item.old_agent_id or ""
+        new_agent = item.new_agent_id
 
-        old_style = _agent_style(old_agent.__class__.__name__)
-        new_style = _agent_style(new_agent.__class__.__name__)
+        old_style = _agent_style(old_agent)
+        new_style = _agent_style(new_agent)
         c.console.print(
             Text.assemble(
                 ("  \u25cf ", "#FFD93D"),
                 ("Handoff: ", "bold #FFD93D"),
-                Text(f"{old_agent.__class__.__name__}", style=old_style),
+                Text(f"{old_agent}", style=old_style),
                 (" \u2192 ", "dim"),
-                Text(f"{new_agent.__class__.__name__}", style=new_style),
+                Text(f"{new_agent}", style=new_style),
             )
         )
 
-    elif event.type == "message":
-        if event.item.text_content:
+    elif item.type == "message":
+        if item.text_content:
             c.console.print()
             c.console.print(
                 Text.assemble(
@@ -1362,19 +1534,19 @@ def _print_run_event(
                     ("Agent", "bold #6BCB77"),
                 )
             )
-            for line in event.item.text_content.split("\n"):
+            for line in item.text_content.split("\n"):
                 c.console.print(Text(f"    {line}"))
 
             metrics_text = _format_turn_metrics(
-                last_user_metrics if event.item.role == "assistant" else None,
-                event.item.metrics if event.item.role == "assistant" else None,
+                last_user_metrics if item.role == "assistant" else None,
+                item.metrics if item.role == "assistant" else None,
             )
             if metrics_text is not None:
                 metrics_line = Text("    ")
                 metrics_line.append_text(metrics_text)
                 c.console.print(metrics_line)
     else:
-        logger.warning(f"unknown RunEvent type {event.type}")
+        logger.warning(f"unsupported ChatItem type {item.type}")
 
 
 def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:
@@ -1414,9 +1586,12 @@ def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: st
 
 
 class _ConsoleWorker:
-    def __init__(self, *, server: AgentServer, shutdown_cb: Callable) -> None:
+    def __init__(
+        self, *, server: AgentServer, shutdown_cb: Callable, simulate_job_on_start: bool = True
+    ) -> None:
         self._loop = asyncio.new_event_loop()
         self._server = server
+        self._simulate_job_on_start = simulate_job_on_start
         self._shutdown_cb = shutdown_cb
         self._lock = threading.Lock()
         self._closed = False
@@ -1443,14 +1618,16 @@ class _ConsoleWorker:
 
             self._server._job_executor_type = JobExecutorType.THREAD  # TODO: better setter
 
-            @self._server.once("worker_started")
-            def _simulate_job() -> None:
-                asyncio.run_coroutine_threadsafe(
-                    self._server.simulate_job(
-                        "console-room", agent_identity="console", fake_job=True
-                    ),
-                    self._loop,
-                )
+            if self._simulate_job_on_start:
+
+                @self._server.once("worker_started")
+                def _simulate_job() -> None:
+                    asyncio.run_coroutine_threadsafe(
+                        self._server.simulate_job(
+                            "console-room", agent_identity="console", fake_job=True
+                        ),
+                        self._loop,
+                    )
 
             await self._server.run(devmode=True, unregistered=True)
             self._shutdown_cb()
@@ -1538,6 +1715,68 @@ def _run_console(
             console_worker.join()
 
     except (CLIError, ValueError) as e:
+        c.print(" ")
+        c.print(f"[error]{e}")
+        c.print(" ")
+        raise typer.Exit(code=1) from None
+
+
+def _run_sms_console(*, server: AgentServer, sess_data_file: str, endpoint: str) -> None:
+    c = AgentsConsole.get_instance()
+    c.console_mode = "text"
+    c.enabled = False  # don't acquire IO for SMS mode
+
+    _configure_logger(c, logging.DEBUG)
+    c.print("Starting SMS console mode 🚀", tag="Agents")
+
+    c.print(" ")
+    try:
+        exit_triggered = False
+
+        def _on_worker_shutdown() -> None:
+            try:
+                signal.raise_signal(signal.SIGTERM)
+            except Exception:
+                try:
+                    signal.raise_signal(signal.SIGINT)
+                except Exception:
+                    pass
+
+        def _handle_exit(sig: int, frame: FrameType | None) -> None:
+            nonlocal exit_triggered
+            if not exit_triggered:
+                exit_triggered = True
+                raise _ExitCli()
+
+            console_worker.shutdown()
+
+        for sig in HANDLED_SIGNALS:
+            signal.signal(sig, _handle_exit)
+
+        console_worker = _ConsoleWorker(
+            server=server, shutdown_cb=_on_worker_shutdown, simulate_job_on_start=False
+        )
+        console_worker.start()
+
+        server_started = threading.Event()
+
+        @server.on("worker_started")
+        def on_worker_started() -> None:
+            server_started.set()
+
+        server_started.wait()
+
+        http_client = AgentHttpClient(f"http://localhost:{server.worker_info.http_port}")
+        try:
+            _sms_text_mode(c, http_client, sess_data_file=sess_data_file, endpoint=endpoint)
+        except _ExitCli:
+            pass
+        finally:
+            http_client.loop.run_until_complete(http_client.aclose())
+            console_worker.shutdown()
+            console_worker.join()
+
+    except CLIError as e:
         c.print(" ")
         c.print(f"[error]{e}")
         c.print(" ")
@@ -1681,6 +1920,28 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             mode="text" if text else "audio",
             record=record,
         )
+
+    @app.command()
+    def sms_console(
+        *,
+        endpoint: Annotated[
+            str,
+            typer.Option(help="Endpoint to send the text to"),
+        ] = "",
+        sess_data_file: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(help="Path to the serialized AgentSession data file in SMS mode"),
+        ] = None,
+    ) -> None:
+        temp_dir: tempfile.TemporaryDirectory | None = None
+        if not sess_data_file:
+            temp_dir = tempfile.TemporaryDirectory(prefix="lk_", delete=False)
+            sess_data_file = os.path.join(temp_dir.name, "session_data.pkl")
+        try:
+            _run_sms_console(server=server, sess_data_file=sess_data_file, endpoint=endpoint)
+        finally:
+            if temp_dir:
+                temp_dir.cleanup()
 
     @app.command()
     def start(

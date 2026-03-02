@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
@@ -10,6 +12,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Protocol,
@@ -38,7 +41,7 @@ from ..types import (
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent, AgentTask
+from .agent import Agent, AgentTask, _AgentState
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
@@ -142,6 +145,15 @@ Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
+_AgentSessionContextVar = contextvars.ContextVar["AgentSession"]("agents_session")
+
+
+@dataclass
+class _AgentSessionState:
+    userdata: Any
+    tools: list[str]  # tool id
+    history: dict[str, Any]
+    agent: _AgentState
 
 
 @runtime_checkable
@@ -405,6 +417,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+        self._rehydrated_agents = OrderedDict[str, Agent]()
+
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -506,9 +520,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @overload
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: Literal[True],
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
@@ -520,9 +535,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @overload
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: Literal[False] = False,
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
@@ -533,9 +549,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def start(
         self,
-        agent: Agent,
+        agent: Agent | _AgentSessionState,
         *,
         capture_run: bool = False,
+        wait_run_state: bool = True,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
@@ -550,6 +567,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
+            wait_run_state: Whether to wait for the run state to be done.
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
@@ -560,6 +578,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return None
 
             self._started_at = time.time()
+
+            run_state: RunResult | None = None
+            if capture_run:
+                if self._global_run_state is not None and not self._global_run_state.done():
+                    raise RuntimeError("nested runs are not supported")
+
+                run_state = RunResult(output_type=None)
+                self._global_run_state = run_state
+
+            if isinstance(agent, _AgentSessionState):
+                agent = await self._rehydrate(agent)
 
             # configure observability first
             job_ctx: JobContext | None = None
@@ -672,7 +701,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if job_ctx._primary_agent_session is None:
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 elif any(self._recording_options.values()):
                     raise RuntimeError(
@@ -704,17 +733,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                     self._job_context_cb_registered = True
 
-            run_state: RunResult | None = None
-            if capture_run:
-                if self._global_run_state is not None and not self._global_run_state.done():
-                    raise RuntimeError("nested runs are not supported")
-
-                run_state = RunResult(output_type=None)
-                self._global_run_state = run_state
-
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(
-                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
+                asyncio.create_task(
+                    self._update_activity(
+                        self._agent,
+                        wait_on_enter=False,
+                        # rehydrated agents have an activity
+                        new_activity="start" if not self._agent._activity else "resume",
+                    )
+                )
             )
 
             try:
@@ -794,7 +822,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             if run_state:
-                await run_state
+                run_state._mark_done_if_needed(None)  # needed if it didn't watch any handles
+                if wait_run_state:
+                    await run_state
 
             return run_state
 
@@ -937,6 +967,116 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
+    def get_state(self) -> _AgentSessionState:
+        history = self._chat_ctx.to_dict(
+            exclude_image=True,
+            exclude_audio=True,
+            exclude_function_call=False,
+            exclude_timestamp=False,
+            exclude_config_update=True,
+        )
+        assert self._agent is not None, "AgentSession is not started"
+        return _AgentSessionState(
+            userdata=self._userdata,
+            tools=[tool.id for tool in self.tools],
+            history=history,
+            agent=self._agent._get_state(),
+        )
+
+    async def _rehydrate(self, state: _AgentSessionState) -> Agent:
+        if self._started:
+            # TODO(long): allow rehydrating a session that has already started?
+            raise RuntimeError("Cannot rehydrate session that has already started")
+
+        self._userdata = state.userdata
+        self._chat_ctx = llm.ChatContext.from_dict(state.history)
+
+        tool_by_id = {tool.id: tool for tool in self.tools}
+        valid_tools: list[llm.Tool | llm.Toolset] = []
+        missing_tools: list[str] = []
+        for tool_id in state.tools:
+            if tool_id in tool_by_id:
+                valid_tools.append(tool_by_id[tool_id])
+            else:
+                missing_tools.append(tool_id)
+        if missing_tools:
+            logger.warning(
+                "tools not found when unpickling", extra={"missing_tools": missing_tools}
+            )
+        self._tools = valid_tools
+
+        rehydrated_agents: list[Agent] = []
+        tk = _AgentSessionContextVar.set(self)
+        try:
+            # rehydrate agent recursively and register them to the session
+            # the order of rehydration is from current to oldest
+            agent = Agent._rehydrate(state.agent)
+
+            # restore the durable functions in the order of oldest to current
+            # if any Agent failed, discard the rest and use the failed one as the current agent
+            rehydrated_agents = list(self._rehydrated_agents.values())
+            assert rehydrated_agents[0] is agent
+
+            while rehydrated_agents:
+                agent = rehydrated_agents.pop(-1)  # oldest agent
+                activity = AgentActivity(agent=agent, sess=self)
+                success = activity._rehydrate(agent._pending_durable_state)
+                agent._pending_durable_state = None
+
+                if not success and rehydrated_agents:
+                    # when durable function rehydration failed, the process is:
+                    # 1. simulate handoff: discard the rest agents and merge their chat context
+                    # 2. raise ToolError from the failed function when session is started
+                    # 3. `session.run` is called with the user input following the ToolError
+                    for stale_agent in rehydrated_agents:
+                        agent._chat_ctx.merge(
+                            stale_agent.chat_ctx,
+                            exclude_function_call=True,
+                            exclude_instructions=True,
+                            exclude_config_update=True,
+                        )
+                        self._rehydrated_agents.pop(stale_agent.id)
+                    break
+
+        finally:
+            # all states unpickled
+            _AgentSessionContextVar.reset(tk)
+
+        if rehydrated_agents:  # True if durable function rehydration failed
+            run_state = self._global_run_state
+            agents_handoff_chain = rehydrated_agents + [agent]
+            for i in range(len(agents_handoff_chain) - 1):
+                old_agent = agents_handoff_chain[i]
+                new_agent = agents_handoff_chain[i + 1]
+                handoff_item = llm.AgentHandoff(
+                    old_agent_id=old_agent.id, new_agent_id=new_agent.id
+                )
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item, old_agent=old_agent, new_agent=new_agent
+                    )
+                self._chat_ctx.insert(handoff_item)
+
+        return agent
+
+    def _register_rehydrated_agent(self, agent: Agent) -> None:
+        if agent.id in self._rehydrated_agents:
+            raise RuntimeError(
+                f"Agent with id {agent.id} already registered, please avoid creating agents with the same id"
+            )
+        self._rehydrated_agents[agent.id] = agent
+
+    def _stop_durable_scheduler(self) -> None:
+        agent = self._agent
+        while agent is not None:
+            if agent._activity and agent._activity._durable_scheduler:
+                agent._activity._durable_scheduler.close()
+
+            if isinstance(agent, AgentTask):
+                agent = agent._old_agent
+            else:
+                break
+
     def update_options(
         self,
         *,
@@ -980,7 +1120,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         run_state = self._global_run_state
-        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        activity = self._next_activity if self._activity._scheduling_paused else self._activity
 
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use say()")
@@ -1038,7 +1178,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         run_state = self._global_run_state
-        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        activity = self._next_activity if self._activity._scheduling_paused else self._activity
 
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
@@ -1127,6 +1267,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            is_handoff = agent is not self._agent or not agent.is_rehydrated()
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
@@ -1171,17 +1312,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
-            )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
+            if is_handoff:
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
                 )
-            self._chat_ctx.insert(handoff_item)
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()
@@ -1190,8 +1332,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
-            assert self._activity._on_enter_task is not None
-            await asyncio.shield(self._activity._on_enter_task)
+            if self._activity._on_enter_task:
+                await asyncio.shield(self._activity._on_enter_task)
+            elif new_activity == "start":
+                raise RuntimeError("on_enter task is not created when starting a new agent")
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

@@ -29,12 +29,14 @@ from ._exceptions import (
     AssignmentTimeoutError,
     create_api_error_from_http,
 )
+from .durable_scheduler import DurableScheduler, EffectCall
 from .job import (
     AutoSubscribe,
     JobContext,
     JobExecutorType,
     JobProcess,
     JobRequest,
+    TextMessageContext,
     get_job_context,
 )
 from .language import Language
@@ -55,6 +57,7 @@ from .llm.tool_context import (
     StopResponse,
     ToolContext,
     ToolError,
+    ToolFlag,
     function_tool,
 )
 from .plugin import Plugin
@@ -133,11 +136,13 @@ __all__ = [
     "JobProcess",
     "JobContext",
     "JobRequest",
+    "TextMessageContext",
     "get_job_context",
     "JobExecutorType",
     "AutoSubscribe",
     "FunctionTool",
     "function_tool",
+    "ToolFlag",
     "ProviderTool",
     "ChatContext",
     "ChatItem",
@@ -215,6 +220,8 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "DurableScheduler",
+    "EffectCall",
 ]
 
 # Cleanup docs of unexported modules

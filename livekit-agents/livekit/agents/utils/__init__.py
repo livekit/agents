@@ -1,6 +1,6 @@
 from livekit import rtc
 
-from . import aio, audio, codecs, http_context, http_server, hw, images
+from . import aio, audio, codecs, encryption, http_context, http_server, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
@@ -36,7 +36,9 @@ __all__ = [
     "wait_for_agent",
     "wait_for_participant",
     "wait_for_track_publication",
+    "encryption",
 ]
+
 
 # Cleanup docs of unexported modules
 _module = dir()
