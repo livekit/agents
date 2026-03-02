@@ -408,6 +408,8 @@ class STT(stt.STT):
             self._opts.model = model
         if is_given(language):
             self._opts.language = Language(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
@@ -437,7 +439,6 @@ class SpeechStream(stt.SpeechStream):
         self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
-        self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -459,6 +460,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.model = model
         if is_given(language):
             self._opts.language = Language(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
         if has_update and self._ws is not None and not self._ws.closed:
@@ -473,7 +476,14 @@ class SpeechStream(stt.SpeechStream):
                 "type": "session.update",
                 "settings": settings,
             }
-            asyncio.ensure_future(self._ws.send_str(json.dumps(update_msg)))
+            asyncio.ensure_future(self._send_session_update(update_msg))
+
+    async def _send_session_update(self, msg: dict[str, Any]) -> None:
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.send_str(json.dumps(msg))
+        except Exception:
+            logger.debug("failed to send session.update, ws may be closing")
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -552,40 +562,14 @@ class SpeechStream(stt.SpeechStream):
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
-            finally:
-                self._ws = None
-                if ws is not None:
-                    await ws.close()
+        try:
+            ws = await self._connect_ws()
+            self._ws = ws
+            await asyncio.gather(send_task(ws), recv_task(ws))
+        finally:
+            self._ws = None
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
