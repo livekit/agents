@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import fal_client
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, Language, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -17,7 +17,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 @dataclass
 class _STTOptions:
-    language: str = "en"
+    language: Language = Language("en")
     task: str = "transcribe"
     chunk_level: str = "segment"
     version: str = "3"
@@ -38,7 +38,9 @@ class WizperSTT(stt.STT):
         self._api_key = api_key if is_given(api_key) else os.getenv("FAL_KEY")
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
-        self._opts = _STTOptions(language=language if is_given(language) else "en")
+        self._opts = _STTOptions(
+            language=Language(language) if is_given(language) else Language("en")
+        )
         self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
     @property
@@ -51,7 +53,7 @@ class WizperSTT(stt.STT):
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
 
     async def _recognize_impl(
         self,
@@ -62,7 +64,7 @@ class WizperSTT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = language
+                self._opts.language = Language(language)
             data_uri = fal_client.encode(
                 rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
@@ -71,7 +73,7 @@ class WizperSTT(stt.STT):
                 arguments={
                     "audio_url": data_uri,
                     "task": self._opts.task,
-                    "language": self._opts.language,
+                    "language": self._opts.language.language,
                     "chunk_level": self._opts.chunk_level,
                     "version": self._opts.version,
                 },

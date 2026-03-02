@@ -21,6 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from functools import cached_property
 from typing import Any, Literal
 
 import aiohttp
@@ -31,6 +32,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    Language,
     tokenize,
     tts,
     utils,
@@ -113,7 +115,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
-        preferred_alignment: Literal["normalized", "original"] = "normalized",
+        preferred_alignment: NotGivenOr[Literal["normalized", "original"]] = NOT_GIVEN,
         pronunciation_dictionary_locators: NotGivenOr[
             list[PronunciationDictionaryLocator]
         ] = NOT_GIVEN,
@@ -137,7 +139,7 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
-            preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
+            preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized", or "original" for CJK (ja, ko, zh) languages.
             pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
         """  # noqa: E501
 
@@ -173,6 +175,7 @@ class TTS(tts.TTS):
                 "auto_mode is enabled, it expects full sentences or phrases, "
                 "please provide a SentenceTokenizer instead of a WordTokenizer."
             )
+
         self._opts = _TTSOptions(
             voice_id=voice_id,
             voice_settings=voice_settings,
@@ -186,7 +189,7 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             enable_logging=enable_logging,
-            language=language,
+            language=Language(language) if is_given(language) else NOT_GIVEN,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
@@ -253,9 +256,11 @@ class TTS(tts.TTS):
             self._opts.voice_settings = voice_settings
             changed = True
 
-        if is_given(language) and language != self._opts.language:
-            self._opts.language = language
-            changed = True
+        if is_given(language):
+            language = Language(language)
+            if language != self._opts.language:
+                self._opts.language = language
+                changed = True
 
         if is_given(pronunciation_dictionary_locators):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
@@ -480,7 +485,7 @@ class _TTSOptions:
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[Language]
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -492,7 +497,7 @@ class _TTSOptions:
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
-    preferred_alignment: Literal["normalized", "original"]
+    preferred_alignment: NotGivenOr[Literal["normalized", "original"]]
     auto_mode: NotGivenOr[bool]
     pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
 
@@ -541,6 +546,21 @@ class _Connection:
     @property
     def is_current(self) -> bool:
         return self._is_current
+
+    @cached_property
+    def preferred_alignment(self) -> Literal["normalized", "original"]:
+        if is_given(self._opts.preferred_alignment):
+            preferred_alignment = self._opts.preferred_alignment
+        else:
+            if is_given(self._opts.language) and self._opts.language.language in {
+                "ja",
+                "ko",
+                "zh",
+            }:
+                preferred_alignment = "original"
+            else:
+                preferred_alignment = "normalized"
+        return preferred_alignment  # type: ignore[return-value]
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
@@ -689,7 +709,7 @@ class _Connection:
                 # ensure alignment
                 alignment = (
                     data.get("normalizedAlignment")
-                    if self._opts.preferred_alignment == "normalized"
+                    if self.preferred_alignment == "normalized"
                     else data.get("alignment")
                 )
                 if alignment and stream is not None:
@@ -834,7 +854,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     params.append(f"model_id={opts.model}")
     params.append(f"output_format={opts.encoding}")
     if is_given(opts.language):
-        params.append(f"language_code={opts.language}")
+        params.append(f"language_code={opts.language.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
     params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")

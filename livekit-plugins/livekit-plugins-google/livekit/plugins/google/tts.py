@@ -18,6 +18,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
+from typing import Any
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -27,7 +28,15 @@ from google.cloud.texttospeech_v1.types import (
     SsmlVoiceGender,
     SynthesizeSpeechResponse,
 )
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, tokenize, tts, utils
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    Language,
+    tokenize,
+    tts,
+    utils,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -126,7 +135,7 @@ class TTS(tts.TTS):
         self._credentials_file = credentials_file
         self._location = location
 
-        lang = language if is_given(language) else DEFAULT_LANGUAGE
+        lang = Language(language) if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
 
         if not is_given(model_name):
@@ -216,9 +225,9 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
         """
-        params = {}
+        params: dict[str, Any] = {}
         if is_given(language):
-            params["language_code"] = str(language)
+            params["language_code"] = Language(language)
         if is_given(gender):
             params["ssml_gender"] = _gender_from_str(str(gender))
         if is_given(voice_name):

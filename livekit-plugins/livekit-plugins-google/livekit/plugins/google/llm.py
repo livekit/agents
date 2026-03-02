@@ -468,9 +468,6 @@ class LLMStream(llm.LLMStream):
 
                 candidate = response.candidates[0]
 
-                if not candidate.content or not candidate.content.parts:
-                    continue
-
                 if candidate.finish_reason is not None:
                     finish_reason = candidate.finish_reason
                     if candidate.finish_reason in BLOCKED_REASONS:
@@ -479,6 +476,9 @@ class LLMStream(llm.LLMStream):
                             retryable=False,
                             request_id=request_id,
                         )
+
+                if not candidate.content or not candidate.content.parts:
+                    continue
 
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
@@ -533,6 +533,8 @@ class LLMStream(llm.LLMStream):
                 request_id=request_id,
                 retryable=retryable,
             ) from e
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"gemini llm: error generating content {str(e)}",

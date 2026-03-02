@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr, utils
+from livekit.agents import NOT_GIVEN, Language, NotGivenOr, utils
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -118,7 +118,9 @@ class FakeSTT(STT):
 
         return SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[SpeechData(text=self._fake_transcript or "", language=language or "")],
+            alternatives=[
+                SpeechData(text=self._fake_transcript or "", language=Language(language or ""))
+            ],
         )
 
     async def recognize(
@@ -167,7 +169,7 @@ class FakeRecognizeStream(RecognizeStream):
                 type=SpeechEventType.FINAL_TRANSCRIPT
                 if is_final
                 else SpeechEventType.INTERIM_TRANSCRIPT,
-                alternatives=[SpeechData(text=transcript, language="")],
+                alternatives=[SpeechData(text=transcript, language=Language(""))],
             )
         )
 

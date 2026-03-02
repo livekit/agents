@@ -27,6 +27,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
 from openai.types import realtime
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
@@ -1120,9 +1121,11 @@ class RealtimeSession(
         async with self._update_chat_ctx_lock:
             chat_ctx = chat_ctx.copy(
                 exclude_handoff=True,
-                exclude_instructions=True,
                 exclude_config_update=True,
             )
+            # only remove the instructions but keep other system messages
+            remove_instructions(chat_ctx)
+
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
 
@@ -1594,19 +1597,8 @@ class RealtimeSession(
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
         ):
-            item = event.item
-            assert item.call_id is not None, "call_id is None"
-            assert item.name is not None, "name is None"
-            assert item.arguments is not None, "arguments is None"
+            self._handle_function_call(event.item)
 
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    id=item_id,
-                    call_id=item.call_id,
-                    name=item.name,
-                    arguments=item.arguments,
-                )
-            )
         elif item_type == "message":
             item_generation = self._current_generation.messages[item_id]
             item_generation.text_ch.close()
@@ -1614,6 +1606,23 @@ class RealtimeSession(
             if not item_generation.modalities.done():
                 # in case message modalities is not set, this shouldn't happen
                 item_generation.modalities.set_result(self._realtime_model._opts.modalities)
+
+    def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+        assert item.id is not None, "item.id is None"
+        assert item.call_id is not None, "call_id is None"
+        assert item.name is not None, "name is None"
+        assert item.arguments is not None, "arguments is None"
+
+        self._current_generation.function_ch.send_nowait(
+            llm.FunctionCall(
+                id=item.id,
+                call_id=item.call_id,
+                name=item.name,
+                arguments=item.arguments,
+            )
+        )
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:

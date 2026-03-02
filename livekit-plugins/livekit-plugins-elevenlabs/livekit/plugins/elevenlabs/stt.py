@@ -31,6 +31,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -39,7 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
-from .languages import iso639_3_to_1
+from ._utils import PeriodicCollector
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -67,11 +68,12 @@ class STTOptions:
     model_id: ElevenLabsSTTModels | str
     api_key: str
     base_url: str
-    language_code: str | None
+    language_code: Language | None
     tag_audio_events: bool
     include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
+    keyterms: NotGivenOr[list[str]]
 
 
 class STT(stt.STT):
@@ -88,6 +90,7 @@ class STT(stt.STT):
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -105,6 +108,10 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
+                Each keyterm can contain at most 5 words and must be less than 50 characters.
+                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
+                (not realtime streaming). Usage incurs additional costs.
         """
 
         if is_given(use_realtime):
@@ -143,12 +150,13 @@ class STT(stt.STT):
         self._opts = STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            language_code=language_code or None,
+            language_code=Language(language_code) if language_code else None,
             tag_audio_events=tag_audio_events,
             sample_rate=sample_rate,
             server_vad=server_vad,
             include_timestamps=include_timestamps,
             model_id=model_id,
+            keyterms=keyterms,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -175,7 +183,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         if is_given(language):
-            self._opts.language_code = language
+            self._opts.language_code = Language(language)
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
@@ -184,6 +192,9 @@ class STT(stt.STT):
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
         if self._opts.language_code:
             form.add_field("language_code", self._opts.language_code)
+        if is_given(self._opts.keyterms):
+            for keyterm in self._opts.keyterms:
+                form.add_field("keyterms", keyterm)
 
         try:
             async with self._ensure_session().post(
@@ -221,7 +232,7 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        normalized_language = iso639_3_to_1(language_code) or language_code
+        normalized_language = Language(language_code or self._opts.language_code or "")
         return self._transcription_to_speech_event(
             language_code=normalized_language,
             text=extracted_text,
@@ -245,7 +256,7 @@ class STT(stt.STT):
             alternatives=[
                 stt.SpeechData(
                     text=text,
-                    language=language_code,
+                    language=Language(language_code),
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
@@ -268,12 +279,16 @@ class STT(stt.STT):
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
 
         for stream in self._streams:
             stream.update_options(server_vad=server_vad)
@@ -313,6 +328,10 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
+        self._audio_duration_collector = PeriodicCollector(
+            callback=self._on_audio_duration_report,
+            duration=5.0,
+        )
 
     def update_options(
         self,
@@ -322,6 +341,14 @@ class SpeechStream(stt.SpeechStream):
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
+
+    def _on_audio_duration_report(self, duration: float) -> None:
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+        )
+        self._event_ch.send_nowait(usage_event)
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -347,6 +374,7 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
+            has_ended = False
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
                 frames: list[rtc.AudioFrame] = []
@@ -354,8 +382,10 @@ class SpeechStream(stt.SpeechStream):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
+                    has_ended = True
 
                 for frame in frames:
+                    self._audio_duration_collector.push(frame.duration)
                     audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     await ws.send_str(
                         json.dumps(
@@ -367,6 +397,10 @@ class SpeechStream(stt.SpeechStream):
                             }
                         )
                     )
+
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        has_ended = False
 
             closing_ws = True
 
@@ -444,6 +478,9 @@ class SpeechStream(stt.SpeechStream):
             f"commit_strategy={commit_strategy}",
         ]
 
+        if not self._language:
+            params.append("include_language_detection=true")
+
         if server_vad := self._opts.server_vad:
             if (
                 vad_silence_threshold_secs := server_vad.get("vad_silence_threshold_secs")
@@ -488,15 +525,19 @@ class SpeechStream(stt.SpeechStream):
         words = data.get("words", [])
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
+        language_code = data.get("language_code", self._language)
 
-        normalized_language = iso639_3_to_1(self._language) or self._language or "en"
+        normalized_language = Language(language_code) if language_code else Language("en")
+
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
             language=normalized_language,
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
-            words=[
+        )
+        if words:
+            speech_data.words = [
                 TimedString(
                     text=word.get("text", ""),
                     start_time=word.get("start", 0) + self.start_time_offset,
@@ -504,8 +545,7 @@ class SpeechStream(stt.SpeechStream):
                     start_time_offset=self.start_time_offset,
                 )
                 for word in words
-            ],
-        )
+            ]
 
         if message_type == "partial_transcript":
             logger.debug("Received message type partial_transcript: %s", data)
@@ -552,6 +592,10 @@ class SpeechStream(stt.SpeechStream):
                 if self._speaking:
                     self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
+
+        elif message_type == "committed_transcript":
+            # if timestamps are included, these will be ignored above since we are handling committed_transcript_with_timestamps
+            pass
 
         elif message_type == "session_started":
             # Session initialization message - informational only

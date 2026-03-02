@@ -56,6 +56,7 @@ ChatModels = Literal[
 ]
 RealtimeModels = Literal[
     "gpt-realtime",
+    "gpt-realtime-1.5",
     "gpt-realtime-2025-08-28",
     "gpt-4o-realtime-preview",
 ]
@@ -288,6 +289,21 @@ XAIChatModels = Literal[
     "grok-2-vision-1212",
     "grok-2-image-1212",
     "grok-2-1212",
+]
+
+SambaNovaChatModels = Literal[
+    "DeepSeek-R1-0528",
+    "DeepSeek-V3-0324",
+    "DeepSeek-V3.1",
+    "DeepSeek-R1-Distill-Llama-70B",
+    "Meta-Llama-3.3-70B-Instruct",
+    "Meta-Llama-3.1-8B-Instruct",
+    "Llama-4-Maverick-17B-128E-Instruct",
+    "gpt-oss-120b",
+    "Qwen3-235B-A22B-Instruct-2507",
+    "Qwen3-32B",
+    "Llama-3.3-Swallow-70B-Instruct-v0.4",
+    "E5-Mistral-7B-Instruct",
 ]
 
 

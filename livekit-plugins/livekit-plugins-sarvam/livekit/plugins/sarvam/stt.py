@@ -38,6 +38,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -406,7 +407,7 @@ class STT(stt.STT):
             )
 
         self._opts = SarvamSTTOptions(
-            language=language,
+            language=Language(language),
             api_key=self._api_key,
             model=model,
             mode=mode,
@@ -449,7 +450,7 @@ class STT(stt.STT):
         Raises:
             ValueError: If mode is explicitly given but not supported by the model.
         """
-        resolved_language = language if is_given(language) else self._opts.language
+        resolved_language = Language(language) if is_given(language) else self._opts.language
         resolved_model = model if is_given(model) else self._opts.model
         if not isinstance(resolved_language, str):
             resolved_language = self._opts.language
@@ -544,7 +545,9 @@ class STT(stt.STT):
                 request_id = response_json.get("request_id", "")
                 detected_language = response_json.get("language_code")
                 if not isinstance(detected_language, str):
-                    detected_language = opts_language or ""
+                    detected_language = Language(opts_language or "")
+                else:
+                    detected_language = Language(detected_language)
 
                 start_time = 0.0
                 end_time = 0.0
@@ -806,7 +809,7 @@ class SpeechStream(stt.SpeechStream):
         if not model or not model.strip():
             raise ValueError("Model cannot be empty")
 
-        self._opts.language = language
+        self._opts.language = Language(language)
         self._opts.model = model
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
         if prompt is not None:
@@ -1189,7 +1192,7 @@ class SpeechStream(stt.SpeechStream):
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
-        language = transcript_data.get("language_code", "")
+        language = Language(transcript_data.get("language_code", ""))
         request_id = transcript_data.get("request_id", "")
         self._maybe_set_server_request_id(transcript_data)
 
