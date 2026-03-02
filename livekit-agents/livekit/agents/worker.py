@@ -566,6 +566,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._host, ServerEnvOption.getvalue(self._port, devmode)
             )
             self._worker_load: float = 0.0
+            self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
@@ -691,17 +692,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 while True:
                     await interval.tick()
 
-                    def load_fnc() -> float:
-                        assert self._load_fnc is not None
-                        signature = inspect.signature(self._load_fnc)
-                        parameters = list(signature.parameters.values())
-                        if len(parameters) == 0:
-                            return self._load_fnc()  # type: ignore
-
-                        return self._load_fnc(self)  # type: ignore
-
                     self._worker_load = await asyncio.get_event_loop().run_in_executor(
-                        None, load_fnc
+                        None, self._run_load_fnc_sync
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
@@ -1149,17 +1141,57 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
+    def _run_load_fnc_sync(self) -> float:
+        """Run load_fnc in executor. Uses signature to call with or without self."""
+        assert self._load_fnc is not None
+        signature = inspect.signature(self._load_fnc)
+        parameters = list(signature.parameters.values())
+        if len(parameters) == 0:
+            return self._load_fnc()  # type: ignore
+        return self._load_fnc(self)  # type: ignore
+
+    async def _refresh_worker_load(self) -> None:
+        """Refresh _worker_load by running load_fnc. Used before availability checks
+        so concurrent job requests see up-to-date load (fixes race with periodic interval).
+        """
+        if self._load_fnc is None:
+            return
+
+        self._worker_load = await asyncio.get_event_loop().run_in_executor(
+            None, self._run_load_fnc_sync
+        )
+        telemetry.metrics._update_worker_load(self._worker_load)
+
+    def _get_effective_load(self) -> float:
+        """Current load including reserved slots (accepted but not yet launched)."""
+        active_jobs = self.active_jobs
+        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
+        if active_jobs:
+            job_load_estimate = self._worker_load / len(active_jobs)
+        elif math.isinf(load_threshold):
+            job_load_estimate = 0.0
+        else:
+            default_idle = ServerEnvOption.getvalue(self._num_idle_processes, self._devmode)
+            job_load_estimate = load_threshold / max(default_idle, 1)
+        return self._worker_load + self._reserved_slots * job_load_estimate
+
     def _is_available(self) -> bool:
         if self._draining:
             return False
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        return self._worker_load < load_threshold
+        if math.isinf(load_threshold):
+            return True
+
+        # Use effective load so we don't over-accept when two requests arrive
+        # before either job appears in active_jobs.
+        return self._get_effective_load() < load_threshold
 
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1167,6 +1199,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._queue_msg(availability_resp)
             return
 
+        # Reserve a slot immediately so concurrent availability checks see updated
+        # load before the user's request_fnc runs or calls accept().
+        self._reserved_slots += 1
         answered = False
 
         async def _on_reject(terminate: bool) -> None:
@@ -1255,9 +1290,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 await _on_reject(terminate=False)
 
+        def _on_job_request_done(task: asyncio.Task[Any]) -> None:
+            self._reserved_slots -= 1
+            self._job_lifecycle_tasks.discard(task)
+
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._job_lifecycle_tasks.add(user_task)
-        user_task.add_done_callback(self._job_lifecycle_tasks.discard)
+        user_task.add_done_callback(_on_job_request_done)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
         logger.debug(
@@ -1298,7 +1337,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        is_full = self._worker_load >= load_threshold
+        effective_load = self._get_effective_load()
+        is_full = effective_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (
@@ -1310,7 +1350,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # only log if status has changed
         if self._previous_status != status and not self._draining:
             self._previous_status = status
-            extra = {"load": self._worker_load, "threshold": load_threshold}
+            extra = {"load": effective_load, "threshold": load_threshold}
             if is_full:
                 logger.info("worker is at full capacity, marking as unavailable", extra=extra)
             else:
