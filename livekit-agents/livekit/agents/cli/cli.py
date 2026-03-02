@@ -199,6 +199,9 @@ class ConsoleAudioOutput(io.AudioOutput):
         with self._audio_lock:
             self._output_buf.clear()
             self._output_buf_empty.set()
+            # redundant (_wait_for_playout does the same, albeit async) but defensive
+            self._segment_id += 1
+            self._playback_started_fired = False
 
         if self._pushed_duration:
             self._interrupted_ev.set()
@@ -269,7 +272,6 @@ class ConsoleAudioOutput(io.AudioOutput):
     def _on_playback_started(self, *, created_at: float, segment_id: int) -> None:
         if self._segment_id != segment_id:
             return
-        logger.info(f"Playback started: {created_at} {segment_id}")
         self.on_playback_started(created_at=created_at)
 
 
