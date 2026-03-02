@@ -70,6 +70,11 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
+```bash
+cd examples
+uv run voice_agents/phonic_realtime_agent.py dev
+```
+
 ## Configuration
 
 Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `RealtimeModel`. All other options are optional.
