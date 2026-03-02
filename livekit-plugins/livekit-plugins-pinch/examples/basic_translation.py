@@ -34,6 +34,7 @@ VOICE_TYPE: str = os.environ.get("VOICE_TYPE", "clone")
 
 # Transcript handler
 
+
 def on_transcript(event: TranscriptEvent) -> None:
     """Called for every transcript message received from the Pinch data channel."""
     status = "✓ final" if event.is_final else "… interim"
@@ -42,6 +43,7 @@ def on_transcript(event: TranscriptEvent) -> None:
         f"[{kind}] [{event.language_detected}] [{status}]  {event.text}",
         flush=True,
     )
+
 
 # Main
 
@@ -89,7 +91,7 @@ async def main() -> None:
     await translator.start(room)
     logger.info(
         "Translation active. Speak into your microphone. "
-        'Press Ctrl+C to stop.\n'
+        "Press Ctrl+C to stop.\n"
         "Translated audio is being published back to the LiveKit room "
         "as track 'pinch-translated'.\n"
     )
