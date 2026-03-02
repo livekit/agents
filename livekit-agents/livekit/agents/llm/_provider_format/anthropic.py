@@ -61,13 +61,22 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
-            result_content: list[Any] | str = msg.output
-            try:
-                parsed = json.loads(msg.output)
-                if isinstance(parsed, list):
-                    result_content = parsed
-            except (json.JSONDecodeError, TypeError):
-                pass
+            result_content: list[Any] | str
+            if isinstance(msg.output, str):
+                result_content = msg.output
+                try:
+                    parsed = json.loads(msg.output)
+                    if isinstance(parsed, list):
+                        result_content = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            else:
+                result_content = []
+                for part in llm.utils.tool_output_parts(msg.output):
+                    if isinstance(part, str):
+                        result_content.append({"type": "text", "text": part})
+                    else:
+                        result_content.append(_to_image_content(part))
             content.append(
                 {
                     "tool_use_id": msg.call_id,

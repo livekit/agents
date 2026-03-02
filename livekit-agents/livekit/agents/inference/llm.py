@@ -294,6 +294,7 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
+        provider_format_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
@@ -303,6 +304,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm = llm_v
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
+        self._provider_format_kwargs = provider_format_kwargs or {}
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
@@ -317,7 +319,9 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            chat_ctx, _ = self._chat_ctx.to_provider_format(
+                format=self._provider_fmt, **self._provider_format_kwargs
+            )
             tool_schemas = cast(
                 list[ChatCompletionToolParam],
                 self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),

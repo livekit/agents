@@ -27,7 +27,12 @@ from livekit import rtc
 from ..log import logger
 from ..utils import images
 from . import _strict
-from .chat_context import ChatContext, ImageContent
+from .chat_context import (
+    ChatContext,
+    FunctionCallOutputValue,
+    ImageContent,
+    ToolOutputContent,
+)
 from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
@@ -38,6 +43,7 @@ if TYPE_CHECKING:
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
+TOOL_OUTPUT_IMAGE_PLACEHOLDER = "[Image omitted: unsupported by provider]"
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -467,7 +473,9 @@ def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str |
 def _is_valid_function_output(value: Any) -> bool:
     VALID_TYPES = (str, int, float, bool, complex, type(None))
 
-    if isinstance(value, VALID_TYPES):
+    if isinstance(value, ImageContent):
+        return True
+    elif isinstance(value, VALID_TYPES):
         return True
     elif (
         isinstance(value, list)
@@ -482,6 +490,69 @@ def _is_valid_function_output(value: Any) -> bool:
             for key, val in value.items()
         )
     return False
+
+
+def normalize_function_output_value(output: Any) -> FunctionCallOutputValue:
+    """
+    Normalize a validated tool output value for storage in FunctionCallOutput.
+
+    Supported multimodal values are preserved:
+    - str
+    - ImageContent
+    - list[str | ImageContent]
+
+    Legacy values are converted to text for backward compatibility.
+    """
+    if isinstance(output, (str, ImageContent)):
+        return output
+
+    if isinstance(output, (list, tuple, set, frozenset)):
+        normalized: list[ToolOutputContent] = []
+        for item in output:
+            if isinstance(item, (str, ImageContent)):
+                normalized.append(item)
+            else:
+                normalized.append(str(item))
+        return normalized
+
+    return str(output) if output is not None else ""
+
+
+def tool_output_parts(output: Any) -> list[ToolOutputContent]:
+    normalized = normalize_function_output_value(output)
+    if isinstance(normalized, list):
+        return normalized
+    return [normalized]
+
+
+def split_tool_output_parts(output: Any) -> tuple[list[str], list[ImageContent]]:
+    text_parts: list[str] = []
+    image_parts: list[ImageContent] = []
+
+    for part in tool_output_parts(output):
+        if isinstance(part, str):
+            text_parts.append(part)
+        elif isinstance(part, ImageContent):
+            image_parts.append(part)
+
+    return text_parts, image_parts
+
+
+def tool_output_to_text(
+    output: Any,
+    *,
+    image_placeholder: str = TOOL_OUTPUT_IMAGE_PLACEHOLDER,
+    include_image_placeholder: bool = True,
+) -> str:
+    text_parts: list[str] = []
+
+    for part in tool_output_parts(output):
+        if isinstance(part, str):
+            text_parts.append(part)
+        elif include_image_placeholder:
+            text_parts.append(image_placeholder)
+
+    return "\n".join(text_parts)
 
 
 @dataclass
@@ -552,12 +623,14 @@ def make_function_call_output(
             raw_exception=None,
         )
 
+    normalized_output = normalize_function_output_value(output)
+
     return FunctionCallResult(
         fnc_call=fnc_call,
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output=normalized_output,
             is_error=False,
         ),
         raw_output=output,

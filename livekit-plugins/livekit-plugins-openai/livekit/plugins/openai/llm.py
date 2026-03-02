@@ -83,6 +83,7 @@ class _LLMOptions:
     extra_body: NotGivenOr[dict[str, Any]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
+    supports_tool_image_output: bool
 
 
 class LLM(llm.LLM):
@@ -112,6 +113,7 @@ class LLM(llm.LLM):
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        supports_tool_image_output: bool = False,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -148,6 +150,7 @@ class LLM(llm.LLM):
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
+            supports_tool_image_output=supports_tool_image_output,
         )
         if is_given(api_key) and not api_key:
             raise ValueError(
@@ -1022,6 +1025,9 @@ class LLM(llm.LLM):
             model=self._opts.model,
             provider_fmt=self._provider_fmt,
             strict_tool_schema=self._strict_tool_schema,
+            provider_format_kwargs={
+                "supports_tool_image_output": self._opts.supports_tool_image_output
+            },
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -1038,6 +1044,7 @@ class LLMStream(_LLMStream):
         model: str | ChatModels,
         provider_fmt: str,
         strict_tool_schema: bool,
+        provider_format_kwargs: dict[str, Any] | None,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[llm.Tool],
@@ -1049,6 +1056,7 @@ class LLMStream(_LLMStream):
             model=model,
             provider_fmt=provider_fmt,
             strict_tool_schema=strict_tool_schema,
+            provider_format_kwargs=provider_format_kwargs,
             client=client,
             chat_ctx=chat_ctx,
             tools=tools,
