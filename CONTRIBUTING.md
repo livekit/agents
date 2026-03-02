@@ -94,7 +94,8 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
     -p livekit.plugins.inworld \
     -p livekit.plugins.keyframe \
     -p livekit.plugins.simli \
-    -p livekit.plugins.anam
+    -p livekit.plugins.anam \
+    -p livekit.plugins.gnani \
 ```
 
 ### Linting

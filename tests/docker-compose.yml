@@ -60,6 +60,9 @@ services:
       - LMNT_API_KEY
       - INWORLD_API_KEY
       - MISTRAL_API_KEY
+      - GNANI_API_KEY
+      - GNANI_ORG_ID
+      - GNANI_USER_ID
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -80,6 +83,7 @@ services:
       - "api.lmnt.com:172.30.0.10"
       - "api.inworld.ai:172.30.0.10"
       - "api.mistralai.com:172.30.0.10"
+      - "api.vachana.ai:172.30.0.10"
     networks:
       - toxinet
 
