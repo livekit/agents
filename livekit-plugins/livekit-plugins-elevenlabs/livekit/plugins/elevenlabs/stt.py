@@ -40,6 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
+from ._utils import PeriodicCollector
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -327,6 +328,10 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
+        self._audio_duration_collector = PeriodicCollector(
+            callback=self._on_audio_duration_report,
+            duration=5.0,
+        )
 
     def update_options(
         self,
@@ -336,6 +341,14 @@ class SpeechStream(stt.SpeechStream):
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
+
+    def _on_audio_duration_report(self, duration: float) -> None:
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            alternatives=[],
+            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+        )
+        self._event_ch.send_nowait(usage_event)
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -361,6 +374,7 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
+            has_ended = False
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
                 frames: list[rtc.AudioFrame] = []
@@ -368,8 +382,10 @@ class SpeechStream(stt.SpeechStream):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
+                    has_ended = True
 
                 for frame in frames:
+                    self._audio_duration_collector.push(frame.duration)
                     audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     await ws.send_str(
                         json.dumps(
@@ -381,6 +397,10 @@ class SpeechStream(stt.SpeechStream):
                             }
                         )
                     )
+
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        has_ended = False
 
             closing_ws = True
 
