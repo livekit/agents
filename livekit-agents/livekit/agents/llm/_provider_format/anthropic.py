@@ -19,7 +19,7 @@ def to_chat_ctx(
     chat_ctx: llm.ChatContext,
     *,
     inject_dummy_user_message: bool = True,
-    no_trailing_assistant: bool = False,
+    inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -95,7 +95,7 @@ def to_chat_ctx(
 
     # Claude 4.6+ does not support prefilling (trailing assistant messages).
     # Append a dummy user message so the request ends with a user turn.
-    if no_trailing_assistant and messages and messages[-1]["role"] == "assistant":
+    if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
         messages.append(
             {"role": "user", "content": [{"text": "(continue)", "type": "text"}]}
         )

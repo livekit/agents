@@ -201,9 +201,9 @@ class LLM(llm.LLM):
                     extra["tool_choice"] = anthropic_tool_choice
 
         # Claude 4.6+ does not support prefilling (trailing assistant messages).
-        no_trailing = _model_disables_prefill(self._opts.model)
+        inject_trailing = _model_disables_prefill(self._opts.model)
         anthropic_ctx, extra_data = chat_ctx.to_provider_format(
-            format="anthropic", no_trailing_assistant=no_trailing
+            format="anthropic", inject_trailing_user_message=inject_trailing
         )
         messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
         if extra_data.system_messages:
