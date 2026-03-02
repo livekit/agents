@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-backboard"
+description = "Agent Framework plugin for Backboard.io — persistent memory, RAG, and 1800+ LLMs"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "ConversyAI", email = "hello@conversyai.com" }]
+keywords = [
+    "backboard",
+    "livekit",
+    "agents",
+    "voice",
+    "AI",
+    "memory",
+    "RAG",
+    "LLM",
+    "realtime",
+    "webrtc",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "livekit-agents>=1.4.0",
+    "httpx>=0.27.0",
+]
+dynamic = ["version"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io/agents/"
+Website = "https://backboard.io"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/backboard/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
