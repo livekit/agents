@@ -388,11 +388,10 @@ def _try_repair_json(raw: str) -> Any:
         if ch == '"':
             quote_count += 1
     if quote_count % 2 != 0:
-        # Strip trailing unescaped backslash (truncated escape sequence)
-        # so we don't produce '\"' instead of a real closing quote.
-        stripped = repaired.rstrip("\\")
-        trailing_backslashes = len(repaired) - len(stripped)
-        if trailing_backslashes % 2 != 0:
+        # If the string ends with an unescaped backslash (start of a truncated
+        # escape sequence), strip it before closing the quote so we don't
+        # produce an escaped-quote '\"' instead of a real closing quote.
+        if repaired.endswith("\\") and not repaired.endswith("\\\\"):
             repaired = repaired[:-1]
         repaired += '"'
 
