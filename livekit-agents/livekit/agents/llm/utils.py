@@ -366,6 +366,64 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     return create_model(model_name, **fields)
 
 
+def _try_repair_json(raw: str) -> Any:
+    """Attempt to repair truncated JSON from LLM tool call arguments.
+
+    LLMs sometimes return truncated JSON in streaming tool calls, e.g.:
+    '{"success":true,"reason":"The message explicitly asks the user'
+    This function tries to close open strings, arrays, and objects.
+    """
+
+    repaired = raw
+    # Close any open string literal
+    quote_count = 0
+    in_escape = False
+    for ch in repaired:
+        if in_escape:
+            in_escape = False
+            continue
+        if ch == "\\":
+            in_escape = True
+            continue
+        if ch == '"':
+            quote_count += 1
+    if quote_count % 2 != 0:
+        # Strip trailing unescaped backslash (truncated escape sequence)
+        # so we don't produce '\"' instead of a real closing quote.
+        stripped = repaired.rstrip("\\")
+        trailing_backslashes = len(repaired) - len(stripped)
+        if trailing_backslashes % 2 != 0:
+            repaired = repaired[:-1]
+        repaired += '"'
+
+    # Close open brackets/braces in correct nesting order
+    nesting_stack: list[str] = []
+    in_string = False
+    in_escape = False
+    for ch in repaired:
+        if in_escape:
+            in_escape = False
+            continue
+        if ch == "\\":
+            in_escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            nesting_stack.append("}")
+        elif ch == "[":
+            nesting_stack.append("]")
+        elif ch in ("}", "]") and nesting_stack and nesting_stack[-1] == ch:
+            nesting_stack.pop()
+
+    repaired += "".join(reversed(nesting_stack))
+
+    return from_json(repaired)
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -379,7 +437,25 @@ def prepare_function_arguments(
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-    args_dict = from_json(json_arguments)
+    try:
+        args_dict = from_json(json_arguments)
+    except ValueError:
+        # LLMs may return truncated JSON in streaming tool calls (e.g., EOF
+        # while parsing a string). Attempt to repair the JSON before giving up.
+        try:
+            args_dict = _try_repair_json(json_arguments)
+            logger.warning(
+                "repaired truncated JSON in tool call arguments",
+                extra={
+                    "raw_arguments_preview": json_arguments[:200],
+                    "raw_arguments_length": len(json_arguments),
+                },
+            )
+        except Exception:
+            raise ValueError(
+                f"Failed to parse tool call arguments as JSON "
+                f"(and repair attempt failed): {json_arguments!r}"
+            ) from None
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
