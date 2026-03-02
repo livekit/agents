@@ -261,11 +261,12 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         sent = False
         for item in chat_ctx.items:
-            if isinstance(item, llm.FunctionCallOutput) and item.call_id in self._pending_tool_call_ids:
+            if (
+                isinstance(item, llm.FunctionCallOutput)
+                and item.call_id in self._pending_tool_call_ids
+            ):
                 self._pending_tool_call_ids.remove(item.call_id)
-                logger.info(
-                    f"Sending tool call output for {item.name} (call_id: {item.call_id})"
-                )
+                logger.info(f"Sending tool call output for {item.name} (call_id: {item.call_id})")
                 if self._socket:
                     await self._socket.send_tool_call_output(
                         ToolCallOutputPayload(
@@ -296,13 +297,15 @@ class RealtimeSession(llm.RealtimeSession):
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
             # We disallow tool chaining and tool calls during agent speech to reduce complexity
             # of managing state while operating within the LiveKit Realtime generations framework
-            self._tool_definitions.append({
-                "type": "custom_websocket",
-                "tool_schema": tool_schema,
-                "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
-                "wait_for_speech_before_tool_call": True,
-                "allow_tool_chaining": False,
-            })
+            self._tool_definitions.append(
+                {
+                    "type": "custom_websocket",
+                    "tool_schema": tool_schema,
+                    "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    "wait_for_speech_before_tool_call": True,
+                    "allow_tool_chaining": False,
+                }
+            )
 
         self._tools_ready.set()
 
@@ -415,9 +418,7 @@ class RealtimeSession(llm.RealtimeSession):
 
             # Instead of using `start_listening` which uses EventEmitter paradigm,
             # we will consume the async iterator directly for better task integration
-            recv_task = asyncio.create_task(
-                self._recv_task(self._socket), name="phonic-recv"
-            )
+            recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
             shutdown_wait_task = asyncio.create_task(
                 self._session_should_close.wait(), name="phonic-shutdown-wait"
             )
