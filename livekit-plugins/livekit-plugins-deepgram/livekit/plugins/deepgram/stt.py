@@ -735,8 +735,8 @@ def live_transcription_to_speech_data(
 
         sd = stt.SpeechData(
             language=Language(language),
-            start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
-            end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
+            start_time=(alt["words"][0].get("start", 0) if alt["words"] else 0) + start_time_offset,
+            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0) + start_time_offset,
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,

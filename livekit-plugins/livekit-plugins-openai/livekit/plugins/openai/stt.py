@@ -577,6 +577,19 @@ class SpeechStream(stt.SpeechStream):
                         current_text = ""
                         transcript = data.get("transcript", "")
                         item_id = data.get("item_id", "")
+                        timing = item_audio_timing.get(item_id, {})
+                        has_start_ms = "start_ms" in timing
+                        has_end_ms = "end_ms" in timing
+                        audio_start_ms = timing.get("start_ms", 0)
+                        audio_end_ms = timing.get("end_ms", 0)
+                        start_time = (
+                            (audio_start_ms / 1000.0) + self.start_time_offset
+                            if has_start_ms
+                            else 0.0
+                        )
+                        end_time = (
+                            (audio_end_ms / 1000.0) + self.start_time_offset if has_end_ms else 0.0
+                        )
 
                         if transcript:
                             self._event_ch.send_nowait(
@@ -586,18 +599,17 @@ class SpeechStream(stt.SpeechStream):
                                         stt.SpeechData(
                                             text=transcript,
                                             language=self._language,
+                                            start_time=start_time,
+                                            end_time=end_time,
                                         )
                                     ],
                                 )
                             )
 
                         audio_duration = 0.0
+                        if has_start_ms and has_end_ms and audio_end_ms > audio_start_ms:
+                            audio_duration = (audio_end_ms - audio_start_ms) / 1000.0
                         if item_id in item_audio_timing:
-                            timing = item_audio_timing[item_id]
-                            start_ms = timing.get("start_ms", 0)
-                            end_ms = timing.get("end_ms", 0)
-                            if end_ms > start_ms:
-                                audio_duration = (end_ms - start_ms) / 1000.0
                             del item_audio_timing[item_id]
 
                         self._event_ch.send_nowait(

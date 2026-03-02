@@ -117,6 +117,12 @@ class MetricsReport(TypedDict, total=False):
     User `ChatMessage` only
     """
 
+    utterance_end_latency: float
+    """Wall-clock delay from when the audio at end_time was pushed to FINAL_TRANSCRIPT reception.
+
+    User `ChatMessage` only
+    """
+
     end_of_turn_delay: float
     """Amount of time between the end of speech and the decision to end the user's turn
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -296,6 +297,17 @@ class RecognizeStream(ABC):
 
         self._start_time_offset: float = 0.0
 
+        # audio push timeline tracking for utterance_end_latency
+        self._cumulative_audio_seconds: float = 0.0
+        self._audio_push_wall_times: list[float] = []  # cumulative audio seconds
+        self._audio_push_timestamps: list[float] = []  # wall-clock time.time()
+
+    def _record_push_timestamp(self, frame_duration: float, pushed_at: float) -> None:
+        """Append a single point to the audio push timeline."""
+        self._cumulative_audio_seconds += frame_duration
+        self._audio_push_wall_times.append(self._cumulative_audio_seconds)
+        self._audio_push_timestamps.append(pushed_at)
+
     @property
     def start_time_offset(self) -> float:
         return self._start_time_offset
@@ -360,6 +372,29 @@ class RecognizeStream(ABC):
             ),
         )
 
+    def _lookup_push_time(self, audio_pos: float) -> float | None:
+        """Find the wall-clock time when audio at the given position was pushed.
+
+        Uses bisect to find the closest push timestamp for the given cumulative
+        audio position in seconds.
+        """
+        if not self._audio_push_wall_times:
+            return None
+
+        # Use bisect_left so exact frame boundaries map to the frame that
+        # produced that boundary (instead of the next frame).
+        idx = bisect.bisect_left(self._audio_push_wall_times, audio_pos)
+        if idx >= len(self._audio_push_wall_times):
+            return self._audio_push_timestamps[-1]
+        return self._audio_push_timestamps[idx]
+
+    def _prune_push_timestamps(self, up_to: float) -> None:
+        """Remove push timestamp entries up to the given audio position."""
+        idx = bisect.bisect_right(self._audio_push_wall_times, up_to)
+        if idx > 0:
+            del self._audio_push_wall_times[:idx]
+            del self._audio_push_timestamps[:idx]
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
 
@@ -386,6 +421,33 @@ class RecognizeStream(ABC):
                 # reset the retry count after a successful recognition
                 self._num_retries = 0
 
+                # compute utterance_end_latency: wall-clock delay from when
+                # the audio at the transcript's end_time was pushed to when
+                # FINAL_TRANSCRIPT was received.
+                utterance_end_latency: float | None = None
+                if ev.alternatives:
+                    end_time = ev.alternatives[0].end_time
+                    if end_time > 0.0:
+                        audio_pos = end_time - self._start_time_offset
+                        push_wall_clock = self._lookup_push_time(audio_pos)
+                        if push_wall_clock is not None:
+                            utterance_end_latency = max(0.0, time.time() - push_wall_clock)
+                            self._prune_push_timestamps(audio_pos)
+
+                stt_metrics = STTMetrics(
+                    request_id=ev.request_id,
+                    timestamp=time.time(),
+                    duration=0.0,
+                    label=self._stt._label,
+                    audio_duration=0.0,
+                    streamed=True,
+                    utterance_end_latency=utterance_end_latency,
+                    metadata=Metadata(
+                        model_name=self._stt.model, model_provider=self._stt.provider
+                    ),
+                )
+                self._stt.emit("metrics_collected", stt_metrics)
+
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
         self._check_input_not_ended()
@@ -404,12 +466,18 @@ class RecognizeStream(ABC):
                     quality=rtc.AudioResamplerQuality.HIGH,
                 )
 
+        frame_duration = frame.samples_per_channel / frame.sample_rate
+
         if self._resampler:
             frames = self._resampler.push(frame)
             for frame in frames:
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
+
+        # record push timeline after enqueueing input audio so the timestamp
+        # represents local "send complete" semantics.
+        self._record_push_timestamp(frame_duration, time.time())
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
