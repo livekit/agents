@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+dist/
+*.egg-info/
+.DS_Store
+
+# ruff and pytest cache
+.ruff_cache/
+.pytest_cache/
+
+# build artifacts
+build/
+*.pyo
