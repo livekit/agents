@@ -96,9 +96,7 @@ def to_chat_ctx(
     # Claude 4.6+ does not support prefilling (trailing assistant messages).
     # Append a dummy user message so the request ends with a user turn.
     if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
-        messages.append(
-            {"role": "user", "content": [{"text": "(continue)", "type": "text"}]}
-        )
+        messages.append({"role": "user", "content": [{"text": "(continue)", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
 
