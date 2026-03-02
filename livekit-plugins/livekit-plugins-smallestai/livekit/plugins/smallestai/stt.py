@@ -33,6 +33,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -566,7 +567,7 @@ def _build_speech_data(
             end_time = last_word_end
 
     return stt.SpeechData(
-        language=language,
+        language=Language(language),
         text=transcript,
         start_time=start_time,
         end_time=end_time,
