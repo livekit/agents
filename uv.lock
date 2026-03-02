@@ -73,6 +73,7 @@ constraints = [{ name = "onnxruntime", marker = "python_full_version < '3.11'", 
 [manifest.dependency-groups]
 dev = [
     { name = "jiwer", specifier = ">=3.1.0" },
+    { name = "livekit-plugins-ai-coustics", directory = "../aic-noise-filter/target/packages/python" },
     { name = "mypy" },
     { name = "playwright", specifier = ">=1.58.0" },
     { name = "pytest" },
@@ -2052,6 +2053,21 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/af/83ec6718f4ee00a130fb4e2fca196a69099aa4a73b932afd1ac3af5cf6c2/livekit_browser-0.1.4-py3-none-any.whl", hash = "sha256:9b22edf6b349ced35381cb6f775ac2680de4d896d3986689d9f4b886d21895e6", size = 14890, upload-time = "2026-02-17T03:27:31.882Z" },
+]
+
+[[package]]
+name = "livekit-plugins-ai-coustics"
+version = "0.1.12"
+source = { directory = "../aic-noise-filter/target/packages/python" }
+dependencies = [
+    { name = "livekit" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit", specifier = ">=1.0.25" },
+    { name = "livekit-agents", specifier = ">=1.4.2" },
 ]
 
 [[package]]

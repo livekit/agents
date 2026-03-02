@@ -10,6 +10,7 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
+    UserStateChangedEvent,
     cli,
     inference,
     metrics,
@@ -18,6 +19,7 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins.ai_coustics import audio_enhancement, VAD
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -94,7 +96,7 @@ async def entrypoint(ctx: JobContext):
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
+        vad=VAD(),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
@@ -106,6 +108,13 @@ async def entrypoint(ctx: JobContext):
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent):
+        if ev.new_state == "speaking":
+            logger.info("User speech started")
+        elif ev.old_state == "speaking":
+            logger.info("User speech ended")
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
@@ -126,6 +135,7 @@ async def entrypoint(ctx: JobContext):
             audio_input=room_io.AudioInputOptions(
                 # uncomment to enable the Krisp BVC noise cancellation
                 # noise_cancellation=noise_cancellation.BVC(),
+                noise_cancellation=audio_enhancement()
             ),
         ),
     )
