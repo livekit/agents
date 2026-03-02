@@ -153,6 +153,9 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._paused_at: float | None = None
         self._paused_duration: float = 0.0
 
+        # track the segment id to avoid stale async operations
+        self._segment_id = 0
+
     @property
     def audio_lock(self) -> threading.Lock:
         return self._audio_lock
@@ -196,7 +199,6 @@ class ConsoleAudioOutput(io.AudioOutput):
         with self._audio_lock:
             self._output_buf.clear()
             self._output_buf_empty.set()
-            self._playback_started_fired = False
 
         if self._pushed_duration:
             self._interrupted_ev.set()
@@ -249,8 +251,9 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._paused_duration = 0.0
         self._interrupted_ev.clear()
         with self._audio_lock:
-            self._playback_started_fired = False
             self._output_buf_empty.set()
+            self._playback_started_fired = False
+            self._segment_id += 1
 
     def _maybe_mark_playback_started(self) -> None:
         """Mark the playback as started if it hasn't been already. Must be called under ``audio_lock``."""
@@ -258,7 +261,16 @@ class ConsoleAudioOutput(io.AudioOutput):
             return
         self._playback_started_fired = True
         t = _wall_time()
-        self._loop.call_soon_threadsafe(lambda: self.on_playback_started(created_at=t))
+        segment_id = self._segment_id
+        self._loop.call_soon_threadsafe(
+            lambda: self._on_playback_started(created_at=t, segment_id=segment_id)
+        )
+
+    def _on_playback_started(self, *, created_at: float, segment_id: int) -> None:
+        if self._segment_id != segment_id:
+            return
+        logger.info(f"Playback started: {created_at} {segment_id}")
+        self.on_playback_started(created_at=created_at)
 
 
 class AgentsConsole:
