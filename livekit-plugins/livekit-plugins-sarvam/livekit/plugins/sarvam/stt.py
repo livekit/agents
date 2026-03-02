@@ -23,6 +23,7 @@ import asyncio
 import enum
 import json
 import os
+import platform
 import weakref
 from dataclasses import dataclass
 from enum import Enum
@@ -39,6 +40,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     Language,
+    __version__ as livekit_version,
     stt,
     utils,
 )
@@ -47,6 +49,8 @@ from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
+
+USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -516,7 +520,10 @@ class STT(stt.STT):
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
-        headers = {"api-subscription-key": self._api_key}
+        headers = {
+            "api-subscription-key": self._api_key,
+            "User-Agent": USER_AGENT,
+        }
 
         try:
             base_url, _ = _get_urls_for_model(opts_model)
@@ -908,15 +915,21 @@ class SpeechStream(stt.SpeechStream):
         ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
 
         # Connect to WebSocket with proper authentication
-        headers = {"api-subscription-key": self._api_key}
+        headers = {
+            "api-subscription-key": self._api_key,
+            "User-Agent": USER_AGENT,
+        }
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url},
+            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(
-            self._session.ws_connect(ws_url, headers=headers),
+            self._session.ws_connect(
+                ws_url,
+                headers=headers,
+            ),
             self._conn_options.timeout,
         )
 

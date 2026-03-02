@@ -24,6 +24,7 @@ import base64
 import enum
 import json
 import os
+import platform
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -37,12 +38,15 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     Language,
+    __version__ as livekit_version,
     tokenize,
     tts,
     utils,
 )
 
 from .log import logger
+
+USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -439,7 +443,7 @@ class TTS(tts.TTS):
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
-            "User-Agent": "LiveKit-Sarvam-TTS/1.0",
+            "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
@@ -626,6 +630,7 @@ class ChunkedStream(tts.ChunkedStream):
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         }
         try:
             async with self._tts._ensure_session().post(
@@ -754,7 +759,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        logger.info("Starting TTS WebSocket session", extra=self._build_log_context())
+        logger.info(
+            "Starting TTS WebSocket session",
+            extra={**self._build_log_context(), "user-agent": USER_AGENT},
+        )
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -764,9 +772,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
-                    "output_audio_bitrate": self._opts.output_audio_bitrate,
-                    "min_buffer_size": self._opts.min_buffer_size,
-                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
@@ -774,6 +779,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
+                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
+                    data["min_buffer_size"] = self._opts.min_buffer_size
+                    data["max_chunk_length"] = self._opts.max_chunk_length
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
