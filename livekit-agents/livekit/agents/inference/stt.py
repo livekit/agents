@@ -21,6 +21,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ..language import Language
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -108,10 +109,10 @@ class FallbackModel(TypedDict, total=False):
 FallbackModelType = FallbackModel | str
 
 
-def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
-    language: NotGivenOr[str] = NOT_GIVEN
+def _parse_model_string(model: str) -> tuple[str, NotGivenOr[Language]]:
+    language: NotGivenOr[Language] = NOT_GIVEN
     if (idx := model.rfind(":")) != -1:
-        language = model[idx + 1 :]
+        language = Language(model[idx + 1 :])
         model = model[:idx]
     return model, language
 
@@ -149,7 +150,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 @dataclass
 class STTOptions:
     model: NotGivenOr[STTModels | str]
-    language: NotGivenOr[str]
+    language: NotGivenOr[Language]
     encoding: STTEncoding
     sample_rate: int
     base_url: str
@@ -330,7 +331,7 @@ class STT(stt.STT):
 
         self._opts = STTOptions(
             model=model,
-            language=language,
+            language=Language(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             base_url=lk_base_url,
@@ -403,7 +404,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
 
         for stream in self._streams:
             stream.update_options(model=model, language=language)
@@ -415,7 +416,7 @@ class STT(stt.STT):
         options = replace(self._opts)
 
         if is_given(language):
-            options.language = language
+            options.language = Language(language)
 
         return options
 
@@ -447,7 +448,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = Language(language)
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -615,7 +616,7 @@ class SpeechStream(stt.SpeechStream):
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
-        language = data.get("language", self._opts.language or "en")
+        language = Language(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
 
         if not text and not is_final:

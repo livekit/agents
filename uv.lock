@@ -61,6 +61,7 @@ members = [
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
     "livekit-plugins-tavus",
+    "livekit-plugins-telnyx",
     "livekit-plugins-trugen",
     "livekit-plugins-turn-detector",
     "livekit-plugins-ultravox",
@@ -2725,6 +2726,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-telnyx"
+version = "0.1.0"
+source = { editable = "livekit-plugins/livekit-plugins-telnyx" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+    { name = "livekit-api" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-api", specifier = ">=0.6.0" },
+]
 
 [[package]]
 name = "livekit-plugins-trugen"

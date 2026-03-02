@@ -1171,7 +1171,7 @@ def _text_mode(c: AgentsConsole) -> None:
             task = asyncio.create_task(_generate(text))
             task.add_done_callback(_done_callback)
 
-        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        h: asyncio.Future[list[RunEvent]] = c.io_loop.create_future()
         c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
 
         c.console.print()

@@ -28,6 +28,7 @@ livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
+livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true}
 livekit-plugins-liveavatar = { workspace = true }
@@ -53,6 +54,7 @@ livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
+livekit-plugins-telnyx = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }

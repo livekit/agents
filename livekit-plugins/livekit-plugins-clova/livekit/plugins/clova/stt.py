@@ -27,6 +27,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -70,7 +71,8 @@ class STT(stt.STT):
         self._invoke_url = (
             invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
         )
-        self._language = clova_languages_mapping.get(language, language)
+        normalized_language = Language(language).iso
+        self._language = clova_languages_mapping.get(normalized_language, normalized_language)
         self._session = http_session
         if clova_secret is None:
             raise ValueError(
@@ -89,7 +91,8 @@ class STT(stt.STT):
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
-            self._language = clova_languages_mapping.get(language, language)
+            normalized = Language(language).iso
+            self._language = clova_languages_mapping.get(normalized, normalized)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -109,7 +112,8 @@ class STT(stt.STT):
         try:
             url = self.url_builder()
             if is_given(language):
-                self._language = clova_languages_mapping.get(language, language)
+                normalized = Language(language).iso
+                self._language = clova_languages_mapping.get(normalized, normalized)
             payload = json.dumps({"language": self._language, "completion": "sync"})
 
             buffer = merge_frames(buffer)
@@ -170,5 +174,5 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,
-            alternatives=[stt.SpeechData(text=text, language=self._language)],
+            alternatives=[stt.SpeechData(text=text, language=Language(self._language))],
         )
