@@ -419,6 +419,7 @@ class STT(stt.STT):
     ) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         options = replace(self._opts)
+        options.extra_kwargs = dict(options.extra_kwargs)
 
         if is_given(language):
             options.language = Language(language)
@@ -565,7 +566,14 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws()
             self._ws = ws
-            await asyncio.gather(send_task(ws), recv_task(ws))
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
         finally:
             self._ws = None
             if ws is not None:
