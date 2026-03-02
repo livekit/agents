@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-krisp"
+dynamic = ["version"]
+description = "Krisp VIVA noise reduction plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = [
+    "voice",
+    "ai",
+    "realtime",
+    "audio",
+    "livekit",
+    "webrtc",
+    "noise-reduction",
+    "krisp",
+    "audio-filter",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.3.6",
+    "livekit>=1.0.23,<2",  # FrameProcessor support requires livekit>=1.0.23 (PR #4145)
+    "numpy>=1.20.0",
+    # Note: krisp-audio is a required runtime dependency but not available on public PyPI.
+    # It must be obtained and installed separately from Krisp.
+    # Install with: pip install krisp-audio (from Krisp's private repository or distribution)
+    # The plugin handles missing krisp-audio gracefully with ImportError.
+    # This dependency is declared here for documentation purposes only.
+    # Since it's not on PyPI, it cannot be listed in dependencies or optional-dependencies.
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/krisp/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
