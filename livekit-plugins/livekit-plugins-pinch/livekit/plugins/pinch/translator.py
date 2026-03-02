@@ -7,7 +7,7 @@ import contextlib
 import json
 import os
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from livekit import rtc
 
@@ -401,10 +401,16 @@ class Translator:
 
     def _on_pinch_data_received(self, data_packet: rtc.DataPacket) -> None:
         try:
-            raw = data_packet.data
-            if isinstance(raw, (bytes, bytearray, memoryview)):
-                raw = bytes(raw).decode("utf-8")
-            msg: dict = json.loads(raw)
+            raw_bytes = data_packet.data
+            try:
+                if isinstance(raw_bytes, (bytes, bytearray, memoryview)):
+                    raw_str = bytes(raw_bytes).decode("utf-8")
+                else:
+                    raw_str = str(raw_bytes)
+                msg: dict = json.loads(raw_str)
+            except Exception as exc:
+                logger.warning("Failed to decode Pinch data message: %s", exc)
+                return
         except Exception as exc:
             logger.warning("Failed to decode Pinch data message: %s", exc)
             return

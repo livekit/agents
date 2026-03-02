@@ -1,21 +1,27 @@
 from __future__ import annotations
 
-from dotenv import load_dotenv
-load_dotenv()
 import asyncio
 import logging
 import os
 import signal
 
+from dotenv import load_dotenv
+
 from livekit import rtc
-from livekit.plugins.pinch import Translator, TranslatorOptions, TranscriptEvent
+from livekit.plugins.pinch import (
+    TranscriptEvent,
+    Translator,
+    TranslatorOptions,
+)
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 # Configuration — read from environment
 
 LIVEKIT_URL: str = os.environ["LIVEKIT_URL"]
