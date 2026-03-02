@@ -49,16 +49,19 @@ class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
-    speech_model: Literal["universal-streaming-english", "universal-streaming-multilingual"] = (
-        "universal-streaming-english"
-    )
+    speech_model: Literal[
+        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro", "u3-pro"
+    ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
-    min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
+    min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
+    prompt: NotGivenOr[str] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
+    speaker_labels: NotGivenOr[bool] = NOT_GIVEN
+    max_speakers: NotGivenOr[int] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -69,18 +72,26 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
         model: Literal[
-            "universal-streaming-english", "universal-streaming-multilingual"
+            "universal-streaming-english",
+            "universal-streaming-multilingual",
+            "u3-rt-pro",
+            "u3-pro",
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
+        max_speakers: NotGivenOr[int] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Args:
@@ -92,15 +103,24 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
+            min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=False,
+                interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
         )
+        if model == "u3-pro":
+            logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
+            model = "u3-rt-pro"
+
+        if is_given(prompt) and model != "u3-rt-pro":
+            raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
+
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
@@ -111,10 +131,19 @@ class STT(stt.STT):
             )
         self._api_key = assemblyai_api_key
 
+        # Handle deprecated min_end_of_turn_silence_when_confident
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
         # designed to work with LK's end of turn models
-        if not is_given(min_end_of_turn_silence_when_confident):
-            min_end_of_turn_silence_when_confident = 100
+        if not is_given(min_turn_silence):
+            min_turn_silence = 100
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -123,11 +152,14 @@ class STT(stt.STT):
             speech_model=model,
             language_detection=language_detection,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
-            min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+            min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
             keyterms_prompt=keyterms_prompt,
+            prompt=prompt,
             vad_threshold=vad_threshold,
+            speaker_labels=speaker_labels,
+            max_speakers=max_speakers,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -178,20 +210,34 @@ class STT(stt.STT):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
-        if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+        if is_given(min_turn_silence):
+            self._opts.min_turn_silence = min_turn_silence
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(prompt):
+            self._opts.prompt = prompt
+        if is_given(keyterms_prompt):
+            self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
@@ -199,8 +245,10 @@ class STT(stt.STT):
             stream.update_options(
                 buffer_size_seconds=buffer_size_seconds,
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
-                min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+                min_turn_silence=min_turn_silence,
                 max_turn_silence=max_turn_silence,
+                prompt=prompt,
+                keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
             )
 
@@ -227,38 +275,68 @@ class SpeechStream(stt.SpeechStream):
         self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
-        self._reconnect_event = asyncio.Event()
+        self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
 
     def update_options(
         self,
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        # Deprecated — use min_turn_silence instead
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
+        if is_given(min_end_of_turn_silence_when_confident):
+            logger.warning(
+                "'min_end_of_turn_silence_when_confident' is deprecated, "
+                "use 'min_turn_silence' instead."
+            )
+            if not is_given(min_turn_silence):
+                min_turn_silence = min_end_of_turn_silence_when_confident
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
-        if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+        if is_given(min_turn_silence):
+            self._opts.min_turn_silence = min_turn_silence
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
+        if is_given(prompt):
+            self._opts.prompt = prompt
+        if is_given(keyterms_prompt):
+            self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
 
-        self._reconnect_event.set()
+        # Send UpdateConfiguration message over the active websocket
+        config_msg: dict = {"type": "UpdateConfiguration"}
+        if is_given(prompt):
+            config_msg["prompt"] = prompt
+        if is_given(keyterms_prompt):
+            config_msg["keyterms_prompt"] = keyterms_prompt
+        if is_given(max_turn_silence):
+            config_msg["max_turn_silence"] = max_turn_silence
+        if is_given(min_turn_silence):
+            config_msg["min_turn_silence"] = min_turn_silence
+        if is_given(end_of_turn_confidence_threshold):
+            config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
+        if is_given(vad_threshold):
+            config_msg["vad_threshold"] = vad_threshold
+
+        if len(config_msg) > 1:
+            self._config_update_queue.put_nowait(config_msg)
+
+    def force_endpoint(self) -> None:
+        """Force-finalize the current turn immediately."""
+        self._config_update_queue.put_nowait({"type": "ForceEndpoint"})
 
     async def _run(self) -> None:
-        """
-        Run a single websocket connection to AssemblyAI and make sure to reconnect
-        when something went wrong.
-        """
-
+        """Run a single websocket connection to AssemblyAI."""
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -320,37 +398,49 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process AssemblyAI message")
 
+        async def send_config_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            """Send config updates and control messages immediately, independent of audio."""
+            while True:
+                config_msg = await self._config_update_queue.get()
+                await ws.send_str(json.dumps(config_msg))
+
         ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        try:
+            ws = await self._connect_ws()
+            config_task = asyncio.create_task(send_config_task(ws))
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(config_task, *tasks)
+        finally:
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        min_silence: int | None
+        max_silence: int | None
+        if self._opts.speech_model == "u3-rt-pro":
+            min_silence = (
+                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
+            )
+            max_silence = (
+                self._opts.max_turn_silence
+                if is_given(self._opts.max_turn_silence)
+                else min_silence
+            )
+        else:
+            min_silence = (
+                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else None
+            )
+            max_silence = (
+                self._opts.max_turn_silence if is_given(self._opts.max_turn_silence) else None
+            )
+
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "encoding": self._opts.encoding,
@@ -359,23 +449,24 @@ class SpeechStream(stt.SpeechStream):
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
-            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident  # noqa: E501
-            if is_given(self._opts.min_end_of_turn_silence_when_confident)
-            else None,
-            "max_turn_silence": self._opts.max_turn_silence
-            if is_given(self._opts.max_turn_silence)
-            else None,
+            "min_turn_silence": min_silence,
+            "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
             if is_given(self._opts.keyterms_prompt)
             else None,
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)
             else True
-            if "multilingual" in self._opts.speech_model
+            if "multilingual" in self._opts.speech_model or self._opts.speech_model == "u3-rt-pro"
             else False,
+            "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
             else None,
+            "speaker_labels": self._opts.speaker_labels
+            if is_given(self._opts.speaker_labels)
+            else None,
+            "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
         }
 
         headers = {
@@ -395,6 +486,11 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type == "SpeechStarted":
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            return
+
         if message_type != "Turn":
             return
         words = data.get("words", [])
