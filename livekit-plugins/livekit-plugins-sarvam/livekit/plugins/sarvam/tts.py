@@ -484,6 +484,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: str | None = None,
+        target_language_code: SarvamTTSLanguages | str | None = None,
         speaker: str | None = None,
         pitch: float | None = None,
         pace: float | None = None,
@@ -496,6 +497,11 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
     ) -> None:
         """Update TTS options with validation."""
+        if target_language_code is not None:
+            if not target_language_code.strip():
+                raise ValueError("Target language code cannot be empty")
+            self._opts.target_language_code = Language(target_language_code)
+
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
