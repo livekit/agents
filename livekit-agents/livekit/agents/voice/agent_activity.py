@@ -2199,12 +2199,14 @@ class AgentActivity(RecognitionHooks):
         # important: no agent output should be used after this point
 
         if len(tool_output.output) > 0:
-            if speech_handle.num_steps >= self._session.options.max_tool_steps + 1:
+            max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
+
+            if max_steps_reached:
                 logger.warning(
-                    "maximum number of function calls steps reached",
+                    "maximum number of function calls steps reached, "
+                    "generating final response with tool_choice='none'",
                     extra={"speech_id": speech_handle.id},
                 )
-                return
 
             speech_handle._num_steps += 1
 
@@ -2254,9 +2256,11 @@ class AgentActivity(RecognitionHooks):
                         tools=tools,
                         model_settings=ModelSettings(
                             # Avoid setting tool_choice to "required" or a specific function when
-                            # passing tool response back to the LLM
+                            # passing tool response back to the LLM.
+                            # Force tool_choice="none" when max steps reached to guarantee
+                            # a final text response instead of silently stopping.
                             tool_choice="none"
-                            if draining or model_settings.tool_choice == "none"
+                            if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
