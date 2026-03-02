@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
-from livekit.agents.llm.realtime import MessageGeneration
+from livekit.agents.llm.realtime import DualChatContextSyncSession, MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
@@ -2372,6 +2372,10 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
+        def _notify_fc_processed(fnc_calls: list[llm.FunctionCall]) -> None:
+            if fnc_calls and isinstance(self._rt_session, DualChatContextSyncSession):
+                self._rt_session.notify_fc_processed([fc.id for fc in fnc_calls])
+
         current_span.set_attributes(
             {
                 trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
@@ -2564,6 +2568,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
+            _notify_fc_processed([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2675,6 +2680,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+            _notify_fc_processed(function_calls)
             return
 
         # wait for the tool execution to complete
@@ -2687,6 +2693,7 @@ class AgentActivity(RecognitionHooks):
             await exe_task
         finally:
             self._background_speeches.discard(speech_handle)
+            _notify_fc_processed(function_calls)
 
         # important: no agent output should be used after this point
 
