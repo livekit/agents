@@ -47,6 +47,7 @@ CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
+    "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
@@ -76,6 +77,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+    prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -399,21 +401,25 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
             self._opts.model = model
         if is_given(language):
             self._opts.language = Language(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
 
         for stream in self._streams:
-            stream.update_options(model=model, language=language)
+            stream.update_options(model=model, language=language, extra=extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
     ) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         options = replace(self._opts)
+        options.extra_kwargs = dict(options.extra_kwargs)
 
         if is_given(language):
             options.language = Language(language)
@@ -434,22 +440,51 @@ class SpeechStream(stt.SpeechStream):
         self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
-        self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(
         self,
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        """Update streaming transcription options."""
+        """Update streaming transcription options.
+
+        When the WebSocket is live, a mid-stream session.update is sent so providers
+        that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
+        reconnecting. Unsupported providers ignore the message.
+        """
         if is_given(model):
             self._opts.model = model
         if is_given(language):
             self._opts.language = Language(language)
-        self._reconnect_event.set()
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
+
+        has_update = is_given(model) or is_given(language) or is_given(extra)
+        if has_update and self._ws is not None and not self._ws.closed:
+            settings: dict[str, Any] = {}
+            if is_given(model):
+                settings["model"] = model
+            if is_given(language):
+                settings["language"] = str(Language(language))
+            if is_given(extra):
+                settings["extra"] = extra
+            update_msg = {
+                "type": "session.update",
+                "settings": settings,
+            }
+            asyncio.ensure_future(self._send_session_update(update_msg))
+
+    async def _send_session_update(self, msg: dict[str, Any]) -> None:
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.send_str(json.dumps(msg))
+        except Exception:
+            logger.debug("failed to send session.update, ws may be closing")
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -528,38 +563,21 @@ class SpeechStream(stt.SpeechStream):
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        try:
+            ws = await self._connect_ws()
+            self._ws = ws
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            self._ws = None
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
