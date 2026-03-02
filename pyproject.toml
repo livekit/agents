@@ -33,6 +33,7 @@ livekit-plugins-lemonslice = { workspace = true}
 livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
+livekit-plugins-moss = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
