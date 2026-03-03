@@ -69,6 +69,7 @@ class DeepgramOptions(TypedDict, total=False):
     numerals: bool
     mip_opt_out: bool
     vad_events: bool  # default: False
+    diarize: bool  # default: False - enables speaker diarization
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -78,6 +79,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    speaker_labels: bool  # default: False - enables speaker diarization
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -286,10 +288,19 @@ class STT(stt.STT):
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
+        # Check extra_kwargs for diarization parameters across different providers
+        # Deepgram uses "diarize", AssemblyAI uses "speaker_labels"
+        diarization_enabled = False
+        if is_given(extra_kwargs):
+            diarization_enabled = bool(
+                extra_kwargs.get("diarize") or extra_kwargs.get("speaker_labels")
+            )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
@@ -410,6 +421,12 @@ class STT(stt.STT):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            # Update diarization capability based on extra_kwargs
+            diarization_enabled = bool(
+                self._opts.extra_kwargs.get("diarize")
+                or self._opts.extra_kwargs.get("speaker_labels")
+            )
+            self._capabilities = replace(self._capabilities, diarization=diarization_enabled)
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
