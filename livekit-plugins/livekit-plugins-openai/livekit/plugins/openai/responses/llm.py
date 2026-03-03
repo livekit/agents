@@ -56,7 +56,7 @@ class _ResponsesWebsocket:
         self._session: aiohttp.ClientSession | None = None
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-            connect_cb=self._create_ws_conn,
+            connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
         )
@@ -66,7 +66,7 @@ class _ResponsesWebsocket:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _create_ws_conn(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         try:
             return await asyncio.wait_for(
                 self._ensure_http_session().ws_connect(
@@ -86,10 +86,10 @@ class _ResponsesWebsocket:
     async def aclose(self) -> None:
         await self._pool.aclose()
 
-    async def send_request(self, msg: dict) -> AsyncGenerator[dict, None]:
+    async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
-                return o.model_dump()
+                return o.model_dump(mode="json")
             raise TypeError(f"unexpected type {type(o)}")
 
         try:
@@ -106,14 +106,22 @@ class _ResponsesWebsocket:
             while True:
                 raw_msg = await ws.receive()
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError("OpenAI Responses WebSocket error") from raw_msg.data
+                    exc = raw_msg.data
+                    status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
+                    raise APIStatusError(
+                        str(exc), status_code=status_code, retryable=False
+                    ) from exc
                 if raw_msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIConnectionError(
-                        message="OpenAI Responses WebSocket connection closed unexpectedly"
+                    close_code = raw_msg.data if isinstance(raw_msg.data, int) else -1
+                    close_reason = raw_msg.extra or "connection closed unexpectedly"
+                    raise APIStatusError(
+                        f"OpenAI Responses WebSocket closed: {close_reason}",
+                        status_code=close_code,
+                        retryable=False,
                     )
                 if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -367,7 +375,7 @@ class LLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.send_request(payload):
+                async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
                     self._process_event(parsed_ev)
                     retryable = False
@@ -418,7 +426,7 @@ class LLMStream(llm.LLMStream):
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate({**event, **event.get("error", {})})
+            return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
