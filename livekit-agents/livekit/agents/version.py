@@ -13,3 +13,8 @@
 # limitations under the License.
 
 __version__ = "1.4.3"
+
+
+def get_version():
+    """Return the LiveKit Agents version."""
+    return __version__
