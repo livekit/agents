@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from aiobotocore.session import AioSession  # type: ignore[import-untyped]
 from botocore.exceptions import ClientError  # type: ignore[import-untyped]
@@ -263,7 +263,7 @@ class LexLLMStream(llm.LLMStream):
         return None
 
     @staticmethod
-    def _handle_client_error(e: ClientError, error_code: str, request_id: str) -> None:
+    def _handle_client_error(e: ClientError, error_code: str, request_id: str) -> NoReturn:
         """Map AWS Lex errors to appropriate API exceptions."""
         if error_code == "ThrottlingException":
             raise APIStatusError(
