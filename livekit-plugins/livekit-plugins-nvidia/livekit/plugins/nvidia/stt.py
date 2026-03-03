@@ -97,7 +97,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        effective_language = LanguageCode(language) if is_given(language) else self._opts.language_code
+        effective_language = (
+            LanguageCode(language) if is_given(language) else self._opts.language_code
+        )
         return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
 
     def log_asr_models(self, asr_service: riva.client.ASRService) -> dict:

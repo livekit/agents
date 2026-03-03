@@ -527,7 +527,9 @@ class STT(stt.STT):
         if not alternatives:
             alternatives.append(
                 stt.SpeechData(
-                    language=LanguageCode(languages[0] if languages and len(languages) > 0 else "en"),
+                    language=LanguageCode(
+                        languages[0] if languages and len(languages) > 0 else "en"
+                    ),
                     start_time=0,
                     end_time=0,
                     confidence=1.0,
