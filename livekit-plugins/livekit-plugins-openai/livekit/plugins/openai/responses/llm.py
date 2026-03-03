@@ -49,7 +49,7 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 class _ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: httpx.Timeout | None, base_url: str | None = None
+        self, api_key: str | None, timeout: float | None, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -86,7 +86,7 @@ class _ResponsesWebsocket:
         except asyncio.TimeoutError as e:
             raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
     async def connect(self) -> None:
@@ -256,7 +256,7 @@ class LLM(llm.LLM):
                 )
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
-                timeout=timeout,
+                timeout=timeout.connect if timeout is not None else None,
                 base_url=base_url if is_given(base_url) else None,
             )
 
