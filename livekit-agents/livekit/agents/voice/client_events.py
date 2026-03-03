@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from livekit import rtc
 
 from .. import utils
-from ..language import Language
+from ..language import LanguageCode
 from ..llm import (
     ChatItem,
     ChatMessage,
@@ -74,7 +74,7 @@ class ClientUserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
-    language: Language | None
+    language: LanguageCode | None
     created_at: float
 
 

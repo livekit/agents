@@ -71,20 +71,20 @@ def _normalize_language(code: str) -> str:
     return lowered
 
 
-class Language(str):
+class LanguageCode(str):
     """Normalized BCP-47 language identifier. Accepts any common format.
 
     Examples::
 
-        Language("english")  # → "en"
-        Language("eng")      # → "en"
-        Language("en")       # → "en"
-        Language("en-US")    # → "en-US"
-        Language("en_us")    # → "en-US"
-        Language("multi")    # → "multi"
+        LanguageCode("english")  # → "en"
+        LanguageCode("eng")      # → "en"
+        LanguageCode("en")       # → "en"
+        LanguageCode("en-US")    # → "en-US"
+        LanguageCode("en_us")    # → "en-US"
+        LanguageCode("multi")    # → "multi"
     """
 
-    def __new__(cls, code: str) -> Language:
+    def __new__(cls, code: str) -> LanguageCode:
         normalized = _normalize_language(code)
         return super().__new__(cls, normalized)
 
