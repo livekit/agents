@@ -36,30 +36,28 @@ if TYPE_CHECKING:
 class Instructions(str):
     """Instructions that adapt based on the user's input modality (audio vs. text).
 
-    ``str(self)`` is the *represent* value — what providers see when they treat
-    this object as a plain string.  By default it equals ``audio``; after
-    :meth:`resolve` it equals the chosen variant.
+    ``str(self)`` is what providers see when treating this as a plain string.
+    By default it equals the ``audio`` variant; after :meth:`for_modality` it
+    equals the chosen variant.
 
     ``_audio_variant`` and ``_text_variant`` are always preserved so
-    :meth:`resolve` can be called again for a different modality (e.g., when the
-    same ``ChatContext`` is reused across tool-call turns).
+    :meth:`for_modality` can be called again for a different modality (e.g.,
+    when the same ``ChatContext`` is reused across tool-call turns).
     """
 
     _audio_variant: str
     _text_variant: str | None
 
     def __new__(
-        cls, audio: str, *, text: str | None = None, represent: str | None = None
+        cls, audio: str, *, text: str | None = None, _represent: str | None = None
     ) -> Instructions:
         """Create an Instructions object.
 
         Args:
             audio: The audio (voice) variant.
             text: The text variant.  Falls back to ``audio`` when omitted.
-            represent: What ``str(self)`` should return.  Defaults to ``audio``.
-                Used internally by :meth:`resolve`.
         """
-        instance = super().__new__(cls, represent if represent is not None else audio)
+        instance = super().__new__(cls, _represent if _represent is not None else audio)
         instance._audio_variant = audio
         instance._text_variant = text
         return instance
@@ -77,47 +75,47 @@ class Instructions(str):
         """
         return self._text_variant if self._text_variant is not None else self._audio_variant
 
-    def resolve(self, modality: Literal["audio", "text"]) -> Instructions:
+    def for_modality(self, modality: Literal["audio", "text"]) -> Instructions:
         """Return a copy whose ``str`` value is the correct variant for *modality*.
 
-        Both ``_audio_variant`` and ``_text_variant`` are preserved for
-        subsequent calls to resolve for a different modality.
+        Both ``_audio_variant`` and ``_text_variant`` are preserved so this can
+        be called again for a different modality (e.g. across tool-call turns).
         """
         return Instructions(
             self._audio_variant,
             text=self._text_variant,
-            represent=self.audio if modality == "audio" else self.text,
+            _represent=self.audio if modality == "audio" else self.text,
         )
 
     def __add__(self, other: object) -> Instructions:
-        """Concatenate, propagating both variants and the current represent."""
+        """Concatenate, propagating both variants and the current str value."""
         if isinstance(other, Instructions):
             has_text = self._text_variant is not None or other._text_variant is not None
             return Instructions(
                 self.audio + other.audio,
                 text=(self.text + other.text) if has_text else None,
-                represent=str(self) + str(other),
+                _represent=str(self) + str(other),
             )
         if isinstance(other, str):
             return Instructions(
                 self.audio + other,
                 text=(self._text_variant + other) if self._text_variant is not None else None,
-                represent=str(self) + other,
+                _represent=str(self) + other,
             )
         raise TypeError(f"Cannot add Instructions and {type(other)}")
 
     def __radd__(self, other: object) -> Instructions:
-        """Support ``plain_str + Instructions``, propagating both variants and represent."""
+        """Support ``plain_str + Instructions``, propagating both variants."""
         if isinstance(other, str):
             return Instructions(
                 other + self.audio,
                 text=(other + self._text_variant) if self._text_variant is not None else None,
-                represent=other + str(self),
+                _represent=other + str(self),
             )
         raise TypeError(f"Cannot add {type(other)} and Instructions")
 
     def __repr__(self) -> str:
-        return f"Instructions(represent={str(self)})"
+        return f"Instructions({str(self)!r})"
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:

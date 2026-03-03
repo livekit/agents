@@ -404,47 +404,47 @@ def test_instructions_string_operations():
     assert result.text == "text A audio B"
 
 
-def test_instructions_resolve():
-    """resolve() bakes the correct variant into str() while preserving both variants."""
+def test_instructions_for_modality():
+    """for_modality() bakes the correct variant into str() while preserving both variants."""
     from livekit.agents.llm import ChatContext, ChatMessage
     from livekit.agents.llm.chat_context import Instructions
-    from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, resolve_instructions
+    from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
 
     instr = Instructions("audio instructions", text="text instructions")
 
-    # resolve('audio')
-    resolved = instr.resolve("audio")
+    # for_modality('audio')
+    resolved = instr.for_modality("audio")
     assert str(resolved) == "audio instructions"
     assert resolved.audio == "audio instructions"
     assert resolved.text == "text instructions"
 
-    # resolve('text')
-    resolved = instr.resolve("text")
+    # for_modality('text')
+    resolved = instr.for_modality("text")
     assert str(resolved) == "text instructions"
 
     # Can switch modality after resolving
-    resolved_text = instr.resolve("text")
-    resolved_audio = resolved_text.resolve("audio")
+    resolved_text = instr.for_modality("text")
+    resolved_audio = resolved_text.for_modality("audio")
     assert str(resolved_audio) == "audio instructions"
 
     # Instructions without text variant returns audio for both modalities
     audio_only = Instructions("audio only")
-    assert str(audio_only.resolve("audio")) == "audio only"
-    assert str(audio_only.resolve("text")) == "audio only"
+    assert str(audio_only.for_modality("audio")) == "audio only"
+    assert str(audio_only.for_modality("text")) == "audio only"
 
-    # resolve_instructions() on ChatContext
+    # apply_instructions_modality() on ChatContext
     ctx = ChatContext([ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])])
-    resolve_instructions(ctx, modality="audio")
+    apply_instructions_modality(ctx, modality="audio")
     assert str(ctx.items[0].content[0]) == "audio instructions"
-    resolve_instructions(ctx, modality="text")
+    apply_instructions_modality(ctx, modality="text")
     assert str(ctx.items[0].content[0]) == "text instructions"
 
-    # Re-resolving after copy
+    # Re-applying after copy
     base_ctx = ChatContext(
         [ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])]
     )
     turn1_ctx = base_ctx.copy()
-    resolve_instructions(turn1_ctx, modality="text")
+    apply_instructions_modality(turn1_ctx, modality="text")
     turn2_ctx = turn1_ctx.copy()
-    resolve_instructions(turn2_ctx, modality="audio")
+    apply_instructions_modality(turn2_ctx, modality="audio")
     assert str(turn2_ctx.items[0].content[0]) == "audio instructions"

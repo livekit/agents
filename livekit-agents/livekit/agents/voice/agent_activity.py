@@ -64,13 +64,13 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    apply_instructions_modality,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
     remove_instructions,
-    resolve_instructions,
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
@@ -1948,8 +1948,8 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # resolve the instructions for the turn's input modality
-        resolve_instructions(chat_ctx, modality=speech_handle.input_details.modality)
+        # apply the correct variant of the instructions for the turn's input modality
+        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?

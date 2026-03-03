@@ -821,11 +821,13 @@ def update_instructions(
         )
 
 
-def resolve_instructions(chat_ctx: ChatContext, *, modality: Literal["audio", "text"]) -> None:
+def apply_instructions_modality(
+    chat_ctx: ChatContext, *, modality: Literal["audio", "text"]
+) -> None:
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
     if idx is not None and (item := chat_ctx.items[idx]).type == "message":
         item.content = [
-            c.resolve(modality) if isinstance(c, Instructions) else c for c in item.content
+            c.for_modality(modality) if isinstance(c, Instructions) else c for c in item.content
         ]
 
 
