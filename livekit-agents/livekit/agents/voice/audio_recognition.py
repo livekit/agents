@@ -522,7 +522,7 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
-        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
+        if self._stt and not self._audio_transcript and self._turn_detection_mode == "stt":
             # stt enabled but no transcript yet
             return
 
