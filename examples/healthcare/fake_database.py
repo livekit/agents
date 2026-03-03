@@ -15,7 +15,7 @@ class FakeDatabase:
             {
                 "name": "Peter Parker",
                 "date_of_birth": date(2001, 8, 10),
-                "phone_number": "18005882300",
+                "phone_number": "17185551962",
                 "insurance": "Aetna",
                 "outstanding_balance": round(random.uniform(20, 3000), 2),
             },
@@ -53,6 +53,16 @@ class FakeDatabase:
     def get_patient_by_name(self, name: str) -> dict | None:
         return next(
             (record for record in self._patient_records if record["name"] == name),
+            None,
+        )
+
+    def get_patient_by_name_and_dob(self, name: str, dob: date) -> dict | None:
+        return next(
+            (
+                record
+                for record in self._patient_records
+                if record["name"] == name and record["date_of_birth"] == dob
+            ),
             None,
         )
 

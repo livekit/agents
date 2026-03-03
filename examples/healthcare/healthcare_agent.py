@@ -38,14 +38,14 @@ from livekit.plugins import openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
 
-load_dotenv(".env.local")
+load_dotenv()
 
 # to test out warm transfer, ensure the following variables/env vars are set
 SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")  # "ST_abcxyz"
 SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+12003004000"
 SIP_NUMBER = os.getenv("LIVEKIT_SIP_NUMBER")  # "+15005006000" - caller ID shown to supervisor
 
-ValidInsurances = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
+VALID_INSURANCES = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
 
 GLOBAL_INSTRUCTIONS = "Be succinct and to the point when assisting the user. Never give medical advice or diagnose users, escalate to a human whenever the user's request is out of your scope of assistance."
 
@@ -99,8 +99,10 @@ async def transfer_to_human(context: RunContext) -> None:
         "Please hold while I connect you to a human agent.", allow_interruptions=False
     )
     try:
-        assert SIP_TRUNK_ID is not None
-        assert SUPERVISOR_PHONE_NUMBER is not None
+        if SIP_TRUNK_ID is None:
+            raise ToolError("SIP_TRUNK_ID is not configured")
+        if SUPERVISOR_PHONE_NUMBER is None:
+            raise ToolError("SUPERVISOR_PHONE_NUMBER is not configured")
 
         result = await WarmTransferTask(
             target_phone_number=SUPERVISOR_PHONE_NUMBER,
@@ -110,7 +112,7 @@ async def transfer_to_human(context: RunContext) -> None:
         )
     except ToolError as e:
         logger.error(f"failed to transfer to supervisor with tool error: {e}")
-        raise e
+        raise
     except Exception as e:
         logger.exception("failed to transfer to supervisor")
         raise ToolError(f"failed to transfer to supervisor with error: {e}") from e
@@ -146,7 +148,7 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
     async def record_health_insurance(
         self,
         context: RunContext,
-        insurance: Annotated[str, Field(json_schema_extra={"enum": ValidInsurances})],
+        insurance: Annotated[str, Field(json_schema_extra={"enum": VALID_INSURANCES})],
     ):
         """Record the user's health insurance.
 
@@ -176,11 +178,11 @@ async def update_record(
         "phone": (GetPhoneNumberTask, "phone_number"),
         "insurance": (GetInsuranceTask, "insurance"),
     }
+    task_class, attr = field_map[field]
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(
         role="system", content=f"The user provided the new field: {updated_detail}"
     )
-    task_class, attr = field_map.get(field)
     result = await task_class(require_confirmation=False, chat_ctx=chat_ctx)
     value = getattr(result, attr)
 
@@ -359,7 +361,8 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
         self._patient_profile = self.session.userdata.profile
 
         name = self._patient_profile["name"]
-        appointments = self._database.get_patient_by_name(name).get("appointments", [])
+        record = self._database.get_patient_by_name(name)
+        appointments = record.get("appointments", []) if record else []
         if not appointments:
             await self.session.generate_reply(
                 instructions="Inform the user that they have no appointments on file."
@@ -439,6 +442,7 @@ class HealthcareAgent(Agent):
             ],
         )
         self._found_profile: NotGivenOr[bool] = NOT_GIVEN
+        self._pending_name: str | None = None
 
         self._database = database
 
@@ -449,36 +453,37 @@ class HealthcareAgent(Agent):
 
     async def task_completed_callback(self, event, task_group):
         if event.task_id == "get_name_task":
-            patient_name = event.result.first_name + " " + event.result.last_name
-            existing_record = self._database.get_patient_by_name(patient_name)
-            if existing_record:
-                logger.info(f"Found existing patient profile for {patient_name}")
-                self._found_profile = True
-                self.session.userdata.profile = existing_record
-                chat_ctx = task_group.chat_ctx.copy()
-                chat_ctx.add_message(
-                    role="system",
-                    content=f"Alert the user that an existing patient record has been found. This birthday has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['date_of_birth']}. After confirming, call 'update_dob'.",
-                )
-                await task_group.update_chat_ctx(chat_ctx)
-            elif not existing_record and self.session.userdata.profile:
+            self._pending_name = event.result.first_name + " " + event.result.last_name
+            if self.session.userdata.profile:
                 # in the case that the user creates a new profile or restarts, the recorded session profile is cleared
                 self.session.userdata.profile = {}
                 self._found_profile = NOT_GIVEN
 
         # each profile field is injected into the taskgroup context before the respective task is executed
-        if event.task_id == "get_dob_task" and self._found_profile:
-            chat_ctx = task_group.chat_ctx.copy()
-            chat_ctx.add_message(
-                role="system",
-                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}. After confirming, call 'update_phone_number'.",
+        if event.task_id == "get_dob_task":
+            existing_record = self._database.get_patient_by_name_and_dob(
+                self._pending_name, event.result.date_of_birth
             )
-            await task_group.update_chat_ctx(chat_ctx)
+            if existing_record:
+                logger.info(f"Found existing patient profile for {self._pending_name}")
+                self._found_profile = True
+                self.session.userdata.profile = existing_record
+            if self._found_profile:
+                chat_ctx = task_group.chat_ctx.copy()
+                logger.info(
+                    f"Found phone number on file: {self.session.userdata.profile['phone_number']}"
+                )
+                chat_ctx.add_message(
+                    role="system",
+                    content=f"An existing patient record has been found. The phone number on file is {self.session.userdata.profile['phone_number']}. Call 'update_phone_number' with this value.",
+                )
+                await task_group.update_chat_ctx(chat_ctx)
         if event.task_id == "get_phone_number_task" and self._found_profile:
             chat_ctx = task_group.chat_ctx.copy()
+            logger.info(f"Found insurance on file: {self.session.userdata.profile['insurance']}")
             chat_ctx.add_message(
                 role="system",
-                content=f"This insurance has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['insurance']}. After confirming, call 'record_health_insurance'.",
+                content=f"The insurance on file is {self.session.userdata.profile['insurance']}. Call 'record_health_insurance' with this value.",
             )
             await task_group.update_chat_ctx(chat_ctx)
 
@@ -500,9 +505,7 @@ class HealthcareAgent(Agent):
                 description="Gathers the user's name",
             )
             task_group.add(
-                lambda: GetDOBTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
-                ),
+                lambda: GetDOBTask(),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
             )
@@ -597,9 +600,10 @@ class HealthcareAgent(Agent):
 
         userdata = self.session.userdata
         if userdata.oai_client is None:
-            if not os.path.isfile("mock_checkup_report.pdf"):
+            pdf_path = os.path.join(os.path.dirname(__file__), "mock_checkup_report.pdf")
+            if not os.path.isfile(pdf_path):
                 logger.warning(
-                    "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
+                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as healthcare_agent.py."
                 )
                 return "No report was found"
             await self.session.generate_reply(
@@ -608,7 +612,7 @@ class HealthcareAgent(Agent):
             userdata.oai_client = AsyncOpenAI()
             vector_store = await userdata.oai_client.vector_stores.create(name="lab_reports")
             userdata.vector_store_id = vector_store.id
-            with open("mock_checkup_report.pdf", "rb") as f:
+            with open(pdf_path, "rb") as f:
                 file = await userdata.oai_client.files.create(file=f, purpose="assistants")
             userdata.file_id = file.id
             await userdata.oai_client.vector_stores.files.create_and_poll(
@@ -648,7 +652,7 @@ class HealthcareAgent(Agent):
 
     def _build_payment_proceeds_tool(self) -> FunctionTool:
         @function_tool()
-        async def confirm_payment_proceeds(amount: float) -> None:
+        async def confirm_payment_proceeds(amount: float) -> str | None:
             """Call to proceed with payment steps regarding the user's bill.
 
             Args:
@@ -666,10 +670,15 @@ class HealthcareAgent(Agent):
 
             last_four_digits = str(result.card_number)[-4:]
             remaining = self._database.apply_payment(name, amount)
+            logger.info(
+                f"Payment of ${amount} confirmed for {name}, card ending in {last_four_digits}, remaining balance: ${remaining}"
+            )
 
+            await self.session.generate_reply(
+                instructions=f"Inform the user that the payment method ending in {last_four_digits} has been successfully charged ${amount}. Remaining balance: ${remaining}."
+            )
             current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
             await self.update_tools(current_tools)
-            return f"The payment method ending in {last_four_digits} has been successfully charged ${amount}. Remaining balance: ${remaining}."
 
         return confirm_payment_proceeds
 
@@ -684,7 +693,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=openai.responses.LLM(model="gpt-4.1"),  # switch to Websocket Mode once merged
+        llm=openai.responses.LLM(model="gpt-4.1"),
         tts=inference.TTS("inworld/inworld-tts-1"),
         vad=silero.VAD.load(),
         preemptive_generation=True,
