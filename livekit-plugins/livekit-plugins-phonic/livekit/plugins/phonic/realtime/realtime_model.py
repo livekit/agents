@@ -213,6 +213,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._socket: AsyncConversationsSocketClient | None = None
         self._socket_ctx: typing.AsyncContextManager[AsyncConversationsSocketClient] | None = None
+        self._send_ch = utils.aio.Chan[AudioChunkPayload]()
         self._main_atask = asyncio.create_task(self._main_task(), name="phonic-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
@@ -318,9 +319,7 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 b64_audio = base64.b64encode(nf.data.tobytes()).decode("utf-8")
-                asyncio.create_task(
-                    self._socket.send_audio_chunk(AudioChunkPayload(audio=b64_audio))
-                )
+                self._send_ch.send_nowait(AudioChunkPayload(audio=b64_audio))
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("push_video is not supported by the Phonic realtime model.")
@@ -360,6 +359,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def aclose(self) -> None:
         self._session_should_close.set()
+        self._send_ch.close()
         self._instructions_ready.set()
         self._tools_ready.set()
 
@@ -418,22 +418,21 @@ class RealtimeSession(llm.RealtimeSession):
             )
             await self._socket.send_config(ConfigPayload(**config_filtered))
 
-            # Instead of using `start_listening` which uses EventEmitter paradigm,
-            # we will consume the async iterator directly for better task integration
             recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
+            send_task = asyncio.create_task(self._send_task(self._socket), name="phonic-send")
             shutdown_wait_task = asyncio.create_task(
                 self._session_should_close.wait(), name="phonic-shutdown-wait"
             )
 
             done, pending = await asyncio.wait(
-                [recv_task, shutdown_wait_task],
+                [recv_task, send_task, shutdown_wait_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
             for task in done:
                 exception = task.exception()
                 if task is not shutdown_wait_task and exception:
-                    logger.error(f"Error in Phonic receive task: {exception}")
+                    logger.error(f"Error in Phonic task: {exception}")
                     raise exception
 
             for task in pending:
@@ -447,6 +446,11 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             await self._close_active_session()
             self._close_current_generation(interrupted=False)
+
+    @utils.log_exceptions(logger=logger)
+    async def _send_task(self, socket: AsyncConversationsSocketClient) -> None:
+        async for payload in self._send_ch:
+            await socket.send_audio_chunk(payload)
 
     @utils.log_exceptions(logger=logger)
     async def _recv_task(self, socket: AsyncConversationsSocketClient) -> None:
