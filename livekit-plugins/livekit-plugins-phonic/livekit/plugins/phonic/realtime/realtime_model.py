@@ -276,7 +276,7 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     sent = True
 
-        if not sent:
+        if not sent and self._config_sent:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
@@ -339,10 +339,11 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("clear_audio is not supported by the Phonic realtime model.")
 
     def interrupt(self) -> None:
-        logger.warning(
-            "interrupt() is not supported by Phonic realtime model. "
-            "User interruptions are automatically handled by Phonic."
-        )
+        if self._current_generation:
+            logger.warning(
+                "interrupt() is not supported by Phonic realtime model. "
+                "User interruptions are automatically handled by Phonic."
+            )
 
     def truncate(
         self,
@@ -475,6 +476,8 @@ class RealtimeSession(llm.RealtimeSession):
                     self._handle_input_speech_stopped()
                 elif msg_type == "tool_call":
                     self._handle_tool_call(message)
+                elif msg_type == "warning":
+                    logger.warning(f"Phonic warning: {message.warning.message}")
                 elif msg_type == "error":
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
