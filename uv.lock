@@ -40,6 +40,7 @@ members = [
     "livekit-plugins-keyframe",
     "livekit-plugins-langchain",
     "livekit-plugins-lemonslice",
+    "livekit-plugins-lex",
     "livekit-plugins-liveavatar",
     "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
@@ -2466,6 +2467,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-lex"
+source = { editable = "livekit-plugins/livekit-plugins-lex" }
+dependencies = [
+    { name = "aiobotocore" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiobotocore", specifier = ">=2.9.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-plugins-liveavatar"
