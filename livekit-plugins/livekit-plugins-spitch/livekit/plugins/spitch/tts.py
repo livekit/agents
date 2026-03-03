@@ -12,7 +12,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tts,
 )
 from spitch import AsyncSpitch
@@ -24,7 +24,7 @@ MIME_TYPE = "audio/mpeg"
 
 @dataclass
 class _TTSOptions:
-    language: Language
+    language: LanguageCode
     voice: str
 
 
@@ -34,7 +34,7 @@ class TTS(tts.TTS):
             capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24_000, num_channels=1
         )
 
-        self._opts = _TTSOptions(language=Language(language), voice=voice)
+        self._opts = _TTSOptions(language=LanguageCode(language), voice=voice)
         self._client = AsyncSpitch()
 
     @property

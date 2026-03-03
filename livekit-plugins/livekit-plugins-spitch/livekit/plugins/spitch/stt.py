@@ -13,7 +13,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     NotGivenOr,
 )
 from livekit.agents.stt import stt
@@ -24,7 +24,7 @@ from spitch import AsyncSpitch
 
 @dataclass
 class _STTOptions:
-    language: Language
+    language: LanguageCode
 
 
 class STT(stt.STT):
@@ -38,7 +38,7 @@ class STT(stt.STT):
             )
         )
 
-        self._opts = _STTOptions(language=Language(language))
+        self._opts = _STTOptions(language=LanguageCode(language))
         self._client = AsyncSpitch()
 
     @property
@@ -50,12 +50,12 @@ class STT(stt.STT):
         return "Spitch"
 
     def update_options(self, language: str) -> None:
-        self._opts.language = Language(language) if language else self._opts.language
+        self._opts.language = LanguageCode(language) if language else self._opts.language
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         if language:
-            config.language = Language(language)
+            config.language = LanguageCode(language)
         return config
 
     async def _recognize_impl(
@@ -81,7 +81,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text or "",
-                        language=Language(config.language or ""),
+                        language=LanguageCode(config.language or ""),
                         start_time=float(resp.segments[0].start)
                         if resp.segments and resp.segments[0] and resp.segments[0].start
                         else 0.0,

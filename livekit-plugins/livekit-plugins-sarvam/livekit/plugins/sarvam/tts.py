@@ -36,7 +36,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -407,7 +407,7 @@ class TTS(tts.TTS):
         word_tokenizer = tokenize.basic.SentenceTokenizer()
 
         self._opts = SarvamTTSOptions(
-            target_language_code=Language(target_language_code),
+            target_language_code=LanguageCode(target_language_code),
             model=model,
             speaker=speaker,
             speech_sample_rate=speech_sample_rate,
@@ -500,7 +500,7 @@ class TTS(tts.TTS):
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = Language(target_language_code)
+            self._opts.target_language_code = LanguageCode(target_language_code)
 
         if model is not None:
             if not model.strip():
