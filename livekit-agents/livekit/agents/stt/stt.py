@@ -15,7 +15,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
-from ..language import Language
+from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
 from ..types import (
@@ -52,7 +52,7 @@ class SpeechEventType(str, Enum):
 
 @dataclass
 class SpeechData:
-    language: Language
+    language: LanguageCode
     text: str
     start_time: float = 0.0
     end_time: float = 0.0
@@ -62,8 +62,8 @@ class SpeechData:
     words: list[TimedString] | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.language, Language) and isinstance(self.language, str):
-            self.language = Language(self.language)
+        if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
+            self.language = LanguageCode(self.language)
 
 
 @dataclass

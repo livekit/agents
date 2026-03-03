@@ -12,7 +12,7 @@ from ..inference.interruption import (
     InterruptionDetectionError,
     OverlappingSpeechEvent,
 )
-from ..language import Language
+from ..language import LanguageCode
 from ..llm import (
     LLM,
     ChatMessage,
@@ -124,7 +124,7 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
-    language: Language | None = None
+    language: LanguageCode | None = None
     created_at: float = Field(default_factory=time.time)
 
 

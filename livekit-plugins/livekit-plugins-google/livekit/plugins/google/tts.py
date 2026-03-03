@@ -32,7 +32,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -135,7 +135,7 @@ class TTS(tts.TTS):
         self._credentials_file = credentials_file
         self._location = location
 
-        lang = Language(language) if is_given(language) else DEFAULT_LANGUAGE
+        lang = LanguageCode(language) if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
 
         if not is_given(model_name):
@@ -227,7 +227,7 @@ class TTS(tts.TTS):
         """
         params: dict[str, Any] = {}
         if is_given(language):
-            params["language_code"] = Language(language)
+            params["language_code"] = LanguageCode(language)
         if is_given(gender):
             params["ssml_gender"] = _gender_from_str(str(gender))
         if is_given(voice_name):

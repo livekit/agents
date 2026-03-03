@@ -24,7 +24,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tts,
 )
 from livekit.agents.types import (
@@ -49,7 +49,7 @@ class _TTSOptions:
     speech_engine: TTSSpeechEngine
     region: str | None
     sample_rate: int
-    language: Language | None
+    language: LanguageCode | None
     text_type: TTSTextType
 
 
@@ -104,7 +104,7 @@ class TTS(tts.TTS):
             speech_engine=speech_engine,
             text_type=text_type,
             region=region or None,
-            language=Language(language) if is_given(language) and language else None,
+            language=LanguageCode(language) if is_given(language) and language else None,
             sample_rate=sample_rate,
         )
 
@@ -132,7 +132,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(speech_engine):
             self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
         if is_given(text_type):
