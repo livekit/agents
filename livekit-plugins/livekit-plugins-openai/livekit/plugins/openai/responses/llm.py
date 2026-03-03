@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import collections
-import contextlib
 import json
 import os
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -41,7 +40,6 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
-from ..log import logger
 from ..models import _supports_reasoning_effort
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
@@ -55,11 +53,7 @@ class _ResponsesWebsocket:
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
         self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
 
-        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
         self._session: aiohttp.ClientSession | None = None
-        self._input_ch = utils.aio.Chan[dict]()
-        self._output_queue: collections.deque[utils.aio.Chan[dict]] = collections.deque()
-        self._run_task: asyncio.Task | None = None
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._create_ws_conn,
@@ -89,98 +83,45 @@ class _ResponsesWebsocket:
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    async def connect(self) -> None:
-        self._input_ch = utils.aio.Chan[dict]()
-        self._run_task = asyncio.create_task(self._run_ws(), name="_ResponsesWebsocket._run_task")
+    async def aclose(self) -> None:
+        await self._pool.aclose()
 
-    async def _run_ws(self) -> None:
-        @utils.log_exceptions(logger=logger)
-        async def _send_task(ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def send_request(self, msg: dict) -> AsyncGenerator[dict, None]:
+        def _default(o: object) -> object:
+            if isinstance(o, openai.BaseModel):
+                return o.model_dump()
+            raise TypeError(f"unexpected type {type(o)}")
+
+        try:
+            data = json.dumps(msg, default=_default)
+        except TypeError as e:
+            raise APIConnectionError(f"failed to serialize request: {e}") from e
+
+        async with self._pool.connection(timeout=self._timeout) as ws:
+            try:
+                await ws.send_str(data)
+            except Exception as e:
+                raise APIConnectionError("failed to send request over WebSocket") from e
+
             while True:
-                try:
-                    msg = await self._input_ch.recv()
-                except utils.aio.channel.ChanClosed:
-                    await ws_conn.close()
-                    return
-                try:
-
-                    def _default(o: object) -> object:
-                        if isinstance(o, openai.BaseModel):
-                            return o.model_dump()
-                        raise TypeError(f"unexpected type {type(o)}")
-
-                    data = json.dumps(msg, default=_default)
-                except TypeError as e:
-                    logger.warning("skipping ws message, failed to serialize: %s", e)
-                    continue
-                try:
-                    await ws_conn.send_str(data)
-                except Exception:
-                    logger.exception("failed to send event")
-
-        @utils.log_exceptions(logger=logger)
-        async def _recv_task(ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws_conn.receive()
-                if msg.type in (
+                raw_msg = await ws.receive()
+                if raw_msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("OpenAI Responses WebSocket error") from raw_msg.data
+                if raw_msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._output_queue:  # if there are no more pending requests
-                        return
                     raise APIConnectionError(
                         message="OpenAI Responses WebSocket connection closed unexpectedly"
                     )
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(msg.data)
-                if self._output_queue:
-                    current = self._output_queue[0]
-                    with contextlib.suppress(utils.aio.channel.ChanClosed):
-                        current.send_nowait(event)
-
-                    if event["type"] in ["response.completed", "response.failed", "error"]:
-                        current.close()
-                        self._output_queue.popleft()
-
-        async with self._pool.connection(timeout=self._timeout) as ws:
-            tasks = [
-                asyncio.create_task(_recv_task(ws), name="_recv_task"),
-                asyncio.create_task(_send_task(ws), name="_send_task"),
-            ]
-            try:
-                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    task.result()
-
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
-                for ch in self._output_queue:
-                    ch.close()
-                self._output_queue.clear()
-                while not self._input_ch.empty():
-                    try:
-                        self._input_ch.recv_nowait()
-                    except (utils.aio.channel.ChanClosed, utils.aio.channel.ChanEmpty):
-                        break
-
-    async def aclose(self) -> None:
-        self._input_ch.close()
-        if self._run_task is not None:
-            await utils.aio.cancel_and_wait(self._run_task)
-
-    async def send_request(self, msg: dict) -> utils.aio.Chan[dict]:
-        output_ch = utils.aio.Chan[dict]()
-        self._output_queue.append(output_ch)
-        try:
-            await self._input_ch.send(msg)
-        except utils.aio.channel.ChanClosed:
-            self._output_queue.remove(output_ch)
-            raise
-        return output_ch
+                event = json.loads(raw_msg.data)
+                yield event
+                if event["type"] in ["response.completed", "response.failed", "error"]:
+                    return
 
 
 @dataclass
@@ -242,8 +183,9 @@ class LLM(llm.LLM):
         self._client = client
         self._owns_client = client is None
         self._ws: _ResponsesWebsocket | None = None
-        self._ws_lock = asyncio.Lock()
 
+        self._active_streams: int = 0
+        self._parallel_generation: bool = False
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
 
@@ -283,18 +225,6 @@ class LLM(llm.LLM):
             await self._ws.aclose()
         if self._owns_client and self._client:
             await self._client.close()
-
-    async def _ensure_ws(self) -> _ResponsesWebsocket:
-        if self._ws is None:
-            raise RuntimeError("_ensure_ws called but self._ws is None")
-        async with self._ws_lock:
-            dead = self._ws._run_task is not None and self._ws._run_task.done()
-            if self._ws._ws_conn is None or dead:
-                if dead and self._ws._ws_conn is not None:
-                    await self._ws._ws_conn.close()
-                    self._ws._ws_conn = None
-                await self._ws.connect()
-        return self._ws
 
     @property
     def model(self) -> str:
@@ -350,7 +280,12 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
-        if self._opts.store is not False and self._prev_chat_ctx is not None and self._prev_resp_id:
+        if (
+            self._opts.store is not False
+            and self._active_streams == 0
+            and self._prev_chat_ctx is not None
+            and self._prev_resp_id
+        ):
             n = len(self._prev_chat_ctx.items)
             if ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx):
                 # send only the new items appended since the last response
@@ -395,6 +330,19 @@ class LLMStream(llm.LLMStream):
         self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
+        if self._llm._active_streams > 0:
+            self._llm._parallel_generation = True
+        self._llm._active_streams += 1
+        try:
+            await self._run_impl()
+        finally:
+            self._llm._active_streams -= 1
+            if self._llm._active_streams == 0 and self._llm._parallel_generation:
+                self._llm._prev_resp_id = ""
+                self._llm._prev_chat_ctx = None
+                self._llm._parallel_generation = False
+
+    async def _run_impl(self) -> None:
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
 
@@ -409,7 +357,8 @@ class LLMStream(llm.LLMStream):
         if self._llm._opts.use_websocket is not False:
             retryable = True
             try:
-                ws = await self._llm._ensure_ws()
+                if self._llm._ws is None:
+                    raise RuntimeError("use_websocket is True but _ws is None")
 
                 payload = {
                     "type": "response.create",
@@ -418,9 +367,7 @@ class LLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                ws_stream = await ws.send_request(payload)
-
-                async for raw_event in ws_stream:
+                async for raw_event in self._llm._ws.send_request(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
                     self._process_event(parsed_ev)
                     retryable = False
@@ -471,7 +418,7 @@ class LLMStream(llm.LLMStream):
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate(event)
+            return ResponseErrorEvent.model_validate({**event, **event.get("error", {})})
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
