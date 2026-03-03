@@ -26,7 +26,7 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
-from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm import AgentHandoff, ChatContext, Instructions, MetricsReport
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -1006,7 +1006,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,

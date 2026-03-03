@@ -33,6 +33,123 @@ if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
 
 
+class Instructions(str):
+    """Instructions that adapt based on the user's input modality (audio vs. text).
+
+    ``str(self)`` is the *represent* value — what providers see when they treat
+    this object as a plain string.  By default it equals ``audio``; after
+    :meth:`resolve` it equals the chosen variant.
+
+    ``_audio_variant`` and ``_text_variant`` are always preserved so
+    :meth:`resolve` can be called again for a different modality (e.g., when the
+    same ``ChatContext`` is reused across tool-call turns).
+    """
+
+    _audio_variant: str
+    _text_variant: str | None
+
+    def __new__(
+        cls, audio: str, *, text: str | None = None, represent: str | None = None
+    ) -> Instructions:
+        """Create an Instructions object.
+
+        Args:
+            audio: The audio (voice) variant.
+            text: The text variant.  Falls back to ``audio`` when omitted.
+            represent: What ``str(self)`` should return.  Defaults to ``audio``.
+                Used internally by :meth:`resolve`.
+        """
+        instance = super().__new__(cls, represent if represent is not None else audio)
+        instance._audio_variant = audio
+        instance._text_variant = text
+        return instance
+
+    @property
+    def audio(self) -> str:
+        """The audio (voice) variant of the instructions."""
+        return self._audio_variant
+
+    @property
+    def text(self) -> str:
+        """The text variant of the instructions.
+
+        Falls back to the audio variant when no text variant was provided.
+        """
+        return self._text_variant if self._text_variant is not None else self._audio_variant
+
+    def resolve(self, modality: Literal["audio", "text"]) -> Instructions:
+        """Return a copy whose ``str`` value is the correct variant for *modality*.
+
+        Both ``_audio_variant`` and ``_text_variant`` are preserved for
+        subsequent calls to resolve for a different modality.
+        """
+        return Instructions(
+            self._audio_variant,
+            text=self._text_variant,
+            represent=self.audio if modality == "audio" else self.text,
+        )
+
+    def __add__(self, other: object) -> Instructions:
+        """Concatenate, propagating both variants and the current represent."""
+        if isinstance(other, Instructions):
+            has_text = self._text_variant is not None or other._text_variant is not None
+            return Instructions(
+                self.audio + other.audio,
+                text=(self.text + other.text) if has_text else None,
+                represent=str(self) + str(other),
+            )
+        if isinstance(other, str):
+            return Instructions(
+                self.audio + other,
+                text=(self._text_variant + other) if self._text_variant is not None else None,
+                represent=str(self) + other,
+            )
+        raise TypeError(f"Cannot add Instructions and {type(other)}")
+
+    def __radd__(self, other: object) -> Instructions:
+        """Support ``plain_str + Instructions``, propagating both variants and represent."""
+        if isinstance(other, str):
+            return Instructions(
+                other + self.audio,
+                text=(other + self._text_variant) if self._text_variant is not None else None,
+                represent=other + str(self),
+            )
+        raise TypeError(f"Cannot add {type(other)} and Instructions")
+
+    def __repr__(self) -> str:
+        return f"Instructions(represent={str(self)})"
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+        from pydantic_core import core_schema
+
+        def validate_python(v: Any) -> Instructions:
+            if isinstance(v, Instructions):
+                return v
+            if isinstance(v, dict) and v.get("type") == "instructions":
+                return cls(v["audio"], text=v.get("text"))
+            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
+
+        def validate_json(v: Any) -> Instructions:
+            if isinstance(v, dict) and v.get("type") == "instructions":
+                return cls(v["audio"], text=v.get("text"))
+            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
+
+        def serialize(v: Instructions) -> dict[str, Any]:
+            d: dict[str, Any] = {"type": "instructions", "audio": v.audio}
+            if v._text_variant is not None:
+                d["text"] = v._text_variant
+            return d
+
+        return core_schema.json_or_python_schema(
+            python_schema=core_schema.no_info_plain_validator_function(validate_python),
+            json_schema=core_schema.no_info_plain_validator_function(validate_json),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                serialize, info_arg=False
+            ),
+        )
+
+
 class ImageContent(BaseModel):
     """
     ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
@@ -173,7 +290,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+ChatContent: TypeAlias = ImageContent | AudioContent | Instructions | str
 
 
 class FunctionCall(BaseModel):
@@ -214,7 +331,7 @@ class AgentConfigUpdate(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
-    instructions: str | None = None
+    instructions: Instructions | str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
 
