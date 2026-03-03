@@ -404,7 +404,7 @@ class RealtimeSession(llm.RealtimeSession):
                 "output_format": "pcm_44100",
                 "recognized_languages": self._opts.languages,
                 "audio_speed": self._opts.audio_speed,
-                "tools": tools_payload,
+                "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
                 "boosted_keywords": self._opts.boosted_keywords,
                 "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
                 "no_input_poke_sec": self._opts.no_input_poke_sec,
