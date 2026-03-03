@@ -259,7 +259,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._instructions_ready.set()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        sent = False
+        tool_call_result_sent = False
         for item in chat_ctx.items:
             if (
                 isinstance(item, llm.FunctionCallOutput)
@@ -274,9 +274,9 @@ class RealtimeSession(llm.RealtimeSession):
                             output=str(item.output),
                         )
                     )
-                    sent = True
+                    tool_call_result_sent = True
 
-        if not sent and self._config_sent:
+        if not tool_call_result_sent and self._config_sent:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
