@@ -31,7 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -71,7 +71,7 @@ class _TTSOptions:
     volume: float | None
     word_timestamps: bool
     api_key: str
-    language: Language | None
+    language: LanguageCode | None
     base_url: str
     api_version: str
     pronunciation_dict_id: str | None
@@ -147,7 +147,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
-            language=Language(language) if language else None,
+            language=LanguageCode(language) if language else None,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -262,7 +262,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = Language(language) if language else None
+            self._opts.language = LanguageCode(language) if language else None
         if is_given(voice):
             self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):

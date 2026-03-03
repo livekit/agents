@@ -39,7 +39,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -54,7 +54,7 @@ from .log import logger
 from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
 LgType = SpeechLanguages | str
-LanguageCode = LgType | list[LgType]
+LanguagesInput = LgType | list[LgType]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -128,7 +128,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        languages: LanguageCode = "en-US",  # Google STT can accept multiple languages
+        languages: LanguagesInput = "en-US",  # Google STT can accept multiple languages
         detect_language: bool = True,
         interim_results: bool = True,
         punctuate: bool = True,
@@ -160,7 +160,7 @@ class STT(stt.STT):
         described in https://cloud.google.com/docs/authentication/application-default-credentials
 
         args:
-            languages(LanguageCode): list of language codes to recognize (default: "en-US")
+            languages(LanguagesInput): list of language codes to recognize (default: "en-US")
             detect_language(bool): whether to detect the language of the audio (default: True)
             interim_results(bool): whether to return interim results (default: True)
             punctuate(bool): whether to punctuate the audio (default: True)
@@ -227,9 +227,9 @@ class STT(stt.STT):
                 ) from None
 
         if isinstance(languages, str):
-            languages = [Language(languages)]
+            languages = [LanguageCode(languages)]
         else:
-            languages = [Language(lg) for lg in languages]
+            languages = [LanguageCode(lg) for lg in languages]
 
         self._config = STTOptions(
             languages=languages,
@@ -303,7 +303,7 @@ class STT(stt.STT):
         config = dataclasses.replace(self._config)
 
         if is_given(language):
-            config.languages = [Language(language)]
+            config.languages = [LanguageCode(language)]
 
         if not isinstance(config.languages, list):
             config.languages = [config.languages]
@@ -424,7 +424,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        languages: NotGivenOr[LanguagesInput] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
@@ -442,9 +442,9 @@ class STT(stt.STT):
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
-                self._config.languages = [Language(languages)]
+                self._config.languages = [LanguageCode(languages)]
             else:
-                self._config.languages = [Language(lg) for lg in languages]
+                self._config.languages = [LanguageCode(lg) for lg in languages]
         if is_given(detect_language):
             self._config.detect_language = detect_language
         if is_given(interim_results):
@@ -551,7 +551,7 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        languages: NotGivenOr[LanguagesInput] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
@@ -569,9 +569,9 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
-                self._config.languages = [Language(languages)]
+                self._config.languages = [LanguageCode(languages)]
             else:
-                self._config.languages = [Language(lg) for lg in languages]
+                self._config.languages = [LanguageCode(lg) for lg in languages]
         if is_given(detect_language):
             self._config.detect_language = detect_language
         if is_given(interim_results):
@@ -902,7 +902,7 @@ def _recognize_response_to_speech_event(
             start_time = end_time = 0
 
         confidence /= len(resp.results)
-        lg = Language(resp.results[0].language_code)
+        lg = LanguageCode(resp.results[0].language_code)
 
         alternatives = [
             stt.SpeechData(
@@ -954,12 +954,12 @@ def _streaming_recognize_response_to_speech_data(
         text = final_result.alternatives[0].transcript
         confidence = final_result.alternatives[0].confidence
         words = list(final_result.alternatives[0].words)
-        lg = Language(final_result.language_code)
+        lg = LanguageCode(final_result.language_code)
     else:
         confidence /= len(resp.results)
         if confidence < min_confidence_threshold:
             return None
-        lg = Language(resp.results[0].language_code)
+        lg = LanguageCode(resp.results[0].language_code)
 
     if text == "" or not words:
         if text and not words:

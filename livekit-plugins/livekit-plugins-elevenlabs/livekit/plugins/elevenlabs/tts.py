@@ -32,7 +32,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -189,7 +189,7 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             enable_logging=enable_logging,
-            language=Language(language) if is_given(language) else NOT_GIVEN,
+            language=LanguageCode(language) if is_given(language) else NOT_GIVEN,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
@@ -257,7 +257,7 @@ class TTS(tts.TTS):
             changed = True
 
         if is_given(language):
-            language = Language(language)
+            language = LanguageCode(language)
             if language != self._opts.language:
                 self._opts.language = language
                 changed = True
@@ -485,7 +485,7 @@ class _TTSOptions:
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
-    language: NotGivenOr[Language]
+    language: NotGivenOr[LanguageCode]
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
