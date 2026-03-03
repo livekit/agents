@@ -33,7 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents import Language
+from livekit.agents import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -45,7 +45,7 @@ API_AUTH_HEADER = "x-api-key"
 
 @dataclass
 class _TTSOptions:
-    lang_code: Language
+    lang_code: LanguageCode
     encoding: str
     sample_rate: int
     voice_id: str
@@ -113,7 +113,7 @@ class TTS(tts.TTS):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            lang_code=Language(lang_code),
+            lang_code=LanguageCode(lang_code),
             encoding=encoding,
             sample_rate=sample_rate,
             voice_id=voice_id,
@@ -189,7 +189,7 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed.
         """
         if is_given(lang_code):
-            self._opts.lang_code = Language(lang_code)
+            self._opts.lang_code = LanguageCode(lang_code)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(speed):
