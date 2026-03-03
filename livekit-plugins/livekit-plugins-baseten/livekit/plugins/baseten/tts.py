@@ -116,7 +116,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "orpheus-tts"
+        return "unknown"
 
     @property
     def provider(self) -> str:
