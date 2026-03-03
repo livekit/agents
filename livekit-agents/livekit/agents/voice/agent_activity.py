@@ -497,7 +497,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    if self._amd_result is not None:
+                    if self._amd_result is not None and not self._session._amd_result_consumed:
                         await self._amd_result
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:

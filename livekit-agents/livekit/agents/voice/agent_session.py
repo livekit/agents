@@ -989,6 +989,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AMD is not enabled on this session")
         result = await activity._amd_result
         self._amd_result_consumed = True
+        self._amd = False
         return result
 
     async def start_ivr_detection(self, transcript: str | None = None) -> None:
