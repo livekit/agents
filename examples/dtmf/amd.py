@@ -33,7 +33,7 @@ class MyAgent(Agent):
         )
 
     async def on_enter(self):
-        result = await self.session.amd_detection_result()
+        result = await self.session.amd_result()
         if result.is_human:
             logger.info("human answered the call, proceeding with normal conversation")
             return
