@@ -52,7 +52,7 @@ class _ResponsesWebsocket:
         self, api_key: str | None, timeout: httpx.Timeout | None, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
-        self._timeout = timeout
+        self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
         self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
 
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
@@ -61,35 +61,41 @@ class _ResponsesWebsocket:
         self._output_queue: collections.deque[utils.aio.Chan[dict]] = collections.deque()
         self._run_task: asyncio.Task | None = None
 
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._create_ws_conn,
+            close_cb=self._close_ws,
+            max_session_duration=3600,
+        )
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws_conn(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         try:
             return await asyncio.wait_for(
                 self._ensure_http_session().ws_connect(
                     self._base_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ),
-                timeout=self._timeout.connect if self._timeout else None,
+                timeout,
             )
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to OpenAI Responses WebSocket") from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
 
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
+
     async def connect(self) -> None:
         self._input_ch = utils.aio.Chan[dict]()
-        self._ws_conn = await self._create_ws_conn()
-        self._run_task = asyncio.create_task(
-            self._run_ws(self._ws_conn), name="_ResponsesWebsocket._run_task"
-        )
+        self._run_task = asyncio.create_task(self._run_ws(), name="_ResponsesWebsocket._run_task")
 
-    async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _run_ws(self) -> None:
         @utils.log_exceptions(logger=logger)
-        async def _send_task() -> None:
+        async def _send_task(ws_conn: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 try:
                     msg = await self._input_ch.recv()
@@ -113,7 +119,7 @@ class _ResponsesWebsocket:
                     logger.exception("failed to send event")
 
         @utils.log_exceptions(logger=logger)
-        async def _recv_task() -> None:
+        async def _recv_task(ws_conn: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws_conn.receive()
                 if msg.type in (
@@ -140,26 +146,26 @@ class _ResponsesWebsocket:
                         current.close()
                         self._output_queue.popleft()
 
-        tasks = [
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-        ]
-        try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
+        async with self._pool.connection(timeout=self._timeout) as ws:
+            tasks = [
+                asyncio.create_task(_recv_task(ws), name="_recv_task"),
+                asyncio.create_task(_send_task(ws), name="_send_task"),
+            ]
+            try:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
 
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
-            await ws_conn.close()
-            for ch in self._output_queue:
-                ch.close()
-            self._output_queue.clear()
-            while not self._input_ch.empty():
-                try:
-                    self._input_ch.recv_nowait()
-                except (utils.aio.channel.ChanClosed, utils.aio.channel.ChanEmpty):
-                    break
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
+                for ch in self._output_queue:
+                    ch.close()
+                self._output_queue.clear()
+                while not self._input_ch.empty():
+                    try:
+                        self._input_ch.recv_nowait()
+                    except (utils.aio.channel.ChanClosed, utils.aio.channel.ChanEmpty):
+                        break
 
     async def aclose(self) -> None:
         self._input_ch.close()
