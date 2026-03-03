@@ -151,7 +151,7 @@ class AudioRecognition:
         # automatic machine detection
         self._amd: AMD | None = session._activity.amd if session._activity is not None else None
         if self._amd:
-            self._amd.on("amd_result", self._hooks.on_amd_result)
+            self._amd.on("amd_result", self._on_amd_result)
 
     def update_options(
         self,
@@ -218,9 +218,9 @@ class AudioRecognition:
             await self._end_of_turn_task
 
         if self._amd is not None:
-            self._amd.off("amd_result", self._hooks.on_amd_result)
-            if not self._amd.closed:
-                self._amd.close()
+            self._amd.off("amd_result", self._on_amd_result)
+            await self._amd.close()
+            self._amd = None
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -540,6 +540,15 @@ class AudioRecognition:
 
             if self._amd:
                 self._amd.on_user_speech_ended(ev.silence_duration)
+
+    def _on_amd_result(self, result: AMDResult) -> None:
+        self._hooks.on_amd_result(result)
+        if self._amd is not None:
+            self._amd.off("amd_result", self._on_amd_result)
+            task = asyncio.create_task(self._amd.close())
+            self._tasks.add(task)
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._amd = None
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":

@@ -420,7 +420,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr and amd
         self._ivr_activity: IVRActivity | None = None
         self._amd = inference.LLM(amd) if isinstance(amd, str) else amd
-        self._amd_result_yielded: bool = False
+        self._amd_result_consumed: bool = False
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
@@ -975,7 +975,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 method,
             )
 
-    async def amd_detection_result(self) -> AMDResult:
+    async def amd_result(self) -> AMDResult:
         """
         Wait for the AMD result and return it.
 
@@ -988,7 +988,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if activity is None or activity._amd_result is None:
             raise RuntimeError("AMD is not enabled on this session")
         result = await activity._amd_result
-        self._amd_result_yielded = True
+        self._amd_result_consumed = True
         return result
 
     async def start_ivr_detection(self, transcript: str | None = None) -> None:

@@ -497,7 +497,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    if self._amd_result is not None and not self._amd_result.done():
+                    if self._amd_result is not None:
                         await self._amd_result
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
@@ -783,6 +783,8 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+            if self._amd_result is not None:
+                await utils.aio.cancel_and_wait(self._amd_result)
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
@@ -1516,7 +1518,7 @@ class AgentActivity(RecognitionHooks):
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
-        if self._amd_result is not None and not self._session._amd_result_yielded:
+        if self._amd_result is not None and not self._session._amd_result_consumed:
             await self._amd_result
             if self._amd_result.result().is_machine:
                 self._cancel_preemptive_generation()
