@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from google.genai import types
-from livekit.agents import llm
 
 from livekit.plugins.google.llm import LLMStream
 
@@ -13,7 +12,6 @@ from livekit.plugins.google.llm import LLMStream
 def llm_stream():
     mock_llm = MagicMock()
     mock_llm._thought_signatures = {}
-    mock_client = MagicMock()
 
     with patch.object(LLMStream, "__init__", lambda self, *a, **kw: None):
         stream = LLMStream.__new__(LLMStream)
