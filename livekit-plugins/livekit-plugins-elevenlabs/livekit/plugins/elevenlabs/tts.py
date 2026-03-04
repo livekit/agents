@@ -87,7 +87,7 @@ class PronunciationDictionaryLocator:
     version_id: str
 
 
-DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
+DEFAULT_VOICE_ID = "l7kNoIfnJKPg7779LI2t"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
