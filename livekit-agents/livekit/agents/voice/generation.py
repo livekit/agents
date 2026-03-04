@@ -826,6 +826,10 @@ def apply_instructions_modality(
 ) -> None:
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
     if idx is not None and (item := chat_ctx.items[idx]).type == "message":
+        has_modality_specific = any(isinstance(c, Instructions) for c in item.content)
+        if not has_modality_specific:
+            return
+
         # ChatContext.copy shadows the original item, create a new instance to avoid mutating the original
         new_item = item.model_copy()
         new_item.content = [
