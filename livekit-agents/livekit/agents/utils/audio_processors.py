@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import array as _array
+import math
 
 from livekit import rtc
 
@@ -41,7 +42,7 @@ class VolumeAmplifierProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     @property
     def gain_db(self) -> float:
         """Current gain in decibels."""
-        return 20.0 * __import__("math").log10(self._gain)
+        return 20.0 * math.log10(self._gain)
 
     @gain_db.setter
     def gain_db(self, value: float) -> None:
