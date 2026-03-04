@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
@@ -46,6 +47,9 @@ from .models import GeminiTTSModels, Gender, SpeechLanguages
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
+# Google Cloud TTS API limit: input.text or input.ssml must not exceed 5000 bytes
+GOOGLE_TTS_MAX_INPUT_BYTES = 5000
+SSML_WRAPPER_OVERHEAD = len(b"<speak></speak>")
 
 
 @dataclass
@@ -293,42 +297,53 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    def _build_ssml(self) -> str:
-        ssml = "<speak>"
-        ssml += self._input_text
-        ssml += "</speak>"
-        return ssml
+    @staticmethod
+    def _build_ssml(text: str) -> str:
+        return f"<speak>{text}</speak>"
+
+    def _get_text_chunks(self) -> list[str]:
+        """Split input text into chunks that respect Google TTS byte limits.
+
+        Google Cloud TTS API rejects input.text or input.ssml longer than
+        5000 bytes. This method splits the input accordingly, accounting for
+        SSML wrapper overhead when SSML is enabled.
+        """
+        if self._opts.enable_ssml:
+            max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES - SSML_WRAPPER_OVERHEAD
+        else:
+            max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES
+
+        return _split_text_by_bytes(self._input_text, max_bytes)
+
+    def _build_synthesis_input(self, text: str) -> texttospeech.SynthesisInput:
+        if self._opts.use_markup:
+            tts_input = texttospeech.SynthesisInput(
+                markup=text, custom_pronunciations=self._opts.custom_pronunciations
+            )
+        elif self._opts.enable_ssml:
+            tts_input = texttospeech.SynthesisInput(
+                ssml=self._build_ssml(text),
+                custom_pronunciations=self._opts.custom_pronunciations,
+            )
+        else:
+            tts_input = texttospeech.SynthesisInput(
+                text=text, custom_pronunciations=self._opts.custom_pronunciations
+            )
+
+        if self._opts.prompt is not None:
+            tts_input.prompt = self._opts.prompt
+
+        return tts_input
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            if self._opts.use_markup:
-                tts_input = texttospeech.SynthesisInput(
-                    markup=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
-                )
-            elif self._opts.enable_ssml:
-                tts_input = texttospeech.SynthesisInput(
-                    ssml=self._build_ssml(), custom_pronunciations=self._opts.custom_pronunciations
-                )
-            else:
-                tts_input = texttospeech.SynthesisInput(
-                    text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
-                )
-
-            if self._opts.prompt is not None:
-                tts_input.prompt = self._opts.prompt
-
-            response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
-                input=tts_input,
-                voice=self._opts.voice,
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=self._opts.encoding,
-                    sample_rate_hertz=self._opts.sample_rate,
-                    pitch=self._opts.pitch,
-                    effects_profile_id=self._opts.effects_profile_id,
-                    speaking_rate=self._opts.speaking_rate,
-                    volume_gain_db=self._opts.volume_gain_db,
-                ),
-                timeout=self._conn_options.timeout,
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=self._opts.encoding,
+                sample_rate_hertz=self._opts.sample_rate,
+                pitch=self._opts.pitch,
+                effects_profile_id=self._opts.effects_profile_id,
+                speaking_rate=self._opts.speaking_rate,
+                volume_gain_db=self._opts.volume_gain_db,
             )
 
             output_emitter.initialize(
@@ -338,7 +353,17 @@ class ChunkedStream(tts.ChunkedStream):
                 mime_type=_encoding_to_mimetype(self._opts.encoding),
             )
 
-            output_emitter.push(response.audio_content)
+            for chunk in self._get_text_chunks():
+                tts_input = self._build_synthesis_input(chunk)
+                response: SynthesizeSpeechResponse = (
+                    await self._tts._ensure_client().synthesize_speech(
+                        input=tts_input,
+                        voice=self._opts.voice,
+                        audio_config=audio_config,
+                        timeout=self._conn_options.timeout,
+                    )
+                )
+                output_emitter.push(response.audio_content)
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
@@ -477,3 +502,86 @@ def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
         return "audio/opus"
     else:
         raise RuntimeError(f"encoding {encoding} isn't supported")
+
+
+def _split_text_by_bytes(text: str, max_bytes: int) -> list[str]:
+    """Split text into chunks that each fit within max_bytes when UTF-8 encoded.
+
+    Splits on sentence-ending punctuation first, then on whitespace boundaries,
+    and as a last resort on character boundaries to guarantee each chunk is
+    within the byte limit.
+    """
+    if len(text.encode("utf-8")) <= max_bytes:
+        return [text]
+
+    # first try splitting on sentence boundaries
+    sentences = re.split(r"(?<=[.!?。！？])\s*", text)
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        if not sentence:
+            continue
+        candidate = current + sentence if current else sentence
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # if a single sentence still exceeds the limit, split it by words
+            if len(sentence.encode("utf-8")) > max_bytes:
+                chunks.extend(_split_on_words(sentence, max_bytes))
+                current = ""
+            else:
+                current = sentence
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _split_on_words(text: str, max_bytes: int) -> list[str]:
+    """Split text on whitespace boundaries to fit within max_bytes."""
+    words = text.split()
+    chunks: list[str] = []
+    current = ""
+
+    for word in words:
+        candidate = current + " " + word if current else word
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # if a single word exceeds the limit, split by characters
+            if len(word.encode("utf-8")) > max_bytes:
+                chunks.extend(_split_on_chars(word, max_bytes))
+                current = ""
+            else:
+                current = word
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _split_on_chars(text: str, max_bytes: int) -> list[str]:
+    """Split text character-by-character to fit within max_bytes."""
+    chunks: list[str] = []
+    current = ""
+
+    for char in text:
+        candidate = current + char
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = char
+
+    if current:
+        chunks.append(current)
+
+    return chunks
