@@ -16,7 +16,7 @@ from .task_group import TaskGroup
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
 
-CardIssuersLookup = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
+CARD_ISSUERS_LOOKUP = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
 
 
 @dataclass
@@ -24,7 +24,7 @@ class GetCreditCardResult:
     cardholder_name: str
     issuer: str
     card_number: int
-    security_code: int
+    security_code: str
     expiration_date: str
 
 
@@ -36,7 +36,7 @@ class GetCardNumberResult:
 
 @dataclass
 class GetSecurityCodeResult:
-    security_code: int
+    security_code: str
 
 
 @dataclass
@@ -114,16 +114,21 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         )
 
     @function_tool()
-    async def update_card_number(
+    async def record_card_number(
         self,
         context: RunContext,
         card_number: int,
     ) -> str | None:
-        """Call to update the user's card number.
+        """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
 
         Args:
             card_number (int): The credit card number as an integer with no dashes or spaces
         """
+        if card_number < 0:
+            self.session.generate_reply(
+                instructions="The card number cannot be negative, ask the user to repeat their card number."
+            )
+            return None
         card_number_str = str(card_number)
         if len(card_number_str) < 13 or len(card_number_str) > 19:
             self.session.generate_reply(
@@ -139,8 +144,8 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                         instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
                     )
                 else:
-                    first_digit = card_number_str[0]
-                    issuer = CardIssuersLookup.get(first_digit, "Other")
+                    first_digit = str(self._card_number)[0]
+                    issuer = CARD_ISSUERS_LOOKUP.get(first_digit, "Other")
                     if not self.done():
                         self.complete(
                             GetCardNumberResult(issuer=issuer, card_number=self._card_number)
@@ -153,8 +158,8 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             await self.update_tools(current_tools)
 
             return (
-                f"The card number has been updated to {card_number}\n"
-                f"Ask them to repeat the number, do not repeat the number back to them.\n"
+                "The card number has been updated.\n"
+                "Ask them to repeat the number, do not repeat the number back to them.\n"
             )
 
     def _build_confirm_tool(self, *, card_number: int) -> llm.FunctionTool:
@@ -177,18 +182,17 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 )
             else:
                 first_digit = str(card_number)[0]
-                issuer = CardIssuersLookup.get(first_digit, "Other")
+                issuer = CARD_ISSUERS_LOOKUP.get(first_digit, "Other")
                 if not self.done():
                     self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
 
         return confirm_card_number
 
     def validate_card_number(self, card_number: int) -> bool:
-        """Validates card number via the Luhn algorithm"""
-        card_number_str = str(card_number)
+        """Validates card number via the Luhn algorithm and checks if positive"""
         total_sum = 0
 
-        reversed_number = card_number_str[::-1]
+        reversed_number = str(card_number)[::-1]
         for index, digit in enumerate(reversed_number):
             if index % 2 == 1:
                 doubled_digit = int(digit) * 2
@@ -199,7 +203,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             else:
                 total_sum += int(digit)
 
-        return total_sum % 10 == 0
+        return (total_sum % 10 == 0) and (card_number > 0)
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
@@ -224,7 +228,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
-        self._security_code = 0
+        self._security_code = ""
         self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
@@ -236,45 +240,46 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
     async def update_security_code(
         self,
         context: RunContext,
-        security_code: int,
+        security_code: str,
     ) -> str | None:
         """Call to update the card's security code.
 
         Args:
-            security_code (int): The card's security code.
+            security_code (str): The card's security code (3-4 digits, may have leading zeros).
         """
-        if len(str(security_code)) < 3 or len(str(security_code)) > 4:
+        stripped = security_code.strip()
+        if not stripped.isdigit() or not (3 <= len(stripped) <= 4):
             self.session.generate_reply(
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
             return None
         else:
-            self._security_code = security_code
+            self._security_code = stripped
 
             if not self._confirmation_required(context):
                 if not self.done():
                     self.complete(GetSecurityCodeResult(security_code=self._security_code))
                 return None
 
-            confirm_tool = self._build_confirm_tool(security_code=security_code)
+            confirm_tool = self._build_confirm_tool(security_code=stripped)
             current_tools = [t for t in self.tools if t.id != "confirm_security_code"]
             current_tools.append(confirm_tool)
             await self.update_tools(current_tools)
 
             return (
-                f"The security code has been updated to {security_code}\n"
-                f"Do not repeat the security code back to the user, ask them to repeat themselves.\n"
+                "The security code has been updated.\n"
+                "Do not repeat the security code back to the user, ask them to repeat themselves.\n"
             )
 
-    def _build_confirm_tool(self, *, security_code: int) -> llm.FunctionTool:
+    def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_security_code(repeated_security_code: int) -> None:
+        async def confirm_security_code(repeated_security_code: str) -> None:
             """Call after the user repeats their security code for confirmation.
 
             Args:
-                repeated_security_code (int): The security code repeated by the user
+                repeated_security_code (str): The security code repeated by the user
             """
-            if repeated_security_code != security_code:
+            if repeated_security_code.strip() != security_code:
                 self.session.generate_reply(
                     instructions="The repeated security code does not match, ask the user to try again."
                 )
@@ -360,9 +365,8 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             await self.update_tools(current_tools)
 
             return (
-                f"The expiration date has been updated to {self._expiration_date}\n"
-                f"Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
-                # f"Do not call `confirm_expiration_date` directly"
+                "The expiration date has been updated.\n"
+                "Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
             )
 
     def _build_confirm_tool(

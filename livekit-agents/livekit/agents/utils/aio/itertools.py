@@ -22,17 +22,33 @@ async def tee_peer(
     buffer: deque[T],
     peers: list[deque[T]],
     lock: AsyncContextManager[Any],
+    exception: list[BaseException | None],
 ) -> AsyncGenerator[T, None]:
+    # exception is a shared mutable container across all peers. When the upstream
+    # iterator raises, only the first peer to call __anext__() would normally see
+    # the error — subsequent calls return StopAsyncIteration per Python async
+    # generator semantics, silently swallowing the error for other peers.
+    #
+    # To fix this, the first peer to hit the exception stores it in exception[0].
+    # Other peers check this before advancing the iterator and re-raise the same
+    # exception, ensuring all peers observe the upstream failure.
     try:
         while True:
             if not buffer:
                 async with lock:
                     if buffer:
                         continue
+                    # a peer already hit an upstream error — re-raise for this peer
+                    if exception[0] is not None:
+                        raise exception[0]
                     try:
                         item = await iterator.__anext__()
                     except StopAsyncIteration:
                         break
+                    except BaseException as e:
+                        # store the exception so other peers can see it
+                        exception[0] = e
+                        raise
                     else:
                         for peer_buffer in peers:
                             peer_buffer.append(item)
@@ -59,12 +75,14 @@ class Tee(Generic[T]):
         self._buffers: list[deque[T]] = [deque() for _ in range(n)]
 
         lock = asyncio.Lock()
+        exception: list[BaseException | None] = [None]
         self._children = tuple(
             tee_peer(
                 iterator=self._iterator,
                 buffer=buffer,
                 peers=self._buffers,
                 lock=lock,
+                exception=exception,
             )
             for buffer in self._buffers
         )

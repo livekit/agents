@@ -71,8 +71,8 @@ class CGroupV2CPUMonitor(CPUMonitor):
             with open("/sys/fs/cgroup/cpu.max") as f:
                 data = f.read().strip().split()
             quota = data[0]
-            period = int(data[1])
-        except FileNotFoundError:
+            period = int(data[1]) if len(data) > 1 else 100000
+        except (FileNotFoundError, IndexError, ValueError):
             quota = "max"
             period = 100000
         return quota, period

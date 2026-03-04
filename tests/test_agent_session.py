@@ -69,7 +69,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 2.0
+    speed = 5.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -335,7 +335,7 @@ async def test_interruption_by_text_input() -> None:
 
     asyncio.get_event_loop().call_later(5 / speed, fake_text_input)
 
-    await asyncio.wait_for(run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
@@ -435,7 +435,7 @@ async def test_generate_reply() -> None:
     """
     Test `generate_reply` in `on_enter` and tool call, `say` in `on_user_turn_completed`
     """
-    speed = 2.5
+    speed = 5.0
 
     actions = FakeActions()
     # llm and tts response for generate_reply() and say()
@@ -464,7 +464,7 @@ async def test_generate_reply() -> None:
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
     t_origin = await asyncio.wait_for(
-        run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT
+        run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT
     )
 
     # playback_finished
@@ -532,7 +532,7 @@ async def test_generate_reply() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
-    speed = 2.0
+    speed = 5.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
@@ -599,7 +599,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session.on("agent_state_changed", agent_state_events.append)
     session.on("conversation_item_added", conversation_events.append)
 
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=1.0), timeout=SESSION_TIMEOUT)
 
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"

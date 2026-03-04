@@ -82,6 +82,32 @@ check: format-check lint type-check ## Run all checks (format, lint, type-check)
 
 fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
 
+unit-tests:
+	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
+	PYTHONPATH="$$PWD" uv run pytest \
+		tests/test_agent_session.py \
+		tests/test_aio.py \
+		tests/test_audio_decoder.py \
+		tests/test_chat_ctx.py \
+		tests/test_config.py \
+		tests/test_connection_pool.py \
+		tests/test_debounce.py \
+		tests/test_google_thought_signatures.py \
+		tests/test_inference_stt_fallback.py \
+		tests/test_inference_tts_fallback.py \
+		tests/test_ipc.py \
+		tests/test_ivr_activity.py \
+		tests/test_langgraph.py \
+		tests/test_schema_gemini.py \
+		tests/test_tts_fallback.py \
+		tests/test_stt_fallback.py \
+		tests/test_recording.py \
+		tests/test_tokenizer.py \
+		tests/test_transcription_filter.py \
+		tests/test_tools.py \
+		tests/test_aio_itertools.py \
+		tests/test_room.py
+
 # ============================================
 # Development Workflows
 # ============================================

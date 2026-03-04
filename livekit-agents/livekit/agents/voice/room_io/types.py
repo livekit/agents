@@ -50,8 +50,8 @@ NoiseCancellationSelector: TypeAlias = Callable[
 ]
 
 
-def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
-    sess.interrupt()
+async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
+    await sess.interrupt()
     sess.generate_reply(user_input=ev.text)
 
 

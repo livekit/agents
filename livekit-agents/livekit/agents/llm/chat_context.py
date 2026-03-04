@@ -366,18 +366,24 @@ class ChatContext:
         """Truncate the chat context to the last N items in place.
 
         Removes leading function calls to avoid partial function outputs.
-        Preserves the first system message by adding it back to the beginning.
+        Preserves the first instruction message (system/developer) by adding it back
+        to the beginning.
         """
 
         if len(self._items) <= max_items:
             return self
 
         instructions = next(
-            (item for item in self._items if item.type == "message" and item.role == "system"),
+            (
+                item
+                for item in self._items
+                if item.type == "message" and item.role in ("system", "developer")
+            ),
             None,
         )
 
         new_items = self._items[-max_items:]
+
         # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
             "function_call",
@@ -385,7 +391,7 @@ class ChatContext:
         ]:
             new_items.pop(0)
 
-        if instructions:
+        if instructions and not any(item.id == instructions.id for item in new_items):
             new_items.insert(0, instructions)
 
         self._items[:] = new_items

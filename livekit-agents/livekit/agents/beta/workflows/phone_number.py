@@ -63,6 +63,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
                 + "If the number is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the area code, then the remaining digits.\n"
                 "Never repeat the phone number back to the user as a single block of digits. Read it back in groups.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
+                "Avoid verbosity by not sharing example phone numbers or formats unless prompted to do so. Do not deviate from the goal of collecting the user's phone number.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
             ),

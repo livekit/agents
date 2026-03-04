@@ -101,7 +101,10 @@ class STT(stt.STT):
 
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
-            raise ValueError("CARTESIA_API_KEY must be set")
+            raise ValueError(
+                "Cartesia API key is required, either as argument or set"
+                " CARTESIA_API_KEY environment variable"
+            )
 
         self._opts = STTOptions(
             model=model,

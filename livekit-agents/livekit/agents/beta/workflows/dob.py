@@ -28,7 +28,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         include_time: bool = False,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: list[llm.Tool | llm.Toolset] | None = None,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -72,12 +72,13 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 + "When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.\n"
                 "If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
+                "Avoid verbosity by not sharing example dates or formats unless prompted to do so. Do not deviate from the goal of collecting the user's birthday.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools,
+            tools=tools or [],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -104,7 +105,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         day: int,
         ctx: RunContext,
     ) -> str | None:
-        """Update the date of birth provided by the user.
+        """Update the date of birth provided by the user. Given a spoken month and year (e.g., 'July 2030'), return its numerical representation (7/2030).
 
         Args:
             year: The birth year (e.g., 1990)
@@ -184,10 +185,11 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 )
             return None
 
-        confirm_tool = self._build_confirm_tool(dob=self._current_dob)
-        current_tools = [t for t in self.tools if t.id != "confirm_dob"]
-        current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        if self._confirmation_required(ctx):
+            confirm_tool = self._build_confirm_tool(dob=self._current_dob)
+            current_tools = [t for t in self.tools if t.id != "confirm_dob"]
+            current_tools.append(confirm_tool)
+            await self.update_tools(current_tools)
 
         formatted_time = birth_time.strftime("%I:%M %p")
         response = f"The time of birth has been updated to {formatted_time}"
@@ -196,10 +198,13 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             formatted_date = self._current_dob.strftime("%B %d, %Y")
             response = f"The date and time of birth has been updated to {formatted_date} at {formatted_time}"
 
-        response += (
-            "\nRepeat the time back to the user in a natural spoken format.\n"
-            "Prompt the user for confirmation, do not call `confirm_dob` directly"
-        )
+        if self._confirmation_required(ctx):
+            response += (
+                "\nRepeat the time back to the user in a natural spoken format.\n"
+                "Prompt the user for confirmation, do not call `confirm_dob` directly"
+            )
+        else:
+            response += "\nThe date of birth has not been provided yet, ask the user to provide it."
 
         return response
 

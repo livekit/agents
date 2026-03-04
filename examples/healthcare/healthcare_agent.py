@@ -7,7 +7,7 @@ from typing import Annotated
 
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
-from openai import OpenAI
+from openai import AsyncOpenAI
 from pydantic import Field
 
 from livekit.agents import (
@@ -19,9 +19,9 @@ from livekit.agents import (
     JobContext,
     RunContext,
     cli,
+    inference,
+    llm,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
     GetCreditCardTask,
@@ -32,24 +32,31 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.plugins import deepgram, openai, silero
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
+from livekit.plugins import openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
 
-load_dotenv(".env.local")
+load_dotenv()
 
 # to test out warm transfer, ensure the following variables/env vars are set
 SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")  # "ST_abcxyz"
 SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+12003004000"
 SIP_NUMBER = os.getenv("LIVEKIT_SIP_NUMBER")  # "+15005006000" - caller ID shown to supervisor
 
-ValidInsurances = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
+VALID_INSURANCES = ["Anthem", "Aetna", "EmblemHealth", "HealthFirst"]
+
+GLOBAL_INSTRUCTIONS = "Be succinct and to the point when assisting the user. Never give medical advice or diagnose users, escalate to a human whenever the user's request is out of your scope of assistance."
 
 
 @dataclass
 class UserData:
     database: FakeDatabase
     profile: dict | None
+    oai_client: AsyncOpenAI | None = None
+    vector_store_id: str | None = None
+    file_id: str | None = None
 
 
 @dataclass
@@ -92,8 +99,10 @@ async def transfer_to_human(context: RunContext) -> None:
         "Please hold while I connect you to a human agent.", allow_interruptions=False
     )
     try:
-        assert SIP_TRUNK_ID is not None
-        assert SUPERVISOR_PHONE_NUMBER is not None
+        if SIP_TRUNK_ID is None:
+            raise ToolError("SIP_TRUNK_ID is not configured")
+        if SUPERVISOR_PHONE_NUMBER is None:
+            raise ToolError("SUPERVISOR_PHONE_NUMBER is not configured")
 
         result = await WarmTransferTask(
             target_phone_number=SUPERVISOR_PHONE_NUMBER,
@@ -103,7 +112,7 @@ async def transfer_to_human(context: RunContext) -> None:
         )
     except ToolError as e:
         logger.error(f"failed to transfer to supervisor with tool error: {e}")
-        raise e
+        raise
     except Exception as e:
         logger.exception("failed to transfer to supervisor")
         raise ToolError(f"failed to transfer to supervisor with error: {e}") from e
@@ -120,24 +129,26 @@ async def transfer_to_human(context: RunContext) -> None:
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
-    def __init__(self):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = True):
         super().__init__(
             instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
         """,
             tools=[transfer_to_human],
+            chat_ctx=chat_ctx,
         )
+        self._require_confirmation = require_confirmation
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Collect the user's health insurance and inform them of the accepted insurance options."
+            instructions="Collect the user's health insurance, inform them of the accepted insurances if they ask."
         )
 
     @function_tool()
     async def record_health_insurance(
         self,
         context: RunContext,
-        insurance: Annotated[str, Field(json_schema_extra={"enum": ValidInsurances})],
+        insurance: Annotated[str, Field(json_schema_extra={"enum": VALID_INSURANCES})],
     ):
         """Record the user's health insurance.
 
@@ -151,11 +162,13 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
 async def update_record(
     context: RunContext,
     field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "phone", "insurance"]})],
+    updated_detail: str,
 ):
-    """Call when the user requests to modify information in their existing patient record.
+    """Call when the user requests to modify information in their existing patient record
 
     Args:
         field (str): The field to update
+        updated_detail (str): The new field to be updated to
     """
     if field == "name":
         await context.session.generate_reply(instructions="The user may not change their name.")
@@ -165,9 +178,12 @@ async def update_record(
         "phone": (GetPhoneNumberTask, "phone_number"),
         "insurance": (GetInsuranceTask, "insurance"),
     }
-
-    task_class, attr = field_map.get(field)
-    result = await task_class()
+    task_class, attr = field_map[field]
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(
+        role="system", content=f"The user provided the new field: {updated_detail}"
+    )
+    result = await task_class(require_confirmation=False, chat_ctx=chat_ctx)
     value = getattr(result, attr)
 
     name = context.session.userdata.profile["name"]
@@ -178,10 +194,22 @@ async def update_record(
 
 
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
-    def __init__(self):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="You will now assist the user with selecting a doctor and appointment time.",
-            tools=[update_record, transfer_to_human],
+            instructions="""You will now assist the user with selecting a doctor and appointment time.
+            Do not be verbose and ask for any unnecessary information unless instructed to.
+            Avoid using special characters like bullet points when listing out doctors and available timeslots, maintain a natural tone.
+            """
+            + GLOBAL_INSTRUCTIONS,
+            tools=[
+                update_record,
+                transfer_to_human,
+                EndCallTool(
+                    end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
+                    delete_room=True,
+                ),
+            ],
+            chat_ctx=chat_ctx,
         )
         self._selected_doctor: str | None = None
         self._appointment_time: datetime | None = None
@@ -199,14 +227,19 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         current_tools = [t for t in self.tools if t.id != "confirm_doctor_selection"]
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
-
+        chat_ctx = self.chat_ctx.copy()
+        chat_ctx.add_message(
+            role="system",
+            content=f"These doctors are compatible with the user's insurance: {available_doctors}",
+        )
+        await self.update_chat_ctx(chat_ctx)
         if len(self._compatible_doctor_records) > 1:
             await self.session.generate_reply(
-                instructions=f"These are the doctors compatible with the user's insurance: {available_doctors}, prompt the user to choose one."
+                instructions="Inform the user of the doctors compatible to them, and prompt the user to choose one. Avoid special notation when listing out the doctors."
             )
         else:
             await self.session.generate_reply(
-                instructions=f"Inform the user that {available_doctors} accepts their insurance and confirm if they would like to select that doctor."
+                instructions="Inform the user of their compatible doctor and confirm if they would like to select that doctor. Avoid special notation when listing out the doctors.."
             )
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
@@ -216,7 +249,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 str,
                 Field(
                     description="The names of the available doctors",
-                    json_schema_extra={"items": {"enum": available_doctors}},
+                    json_schema_extra={"enum": available_doctors},
                 ),
             ],
         ) -> None:
@@ -236,8 +269,14 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             current_tools.append(schedule_appointment_tool)
             await self.update_tools(current_tools)
 
+            chat_ctx = self.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="system",
+                content=f"The selected doctor has availabilities at {available_times}.",
+            )
+            await self.update_chat_ctx(chat_ctx)
             await self.session.generate_reply(
-                instructions=f"The selected doctor has availabilities at {available_times}. Ask the user which time slot they prefer."
+                instructions="Inform and ask the user which time slot they prefer, and do not list out the times using bullet points. Avoid special notation when listing out the available time slots."
             )
 
         return confirm_doctor_selection
@@ -255,7 +294,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
                 str,
                 Field(
                     description="The available appointment times in ISO format",
-                    json_schema_extra={"items": {"enum": iso_times}},
+                    json_schema_extra={"enum": iso_times},
                 ),
             ],
         ):
@@ -270,7 +309,6 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             current_tools = [t for t in self.tools if t.id != "confirm_visit_reason"]
             current_tools.append(visit_reason_tool)
             await self.update_tools(current_tools)
-
             await self.session.generate_reply(
                 instructions="Prompt the user for the reason for their visit."
             )
@@ -297,10 +335,23 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 
 
 class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
-    def __init__(self, function: str):
+    def __init__(self, function: str, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="You will now assist the user with modifying their appointment.",
-            tools=[update_record, transfer_to_human],
+            instructions="""You will now assist the user with modifying their appointment.
+            Do not be verbose and ask for any unnecessary information unless instructed to.
+            Avoid using special characters like bullet points, maintain a natural tone.
+            Do not preemptively ask for information and refrain from listing made-up appointment times.
+            """
+            + GLOBAL_INSTRUCTIONS,
+            chat_ctx=chat_ctx,
+            tools=[
+                update_record,
+                transfer_to_human,
+                EndCallTool(
+                    end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
+                    delete_room=True,
+                ),
+            ],
         )
         self._function = function
         self._selected_appointment: dict | None = None
@@ -310,7 +361,8 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
         self._patient_profile = self.session.userdata.profile
 
         name = self._patient_profile["name"]
-        appointments = self._database.get_patient_by_name(name).get("appointments", [])
+        record = self._database.get_patient_by_name(name)
+        appointments = record.get("appointments", []) if record else []
         if not appointments:
             await self.session.generate_reply(
                 instructions="Inform the user that they have no appointments on file."
@@ -318,56 +370,58 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             self.complete(ModifyAppointmentResult(new_appointment=None, old_appointment={}))
             return
         else:
-            cancel_appt_tool = self._build_modify_appt_tool(available_appts=appointments)
+            modify_appt_tool = self._build_modify_appt_tool(available_appts=appointments)
             current_tools = [t for t in self.tools if t.id != "confirm_appointment_selection"]
-            current_tools.append(cancel_appt_tool)
+            current_tools.append(modify_appt_tool)
             await self.update_tools(current_tools)
+
+            chat_ctx = self.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="system",
+                content=f"The user has these outstanding appointments: {json.dumps(appointments, default=str)} and requested to {self._function} one.",
+            )
+            await self.update_chat_ctx(chat_ctx)
             await self.session.generate_reply(
-                instructions=f"The user has these outstanding appointments: {json.dumps(appointments, default=str)}, prompt them to choose one to modify."
+                instructions="Prompt the user to choose one of the appointments to modify, and confirm if they would either like to reschedule or cancel it. Avoid using special notations. Call 'confirm_appointment_selection' to carry out the execution."
             )
 
-    def _build_modify_appt_tool(self, *, available_appts: list[str]) -> FunctionTool:
+    def _build_modify_appt_tool(self, *, available_appts: list[dict]) -> FunctionTool:
+        appt_by_time = {str(appt["appointment_time"]): appt for appt in available_appts}
+        appt_times = list(appt_by_time.keys())
+
         @function_tool()
         async def confirm_appointment_selection(
-            selected_appointment: Annotated[
+            function: Annotated[
                 str,
                 Field(
-                    description="The names of the available appointments to cancel or reschedule",
-                    json_schema_extra={"items": {"enum": available_appts}},
+                    description="Available functions to modify an existing appointment",
+                    json_schema_extra={"enum": ["reschedule", "cancel"]},
+                ),
+            ],
+            selected_appointment_time: Annotated[
+                str,
+                Field(
+                    description="The appointment time to cancel or reschedule",
+                    json_schema_extra={"enum": appt_times},
                 ),
             ],
         ) -> None:
-            """Call to confirm the user's appointment selection to either cancel or reschedule
+            """Call to confirm the user's appointment selection to either cancel or reschedule"""
+            appointment = appt_by_time[selected_appointment_time]
+            self._selected_appointment = appointment
+            self._database.cancel_appointment(self._patient_profile["name"], appointment)
 
-            Args:
-                selected_appointment (str): The appointment the user selects for modification
-            """
-            self._selected_appointment = selected_appointment
-            self._database.cancel_appointment(self._patient_profile["name"], selected_appointment)
-
-            if self._function == "cancel":
+            if function == "cancel":
                 self.complete(
-                    ModifyAppointmentResult(
-                        new_appointment=None, old_appointment=selected_appointment
-                    )
+                    ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
                 result = await ScheduleAppointmentTask()
                 self.complete(
-                    ModifyAppointmentResult(
-                        new_appointment=result, old_appointment=selected_appointment
-                    )
+                    ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
 
         return confirm_appointment_selection
-
-
-async def end_call_callback(agent, ev) -> None:
-    if agent._oai_client is not None:
-        if agent._vector_store is not None:
-            agent._oai_client.vector_stores.delete(agent._vector_store.id)
-        if agent._file is not None:
-            agent._oai_client.files.delete(agent._file.id)
 
 
 class HealthcareAgent(Agent):
@@ -376,25 +430,21 @@ class HealthcareAgent(Agent):
             instructions=(
                 "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
                 "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
-                "Call 'schedule_appointment' to schedule a new appointment."
+                "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'."
+                + GLOBAL_INSTRUCTIONS
             ),
             tools=[
                 EndCallTool(
                     end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
                     delete_room=True,
-                    on_tool_called=lambda event: end_call_callback(self, event),
                 ),
-                update_record,
                 transfer_to_human,
             ],
         )
-        self._information_verified: bool = False
         self._found_profile: NotGivenOr[bool] = NOT_GIVEN
+        self._pending_name: str | None = None
 
         self._database = database
-        self._oai_client: OpenAI | None = None
-        self._vector_store = None
-        self._file = None
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -403,35 +453,37 @@ class HealthcareAgent(Agent):
 
     async def task_completed_callback(self, event, task_group):
         if event.task_id == "get_name_task":
-            patient_name = event.result.first_name + " " + event.result.last_name
-            existing_record = self._database.get_patient_by_name(patient_name)
-            if existing_record:
-                logger.info(f"Found existing patient profile for {patient_name}")
-                self._found_profile = True
-                self.session.userdata.profile = existing_record
-                chat_ctx = task_group.chat_ctx.copy()
-                chat_ctx.add_message(
-                    role="system",
-                    content=f"Alert the user that an existing patient record has been found. This birthday has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['date_of_birth']}",
-                )
-                await task_group.update_chat_ctx(chat_ctx)
-            elif not existing_record and self.session.userdata.profile:
+            self._pending_name = event.result.first_name + " " + event.result.last_name
+            if self.session.userdata.profile:
                 # in the case that the user creates a new profile or restarts, the recorded session profile is cleared
                 self.session.userdata.profile = {}
+                self._found_profile = NOT_GIVEN
 
         # each profile field is injected into the taskgroup context before the respective task is executed
-        if event.task_id == "get_dob_task" and self._found_profile:
-            chat_ctx = task_group.chat_ctx.copy()
-            chat_ctx.add_message(
-                role="system",
-                content=f"This phone number has been found linked to the existing profile, confirm it with the user: {self.session.userdata.profile['phone_number']}",
+        if event.task_id == "get_dob_task":
+            existing_record = self._database.get_patient_by_name_and_dob(
+                self._pending_name, event.result.date_of_birth
             )
-            await task_group.update_chat_ctx(chat_ctx)
+            if existing_record:
+                logger.info(f"Found existing patient profile for {self._pending_name}")
+                self._found_profile = True
+                self.session.userdata.profile = existing_record
+            if self._found_profile:
+                chat_ctx = task_group.chat_ctx.copy()
+                logger.info(
+                    f"Found phone number on file: {self.session.userdata.profile['phone_number']}"
+                )
+                chat_ctx.add_message(
+                    role="system",
+                    content=f"An existing patient record has been found. The phone number on file is {self.session.userdata.profile['phone_number']}. Call 'update_phone_number' with this value.",
+                )
+                await task_group.update_chat_ctx(chat_ctx)
         if event.task_id == "get_phone_number_task" and self._found_profile:
             chat_ctx = task_group.chat_ctx.copy()
+            logger.info(f"Found insurance on file: {self.session.userdata.profile['insurance']}")
             chat_ctx.add_message(
                 role="system",
-                content=f"This insurance has been found linked to the existing file, confirm it with the user: {self.session.userdata.profile['insurance']}",
+                content=f"The insurance on file is {self.session.userdata.profile['insurance']}. Call 'record_health_insurance' with this value.",
             )
             await task_group.update_chat_ctx(chat_ctx)
 
@@ -446,20 +498,20 @@ class HealthcareAgent(Agent):
             )
 
             task_group.add(
-                lambda: GetNameTask(last_name=True),
+                lambda: GetNameTask(
+                    last_name=True,
+                ),
                 id="get_name_task",
                 description="Gathers the user's name",
             )
             task_group.add(
-                lambda: GetDOBTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
-                ),
+                lambda: GetDOBTask(),
                 id="get_dob_task",
                 description="Gathers the user's date of birth",
             )
             task_group.add(
                 lambda: GetPhoneNumberTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN
+                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
                 ),
                 id="get_phone_number_task",
                 description="Gathers the user's phone number",
@@ -487,11 +539,15 @@ class HealthcareAgent(Agent):
                 self.session.userdata.profile = profile
                 self._database.add_patient_record(info=profile)
 
+            current_tools = [t for t in self.tools if t.id != "update_record"]
+            current_tools.append(update_record)
+            await self.update_tools(current_tools)
+
     @function_tool()
     async def schedule_appointment(self):
         """Call to schedule an appointment for the user. Do not ask for any information in advance."""
         await self.profile_authenticator()
-        result = await ScheduleAppointmentTask()
+        result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
 
         appointment = {
             "doctor_name": result.doctor_name,
@@ -504,7 +560,7 @@ class HealthcareAgent(Agent):
         )
 
         return "The appointment has been made, ask the user if they need assistance with anything else."
-    
+
     @function_tool()
     async def modify_appointment(
         self,
@@ -516,10 +572,10 @@ class HealthcareAgent(Agent):
             ),
         ],
     ):
-        """Call if the user requests to reschedule or cancel an existing appointment"""
+        """Call if the user requests to reschedule or cancel an existing appointment. Do not ask for any information in advance."""
         await self.profile_authenticator()
 
-        result = await ModifyAppointmentTask(function=function)
+        result = await ModifyAppointmentTask(function=function, chat_ctx=self.chat_ctx)
         confirmation_message = (
             f"Inform the user that the old appointment ({result.old_appointment}) has been canceled"
         )
@@ -542,24 +598,31 @@ class HealthcareAgent(Agent):
         """Call if the user wishes to see their latest lab results"""
         await self.profile_authenticator()
 
-        if not os.path.isfile("mock_checkup_report.pdf"):
-            logger.warning(
-                "To try out this task, 'mock_checkup_report.pdf' must be in the current directory."
+        userdata = self.session.userdata
+        if userdata.oai_client is None:
+            pdf_path = os.path.join(os.path.dirname(__file__), "mock_checkup_report.pdf")
+            if not os.path.isfile(pdf_path):
+                logger.warning(
+                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as healthcare_agent.py."
+                )
+                return "No report was found"
+            await self.session.generate_reply(
+                instructions="Inform the user you are fetching their report."
             )
-            return
-        await self.session.generate_reply(instructions="Inform the user you are fetching their report.")
-        self._oai_client = OpenAI()
-        self._vector_store = self._oai_client.vector_stores.create(name="lab_reports")
-        with open("mock_checkup_report.pdf", "rb") as f:
-            self._file = self._oai_client.files.create(file=f, purpose="assistants")
-        self._oai_client.vector_stores.files.create(
-            vector_store_id=self._vector_store.id, file_id=self._file.id
-        )
+            userdata.oai_client = AsyncOpenAI()
+            vector_store = await userdata.oai_client.vector_stores.create(name="lab_reports")
+            userdata.vector_store_id = vector_store.id
+            with open(pdf_path, "rb") as f:
+                file = await userdata.oai_client.files.create(file=f, purpose="assistants")
+            userdata.file_id = file.id
+            await userdata.oai_client.vector_stores.files.create_and_poll(
+                vector_store_id=userdata.vector_store_id, file_id=userdata.file_id
+            )
 
-        filesearch_tool = openai.tools.FileSearch(vector_store_ids=[self._vector_store.id])
-        current_tools = self.tools
-        current_tools.append(filesearch_tool)
-        await self.update_tools(current_tools)
+            filesearch_tool = openai.tools.FileSearch(vector_store_ids=[userdata.vector_store_id])
+            current_tools = [t for t in self.tools if not isinstance(t, openai.tools.FileSearch)]
+            current_tools.append(filesearch_tool)
+            await self.update_tools(current_tools)
         await self.session.generate_reply(
             instructions="You now are able to access the user's report, invite any queries regarding it. Keep descriptions short and succinct unless requested otherwise."
         )
@@ -589,7 +652,7 @@ class HealthcareAgent(Agent):
 
     def _build_payment_proceeds_tool(self) -> FunctionTool:
         @function_tool()
-        async def confirm_payment_proceeds(amount: float) -> None:
+        async def confirm_payment_proceeds(amount: float) -> str | None:
             """Call to proceed with payment steps regarding the user's bill.
 
             Args:
@@ -607,10 +670,15 @@ class HealthcareAgent(Agent):
 
             last_four_digits = str(result.card_number)[-4:]
             remaining = self._database.apply_payment(name, amount)
+            logger.info(
+                f"Payment of ${amount} confirmed for {name}, card ending in {last_four_digits}, remaining balance: ${remaining}"
+            )
 
+            await self.session.generate_reply(
+                instructions=f"Inform the user that the payment method ending in {last_four_digits} has been successfully charged ${amount}. Remaining balance: ${remaining}."
+            )
             current_tools = [t for t in self.tools if t.id != "confirm_payment_proceeds"]
             await self.update_tools(current_tools)
-            return f"The payment method ending in {last_four_digits} has been successfully charged ${amount}. Remaining balance: ${remaining}."
 
         return confirm_payment_proceeds
 
@@ -621,13 +689,32 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     db = FakeDatabase()
+    userdata = UserData(database=db, profile=None)
     session = AgentSession(
-        userdata=UserData(database=db, profile=None),
-        stt=deepgram.STT(),
+        userdata=userdata,
+        stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=openai.responses.LLM(model="gpt-4.1"),
-        tts=deepgram.TTS(),
+        tts=inference.TTS("inworld/inworld-tts-1"),
         vad=silero.VAD.load(),
+        preemptive_generation=True,
     )
+
+    async def on_session_close() -> None:
+        if userdata.oai_client is None:
+            return
+        try:
+            if userdata.vector_store_id is not None:
+                await userdata.oai_client.vector_stores.delete(userdata.vector_store_id)
+        except Exception:
+            logger.exception("failed to delete vector store")
+        try:
+            if userdata.file_id is not None:
+                await userdata.oai_client.files.delete(userdata.file_id)
+        except Exception:
+            logger.exception("failed to delete file")
+        await userdata.oai_client.close()
+
+    ctx.add_shutdown_callback(on_session_close)
 
     await session.start(
         agent=HealthcareAgent(database=db),

@@ -34,7 +34,7 @@ class AvailabilityChangedEvent:
 @dataclass
 class _STTStatus:
     available: bool
-    recovering_synthesize_task: asyncio.Task[None] | None
+    recovering_recognize_task: asyncio.Task[None] | None
     recovering_stream_task: asyncio.Task[None] | None
 
 
@@ -84,7 +84,7 @@ class FallbackAdapter(
         self._status: list[_STTStatus] = [
             _STTStatus(
                 available=True,
-                recovering_synthesize_task=None,
+                recovering_recognize_task=None,
                 recovering_stream_task=None,
             )
             for _ in self._stt_instances
@@ -171,8 +171,8 @@ class FallbackAdapter(
     ) -> None:
         stt_status = self._status[self._stt_instances.index(stt)]
         if (
-            stt_status.recovering_synthesize_task is None
-            or stt_status.recovering_synthesize_task.done()
+            stt_status.recovering_recognize_task is None
+            or stt_status.recovering_recognize_task.done()
         ):
 
             async def _recover_stt_task(stt: STT) -> None:
@@ -192,9 +192,10 @@ class FallbackAdapter(
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
                 except Exception:
+                    logger.debug(f"{stt.label} recovery attempt failed", exc_info=True)
                     return
 
-            stt_status.recovering_synthesize_task = asyncio.create_task(_recover_stt_task(stt))
+            stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
 
     async def _recognize_impl(
         self,
@@ -253,8 +254,8 @@ class FallbackAdapter(
 
     async def aclose(self) -> None:
         for stt_status in self._status:
-            if stt_status.recovering_synthesize_task is not None:
-                await aio.cancel_and_wait(stt_status.recovering_synthesize_task)
+            if stt_status.recovering_recognize_task is not None:
+                await aio.cancel_and_wait(stt_status.recovering_recognize_task)
 
             if stt_status.recovering_stream_task is not None:
                 await aio.cancel_and_wait(stt_status.recovering_stream_task)
@@ -291,22 +292,25 @@ class FallbackRecognizeStream(RecognizeStream):
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
-                try:
-                    for stream in self._recovering_streams:
+                for stream in list(self._recovering_streams):
+                    try:
                         if isinstance(data, rtc.AudioFrame):
                             stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             stream.flush()
+                    except Exception:
+                        pass
 
-                    if main_stream is not None:
+                if main_stream is not None:
+                    try:
                         if isinstance(data, rtc.AudioFrame):
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
-                except RuntimeError:
-                    pass
-                except Exception:
-                    logger.exception("error happened in forwarding input", extra={"streamed": True})
+                    except Exception:
+                        logger.exception(
+                            "error happened in forwarding input", extra={"streamed": True}
+                        )
 
             if main_stream is not None:
                 with contextlib.suppress(RuntimeError):
@@ -394,7 +398,7 @@ class FallbackRecognizeStream(RecognizeStream):
                     nb_transcript = 0
                     async with stream:
                         async for ev in stream:
-                            if ev.type in SpeechEventType.FINAL_TRANSCRIPT:
+                            if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
                                 if not ev.alternatives or not ev.alternatives[0].text:
                                     continue
 
@@ -405,7 +409,7 @@ class FallbackRecognizeStream(RecognizeStream):
                         return
 
                     stt_status.available = True
-                    logger.info(f"tts.FallbackAdapter, {stt.label} recovered")
+                    logger.info(f"stt.FallbackAdapter, {stt.label} recovered")
                     self._fallback_adapter.emit(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),

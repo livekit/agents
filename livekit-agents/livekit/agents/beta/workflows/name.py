@@ -32,7 +32,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: list[llm.Tool | llm.Toolset] | None = None,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -73,7 +73,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         super().__init__(
             instructions=(
                 f"You are only a single step in a broader system, responsible solely for capturing the user's name.\n"
-                f"You need to collect the name parts in this order: {self._name_format}.\n"
+                f"You need to naturally collect the name parts in this order: {self._name_format}.\n"
                 "Handle input as noisy voice transcription. Expect that users will say names aloud and may:\n"
                 "- Say their name followed by spelling: e.g., 'Michael m i c h a e l'\n"
                 "- Use phonetic alphabet: e.g., 'Mike as in Mike India Charlie Hotel Alpha Echo Lima'\n"
@@ -97,12 +97,13 @@ class GetNameTask(AgentTask[GetNameResult]):
                 )
                 + "If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.\n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
+                "Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.\n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools,
+            tools=tools or [],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -116,7 +117,7 @@ class GetNameTask(AgentTask[GetNameResult]):
 
     async def on_enter(self) -> None:
         self.session.generate_reply(
-            instructions=f"Ask the user to provide their name in this format: {self._name_format}."
+            instructions=f"Ask the user for their name, follow this order '{self._name_format}' but do not mention the format."
         )
 
     @function_tool()
