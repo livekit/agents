@@ -115,6 +115,7 @@ ultravox = ["livekit-plugins-ultravox>=1.5.0.rc1"]
 upliftai = ["livekit-plugins-upliftai>=1.5.0.rc1"]
 gradium = ["livekit-plugins-gradium>=1.5.0.rc1"]
 xai = ["livekit-plugins-xai>=1.5.0.rc1"]
+phonic = ["livekit-plugins-phonic>=1.4.4"]
 
 
 [project.urls]
