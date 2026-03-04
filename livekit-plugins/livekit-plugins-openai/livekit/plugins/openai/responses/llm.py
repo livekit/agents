@@ -116,12 +116,10 @@ class _ResponsesWebsocket:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    close_code = raw_msg.data if isinstance(raw_msg.data, int) else -1
-                    close_reason = raw_msg.extra or "connection closed unexpectedly"
                     raise APIStatusError(
-                        f"OpenAI Responses WebSocket closed: {close_reason}",
-                        status_code=close_code,
-                        retryable=False,
+                        "OpenAI Responses WebSocket connection closed unexpectedly",
+                        status_code=raw_msg.data or -1,
+                        body=f"{raw_msg.data=} {raw_msg.extra=}",
                     )
                 if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
