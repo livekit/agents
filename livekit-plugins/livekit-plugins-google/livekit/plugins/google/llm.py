@@ -308,7 +308,7 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
@@ -334,7 +334,7 @@ class LLM(llm.LLM):
 
             # Extract both parameters
             _budget = None
-            _level = None
+            _level: str | types.ThinkingLevel | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
@@ -468,9 +468,6 @@ class LLMStream(llm.LLMStream):
 
                 candidate = response.candidates[0]
 
-                if not candidate.content or not candidate.content.parts:
-                    continue
-
                 if candidate.finish_reason is not None:
                     finish_reason = candidate.finish_reason
                     if candidate.finish_reason in BLOCKED_REASONS:
@@ -479,6 +476,9 @@ class LLMStream(llm.LLMStream):
                             retryable=False,
                             request_id=request_id,
                         )
+
+                if not candidate.content or not candidate.content.parts:
+                    continue
 
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
@@ -515,7 +515,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=False if e.code != 429 else True,
+                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
@@ -533,6 +533,8 @@ class LLMStream(llm.LLMStream):
                 request_id=request_id,
                 retryable=retryable,
             ) from e
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"gemini llm: error generating content {str(e)}",

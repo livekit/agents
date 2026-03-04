@@ -343,7 +343,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("Resemble connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Resemble connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("Unexpected Resemble message type %s", msg.type)

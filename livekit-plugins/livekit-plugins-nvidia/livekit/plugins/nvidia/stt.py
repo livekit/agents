@@ -12,6 +12,7 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    LanguageCode,
     stt,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
@@ -28,7 +29,7 @@ class STTOptions:
     model: str
     function_id: str
     punctuate: bool
-    language_code: str
+    language_code: LanguageCode
     sample_rate: int
     use_ssl: bool
     server: str
@@ -68,14 +69,14 @@ class STT(stt.STT):
 
         logger.info(f"Initializing NVIDIA STT with model: {model}, server: {server}")
         logger.debug(
-            f"Function ID: {function_id}, Language: {language_code}, Sample rate: {sample_rate}"
+            f"Function ID: {function_id}, LanguageCode: {language_code}, Sample rate: {sample_rate}"
         )
 
         self._opts = STTOptions(
             model=model,
             function_id=function_id,
             punctuate=punctuate,
-            language_code=language_code,
+            language_code=LanguageCode(language_code),
             sample_rate=sample_rate,
             server=server,
             use_ssl=use_ssl,
@@ -96,7 +97,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        effective_language = language if is_given(language) else self._opts.language_code
+        effective_language = (
+            LanguageCode(language) if is_given(language) else self._opts.language_code
+        )
         return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
 
     def log_asr_models(self, asr_service: riva.client.ASRService) -> dict:
@@ -280,7 +283,7 @@ class SpeechStream(stt.SpeechStream):
             end_time = getattr(words[-1], "end_time", 0) / 1000.0 + self.start_time_offset
 
         return stt.SpeechData(
-            language=self._language,
+            language=LanguageCode(self._language),
             start_time=start_time,
             end_time=end_time,
             confidence=confidence,

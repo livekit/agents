@@ -85,7 +85,10 @@ async def test_slot_scheduling() -> None:
             .judge(llm, intent="must ask for the email address")
         )
 
-        result = await sess.run(user_input="My email address is theo@livekit.io")
+        result = await sess.run(
+            user_input="My email address is theo@livekit.io",
+            input_modality="audio",  # simulate audio input
+        )
         result.expect.next_event().is_function_call(
             name="update_email_address", arguments={"email": "theo@livekit.io"}
         )

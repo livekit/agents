@@ -231,6 +231,9 @@ class LLMStream(llm.LLMStream):
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
                         f"aws bedrock llm: error generating content: {response}",
+                        status_code=response["ResponseMetadata"]["HTTPStatusCode"],
+                        # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
+                        # body=response,
                         retryable=False,
                         request_id=request_id,
                     )

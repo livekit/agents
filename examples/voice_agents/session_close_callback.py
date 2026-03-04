@@ -21,9 +21,9 @@ class MyAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant.",
-            stt="assemblyai/universal-streaming",
+            stt="deepgram/nova-3:en",
             llm="openai/gpt-4.1-mini",
-            tts="cartesia/sonic-3",
+            tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
             # llm=google.realtime.RealtimeModel(),
             tools=[
                 EndCallTool(
@@ -55,7 +55,8 @@ async def entrypoint(ctx: JobContext):
         print("Chat History:")
         for item in session.history.items:
             if item.type == "message":
-                text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
+                content = item.text_content.replace("\n", "\\n")
+                text = f"{item.role}: {content}"
                 if item.interrupted:
                     text += " (interrupted)"
 

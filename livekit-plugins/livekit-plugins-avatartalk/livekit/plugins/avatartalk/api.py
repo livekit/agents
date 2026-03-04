@@ -24,7 +24,10 @@ class AvatarTalkAPI:
         self._api_url = api_url or DEFAULT_API_URL
         avatartalk_api_key = api_key or os.getenv("AVATARTALK_API_KEY")
         if avatartalk_api_key is None:
-            raise AvatarTalkException("AVATARTALK_API_KEY must be set")
+            raise AvatarTalkException(
+                "AvatarTalk API key is required, either as argument or set"
+                " AVATARTALK_API_KEY environment variable"
+            )
 
         self._api_key = avatartalk_api_key
         self._headers = {"Authorization": f"Bearer {self._api_key}"}

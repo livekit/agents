@@ -31,7 +31,14 @@ except ImportError as err:
         "Install with: pip install azure-cognitiveservices-speech"
     ) from err
 
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    LanguageCode,
+    tts,
+    utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -130,7 +137,7 @@ class _TTSOptions:
     subscription_key: str | None
     region: str | None
     voice: str
-    language: str | None
+    language: LanguageCode | None
     speech_endpoint: str | None
     deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
@@ -225,7 +232,7 @@ class TTS(tts.TTS):
             speech_endpoint=speech_endpoint,
             voice=voice,
             deployment_id=deployment_id,
-            language=language,
+            language=LanguageCode(language) if language else None,
             prosody=prosody,
             style=style,
             lexicon_uri=lexicon_uri,
@@ -266,7 +273,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(prosody):
             prosody.validate()
             self._opts.prosody = prosody

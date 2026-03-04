@@ -126,7 +126,7 @@ class TestNormalizeFallback:
         ]
 
     def test_string_with_language_suffix_discards_language(self):
-        """Language suffix in string model is discarded."""
+        """LanguageCode suffix in string model is discarded."""
         result = _normalize_fallback("deepgram/nova-3:en")
         assert result == [{"model": "deepgram/nova-3"}]
 
@@ -226,7 +226,7 @@ class TestSTTConstructorFallbackAndConnectOptions:
         ]
 
     def test_fallback_string_with_language_discarded(self):
-        """Language suffix in fallback string is discarded."""
+        """LanguageCode suffix in fallback string is discarded."""
         stt = _make_stt(fallback="deepgram/nova-3:en")
         assert stt._opts.fallback == [{"model": "deepgram/nova-3"}]
 

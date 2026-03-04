@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIError
+from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
@@ -65,7 +65,7 @@ TEvent = TypeVar("TEvent")
 
 class TTS(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(
@@ -292,6 +292,10 @@ class ChunkedStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
@@ -299,8 +303,7 @@ class ChunkedStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
                         extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
                     )
 
@@ -408,7 +411,7 @@ class SynthesizeStream(ABC):
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
@@ -471,6 +474,10 @@ class SynthesizeStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
@@ -478,8 +485,7 @@ class SynthesizeStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
                         extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
                     )
 
@@ -720,13 +726,11 @@ class AudioEmitter:
         from ..voice.io import TimedString
 
         self._write_ch = aio.Chan[
-            Union[
-                bytes,
-                AudioEmitter._FlushSegment,
-                AudioEmitter._StartSegment,
-                AudioEmitter._EndSegment,
-                TimedString,
-            ]
+            bytes
+            | AudioEmitter._FlushSegment
+            | AudioEmitter._StartSegment
+            | AudioEmitter._EndSegment
+            | TimedString
         ]()
         self._main_atask = asyncio.create_task(self._main_task(), name="AudioEmitter._main_task")
 

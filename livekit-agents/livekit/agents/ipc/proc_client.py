@@ -4,9 +4,8 @@ import asyncio
 import contextlib
 import socket
 import sys
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from types import FrameType
-from typing import Callable
 
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
