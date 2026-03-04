@@ -129,7 +129,9 @@ class TTS(tts.TTS):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
-            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
+            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers.
+                Sentence tokenizer will be used to synthesize one sentence at a time.
+                Defaults to True unless ``chunk_length_schedule`` is provided.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
@@ -160,7 +162,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(auto_mode):
-            auto_mode = True
+            auto_mode = not is_given(chunk_length_schedule)
 
         if not is_given(word_tokenizer):
             word_tokenizer = (
@@ -497,6 +499,30 @@ class _TTSOptions:
     pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
 
 
+def _build_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
+    voice_settings = (
+        _strip_nones(dataclasses.asdict(opts.voice_settings)) if is_given(opts.voice_settings) else {}
+    )
+    init_pkt: dict[str, Any] = {
+        "text": " ",
+        "voice_settings": voice_settings,
+        "context_id": context_id,
+    }
+    if is_given(opts.chunk_length_schedule):
+        init_pkt["generation_config"] = {
+            "chunk_length_schedule": opts.chunk_length_schedule,
+        }
+    if is_given(opts.pronunciation_dictionary_locators):
+        init_pkt["pronunciation_dictionary_locators"] = [
+            {
+                "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                "version_id": locator.version_id,
+            }
+            for locator in opts.pronunciation_dictionary_locators
+        ]
+    return init_pkt
+
+
 @dataclass
 class _SynthesizeContent:
     context_id: str
@@ -595,24 +621,10 @@ class _Connection:
                     is_new_context = msg.context_id not in self._active_contexts
 
                     if is_new_context:
-                        voice_settings = (
-                            _strip_nones(dataclasses.asdict(self._opts.voice_settings))
-                            if is_given(self._opts.voice_settings)
-                            else {}
+                        init_pkt = _build_context_init_packet(
+                            self._opts,
+                            context_id=msg.context_id,
                         )
-                        init_pkt: dict[str, Any] = {
-                            "text": " ",
-                            "voice_settings": voice_settings,
-                            "context_id": msg.context_id,
-                        }
-                        if is_given(self._opts.pronunciation_dictionary_locators):
-                            init_pkt["pronunciation_dictionary_locators"] = [
-                                {
-                                    "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
-                                    "version_id": locator.version_id,
-                                }
-                                for locator in self._opts.pronunciation_dictionary_locators
-                            ]
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
