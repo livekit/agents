@@ -1453,8 +1453,8 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
 
-            if self._session._closing:
-                # add user input to chat context
+            if self._session._closing and info.new_transcript:
+                # add user input to chat context and skip blank messages
                 user_message = llm.ChatMessage(
                     role="user",
                     content=[info.new_transcript],

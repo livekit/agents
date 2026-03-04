@@ -527,7 +527,9 @@ class AudioRecognition:
             return
 
         chat_ctx = chat_ctx.copy()
-        chat_ctx.add_message(role="user", content=self._audio_transcript)
+        if self._audio_transcript:
+            # only append when we have a transcript so we don't inject blank user messages
+            chat_ctx.add_message(role="user", content=self._audio_transcript)
         turn_detector = (
             self._turn_detector
             if self._audio_transcript and self._turn_detection_mode != "manual"
