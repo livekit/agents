@@ -501,7 +501,9 @@ class _TTSOptions:
 
 def _build_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
     voice_settings = (
-        _strip_nones(dataclasses.asdict(opts.voice_settings)) if is_given(opts.voice_settings) else {}
+        _strip_nones(dataclasses.asdict(opts.voice_settings))
+        if is_given(opts.voice_settings)
+        else {}
     )
     init_pkt: dict[str, Any] = {
         "text": " ",
