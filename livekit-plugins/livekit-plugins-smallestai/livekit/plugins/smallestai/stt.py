@@ -399,7 +399,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if self._is_last_event.is_set():
                     closing_ws = True
-                    return
+                    continue
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
