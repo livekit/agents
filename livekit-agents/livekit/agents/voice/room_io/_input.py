@@ -54,6 +54,9 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._processor = processor
 
+    def _iter_processors(self) -> tuple[rtc.FrameProcessor[T], ...]:
+        return (self._processor,) if self._processor is not None else ()
+
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
 
@@ -165,8 +168,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._tasks.add(task)
             self._stream = None
             self._publication = None
-        if self._processor:
-            self._processor._close()
+        for processor in self._iter_processors():
+            processor._close()
 
     def _on_track_available(
         self,
@@ -184,14 +187,14 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
-        if self._processor:
-            self._processor._on_stream_info_updated(
+        for processor in self._iter_processors():
+            processor._on_stream_info_updated(
                 room_name=self._room.name,
                 participant_identity=participant.identity,
                 publication_sid=publication.sid,
             )
             if self._room._token is not None and self._room._server_url is not None:
-                self._processor._on_credentials_updated(
+                processor._on_credentials_updated(
                     token=self._room._token, url=self._room._server_url
                 )
         self._forward_atask = asyncio.create_task(
@@ -219,14 +222,10 @@ class _ParticipantInputStream(Generic[T], ABC):
                 return
 
     def _on_token_refreshed(self) -> None:
-        if (
-            self._processor is not None
-            and self._room._token is not None
-            and self._room._server_url is not None
-        ):
-            self._processor._on_credentials_updated(
-                token=self._room._token, url=self._room._server_url
-            )
+        if self._room._token is None or self._room._server_url is None:
+            return
+        for processor in self._iter_processors():
+            processor._on_credentials_updated(token=self._room._token, url=self._room._server_url)
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
@@ -240,6 +239,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         | NoiseCancellationSelector
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None,
+        post_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
@@ -261,7 +261,22 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._num_channels = num_channels
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
+        self._post_processor = post_processor
         self._pre_connect_audio_handler = pre_connect_audio_handler
+
+    @override
+    def _iter_processors(self) -> tuple[rtc.FrameProcessor[rtc.AudioFrame], ...]:
+        processors: list[rtc.FrameProcessor[rtc.AudioFrame]] = []
+        seen_ids: set[int] = set()
+        for processor in (self._processor, self._post_processor):
+            if processor is None:
+                continue
+            proc_id = id(processor)
+            if proc_id in seen_ids:
+                continue
+            seen_ids.add(proc_id)
+            processors.append(processor)
+        return tuple(processors)
 
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
@@ -323,7 +338,24 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
-        await super()._forward_task(old_task, stream, publication, participant)
+        # Inline the base _forward_task loop so we can apply self._post_processor to
+        # each live frame after the native FFI filter (e.g. Krisp BVCTelephony) has run.
+        extra = {
+            "participant": participant.identity,
+            "source": rtc.TrackSource.Name(publication.source),
+        }
+        logger.debug("start reading stream", extra=extra)
+        async for event in stream:
+            if not self._attached:
+                continue
+            frame = event.frame
+            if self._post_processor is not None and self._post_processor.enabled:
+                try:
+                    frame = self._post_processor._process(frame)
+                except Exception as e:
+                    logger.warning("error post-processing audio frame", exc_info=e)
+            await self._data_ch.send(frame)
+        logger.debug("stream closed", extra=extra)
 
         # push a silent frame to flush the stt final result if any
         silent_samples = int(self._sample_rate * 0.5)
@@ -360,15 +392,21 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         for frame in frames:
             if self._processor is not None:
                 try:
-                    yield self._processor._process(frame)
+                    frame = self._processor._process(frame)
                 except Exception as e:
                     logger.warning(
-                        "error pre-processing audio frame",
+                        "error applying NC processor to audio frame",
                         exc_info=e,
                     )
-                    yield frame
-            else:
-                yield frame
+            if self._post_processor is not None and self._post_processor.enabled:
+                try:
+                    frame = self._post_processor._process(frame)
+                except Exception as e:
+                    logger.warning(
+                        "error post-processing audio frame",
+                        exc_info=e,
+                    )
+            yield frame
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):

@@ -2,6 +2,7 @@ from livekit import rtc
 
 from . import aio, audio, codecs, http_context, http_server, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
+from .audio_processors import VolumeAmplifierProcessor
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
@@ -36,6 +37,7 @@ __all__ = [
     "wait_for_agent",
     "wait_for_participant",
     "wait_for_track_publication",
+    "VolumeAmplifierProcessor",
 ]
 
 # Cleanup docs of unexported modules
