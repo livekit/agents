@@ -39,7 +39,15 @@ class ValenceWebSocketClient:
     """WebSocket client for Valence AI streaming emotion detection API.
 
     This client maintains a persistent WebSocket connection to the Valence API
-    and processes audio chunks for real-time emotion detection.
+    and continuously streams audio for real-time emotion detection.
+
+    Supports two modes:
+    - **Continuous streaming** (preferred): Call `start_streaming()`, then
+      `send_audio_chunk()` for each frame. Predictions arrive asynchronously
+      and are stored with timestamps. Use `get_latest_emotion()` or
+      `get_emotion_for_timerange()` to retrieve predictions without blocking.
+    - **Batch** (legacy): Call `process_audio()` with a full audio buffer
+      and wait for the prediction synchronously.
 
     Args:
         api_key: Your Valence AI API key.
@@ -63,9 +71,18 @@ class ValenceWebSocketClient:
             "confidence": 0.0,
             "all_emotions": {},
         }
+        # Legacy batch mode support
         self._prediction_event: asyncio.Event | None = None
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 3
+
+        # Continuous streaming state
+        self._emotion_history: list[dict] = []
+        self._emotion_history_lock = asyncio.Lock()
+        self._streaming = False
+        self._total_audio_sent_ms: float = 0.0
+        self._chunks_sent: int = 0
+
         self._setup_handlers()
 
     @property
@@ -97,15 +114,51 @@ class ValenceWebSocketClient:
 
         @self._sio.on("prediction")
         async def on_prediction(prediction: dict) -> None:
-            self._latest_emotion = {
+            emotion_entry = {
                 "dominant": prediction.get("main_emotion", "neutral"),
                 "confidence": prediction.get("confidence", 0.0),
                 "all_emotions": prediction.get("all_predictions", {}),
+                "timestamp_ms": self._total_audio_sent_ms,
             }
+
+            # Update latest emotion for backward compat
+            self._latest_emotion = {
+                "dominant": emotion_entry["dominant"],
+                "confidence": emotion_entry["confidence"],
+                "all_emotions": emotion_entry["all_emotions"],
+            }
+
+            # Store in timestamped history for continuous streaming mode
+            async with self._emotion_history_lock:
+                self._emotion_history.append(emotion_entry)
+                # Cap at 20 entries (~100s of predictions at 5s intervals)
+                if len(self._emotion_history) > 20:
+                    self._emotion_history = self._emotion_history[-20:]
+
             logger.debug(
-                f"Emotion prediction: {self._latest_emotion['dominant']} "
-                f"({self._latest_emotion['confidence']:.1%})"
+                f"Emotion prediction at {self._total_audio_sent_ms:.0f}ms: "
+                f"{emotion_entry['dominant']} ({emotion_entry['confidence']:.1%})"
             )
+
+            # Log prediction gap for performance monitoring
+            if len(self._emotion_history) > 1:
+                prev = self._emotion_history[-2]
+                gap_ms = emotion_entry["timestamp_ms"] - prev["timestamp_ms"]
+                logger.info(
+                    f"[PERF] VALENCE | prediction_gap={gap_ms:.0f}ms "
+                    f"emotion={emotion_entry['dominant']} "
+                    f"confidence={emotion_entry['confidence']:.1%} "
+                    f"history_size={len(self._emotion_history)}"
+                )
+            else:
+                logger.info(
+                    f"[PERF] VALENCE | first_prediction "
+                    f"at_audio={emotion_entry['timestamp_ms']:.0f}ms "
+                    f"emotion={emotion_entry['dominant']} "
+                    f"confidence={emotion_entry['confidence']:.1%}"
+                )
+
+            # Wake up legacy batch waiters
             if self._prediction_event:
                 self._prediction_event.set()
 
@@ -158,13 +211,129 @@ class ValenceWebSocketClient:
             await self._sio.disconnect()
             logger.debug("Disconnected from Valence API")
 
+    # ── Continuous streaming mode ────────────────────────────────────────
+
+    async def start_streaming(self) -> None:
+        """Begin a continuous streaming session. Resets emotion history."""
+        self._emotion_history = []
+        self._streaming = True
+        self._total_audio_sent_ms = 0.0
+        self._chunks_sent = 0
+        logger.debug("Started continuous emotion streaming session")
+
+    async def stop_streaming(self) -> None:
+        """End the continuous streaming session."""
+        self._streaming = False
+        logger.debug("Stopped continuous emotion streaming session")
+
+    async def send_audio_chunk(
+        self,
+        audio_data: bytes,
+        sample_rate: int,
+        samples_per_channel: int,
+    ) -> None:
+        """Send a single audio chunk to Valence API without waiting for a response.
+
+        This should be called for every audio frame as it arrives, enabling
+        the server-side buffer to accumulate enough audio for predictions.
+
+        Args:
+            audio_data: Raw PCM audio bytes (int16).
+            sample_rate: Sample rate of the audio.
+            samples_per_channel: Number of samples per channel in this chunk.
+        """
+        if not self._sio.connected or not self._streaming:
+            return
+
+        try:
+            samples = np.frombuffer(audio_data, dtype=np.int16)
+            base64_audio = base64.b64encode(samples.tobytes()).decode("utf-8")
+
+            frame_duration_ms = (samples_per_channel / sample_rate) * 1000
+            self._total_audio_sent_ms += frame_duration_ms
+            self._chunks_sent += 1
+
+            message = {
+                "service": "emotion",
+                "action": "prediction",
+                "model": self._model,
+                "sample_rate": sample_rate,
+                "payload": base64_audio,
+            }
+
+            await self._sio.emit("message", json.dumps(message))
+
+            # Log streaming health every ~5s (250 frames at 20ms each)
+            if self._chunks_sent % 250 == 0:
+                logger.info(
+                    f"[PERF] VALENCE | streaming_active "
+                    f"chunks_sent={self._chunks_sent} "
+                    f"audio_sent={self._total_audio_sent_ms:.0f}ms"
+                )
+        except Exception as e:
+            logger.error(f"Error sending audio chunk: {e}")
+
+    async def get_latest_emotion(self) -> dict:
+        """Return the most recent emotion prediction without blocking.
+
+        Returns:
+            dict with 'dominant', 'confidence', and 'all_emotions' keys.
+        """
+        async with self._emotion_history_lock:
+            if self._emotion_history:
+                entry = self._emotion_history[-1]
+                return {
+                    "dominant": entry["dominant"],
+                    "confidence": entry["confidence"],
+                    "all_emotions": entry["all_emotions"],
+                }
+        return {"dominant": "neutral", "confidence": 0.0, "all_emotions": {}}
+
+    async def get_emotion_for_timerange(
+        self,
+        start_ms: float,
+        end_ms: float,
+    ) -> dict:
+        """Return the emotion prediction closest to a given audio time range.
+
+        Finds the prediction whose audio timestamp is closest to the midpoint
+        of the requested range. Falls back to the latest available prediction.
+
+        Args:
+            start_ms: Start of the time range in milliseconds.
+            end_ms: End of the time range in milliseconds.
+
+        Returns:
+            dict with 'dominant', 'confidence', and 'all_emotions' keys.
+        """
+        async with self._emotion_history_lock:
+            if not self._emotion_history:
+                return {"dominant": "neutral", "confidence": 0.0, "all_emotions": {}}
+
+            midpoint = (start_ms + end_ms) / 2.0
+            closest = min(
+                self._emotion_history,
+                key=lambda e: abs(e["timestamp_ms"] - midpoint),
+            )
+            return {
+                "dominant": closest["dominant"],
+                "confidence": closest["confidence"],
+                "all_emotions": closest["all_emotions"],
+            }
+
+    # ── Legacy batch mode ────────────────────────────────────────────────
+
     async def process_audio(
         self,
         audio_samples: np.ndarray,
         sample_rate: int = 48000,
-        timeout: float = 2.0,
+        timeout: float = 7.0,
     ) -> dict:
-        """Send audio samples to Valence API for emotion detection.
+        """Send audio samples to Valence API and wait for a prediction.
+
+        This is the legacy batch method. Prefer continuous streaming mode
+        (start_streaming / send_audio_chunk / get_latest_emotion) for
+        real-time use cases.
 
         Args:
             audio_samples: numpy array of int16 PCM audio samples.
