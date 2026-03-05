@@ -12,6 +12,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     tts,
 )
 from spitch import AsyncSpitch
@@ -23,7 +24,7 @@ MIME_TYPE = "audio/mpeg"
 
 @dataclass
 class _TTSOptions:
-    language: str
+    language: Language
     voice: str
 
 
@@ -33,7 +34,7 @@ class TTS(tts.TTS):
             capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24_000, num_channels=1
         )
 
-        self._opts = _TTSOptions(language=language, voice=voice)
+        self._opts = _TTSOptions(language=Language(language), voice=voice)
         self._client = AsyncSpitch()
 
     @property
@@ -76,7 +77,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         spitch_stream = self._client.speech.with_streaming_response.generate(
             text=self.input_text,
-            language=self._opts.language,  # type: ignore
+            language=self._opts.language.language,  # type: ignore
             voice=self._opts.voice,  # type: ignore
             format="mp3",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),

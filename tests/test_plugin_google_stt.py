@@ -2,6 +2,7 @@ from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
+from livekit.agents import Language
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.types import TimedString
 from livekit.plugins.google.stt import (
@@ -271,7 +272,7 @@ async def test_recognize_response_to_speech_event_words():
     assert result.type == SpeechEventType.FINAL_TRANSCRIPT
     assert result.alternatives == [
         SpeechData(
-            language="te-ST",
+            language=Language("te-ST"),
             start_time=0.0,
             end_time=1.0,
             text="test",
@@ -310,7 +311,7 @@ async def test_recognize_response_to_speech_event_words():
     assert result.type == SpeechEventType.FINAL_TRANSCRIPT
     assert result.alternatives == [
         SpeechData(
-            language="te-ST",
+            language=Language("te-ST"),
             start_time=0.0,
             end_time=1.0,
             text="test",

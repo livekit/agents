@@ -9,6 +9,7 @@ import numpy as np
 from livekit import rtc
 
 from .. import utils
+from ..language import Language
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.audio import AudioByteStream
@@ -118,7 +119,7 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
                     self._event_ch.send_nowait(
                         SpeechEvent(
                             type=SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[SpeechData(language="", text="")],
+                            alternatives=[SpeechData(language=Language(""), text="")],
                         )
                     )
 

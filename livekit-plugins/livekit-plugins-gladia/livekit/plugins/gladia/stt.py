@@ -36,6 +36,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     NotGivenOr,
     stt,
     utils,
@@ -505,7 +506,9 @@ class STT(stt.STT):
             if text:
                 alternatives.append(
                     stt.SpeechData(
-                        language=utterance.get("language", languages[0] if languages else "en"),
+                        language=Language(
+                            utterance.get("language", languages[0] if languages else "en")
+                        ),
                         start_time=utterance.get("start", 0),
                         end_time=utterance.get("end", 0),
                         confidence=utterance.get("confidence", 1.0),
@@ -524,7 +527,7 @@ class STT(stt.STT):
         if not alternatives:
             alternatives.append(
                 stt.SpeechData(
-                    language=languages[0] if languages and len(languages) > 0 else "en",
+                    language=Language(languages[0] if languages and len(languages) > 0 else "en"),
                     start_time=0,
                     end_time=0,
                     confidence=1.0,
@@ -1023,11 +1026,13 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             if text:
-                language = utterance.get(
-                    "language",
-                    self._opts.language_config.languages[0]
-                    if self._opts.language_config.languages
-                    else "en",
+                language = Language(
+                    utterance.get(
+                        "language",
+                        self._opts.language_config.languages[0]
+                        if self._opts.language_config.languages
+                        else "en",
+                    )
                 )
 
                 speech_data = stt.SpeechData(
@@ -1103,7 +1108,7 @@ class SpeechStream(stt.SpeechStream):
                 if translated_text and language:
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
-                        language=language,  # Use the target language
+                        language=Language(language),  # Use the target language
                         start_time=translated_utterance.get("start", 0) + self.start_time_offset,
                         end_time=translated_utterance.get("end", 0) + self.start_time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),

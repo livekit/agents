@@ -29,6 +29,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    Language,
     stt,
     utils,
 )
@@ -50,7 +51,7 @@ _IDLE_CHECK_INTERVAL = 1.0
 @dataclass
 class _STTOptions:
     model_name: str = "sommers_ko"  # sommers_ko: "ko", sommers_ja: "ja"
-    language: str = "ko"  # ko, ja, en
+    language: Language = Language("ko")  # ko, ja, en
     sample_rate: int = DEFAULT_SAMPLE_RATE
     encoding: str = "LINEAR16"  # or "OGG_OPUS" in future
     domain: str = "CALL"  # CALL, MEETING
@@ -99,7 +100,7 @@ class STT(stt.STT):
 
         self._params = _STTOptions(
             model_name=model,
-            language=language,
+            language=Language(language),
             sample_rate=sample_rate,
             domain=domain,
             epd_time=epd_time,
