@@ -70,7 +70,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         *,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         trunk_config: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
-        sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
+        sip_trunk_id: NotGivenOr[str | None] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_instructions: str = "",
@@ -105,9 +105,11 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._target_phone_number = target_phone_number
         self._trunk_config = trunk_config if is_given(trunk_config) else None
         self._sip_trunk_id = (
-            sip_trunk_id if is_given(sip_trunk_id) else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+            sip_trunk_id
+            if is_given(sip_trunk_id)
+            else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         )
-        if not self._sip_trunk_id and not self._trunk_config:
+        if self._sip_trunk_id is None and self._trunk_config is None:
             raise ValueError(
                 "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `trunk_config` must be set"
             )
@@ -312,7 +314,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             sip_number=self._sip_number or None,
             headers=self._sip_headers,
         )
-        if self._trunk_config:
+        if self._trunk_config is not None:
             sip_request.trunk.CopyFrom(self._trunk_config)
         await job_ctx.api.sip.create_sip_participant(sip_request)
 
