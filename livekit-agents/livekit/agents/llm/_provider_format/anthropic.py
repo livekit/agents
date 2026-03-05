@@ -16,7 +16,10 @@ class AnthropicFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -89,6 +92,11 @@ def to_chat_ctx(
                 "content": [{"text": "(empty)", "type": "text"}],
             },
         )
+
+    # Claude 4.6+ does not support prefilling (trailing assistant messages).
+    # Append a dummy user message so the request ends with a user turn.
+    if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+        messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
 

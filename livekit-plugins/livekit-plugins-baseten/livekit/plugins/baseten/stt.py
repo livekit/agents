@@ -62,6 +62,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -121,6 +122,7 @@ class STTOptions:
     vad_threshold: float = 0.5
     vad_min_silence_duration_ms: int = 300
     vad_speech_pad_ms: int = 30
+    language: LanguageCode = LanguageCode("en")
 
 
 class STT(stt.STT):
@@ -245,6 +247,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
+            language=LanguageCode(language),
         )
 
         if is_given(encoding):
@@ -310,7 +313,7 @@ class STT(stt.STT):
         if is_given(vad_speech_pad_ms):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -368,7 +371,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(vad_speech_pad_ms):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -496,7 +499,7 @@ class SpeechStream(stt.SpeechStream):
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
                                     stt.SpeechData(
-                                        language="",
+                                        language=LanguageCode(""),
                                         text=text,
                                         confidence=confidence,
                                         start_time=start_time,
@@ -507,8 +510,8 @@ class SpeechStream(stt.SpeechStream):
                             )
                             self._event_ch.send_nowait(event)
 
-                    else:
-                        language = data.get("language_code", self._opts.language)
+                    elif is_final:
+                        language = LanguageCode(data.get("language_code", self._opts.language))
 
                         if text:
                             event = stt.SpeechEvent(

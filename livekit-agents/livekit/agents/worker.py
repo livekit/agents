@@ -705,7 +705,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
-                    telemetry.metrics._update_child_proc_count()
+                    if self._prometheus_multiproc_dir:
+                        await asyncio.get_event_loop().run_in_executor(
+                            None, telemetry.metrics._update_child_proc_count
+                        )
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
@@ -858,14 +861,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not fake_job:
                     raise ValueError("room_info is None but fake_job is False")
 
-                room_info = models.Room(sid=utils.shortuuid("FAKE_RM_"), name=room)
+                room_info = models.Room(sid=utils.shortuuid("SRM_"), name=room)
 
             # room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
 
             job = agent.Job(
-                id=utils.shortuuid("simulated-job-")
-                if not fake_job
-                else utils.shortuuid("fake-job-"),
+                id=utils.shortuuid("job-") if not fake_job else utils.shortuuid("mock-job-"),
                 room=room_info,
                 type=agent.JobType.JT_ROOM,
                 participant=None,
