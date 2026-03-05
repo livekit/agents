@@ -55,7 +55,7 @@ from .log import logger
 EmotionModel = Literal["4emotions", "7emotions"]
 
 # Sentence boundary pattern - splits on . ! ? followed by space or end
-SENTENCE_PATTERN = re.compile(r'([.!?]+)(?:\s+|$)')
+SENTENCE_PATTERN = re.compile(r"([.!?]+)(?:\s+|$)")
 
 
 class STT(stt.STT):
@@ -274,9 +274,7 @@ class STT(stt.STT):
 
             if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
                 try:
-                    emotions = await self._valence_client.process_audio(
-                        audio_segment, sample_rate
-                    )
+                    emotions = await self._valence_client.process_audio(audio_segment, sample_rate)
                     emotion = emotions.get("dominant", "neutral")
                     confidence = emotions.get("confidence", 0.0)
 
@@ -317,7 +315,7 @@ def split_into_sentences(text: str) -> list[str]:
     sentences = []
     current = ""
 
-    for i, part in enumerate(parts):
+    for _i, part in enumerate(parts):
         if not part:
             continue
         # Check if this part is punctuation
@@ -423,9 +421,7 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
             async for event in underlying_stream:
                 if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                     # Enrich with the latest available emotion (non-blocking)
-                    enriched_event = await self._enrich_final_transcript(
-                        event, valence_client
-                    )
+                    enriched_event = await self._enrich_final_transcript(event, valence_client)
                     self._event_ch.send_nowait(enriched_event)
                     self._last_final_transcript_ms = self._current_audio_position_ms
                 elif event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -462,9 +458,7 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         new_alternatives = []
         for alt in event.alternatives:
             if alt.text.strip():
-                enriched_text = await self._enrich_text(
-                    alt.text, valence_client
-                )
+                enriched_text = await self._enrich_text(alt.text, valence_client)
                 logger.debug(f"Enriched: '{alt.text[:50]}' -> '{enriched_text[:80]}'")
                 new_alternatives.append(
                     stt.SpeechData(
@@ -481,7 +475,11 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                 new_alternatives.append(alt)
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        history_len = len(valence_client._emotion_history) if hasattr(valence_client, '_emotion_history') else 0
+        history_len = (
+            len(valence_client._emotion_history)
+            if hasattr(valence_client, "_emotion_history")
+            else 0
+        )
         logger.info(
             f"[PERF] EMOTION | enrichment={elapsed_ms:.1f}ms "
             f"predictions_available={history_len} "
