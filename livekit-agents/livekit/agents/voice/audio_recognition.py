@@ -69,7 +69,8 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+TurnDetectionType = Literal["stt", "vad", "realtime_llm", "manual"]
+TurnDetectionMode = TurnDetectionType | _TurnDetector
 """
 The mode of turn detection to use.
 
@@ -121,7 +122,9 @@ class AudioRecognition:
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
-        self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
+        self._turn_detection_mode: TurnDetectionType | None = (
+            turn_detection if isinstance(turn_detection, str) else None
+        )
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
@@ -521,14 +524,22 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
+    def _eou_requires_transcript(self) -> bool:
+        # while we aren't checking _turn_detector here,
+        #   _turn_detector and _turn_detection_mode are mutually exclusive (such that if one is provided, the other must be None)
+        # e.g. if _turn_detector is provided, _turn_detection_mode is None, and vice versa
+        match self._turn_detection_mode:
+            case "stt" | "realtime_llm" | None:
+                return True
+            case "manual" | "vad":
+                return False
+            case _:
+                # If not specified then we assume it requires transcript
+                return True
+
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
-        if self._stt and not self._audio_transcript:
-            if self._turn_detection_mode == "stt":
-                # stt enabled but no transcript yet
-                return
-            if self._turn_detector is not None:
-                # a turn detector like (MultilingualModel) is provided but no transcript yet
-                return
+        if self._stt and not self._audio_transcript and self._eou_requires_transcript():
+            return
 
         chat_ctx = chat_ctx.copy()
         if self._audio_transcript != "":
