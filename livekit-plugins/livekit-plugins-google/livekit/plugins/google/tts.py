@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
@@ -313,7 +312,7 @@ class ChunkedStream(tts.ChunkedStream):
         else:
             max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES
 
-        return _split_text_by_bytes(self._input_text, max_bytes)
+        return _split_text_by_bytes(self._input_text, max_bytes, self._opts.tokenizer)
 
     def _build_synthesis_input(self, text: str) -> texttospeech.SynthesisInput:
         if self._opts.use_markup:
@@ -504,25 +503,27 @@ def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
         raise RuntimeError(f"encoding {encoding} isn't supported")
 
 
-def _split_text_by_bytes(text: str, max_bytes: int) -> list[str]:
+def _split_text_by_bytes(
+    text: str, max_bytes: int, sentence_tokenizer: tokenize.SentenceTokenizer
+) -> list[str]:
     """Split text into chunks that each fit within max_bytes when UTF-8 encoded.
 
-    Splits on sentence-ending punctuation first, then on whitespace boundaries,
-    and as a last resort on character boundaries to guarantee each chunk is
-    within the byte limit.
+    Uses the provided sentence tokenizer (e.g. blingfire) for sentence boundary
+    detection, then falls back to whitespace and character boundaries when a
+    single sentence still exceeds the byte limit.
     """
     if len(text.encode("utf-8")) <= max_bytes:
         return [text]
 
-    # first try splitting on sentence boundaries
-    sentences = re.split(r"(?<=[.!?。！？])\s*", text)
+    # use the tokenizer for sentence boundary detection
+    sentences = sentence_tokenizer.tokenize(text=text)
     chunks: list[str] = []
     current = ""
 
     for sentence in sentences:
         if not sentence:
             continue
-        candidate = current + sentence if current else sentence
+        candidate = (current + " " + sentence) if current else sentence
         if len(candidate.encode("utf-8")) <= max_bytes:
             current = candidate
         else:
