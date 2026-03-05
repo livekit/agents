@@ -10,7 +10,7 @@ class XAITool(ProviderTool, ABC):
     def to_dict(self) -> dict[str, Any]: ...
 
 
-@dataclass
+@dataclass(eq=False)
 class WebSearch(XAITool):
     """Enable web search tool for real-time internet searches."""
 
@@ -21,7 +21,7 @@ class WebSearch(XAITool):
         return {"type": "web_search"}
 
 
-@dataclass
+@dataclass(eq=False)
 class XSearch(XAITool):
     """Enable X (Twitter) search tool for searching posts."""
 
@@ -37,7 +37,7 @@ class XSearch(XAITool):
         return result
 
 
-@dataclass
+@dataclass(eq=False)
 class FileSearch(XAITool):
     """Enable file search tool for searching uploaded document collections."""
 

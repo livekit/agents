@@ -11,7 +11,7 @@ class OpenAITool(ProviderTool, ABC):
     def to_dict(self) -> dict[str, Any]: ...
 
 
-@dataclass
+@dataclass(eq=False)
 class WebSearch(OpenAITool):
     """Enable web search tool to access up-to-date information from the internet"""
 
@@ -35,7 +35,7 @@ class WebSearch(OpenAITool):
         return result
 
 
-@dataclass
+@dataclass(eq=False)
 class FileSearch(OpenAITool):
     """Enable file search tool to search uploaded document collections"""
 
@@ -64,7 +64,7 @@ class FileSearch(OpenAITool):
         return result
 
 
-@dataclass
+@dataclass(eq=False)
 class CodeInterpreter(OpenAITool):
     """Enable the code interpreter tool to write and execute Python code in a sandboxed environment"""
 
