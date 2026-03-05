@@ -1065,6 +1065,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
+        Args:
+            force (bool): If ``True``, interrupts even when speech does not allow interruptions. Default is ``False``.
+
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated.
