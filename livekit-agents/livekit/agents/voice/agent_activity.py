@@ -2187,6 +2187,26 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # Preserve completed tool results in chat context even after interruption.
+            # This prevents the LLM from re-calling the same tools on the next turn
+            # when the user interrupts mid-speech but tools have already completed.
+            if len(tool_output.output) > 0:
+                preserved_messages: list[llm.FunctionCall | llm.FunctionCallOutput] = []
+                for completed_out in tool_output.output:
+                    if completed_out.fnc_call_out is not None:
+                        preserved_messages.append(completed_out.fnc_call)
+                        preserved_messages.append(completed_out.fnc_call_out)
+
+                if preserved_messages:
+                    self._agent._chat_ctx.insert(preserved_messages)
+                    self._session._tool_items_added(preserved_messages)
+                    logger.debug(
+                        "preserved %d tool result(s) in chat context after interruption",
+                        len(preserved_messages) // 2,
+                        extra={"speech_id": speech_handle.id},
+                    )
+
             return
 
         # wait for the tool execution to complete
@@ -2675,6 +2695,27 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # Preserve completed tool results in chat context even after interruption.
+            # This prevents the LLM from re-calling the same tools on the next turn
+            # when the user interrupts mid-speech but tools have already completed.
+            # Note: in the realtime path, fnc_call is already added to chat_ctx
+            # by _tool_execution_started_cb, so we only add fnc_call_out here.
+            if len(tool_output.output) > 0:
+                preserved_count = 0
+                for completed_out in tool_output.output:
+                    if completed_out.fnc_call_out is not None:
+                        self._agent._chat_ctx.items.append(completed_out.fnc_call_out)
+                        self._session._tool_items_added([completed_out.fnc_call_out])
+                        preserved_count += 1
+
+                if preserved_count > 0:
+                    logger.debug(
+                        "preserved %d tool result(s) in chat context after interruption",
+                        preserved_count,
+                        extra={"speech_id": speech_handle.id},
+                    )
+
             return
 
         # wait for the tool execution to complete
