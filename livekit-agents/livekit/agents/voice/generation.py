@@ -121,6 +121,7 @@ async def _llm_inference_task(
     # are using the newer tools.
     # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
+    tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
         data.generated_text = llm_node
@@ -150,6 +151,14 @@ async def _llm_inference_task(
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
                             continue
+
+                        # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
+                        if (
+                            tool_ctx.get_function_tool(tool.name) is None
+                            and tools != tools_snapshot
+                        ):
+                            tool_ctx.update_tools(tools)
+                            tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
                             id=f"{data.id}/fnc_{len(data.generated_functions)}",
@@ -488,6 +497,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                    )
+                )
                 continue
 
             if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
@@ -497,6 +513,13 @@ async def _execute_tools_task(
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
                     },
+                )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown tool type for function: {fnc_call.name}"),
+                    )
                 )
                 continue
 

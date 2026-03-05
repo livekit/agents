@@ -36,6 +36,11 @@ def create_session(
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
     stt = FakeSTT(fake_user_speeches=user_speeches)
+
+    extra_kwargs = extra_kwargs or {}
+    if "aec_warmup_duration" not in extra_kwargs:
+        extra_kwargs["aec_warmup_duration"] = None  # disable aec warmup by default
+
     session = AgentSession[None](
         vad=FakeVAD(
             fake_user_speeches=user_speeches,
@@ -49,7 +54,7 @@ def create_session(
         min_endpointing_delay=0.5 / speed_factor,
         max_endpointing_delay=6.0 / speed_factor,
         false_interruption_timeout=2.0 / speed_factor,
-        **(extra_kwargs or {}),
+        **extra_kwargs,
     )
 
     # setup io with transcription sync

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -429,7 +430,11 @@ class Agent:
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
-            assert activity.tts is not None, "tts_node called but no TTS node is available"
+            if activity.tts is None:
+                raise RuntimeError(
+                    "`tts_node` called but no TTS node is available. If audio output is not needed, disable it using "
+                    "`session.output.set_audio_enabled(False)`."
+                )
 
             wrapped_tts = activity.tts
 
@@ -829,7 +834,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         finally:
             if speech_handle:
-                speech_handle.allow_interruptions = old_allow_interruptions
+                with contextlib.suppress(RuntimeError):
+                    speech_handle.allow_interruptions = old_allow_interruptions
 
             # run_state could have changed after self.__fut
             run_state = session._global_run_state

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import io
 import struct
 import threading
@@ -68,38 +69,52 @@ class StreamBuffer:
     Allows writing from one thread and reading from another.
     """
 
+    _COMPACT_THRESHOLD = 5 * 1024 * 1024  # compact after 5MB consumed
+
     def __init__(self) -> None:
-        self._buffer = io.BytesIO()
+        self._bio = io.BytesIO()
         self._lock = threading.Lock()
         self._data_available = threading.Condition(self._lock)
         self._eof = False
+        self._closed = False
+        self._write_pos = 0
+        self._read_pos = 0
 
     def write(self, data: bytes) -> None:
         """Write data to the buffer from a writer thread."""
         with self._data_available:
-            self._buffer.seek(0, io.SEEK_END)
-            self._buffer.write(data)
+            self._bio.seek(self._write_pos)
+            self._bio.write(data)
+            self._write_pos = self._bio.tell()
             self._data_available.notify_all()
 
     def read(self, size: int = -1) -> bytes:
         """Read data from the buffer in a reader thread."""
-
-        if self._buffer.closed:
+        if size == 0:
             return b""
 
         with self._data_available:
             while True:
-                if self._buffer.closed:
+                if self._closed:
                     return b""
-                # always read from beginning
-                self._buffer.seek(0)
-                data = self._buffer.read(size)
 
-                if data:
-                    # shrink the buffer to remove already-read data
-                    remaining = self._buffer.read()
-                    self._buffer = io.BytesIO(remaining)
-                    return data
+                available = self._write_pos - self._read_pos
+                if available > 0:
+                    self._bio.seek(self._read_pos)
+                    if size < 0:
+                        data = self._bio.read(available)
+                    else:
+                        data = self._bio.read(min(size, available))
+                    self._read_pos = self._bio.tell()
+
+                    if self._read_pos >= self._COMPACT_THRESHOLD:
+                        remaining = self._bio.read()
+                        self._bio = io.BytesIO(remaining)
+                        self._bio.seek(0, io.SEEK_END)
+                        self._write_pos = self._bio.tell()
+                        self._read_pos = 0
+
+                    return data if data else b""
 
                 if self._eof:
                     return b""
@@ -113,7 +128,209 @@ class StreamBuffer:
             self._data_available.notify_all()
 
     def close(self) -> None:
-        self._buffer.close()
+        with self._data_available:
+            self._closed = True
+            self._data_available.notify_all()
+            self._bio.close()
+
+
+class _WavState(enum.IntEnum):
+    RIFF_HEADER = 0
+    CHUNK_HEADER = 1
+    FMT_DATA = 2
+    SKIP_CHUNK_DATA = 3
+    STREAMING = 4
+
+
+class _WavInlineDecoder:
+    """Incremental WAV decoder that runs entirely on the event loop (no thread).
+
+    Processes WAV bytes via a state machine:
+    RIFF_HEADER → CHUNK_HEADER → FMT_DATA/SKIP_CHUNK_DATA → STREAMING.
+    Once in STREAMING state, subsequent push() calls feed bytes directly to
+    AudioByteStream → optional resampler → output channel.
+
+    Each push() may contain a complete WAV file (with its own headers). When a
+    new RIFF header is detected while already streaming, the current stream is
+    flushed and the state machine resets to parse the new file's headers.
+    """
+
+    _RIFF_MAGIC = b"RIFF"
+
+    def __init__(
+        self,
+        output_ch: aio.Chan[rtc.AudioFrame],
+        sample_rate: int | None,
+    ) -> None:
+        self._output_ch = output_ch
+        self._sample_rate = sample_rate
+
+        self._state = _WavState.RIFF_HEADER
+        self._hdr_buf = bytearray()
+        self._need = 12  # bytes needed for current header state
+        self._skip_remaining = 0
+        self._chunk_size = 0
+
+        # set after fmt is parsed
+        self._bstream: AudioByteStream | None = None
+        self._resampler: rtc.AudioResampler | None = None
+        self._wave_channels = 0
+        self._wave_rate = 0
+
+    def push(self, data: bytes) -> None:
+        if self._state == _WavState.STREAMING:
+            if len(data) >= 4 and data[:4] == self._RIFF_MAGIC:
+                self._flush_current()
+                self._reset_state()
+            else:
+                self._push_pcm(data)
+                return
+
+        buf = memoryview(data)
+        pos = 0
+        while pos < len(buf):
+            if self._state == _WavState.RIFF_HEADER:
+                pos = self._consume_riff(buf, pos)
+            elif self._state == _WavState.CHUNK_HEADER:
+                pos = self._consume_chunk_header(buf, pos)
+            elif self._state == _WavState.FMT_DATA:
+                pos = self._consume_fmt_data(buf, pos)
+            elif self._state == _WavState.SKIP_CHUNK_DATA:
+                pos = self._consume_skip(buf, pos)
+            elif self._state == _WavState.STREAMING:
+                # remainder after headers goes straight to PCM path
+                self._push_pcm(bytes(buf[pos:]))
+                return
+
+    def flush(self) -> None:
+        self._flush_current()
+
+    def _flush_current(self) -> None:
+        """Flush AudioByteStream and resampler for the current WAV segment."""
+        if self._bstream is not None:
+            remaining = self._bstream.flush()
+            if self._resampler is not None:
+                for frame in remaining:
+                    for resampled in self._resampler.push(frame):
+                        self._output_ch.send_nowait(resampled)
+                for frame in self._resampler.flush():
+                    if frame.samples_per_channel > 0:
+                        self._output_ch.send_nowait(frame)
+            else:
+                for frame in remaining:
+                    self._output_ch.send_nowait(frame)
+
+    def _reset_state(self) -> None:
+        """Reset the state machine to parse a new WAV file."""
+        self._state = _WavState.RIFF_HEADER
+        self._hdr_buf.clear()
+        self._need = 12
+        self._skip_remaining = 0
+        self._chunk_size = 0
+        self._bstream = None
+        self._resampler = None
+        self._wave_channels = 0
+        self._wave_rate = 0
+
+    # -- state handlers -------------------------------------------------------
+
+    def _consume_riff(self, buf: memoryview, pos: int) -> int:
+        take = min(self._need - len(self._hdr_buf), len(buf) - pos)
+        self._hdr_buf.extend(buf[pos : pos + take])
+        pos += take
+        if len(self._hdr_buf) < self._need:
+            return pos
+
+        if self._hdr_buf[:4] != b"RIFF" or self._hdr_buf[8:12] != b"WAVE":
+            raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {bytes(self._hdr_buf)!r}")
+        self._hdr_buf.clear()
+        self._need = 8
+        self._state = _WavState.CHUNK_HEADER
+        return pos
+
+    def _consume_chunk_header(self, buf: memoryview, pos: int) -> int:
+        take = min(self._need - len(self._hdr_buf), len(buf) - pos)
+        self._hdr_buf.extend(buf[pos : pos + take])
+        pos += take
+        if len(self._hdr_buf) < self._need:
+            return pos
+
+        chunk_id, chunk_size = struct.unpack("<4sI", bytes(self._hdr_buf[:8]))
+        self._hdr_buf.clear()
+        self._chunk_size = chunk_size
+
+        if chunk_id == b"fmt ":
+            self._need = chunk_size
+            self._state = _WavState.FMT_DATA
+        elif chunk_id == b"data":
+            self._init_streaming()
+            self._state = _WavState.STREAMING
+        else:
+            self._skip_remaining = chunk_size
+            self._state = _WavState.SKIP_CHUNK_DATA
+        return pos
+
+    def _consume_fmt_data(self, buf: memoryview, pos: int) -> int:
+        take = min(self._need - len(self._hdr_buf), len(buf) - pos)
+        self._hdr_buf.extend(buf[pos : pos + take])
+        pos += take
+        if len(self._hdr_buf) < self._need:
+            return pos
+
+        fmt = bytes(self._hdr_buf[: self._chunk_size])
+        audio_format, channels, rate = struct.unpack("<HHI", fmt[:8])
+        if len(fmt) >= 16:
+            bits_per_sample = struct.unpack("<H", fmt[14:16])[0]
+            if bits_per_sample != 16:
+                raise ValueError(
+                    f"Unsupported WAV bits per sample: {bits_per_sample}"
+                    " (only 16-bit PCM supported)"
+                )
+        if audio_format != 1:
+            raise ValueError(f"Unsupported WAV audio format: {audio_format}")
+
+        self._wave_channels = channels
+        self._wave_rate = rate
+        self._hdr_buf.clear()
+        self._need = 8
+        self._state = _WavState.CHUNK_HEADER
+        return pos
+
+    def _consume_skip(self, buf: memoryview, pos: int) -> int:
+        take = min(self._skip_remaining, len(buf) - pos)
+        self._skip_remaining -= take
+        pos += take
+        if self._skip_remaining == 0:
+            self._hdr_buf.clear()
+            self._need = 8
+            self._state = _WavState.CHUNK_HEADER
+        return pos
+
+    # -- streaming helpers ----------------------------------------------------
+
+    def _init_streaming(self) -> None:
+        if self._wave_rate == 0:
+            raise ValueError("Invalid WAV file: data chunk before fmt chunk")
+
+        self._bstream = AudioByteStream(
+            sample_rate=self._wave_rate, num_channels=self._wave_channels
+        )
+        if self._sample_rate is not None and self._sample_rate != self._wave_rate:
+            self._resampler = rtc.AudioResampler(
+                input_rate=self._wave_rate,
+                output_rate=self._sample_rate,
+                num_channels=self._wave_channels,
+            )
+
+    def _push_pcm(self, data: bytes) -> None:
+        assert self._bstream is not None
+        if self._resampler is not None:
+            for frame in self._bstream.push(data):
+                for resampled in self._resampler.push(frame):
+                    self._output_ch.send_nowait(resampled)
+        else:
+            for frame in self._bstream.push(data):
+                self._output_ch.send_nowait(frame)
 
 
 class AudioStreamDecoder:
@@ -138,26 +355,57 @@ class AudioStreamDecoder:
 
         self._mime_type = format.lower() if format else None
         self._av_format = _mime_to_av_format(self._mime_type)
+        self._is_wav = self._av_format == "wav"
 
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
         self._started = False
-        self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
 
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="AudioDecoder")
+        # lazy-initialized only for non-WAV codecs
+        self._input_buf: StreamBuffer | None = None
+        self._executor: ThreadPoolExecutor | None = None
+
+        # lazy-initialized only for WAV
+        self._wav_decoder: _WavInlineDecoder | None = None
 
     def push(self, chunk: bytes) -> None:
+        if self._is_wav:
+            if self._wav_decoder is None:
+                self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
+            try:
+                self._wav_decoder.push(chunk)
+            except Exception:
+                if not self._closed:
+                    logger.exception("error decoding WAV audio")
+                    self._output_ch.close()
+                    self._closed = True
+                return
+            self._started = True
+            return
+
+        if self._input_buf is None:
+            self._input_buf = StreamBuffer()
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="AudioDecoder")
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
-            target = self._decode_wav_loop if self._av_format == "wav" else self._decode_loop
-            self._loop.run_in_executor(self._executor, target)
+            self._loop.run_in_executor(self._executor, self._decode_loop)
 
     def end_input(self) -> None:
-        self._input_buf.end_input()
+        if self._is_wav:
+            if self._wav_decoder is not None and not self._closed:
+                try:
+                    self._wav_decoder.flush()
+                except Exception:
+                    logger.exception("error flushing WAV audio")
+            if not self._closed:
+                self._output_ch.close()
+            return
+
+        if self._input_buf is not None:
+            self._input_buf.end_input()
         if not self._started:
-            # if no data was pushed, close the output channel
             self._output_ch.close()
 
     def _decode_loop(self) -> None:
@@ -206,16 +454,12 @@ class AudioStreamDecoder:
                     frames = [frame]
 
                 for f in frames:
-                    nchannels = len(f.layout.channels)
-                    self._loop.call_soon_threadsafe(
-                        self._output_ch.send_nowait,
-                        rtc.AudioFrame(
-                            data=f.to_ndarray().tobytes(),
-                            num_channels=nchannels,
-                            sample_rate=int(f.sample_rate),
-                            samples_per_channel=int(f.samples / nchannels),
-                        ),
-                    )
+                    self._emit_av_frame(f)
+
+            # flush the resampler to get any remaining buffered samples
+            if resampler and not self._closed:
+                for f in resampler.resample(None):
+                    self._emit_av_frame(f)
 
         except Exception:
             logger.exception("error decoding audio")
@@ -224,97 +468,16 @@ class AudioStreamDecoder:
             if container:
                 container.close()
 
-    def _decode_wav_loop(self) -> None:
-        """Decode wav data from the buffer without ffmpeg, parse header and emit PCM frames.
-
-        This can be much faster than using ffmpeg, as we are emitting frames as quickly as possible.
-        """
-
-        try:
-            # parse RIFF header
-            header = b""
-            while len(header) < 12:
-                chunk = self._input_buf.read(12 - len(header))
-                if not chunk:
-                    raise ValueError("Invalid WAV file: incomplete header")
-                header += chunk
-            if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-                raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {header!r}")
-
-            # parse fmt chunk
-            while True:
-                sub_header = self._input_buf.read(8)
-                if len(sub_header) < 8:
-                    raise ValueError("Invalid WAV file: incomplete fmt chunk header")
-                chunk_id, chunk_size = struct.unpack("<4sI", sub_header)
-                data = b""
-                remaining = chunk_size
-                while remaining > 0:
-                    part = self._input_buf.read(min(1024, remaining))
-                    if not part:
-                        raise ValueError("Invalid WAV file: incomplete fmt chunk data")
-                    data += part
-                    remaining -= len(part)
-                if chunk_id == b"fmt ":
-                    audio_format, wave_channels, wave_rate, _, _, bits_per_sample = struct.unpack(
-                        "<HHIIHH", data[:16]
-                    )
-                    if audio_format != 1:
-                        raise ValueError(f"Unsupported WAV audio format: {audio_format}")
-                    break
-
-            # parse data chunk
-            while True:
-                sub_header = self._input_buf.read(8)
-                if len(sub_header) < 8:
-                    raise ValueError("Invalid WAV file: incomplete data chunk header")
-                chunk_id, chunk_size = struct.unpack("<4sI", sub_header)
-                if chunk_id == b"data":
-                    break
-
-                # skip chunk data
-                to_skip = chunk_size
-                while to_skip > 0:
-                    skipped = self._input_buf.read(min(1024, to_skip))
-                    if not skipped:
-                        raise ValueError("Invalid WAV file: incomplete chunk while seeking data")
-                    to_skip -= len(skipped)
-
-            # now ready to decode
-            bstream = AudioByteStream(sample_rate=wave_rate, num_channels=wave_channels)
-            resampler = (
-                rtc.AudioResampler(
-                    input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
-                )
-                if self._sample_rate is not None
-                else None
-            )
-
-            def resample_and_push(frame: rtc.AudioFrame) -> None:
-                if not resampler:
-                    self._loop.call_soon_threadsafe(self._output_ch.send_nowait, frame)
-                    return
-
-                for resampled_frame in resampler.push(frame):
-                    self._loop.call_soon_threadsafe(
-                        self._output_ch.send_nowait,
-                        resampled_frame,
-                    )
-
-            while True:
-                chunk = self._input_buf.read(1024)
-                if not chunk:
-                    break
-                frames = bstream.push(chunk)
-                for rtc_frame in frames:
-                    resample_and_push(rtc_frame)
-
-            for rtc_frame in bstream.flush():
-                resample_and_push(rtc_frame)
-        except Exception:
-            logger.exception("error decoding wav")
-        finally:
-            self._loop.call_soon_threadsafe(self._output_ch.close)
+    def _emit_av_frame(self, f: av.AudioFrame) -> None:
+        self._loop.call_soon_threadsafe(
+            self._output_ch.send_nowait,
+            rtc.AudioFrame(
+                data=f.to_ndarray().tobytes(),
+                num_channels=len(f.layout.channels),
+                sample_rate=int(f.sample_rate),
+                samples_per_channel=f.samples,
+            ),
+        )
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
@@ -328,7 +491,9 @@ class AudioStreamDecoder:
 
         self.end_input()
         self._closed = True
-        self._input_buf.close()
+
+        if self._input_buf is not None:
+            self._input_buf.close()
 
         if not self._started:
             return
@@ -336,4 +501,5 @@ class AudioStreamDecoder:
         async for _ in self._output_ch:
             pass
 
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
