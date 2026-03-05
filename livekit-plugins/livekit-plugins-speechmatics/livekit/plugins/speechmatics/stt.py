@@ -23,7 +23,7 @@ from typing import Any
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -79,7 +79,7 @@ class STTOptions:
     """Configuration parameters for Speechmatics STT service."""
 
     # Service configuration
-    language: Language = Language("en")
+    language: LanguageCode = LanguageCode("en")
     output_locale: str | None = None
     domain: str | None = None
 
@@ -269,7 +269,7 @@ class STT(stt.STT):
 
         # Create STT options from parameters
         self._stt_options = STTOptions(
-            language=Language(language),
+            language=LanguageCode(language),
             output_locale=_set(output_locale),
             domain=_set(domain),
             turn_detection_mode=turn_detection_mode,
@@ -415,8 +415,8 @@ class STT(stt.STT):
         config.sample_rate = self._sample_rate
         config.audio_encoding = self._audio_encoding
 
-        # Language and domain
-        config.language = Language(language) if is_given(language) else opts.language
+        # LanguageCode and domain
+        config.language = LanguageCode(language) if is_given(language) else opts.language
         config.domain = opts.domain
         config.output_locale = opts.output_locale
 
@@ -822,7 +822,7 @@ class SpeechStream(stt.RecognizeStream):
 
             # Create speech event
             speech_data = stt.SpeechData(
-                language=Language(segment.get("language", opts.language)),
+                language=LanguageCode(segment.get("language", opts.language)),
                 text=text,
                 speaker_id=segment.get("speaker_id", "UU"),
                 start_time=segment.get("metadata", {}).get("start_time", 0)

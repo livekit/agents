@@ -25,7 +25,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
-    Language,
+    LanguageCode,
     create_api_error_from_http,
     tts,
     utils,
@@ -50,7 +50,7 @@ class _TTSOptions:
     consistency: float
     similarity: float
     enhancement: float
-    language: Language
+    language: LanguageCode
     output_format: TTSEncoding | str
     base_url: str
 
@@ -116,7 +116,7 @@ class TTS(tts.TTS):
             consistency=consistency,
             similarity=similarity,
             enhancement=enhancement,
-            language=Language(language),
+            language=LanguageCode(language),
             output_format=output_format,
             base_url=base_url,
         )
@@ -165,7 +165,7 @@ class TTS(tts.TTS):
         if is_given(enhancement):
             self._opts.enhancement = enhancement
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(output_format):
             self._opts.output_format = output_format
 
@@ -238,6 +238,6 @@ def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
 
     keys = base_keys if opts.model == "lightning" else base_keys + extra_keys
     result = {key: getattr(opts, key) for key in keys}
-    if "language" in result and isinstance(result["language"], Language):
+    if "language" in result and isinstance(result["language"], LanguageCode):
         result["language"] = result["language"].language
     return result
