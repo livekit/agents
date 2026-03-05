@@ -145,19 +145,14 @@ class ElevenlabsOptions(TypedDict, total=False):
 
 
 class RimeOptions(TypedDict, total=False):
-    # Universal
-    reduce_latency: bool
-    # Mistv2-specific
-    pause_between_brackets: bool
-    phonemize_between_brackets: bool
-    inline_speed_alpha: str
-    no_text_normalization: bool
-    speed_alpha: float
-    # Arcana-specific
-    repetition_penalty: float  # range 1-2
-    temperature: float  # range 0-1
-    top_p: float  # range 0-1
-    max_tokens: int  # range 200-5000
+    """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
+    See: https://docs.rime.ai/api-reference/endpoint/websockets-json
+    """
+    speed_alpha: float  # default 1.0, <1 = faster, >1 = slower
+    pause_between_brackets: bool  # default False
+    phonemize_between_brackets: bool  # default False
+    inline_speed_alpha: str  # comma-separated speed factors for [bracketed] words
+    no_text_normalization: bool  # default False
 
 
 class InworldOptions(TypedDict, total=False):
