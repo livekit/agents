@@ -69,6 +69,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         target_phone_number: str,
         *,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
+        trunk_config: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -102,12 +103,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_identity = "human-agent-sip"
 
         self._target_phone_number = target_phone_number
+        self._trunk_config = trunk_config if is_given(trunk_config) else None
         self._sip_trunk_id = (
             sip_trunk_id if is_given(sip_trunk_id) else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
         )
-        if not self._sip_trunk_id:
+        if not self._sip_trunk_id and not self._trunk_config:
             raise ValueError(
-                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable or `sip_trunk_id` argument must be set"
+                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `trunk_config` must be set"
             )
 
         self._sip_number = (
@@ -301,17 +303,18 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
 
         # dial the human agent
-        await job_ctx.api.sip.create_sip_participant(
-            api.CreateSIPParticipantRequest(
-                sip_trunk_id=self._sip_trunk_id,
-                sip_call_to=self._target_phone_number,
-                room_name=human_agent_room_name,
-                participant_identity=self._human_agent_identity,
-                wait_until_answered=True,
-                sip_number=self._sip_number or None,
-                headers=self._sip_headers,
-            )
+        sip_request = api.CreateSIPParticipantRequest(
+            sip_trunk_id=self._sip_trunk_id,
+            sip_call_to=self._target_phone_number,
+            room_name=human_agent_room_name,
+            participant_identity=self._human_agent_identity,
+            wait_until_answered=True,
+            sip_number=self._sip_number or None,
+            headers=self._sip_headers,
         )
+        if self._trunk_config:
+            sip_request.trunk.CopyFrom(self._trunk_config)
+        await job_ctx.api.sip.create_sip_participant(sip_request)
 
         return human_agent_sess
 
