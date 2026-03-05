@@ -15,6 +15,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/self-managed/livekit-agent-integration)
 - **[LiveAvatar](./liveavatar/)** - [Platform](https://www.liveavatar.com/)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
+- **[SpatialReal](./spatialreal/)** - [Platform](https://app.spatialreal.ai/) | [Integration Guide](https://docs.spatialreal.ai/guide/rtc-mode)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
 - **[TruGen](./trugen/)** - [Platform](https://app.trugen.ai/)
 
