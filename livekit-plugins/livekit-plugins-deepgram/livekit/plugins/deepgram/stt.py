@@ -44,7 +44,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -402,10 +402,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
+        self._speech_duration = 0.0
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
@@ -515,11 +512,10 @@ class SpeechStream(stt.SpeechStream):
                     has_ended = True
 
                 for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
+                    self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
-                        self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
 
@@ -642,15 +638,6 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("failed to connect to deepgram") from e
         return ws
 
-    def _on_audio_duration_report(self, duration: float) -> None:
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=self._request_id,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self._event_ch.send_nowait(usage_event)
-
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
 
@@ -712,6 +699,17 @@ class SpeechStream(stt.SpeechStream):
             if is_endpoint and self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                
+                # Report usage only at the end of speech
+                if self._speech_duration > 0:
+                    usage_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.RECOGNITION_USAGE,
+                        request_id=request_id,
+                        alternatives=[],
+                        recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                    )
+                    self._event_ch.send_nowait(usage_event)
+                    self._speech_duration = 0.0
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
