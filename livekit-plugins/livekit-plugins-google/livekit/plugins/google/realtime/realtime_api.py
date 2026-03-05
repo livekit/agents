@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
@@ -148,6 +149,7 @@ class _RealtimeOptions:
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    credentials: google.auth.credentials.Credentials | None = None
 
 
 @dataclass
@@ -215,6 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -315,6 +318,11 @@ class RealtimeModel(llm.RealtimeModel):
         else:
             gcp_project = None
             gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -354,6 +362,7 @@ class RealtimeModel(llm.RealtimeModel):
             http_options=http_options,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            credentials=credentials,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -452,6 +461,7 @@ class RealtimeSession(llm.RealtimeSession):
             vertexai=self._opts.vertexai,
             project=self._opts.project,
             location=self._opts.location,
+            credentials=self._opts.credentials,
             http_options=http_options,
         )
 
