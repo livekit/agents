@@ -1639,7 +1639,10 @@ class AgentActivity(RecognitionHooks):
                 input_details=InputDetails(modality="audio"),
             )
 
-        if self._user_turn_completed_atask != asyncio.current_task():
+        if (
+            self._user_turn_completed_atask != asyncio.current_task()
+            and not speech_handle._allow_interruptions
+        ):
             # If a new user turn has already started, interrupt this one since it's now outdated
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
