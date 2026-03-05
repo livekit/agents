@@ -22,7 +22,7 @@ import os
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, MetricsCollectedEvent, RoomInputOptions, metrics
-from livekit.plugins import baseten, openai, silero
+from livekit.plugins import baseten, silero
 
 try:
     from livekit.plugins import noise_cancellation
