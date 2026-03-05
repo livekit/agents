@@ -525,20 +525,23 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     def _eou_requires_transcript(self) -> bool:
-        # while we aren't checking _turn_detector here,
-        #   _turn_detector and _turn_detection_mode are mutually exclusive (such that if one is provided, the other must be None)
-        # e.g. if _turn_detector is provided, _turn_detection_mode is None, and vice versa
-        match self._turn_detection_mode:
-            case "stt" | "realtime_llm" | None:
-                return True
-            case "manual" | "vad":
-                return False
-            case _:
-                # If not specified then we assume it requires transcript
-                return True
+        if self._stt:
+            # while we aren't checking _turn_detector here,
+            #   _turn_detector and _turn_detection_mode are mutually exclusive (such that if one is provided, the other must be None)
+            # e.g. if _turn_detector is provided, _turn_detection_mode is None, and vice versa
+            match self._turn_detection_mode:
+                case "stt" | "realtime_llm" | None:
+                    return True
+                case "manual" | "vad":
+                    return False
+                case _:
+                    # If not specified then we assume it requires transcript
+                    return True
+        else:
+            return False
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
-        if self._stt and not self._audio_transcript and self._eou_requires_transcript():
+        if not self._audio_transcript and self._eou_requires_transcript():
             return
 
         chat_ctx = chat_ctx.copy()
