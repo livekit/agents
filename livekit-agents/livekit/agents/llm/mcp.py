@@ -116,14 +116,25 @@ class MCPServer(ABC):
 
             # TODO(theomonnom): handle images & binary messages
             if len(tool_result.content) == 1:
-                return tool_result.content[0].model_dump_json()
+                result = tool_result.content[0].model_dump_json()
             elif len(tool_result.content) > 1:
-                return json.dumps([item.model_dump() for item in tool_result.content])
+                result = json.dumps([item.model_dump() for item in tool_result.content])
+            else:
+                raise ToolError(
+                    f"Tool '{name}' completed without producing a result. "
+                    "This might indicate an issue with internal processing."
+                )
 
-            raise ToolError(
-                f"Tool '{name}' completed without producing a result. "
-                "This might indicate an issue with internal processing."
-            )
+            # Preserve the meta field from CallToolResult if present
+            if getattr(tool_result, "meta", None) is not None:
+                parsed = json.loads(result) if isinstance(result, str) else result
+                if isinstance(parsed, dict):
+                    parsed["meta"] = tool_result.meta
+                elif isinstance(parsed, list):
+                    parsed = {"content": parsed, "meta": tool_result.meta}
+                result = json.dumps(parsed)
+
+            return result
 
         raw_schema = {
             "name": name,
