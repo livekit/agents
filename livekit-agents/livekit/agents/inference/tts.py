@@ -146,13 +146,13 @@ class ElevenlabsOptions(TypedDict, total=False):
 
 class RimeOptions(TypedDict, total=False):
     # Universal
-    reduceLatency: bool
+    reduce_latency: bool
     # Mistv2-specific
-    pauseBetweenBrackets: bool
-    phonemizeBetweenBrackets: bool
-    inlineSpeedAlpha: str
-    noTextNormalization: bool
-    speedAlpha: float
+    pause_between_brackets: bool
+    phonemize_between_brackets: bool
+    inline_speed_alpha: str
+    no_text_normalization: bool
+    speed_alpha: float
     # Arcana-specific
     repetition_penalty: float  # range 1-2
     temperature: float  # range 0-1

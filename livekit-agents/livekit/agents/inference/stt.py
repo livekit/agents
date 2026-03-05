@@ -104,7 +104,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
     language_detection: bool
-    inactivity_timeout: int  # milliseconds
+    inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
