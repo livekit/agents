@@ -55,5 +55,7 @@ async def _close_http_ctx() -> None:
     val = _ContextVar.get(None)
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")
-        await val().close()
+        session = val()
+        if not session.closed:
+            await session.close()
         _ContextVar.set(None)
