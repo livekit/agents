@@ -577,6 +577,7 @@ class SynthesizeStream(ABC):
         self._pushed_text += token
 
         if self._metrics_task is None:
+            self._mark_started()
             self._metrics_task = asyncio.create_task(
                 self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
             )
