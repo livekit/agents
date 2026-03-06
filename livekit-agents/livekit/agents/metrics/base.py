@@ -38,6 +38,14 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    input_tokens: int | None = None
+    """Total input tokens billed by the ASR model."""
+    output_tokens: int | None = None
+    """Total output tokens (transcription text) billed by the ASR model."""
+    total_tokens: int | None = None
+    """Sum of input and output tokens."""
+    input_audio_tokens: int | None = None
+    """Number of audio input tokens billed by the ASR model."""
     metadata: Metadata | None = None
 
 
