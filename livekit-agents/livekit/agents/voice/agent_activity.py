@@ -2562,6 +2562,7 @@ class AgentActivity(RecognitionHooks):
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
+            fnc_call.extra["dispatched"] = True
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
 
@@ -2687,6 +2688,8 @@ class AgentActivity(RecognitionHooks):
             await exe_task
         finally:
             self._background_speeches.discard(speech_handle)
+            for fc in function_calls:
+                fc.extra["dispatched"] = True
 
         # important: no agent output should be used after this point
 
