@@ -48,7 +48,6 @@ DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 # Google Cloud TTS API limit: input.text or input.ssml must not exceed 5000 bytes
 GOOGLE_TTS_MAX_INPUT_BYTES = 5000
-SSML_WRAPPER_OVERHEAD = len(b"<speak></speak>")
 
 
 @dataclass
@@ -304,15 +303,16 @@ class ChunkedStream(tts.ChunkedStream):
         """Split input text into chunks that respect Google TTS byte limits.
 
         Google Cloud TTS API rejects input.text or input.ssml longer than
-        5000 bytes. This method splits the input accordingly, accounting for
-        SSML wrapper overhead when SSML is enabled.
+        5000 bytes. This method splits plain text accordingly using the
+        sentence tokenizer. Structured content (SSML, markup) is returned
+        as-is because naive sentence splitting would break tag structure.
         """
-        if self._opts.enable_ssml:
-            max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES - SSML_WRAPPER_OVERHEAD
-        else:
-            max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES
+        if self._opts.enable_ssml or self._opts.use_markup:
+            return [self._input_text]
 
-        return _split_text_by_bytes(self._input_text, max_bytes, self._opts.tokenizer)
+        return _split_text_by_bytes(
+            self._input_text, GOOGLE_TTS_MAX_INPUT_BYTES, self._opts.tokenizer
+        )
 
     def _build_synthesis_input(self, text: str) -> texttospeech.SynthesisInput:
         if self._opts.use_markup:
