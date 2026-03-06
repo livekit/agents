@@ -83,7 +83,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "playwright>=1.58.0",
 ]
-docs = ["pdoc3", "setuptools"]
+docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 
 [tool.ruff]
 line-length = 100
