@@ -256,9 +256,13 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
-    ) -> None:
+    ) -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
         if not self._stt or self._closing.is_set():
-            return
+            fut.set_result("")
+            return fut
 
         async def _commit_user_turn() -> None:
             if self._last_final_transcript_time is None or (
@@ -316,15 +320,28 @@ class AudioRecognition:
                     f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
                 )
 
+            transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx, skip_reply=skip_reply)
             self._user_turn_committed = True
+            if not fut.done():
+                fut.set_result(transcript)
+
+        def _on_task_done(task: asyncio.Task[None]) -> None:
+            if fut.done():
+                return
+            if task.cancelled():
+                fut.cancel()
+            elif exc := task.exception():
+                fut.set_exception(exc)
 
         if self._commit_user_turn_atask is not None:
             self._commit_user_turn_atask.cancel()
 
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
+        self._commit_user_turn_atask.add_done_callback(_on_task_done)
+        return fut
 
     @property
     def current_transcript(self) -> str:
