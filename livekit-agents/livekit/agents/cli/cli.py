@@ -1597,6 +1597,13 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
 
     loop.slow_callback_duration = 0.1  # 100ms
 
+    try:
+        import blockguard
+
+        blockguard.install()
+    except ImportError:
+        pass
+
     async def _worker_run(worker: AgentServer) -> None:
         try:
             await server.run(devmode=args.devmode, unregistered=jupyter)
@@ -1645,6 +1652,12 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
 
                     loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
                 finally:
+                    try:
+                        import blockguard
+
+                        blockguard.uninstall()
+                    except (ImportError, RuntimeError):
+                        pass
                     loop.run_until_complete(loop.shutdown_asyncgens())
                     loop.run_until_complete(loop.shutdown_default_executor())
                     loop.close()
