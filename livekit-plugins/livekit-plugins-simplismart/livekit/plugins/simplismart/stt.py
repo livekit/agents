@@ -36,7 +36,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -51,7 +51,7 @@ SIMPLISMART_BASE_URL = "https://api.simplismart.live/predict"
 
 
 class SimplismartSTTOptions(BaseModel):
-    language: Language | None = None
+    language: LanguageCode | None = None
     task: Literal["transcribe", "translate"] = "transcribe"
     without_timestamps: bool = True
     vad_model: Literal["silero", "frame"] = "frame"
@@ -158,7 +158,7 @@ class STT(stt.STT):
 
         self._model = model
         self._opts = SimplismartSTTOptions(
-            language=Language(language),
+            language=LanguageCode(language),
             task=task,
             without_timestamps=without_timestamps,
             vad_model=vad_model,
@@ -243,7 +243,7 @@ class STT(stt.STT):
                 transcription = response_json.get("transcription", [])
 
                 info = response_json.get("info", {})
-                detected_language = Language(info.get("language", resolved_language or "en"))
+                detected_language = LanguageCode(info.get("language", resolved_language or "en"))
 
                 start_time = timestamps[0][0] if timestamps else 0.0
                 end_time = timestamps[-1][1] if timestamps else 0.0
@@ -284,7 +284,7 @@ class STT(stt.STT):
         **kwargs: Any,
     ) -> "SpeechStream":
         """Create a streaming transcription session."""
-        opts_language = Language(language) if is_given(language) else self._opts.language
+        opts_language = LanguageCode(language) if is_given(language) else self._opts.language
 
         # Create options for the stream
         stream_opts = SimplismartSTTOptions(language=opts_language)
@@ -470,7 +470,7 @@ class SpeechStream(stt.SpeechStream):
 
             # Create speech data
             speech_data = stt.SpeechData(
-                language=Language(self._opts.language or "en"),
+                language=LanguageCode(self._opts.language or "en"),
                 text=transcript_text,
             )
 

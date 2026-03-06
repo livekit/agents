@@ -29,7 +29,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -81,7 +81,7 @@ class _PeriodicCollector:
 class STTOptions:
     model: NotGivenOr[str]
     sample_rate: int
-    language: NotGivenOr[Language] = NOT_GIVEN
+    language: NotGivenOr[LanguageCode] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     skip_vad: NotGivenOr[bool] = NOT_GIVEN
@@ -160,7 +160,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            language=Language(language) if isinstance(language, str) else language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             prompt=prompt,
             temperature=temperature,
             skip_vad=skip_vad,
@@ -230,7 +230,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(temperature):
@@ -301,7 +301,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(temperature):
@@ -498,7 +498,7 @@ class SpeechStream(stt.SpeechStream):
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
-                            language=Language(self._opts.language or ""), text=full_transcript
+                            language=LanguageCode(self._opts.language or ""), text=full_transcript
                         )
                     ],
                 )
@@ -513,7 +513,7 @@ class SpeechStream(stt.SpeechStream):
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
-                            language=Language(self._opts.language or ""), text=full_transcript
+                            language=LanguageCode(self._opts.language or ""), text=full_transcript
                         )
                     ],
                 )

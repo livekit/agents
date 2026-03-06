@@ -19,7 +19,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
-from ..language import Language
+from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -146,7 +146,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 class _TTSOptions:
     model: TTSModels | str
     voice: NotGivenOr[str]
-    language: NotGivenOr[Language]
+    language: NotGivenOr[LanguageCode]
     encoding: TTSEncoding
     sample_rate: int
     base_url: str
@@ -359,7 +359,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            language=Language(language) if isinstance(language, str) else language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate,
             base_url=lk_base_url,
@@ -493,7 +493,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(extra_kwargs):
             self._opts.extra_kwargs.update(extra_kwargs)
 
