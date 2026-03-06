@@ -241,6 +241,9 @@ class STT(stt.STT):
         word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         diarize: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        if is_given(encoding) and self._streams:
+            _validate_stream_encoding(encoding)
+
         if is_given(language):
             self._opts.language = language
         if is_given(sample_rate):
