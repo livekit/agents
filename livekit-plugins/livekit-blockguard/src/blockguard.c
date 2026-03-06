@@ -125,6 +125,58 @@ snap_eq(const FrameSnap *a, const FrameSnap *b)
     return (a->code != NULL) && (a->code == b->code) && (a->lineno == b->lineno);
 }
 
+/*
+ * The idle event loop sits in selectors.py:select() called from
+ * base_events.py:_run_once(). We only skip this specific call chain,
+ * not arbitrary selectors.py:select() calls (which would be a real block).
+ */
+static int
+snap_is_idle_select(PyThreadState *tstate)
+{
+    if (!tstate) return 0;
+
+    PyFrameObject *f = PyThreadState_GetFrame(tstate);
+    if (!f) return 0;
+
+    PyCodeObject *code = PyFrame_GetCode(f);
+    const char *fn = PyUnicode_AsUTF8(code->co_filename);
+    const char *name = PyUnicode_AsUTF8(code->co_name);
+    Py_DECREF(code);
+
+    if (!fn || !name || strcmp(name, "select") != 0) {
+        Py_DECREF(f);
+        return 0;
+    }
+
+    const char *p = strrchr(fn, '/');
+    if (!p) p = strrchr(fn, '\\');
+    const char *basename = p ? p + 1 : fn;
+
+    if (strcmp(basename, "selectors.py") != 0) {
+        Py_DECREF(f);
+        return 0;
+    }
+
+    PyFrameObject *caller = PyFrame_GetBack(f);
+    Py_DECREF(f);
+    if (!caller) return 0;
+
+    PyCodeObject *caller_code = PyFrame_GetCode(caller);
+    const char *caller_fn = PyUnicode_AsUTF8(caller_code->co_filename);
+    const char *caller_name = PyUnicode_AsUTF8(caller_code->co_name);
+    Py_DECREF(caller_code);
+    Py_DECREF(caller);
+
+    if (!caller_fn || !caller_name) return 0;
+
+    const char *cp = strrchr(caller_fn, '/');
+    if (!cp) cp = strrchr(caller_fn, '\\');
+    const char *caller_basename = cp ? cp + 1 : caller_fn;
+
+    return strcmp(caller_basename, "base_events.py") == 0
+        && strcmp(caller_name, "_run_once") == 0;
+}
+
 static int
 append_str(PyObject *parts, PyObject *s)
 {
@@ -255,7 +307,12 @@ watchdog_body(void *arg)
 
         FrameSnap now = snap_frame(g.loop_tstate);
 
-        if (now.code != NULL && snap_eq(&now, &last)) {
+        if (now.code != NULL && snap_is_idle_select(g.loop_tstate)) {
+            snap_clear(&now);
+            snap_clear(&last);
+            stuck_ms = 0.0;
+            cooldown_left = 0.0;
+        } else if (now.code != NULL && snap_eq(&now, &last)) {
             stuck_ms += g.poll_ms;
             if (cooldown_left > 0.0)
                 cooldown_left -= g.poll_ms;
