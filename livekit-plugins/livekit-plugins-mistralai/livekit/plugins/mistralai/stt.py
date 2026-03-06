@@ -462,8 +462,7 @@ class SpeechStream(stt.RecognizeStream):
         initial_events = getattr(connection, "_initial_events", None)
         while initial_events:
             event = initial_events.popleft()
-            if self._process_event(event):
-                return
+            self._process_event(event)
 
         websocket = getattr(connection, "_websocket", None)
         if websocket is None:
@@ -568,7 +567,10 @@ class SpeechStream(stt.RecognizeStream):
             return None
         return duration if duration > 0 else None
 
-    def _process_event(self, event: Any) -> bool:
+    def _current_language(self) -> LanguageCode:
+        return LanguageCode(self._detected_language or self._opts.language or "")
+
+    def _process_event(self, event: Any) -> None:
         if isinstance(
             event,
             RealtimeTranscriptionSessionCreated | RealtimeTranscriptionSessionUpdated,
@@ -587,7 +589,7 @@ class SpeechStream(stt.RecognizeStream):
                     if k != "request_id"
                 },
             )
-            return False
+            return
 
         if isinstance(event, TranscriptionStreamLanguage):
             logger.debug(
@@ -596,7 +598,7 @@ class SpeechStream(stt.RecognizeStream):
             )
             if event.audio_language:
                 self._detected_language = LanguageCode(event.audio_language)
-            return False
+            return
 
         if isinstance(event, TranscriptionStreamTextDelta):
             logger.debug(
@@ -605,7 +607,7 @@ class SpeechStream(stt.RecognizeStream):
                 len(event.text) if event.text else 0,
             )
             self._handle_interim_text(event.text)
-            return False
+            return
 
         if isinstance(event, TranscriptionStreamSegmentDelta):
             logger.debug(
@@ -620,7 +622,7 @@ class SpeechStream(stt.RecognizeStream):
                 start_time=event.start,
                 end_time=event.end,
             )
-            return False
+            return
 
         if isinstance(event, TranscriptionStreamDone):
             logger.debug(
@@ -635,16 +637,12 @@ class SpeechStream(stt.RecognizeStream):
                 self._detected_language = LanguageCode(event.language)
 
             done_text = event.text.strip()
-
-            if done_text:
-                if not self._is_redundant_done_text(done_text):
-                    self._partial_text = done_text
+            if done_text and not self._is_redundant_done_text(done_text):
+                self._partial_text = done_text
 
             self._finalize_utterance(reason="transcription_done")
             self._emit_usage_metrics(self._provider_audio_duration(event))
-            # Non-terminal: flush_audio() triggers TranscriptionStreamDone
-            # but the connection stays open for the next utterance.
-            return False
+            return
 
         if isinstance(event, RealtimeTranscriptionError):
             error = event.error
@@ -668,8 +666,6 @@ class SpeechStream(stt.RecognizeStream):
                 event.type or "unknown",
                 event.error or "n/a",
             )
-
-        return False
 
     def _ensure_speaking(self) -> None:
         if not self._speaking:
@@ -696,13 +692,15 @@ class SpeechStream(stt.RecognizeStream):
         self._partial_text += text
 
         if self._opts.interim_results:
-            language = LanguageCode(self._detected_language or self._opts.language or "")
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     request_id=self._request_id,
                     alternatives=[
-                        stt.SpeechData(text=self._partial_text.strip(), language=language)
+                        stt.SpeechData(
+                            text=self._partial_text.strip(),
+                            language=self._current_language(),
+                        )
                     ],
                 )
             )
@@ -736,7 +734,6 @@ class SpeechStream(stt.RecognizeStream):
         if not text or self._is_duplicate_final(text):
             return
 
-        language = LanguageCode(self._detected_language or self._opts.language or "")
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -744,7 +741,7 @@ class SpeechStream(stt.RecognizeStream):
                 alternatives=[
                     stt.SpeechData(
                         text=text,
-                        language=language,
+                        language=self._current_language(),
                         start_time=start_time,
                         end_time=end_time,
                     )
