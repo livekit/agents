@@ -970,6 +970,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 extra={**self._build_log_context(), "raw_data": msg_data[:200]},
             )
             return True  # Continue processing
+        except (APIStatusError, APIConnectionError):
+            # Preserve provider-originated status/body/retry metadata.
+            raise
         except Exception as e:
             logger.error(
                 f"Error processing WebSocket message: {e}",
