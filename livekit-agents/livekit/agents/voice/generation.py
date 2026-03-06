@@ -733,7 +733,7 @@ def make_tool_output(
             fnc_call=fnc_call, output=None, exception=exception
         )
         return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
+            fnc_call=fnc_call,
             fnc_call_out=base_result.fnc_call_out,
             agent_task=None,
             raw_output=output,
@@ -756,7 +756,7 @@ def make_tool_output(
                 extra={"call_id": fnc_call.call_id, "output": output},
             )
             return ToolExecutionOutput(
-                fnc_call=fnc_call.model_copy(),
+                fnc_call=fnc_call,
                 fnc_call_out=None,
                 agent_task=None,
                 raw_output=output,
@@ -783,7 +783,7 @@ def make_tool_output(
     )
 
     return ToolExecutionOutput(
-        fnc_call=fnc_call.model_copy(),
+        fnc_call=fnc_call,
         fnc_call_out=base_result.fnc_call_out,
         reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
