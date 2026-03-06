@@ -370,7 +370,7 @@ Runs the agent with production-ready optimizations.
 
 ## Contributing
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit Slack community](https://livekit.io/join-slack).
+The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit community](https://docs.livekit.io/intro/community/).
 
 ### Development setup
 
