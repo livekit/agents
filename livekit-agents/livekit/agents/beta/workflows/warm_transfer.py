@@ -66,11 +66,11 @@ class WarmTransferResult:
 class WarmTransferTask(AgentTask[WarmTransferResult]):
     def __init__(
         self,
-        target_phone_number: str,
+        sip_call_to: NotGivenOr[str] = NOT_GIVEN,
         *,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        trunk_config: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_trunk_id: NotGivenOr[str | None] = NOT_GIVEN,
+        sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_instructions: str = "",
@@ -82,6 +82,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        # deprecated
+        target_phone_number: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=self.get_instructions(
@@ -102,16 +104,25 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
 
-        self._target_phone_number = target_phone_number
-        self._trunk_config = trunk_config if is_given(trunk_config) else None
+        if target_phone_number:
+            logger.warning("`target_phone_number` is deprecated, use `sip_call_to` instead")
+            if not sip_call_to:
+                sip_call_to = target_phone_number
+
+        if not sip_call_to:
+            raise ValueError("`sip_call_to` must be set")
+
+        self._sip_call_to = sip_call_to
+        self._sip_connection = sip_connection if is_given(sip_connection) else None
         self._sip_trunk_id = (
             sip_trunk_id
             if is_given(sip_trunk_id)
             else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         )
-        if self._sip_trunk_id is None and self._trunk_config is None:
+        if self._sip_trunk_id is None and self._sip_connection is None:
             raise ValueError(
-                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `trunk_config` must be set"
+                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`,"
+                " or `sip_connection` must be set"
             )
 
         self._sip_number = (
@@ -307,15 +318,15 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # dial the human agent
         sip_request = api.CreateSIPParticipantRequest(
             sip_trunk_id=self._sip_trunk_id,
-            sip_call_to=self._target_phone_number,
+            sip_call_to=self._sip_call_to,
             room_name=human_agent_room_name,
             participant_identity=self._human_agent_identity,
             wait_until_answered=True,
             sip_number=self._sip_number or None,
             headers=self._sip_headers,
         )
-        if self._trunk_config is not None:
-            sip_request.trunk.CopyFrom(self._trunk_config)
+        if self._sip_connection is not None:
+            sip_request.trunk.CopyFrom(self._sip_connection)
         await job_ctx.api.sip.create_sip_participant(sip_request)
 
         return human_agent_sess
