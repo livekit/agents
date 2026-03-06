@@ -18,6 +18,29 @@ permissions:
   actions: write
 
 jobs:
+  blockguard-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install blockguard
+        run: pip install livekit-plugins/livekit-blockguard/
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run blockguard tests
+        working-directory: livekit-plugins/livekit-blockguard
+        run: python -m pytest test_blockguard.py -v
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
