@@ -508,9 +508,7 @@ class AudioRecognition:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration
             self._speech_start_time = speech_start_time
-            with trace.use_span(
-                self._ensure_user_turn_span(start_time=speech_start_time)
-            ):
+            with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev)
 
             self._speaking = True
