@@ -2676,6 +2676,8 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+            for fc in function_calls:
+                fc.extra["dispatched"] = True
             return
 
         # wait for the tool execution to complete
