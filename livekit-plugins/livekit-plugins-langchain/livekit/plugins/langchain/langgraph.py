@@ -24,7 +24,7 @@ from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -177,17 +177,15 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         """Convert chat context to langgraph input"""
 
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
-        for item in self._chat_ctx.items:
-            # only support chat messages, ignoring tool calls
-            if isinstance(item, ChatMessage):
-                content = item.text_content
-                if content:
-                    if item.role == "assistant":
-                        messages.append(AIMessage(content=content, id=item.id))
-                    elif item.role == "user":
-                        messages.append(HumanMessage(content=content, id=item.id))
-                    elif item.role in ["system", "developer"]:
-                        messages.append(SystemMessage(content=content, id=item.id))
+        for msg in self._chat_ctx.messages():
+            content = msg.text_content
+            if content:
+                if msg.role == "assistant":
+                    messages.append(AIMessage(content=content, id=msg.id))
+                elif msg.role == "user":
+                    messages.append(HumanMessage(content=content, id=msg.id))
+                elif msg.role in ["system", "developer"]:
+                    messages.append(SystemMessage(content=content, id=msg.id))
 
         return {"messages": messages}
 

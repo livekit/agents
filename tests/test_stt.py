@@ -5,7 +5,7 @@ Do speech recognition on a long audio file and compare the result with the expec
 import asyncio
 import math
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from dotenv import load_dotenv

@@ -18,12 +18,12 @@ import functools
 import inspect
 import itertools
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeGuard, TypeVar, overload
 
-from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeGuard
+from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
 from ..log import logger
 from . import _provider_format
@@ -80,7 +80,7 @@ class NamedToolChoice(TypedDict, total=False):
     function: Required[Function]
 
 
-ToolChoice = Union[NamedToolChoice, Literal["auto", "required", "none"]]
+ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
 
 
 class ToolError(Exception):
@@ -405,6 +405,9 @@ class ToolContext:
         tools.extend(list(self._fnc_tools_map.values()))
         tools.extend(self._provider_tools)
         return tools
+
+    def get_function_tool(self, name: str) -> FunctionTool | RawFunctionTool | None:
+        return self._fnc_tools_map.get(name)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ToolContext):

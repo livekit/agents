@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -14,7 +14,14 @@ from typing_extensions import Required
 from livekit import rtc
 
 from .. import stt, utils
-from .._exceptions import APIConnectionError, APIError, APIStatusError
+from .._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    create_api_error_from_http,
+)
+from ..language import LanguageCode
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -40,6 +47,7 @@ CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
+    "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
@@ -69,6 +77,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+    prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -99,13 +108,13 @@ class FallbackModel(TypedDict, total=False):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
-def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
-    language: NotGivenOr[str] = NOT_GIVEN
+def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
+    language: NotGivenOr[LanguageCode] = NOT_GIVEN
     if (idx := model.rfind(":")) != -1:
-        language = model[idx + 1 :]
+        language = LanguageCode(model[idx + 1 :])
         model = model[:idx]
     return model, language
 
@@ -125,13 +134,13 @@ def _normalize_fallback(
     return [_make_fallback(fallback)]
 
 
-STTModels = Union[
-    DeepgramModels,
-    CartesiaModels,
-    AssemblyAIModels,
-    ElevenlabsModels,
-    Literal["auto"],  # automatically select a provider based on the language
-]
+STTModels = (
+    DeepgramModels
+    | CartesiaModels
+    | AssemblyAIModels
+    | ElevenlabsModels
+    | Literal["auto"]  # automatically select a provider based on the language
+)
 STTEncoding = Literal["pcm_s16le"]
 
 
@@ -143,7 +152,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 @dataclass
 class STTOptions:
     model: NotGivenOr[STTModels | str]
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     encoding: STTEncoding
     sample_rate: int
     base_url: str
@@ -264,7 +273,7 @@ class STT(stt.STT):
         """Livekit Cloud Inference STT
 
         Args:
-            model (STTModels | str, optional): STT model to use.
+            model (STTModels | str, optional): STT model to use, in "provider/model[:language]" format.
             language (str, optional): Language of the STT model.
             encoding (STTEncoding, optional): Encoding of the STT model.
             sample_rate (int, optional): Sample rate of the STT model.
@@ -285,6 +294,13 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+
+        # Parse language from model string if provided: "provider/model:language"
+        if is_given(model) and isinstance(model, str):
+            parsed_model, parsed_language = _parse_model_string(model)
+            model = parsed_model
+            if is_given(parsed_language) and not is_given(language):
+                language = parsed_language
 
         lk_base_url = (
             base_url
@@ -317,7 +333,7 @@ class STT(stt.STT):
 
         self._opts = STTOptions(
             model=model,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             base_url=lk_base_url,
@@ -365,7 +381,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError(
-            "LiveKit STT does not support batch recognition, use stream() instead"
+            "LiveKit Inference STT does not support batch recognition, use stream() instead"
         )
 
     def stream(
@@ -385,24 +401,28 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
 
         for stream in self._streams:
-            stream.update_options(model=model, language=language)
+            stream.update_options(model=model, language=language, extra=extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
     ) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         options = replace(self._opts)
+        options.extra_kwargs = dict(options.extra_kwargs)
 
         if is_given(language):
-            options.language = language
+            options.language = LanguageCode(language)
 
         return options
 
@@ -420,22 +440,51 @@ class SpeechStream(stt.SpeechStream):
         self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
-        self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(
         self,
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        """Update streaming transcription options."""
+        """Update streaming transcription options.
+
+        When the WebSocket is live, a mid-stream session.update is sent so providers
+        that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
+        reconnecting. Unsupported providers ignore the message.
+        """
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
-        self._reconnect_event.set()
+            self._opts.language = LanguageCode(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
+
+        has_update = is_given(model) or is_given(language) or is_given(extra)
+        if has_update and self._ws is not None and not self._ws.closed:
+            settings: dict[str, Any] = {}
+            if is_given(model):
+                settings["model"] = model
+            if is_given(language):
+                settings["language"] = str(LanguageCode(language))
+            if is_given(extra):
+                settings["extra"] = extra
+            update_msg = {
+                "type": "session.update",
+                "settings": settings,
+            }
+            asyncio.ensure_future(self._send_session_update(update_msg))
+
+    async def _send_session_update(self, msg: dict[str, Any]) -> None:
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.send_str(json.dumps(msg))
+        except Exception:
+            logger.debug("failed to send session.update, ws may be closing")
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -486,10 +535,12 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="LiveKit STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="LiveKit Inference STT connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected LiveKit STT message type %s", msg.type)
+                    logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
                     continue
 
                 data = json.loads(msg.data)
@@ -505,46 +556,31 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.closed":
                     pass
                 elif msg_type == "error":
-                    raise APIError(f"LiveKit STT returned error: {msg.data}")
+                    raise APIError(f"LiveKit Inference STT returned error: {msg.data}")
                 else:
-                    logger.warning("received unexpected message from LiveKit STT: %s", data)
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
+                    logger.warning(
+                        "received unexpected message from LiveKit Inference STT: %s", data
                     )
 
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+        ws: aiohttp.ClientWebSocketResponse | None = None
+        try:
+            ws = await self._connect_ws()
+            self._ws = ws
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            self._ws = None
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit STT WebSocket."""
+        """Connect to the LiveKit Inference STT WebSocket."""
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
@@ -587,20 +623,18 @@ class SpeechStream(stt.SpeechStream):
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
-        except (
-            aiohttp.ClientConnectorError,
-            asyncio.TimeoutError,
-            aiohttp.ClientResponseError,
-        ) as e:
-            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
-            raise APIConnectionError("failed to connect to LiveKit STT") from e
+        except aiohttp.ClientResponseError as e:
+            raise create_api_error_from_http(e.message, status=e.status) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to LiveKit Inference STT") from e
         return ws
 
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
-        language = data.get("language", self._opts.language or "en")
+        language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
 
         if not text and not is_final:

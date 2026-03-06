@@ -5,9 +5,9 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -20,6 +20,7 @@ from ..llm import (
     ChatContext,
     StopResponse,
     ToolContext,
+    ToolError,
     utils as llm_utils,
 )
 from ..log import logger
@@ -60,7 +61,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[Union[str, FlushSentinel]]()
+    text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -120,6 +121,7 @@ async def _llm_inference_task(
     # are using the newer tools.
     # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
+    tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
         data.generated_text = llm_node
@@ -149,6 +151,14 @@ async def _llm_inference_task(
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
                             continue
+
+                        # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
+                        if (
+                            tool_ctx.get_function_tool(tool.name) is None
+                            and tools != tools_snapshot
+                        ):
+                            tool_ctx.update_tools(tools)
+                            tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
                             id=f"{data.id}/fnc_{len(data.generated_functions)}",
@@ -199,7 +209,7 @@ def perform_tts_inference(
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
-    timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
+    timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
@@ -487,6 +497,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                    )
+                )
                 continue
 
             if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
@@ -496,6 +513,13 @@ async def _execute_tools_task(
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
                     },
+                )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown tool type for function: {fnc_call.name}"),
+                    )
                 )
                 continue
 
@@ -574,7 +598,7 @@ async def _execute_tools_task(
                         bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
                         bound.apply_defaults()
 
-                        if asyncio.iscoroutinefunction(mock):
+                        if inspect.iscoroutinefunction(mock):
                             return await mock(*bound.args, **bound.kwargs)
                         else:
                             return mock(*bound.args, **bound.kwargs)
@@ -608,7 +632,16 @@ async def _execute_tools_task(
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        if not isinstance(e, StopResponse):
+                        if isinstance(e, ToolError):
+                            logger.warning(
+                                "ToolError while executing tool: %s",
+                                e.message,
+                                extra={
+                                    "function": fnc_call.name,
+                                    "speech_id": speech_handle.id,
+                                },
+                            )
+                        elif not isinstance(e, StopResponse):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},

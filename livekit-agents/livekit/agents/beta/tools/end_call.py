@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Awaitable
-from typing import Any, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ...job import get_job_context
 from ...llm import RealtimeModel, Tool, Toolset, function_tool

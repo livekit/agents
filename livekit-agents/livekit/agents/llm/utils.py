@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
-import sys
 import types
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Callable,
     Union,
     cast,
     get_args,
@@ -432,8 +431,7 @@ def _is_optional_type(hint: Any) -> bool:
     origin = get_origin(hint)
 
     is_union = origin is Union
-    if sys.version_info >= (3, 10):
-        is_union = is_union or origin is types.UnionType
+    is_union = is_union or origin is types.UnionType
 
     return is_union and type(None) in get_args(hint)
 

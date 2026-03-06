@@ -10,11 +10,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, LanguageCode, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -48,8 +49,6 @@ lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
         "gemini-live-2.5-flash-native-audio",
-        "gemini-live-2.5-flash-preview-native-audio-09-2025",
-        "gemini-live-2.5-flash-preview-native-audio",
     }
 )
 
@@ -59,7 +58,6 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
-        "gemini-2.0-flash-exp",
     }
 )
 
@@ -124,7 +122,7 @@ class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     response_modalities: list[types.Modality]
     vertexai: bool
     project: str | None
@@ -151,6 +149,7 @@ class _RealtimeOptions:
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    credentials: google.auth.credentials.Credentials | None = None
 
 
 @dataclass
@@ -218,6 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -318,6 +318,11 @@ class RealtimeModel(llm.RealtimeModel):
         else:
             gcp_project = None
             gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -344,7 +349,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             image_encode_options=image_encode_options,
             enable_affective_dialog=enable_affective_dialog,
             proactivity=proactivity,
@@ -357,6 +362,7 @@ class RealtimeModel(llm.RealtimeModel):
             http_options=http_options,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            credentials=credentials,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -455,6 +461,7 @@ class RealtimeSession(llm.RealtimeSession):
             vertexai=self._opts.vertexai,
             project=self._opts.project,
             location=self._opts.location,
+            credentials=self._opts.credentials,
             http_options=http_options,
         )
 
@@ -545,9 +552,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
-            1
-            for item in chat_ctx.items
-            if item.type == "message" and item.role in ["system", "developer"]
+            1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
         )
         if system_msg_count > 0:
             logger.warning(
@@ -774,8 +779,8 @@ class RealtimeSession(llm.RealtimeSession):
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
                             1
-                            for item in self._chat_ctx.items
-                            if item.type == "message" and item.role in ["system", "developer"]
+                            for msg in self._chat_ctx.messages()
+                            if msg.role in ("system", "developer")
                         )
                         if system_msg_count > 0:
                             logger.warning(

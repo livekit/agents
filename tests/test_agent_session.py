@@ -69,7 +69,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 2.0
+    speed = 5.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -335,7 +335,7 @@ async def test_interruption_by_text_input() -> None:
 
     asyncio.get_event_loop().call_later(5 / speed, fake_text_input)
 
-    await asyncio.wait_for(run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
@@ -435,7 +435,7 @@ async def test_generate_reply() -> None:
     """
     Test `generate_reply` in `on_enter` and tool call, `say` in `on_user_turn_completed`
     """
-    speed = 2.5
+    speed = 5.0
 
     actions = FakeActions()
     # llm and tts response for generate_reply() and say()
@@ -464,7 +464,7 @@ async def test_generate_reply() -> None:
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
     t_origin = await asyncio.wait_for(
-        run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT
+        run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT
     )
 
     # playback_finished
@@ -524,6 +524,49 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
+async def test_aec_warmup() -> None:
+    """AEC warmup should block audio-activity-based interruptions during the warmup window.
+
+    Without warmup, VAD-based interruption fires at 4.0 + 0.5 = 4.5s.
+    With warmup (3.0s from speaking at 3.5s, expires at 6.5s), the VAD path is blocked.
+    The interruption is delayed to 5.5s (EOU: speech end 5.0 + 0.5 endpointing delay)
+    because FakeSTT is timer-based and still produces transcripts during warmup.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(15.0)  # playout starts at 3.5s
+    # user speaks at 4.0-5.0s — within warmup window (3.5 + 3.0 = 6.5s expiry)
+    # without warmup: VAD interruption at 4.0 + 0.5 = 4.5s
+    # with warmup: VAD blocked, falls through to EOU at 5.0 + 0.5 = 5.5s
+    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"aec_warmup_duration": 3.0},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    # interruption delayed to 5.5s (EOU), not 4.5s (VAD was blocked by warmup)
+    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
+    check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
@@ -532,7 +575,7 @@ async def test_generate_reply() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
-    speed = 2.0
+    speed = 5.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
@@ -599,7 +642,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session.on("agent_state_changed", agent_state_events.append)
     session.on("conversation_item_added", conversation_events.append)
 
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=1.0), timeout=SESSION_TIMEOUT)
 
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
@@ -627,6 +670,47 @@ async def test_interrupt_during_on_user_turn_completed(
     assert conversation_events[2].item.type == "message"
     assert conversation_events[2].item.role == "assistant"
     assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
+
+
+async def test_unknown_function_call() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Check the weather")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="nonexistent_tool", arguments='{"location": "Tokyo"}', call_id="1"
+            )
+        ],
+    )
+    actions.add_llm(
+        content="I don't have access to that function.",
+        input="Unknown function: nonexistent_tool",
+    )
+    actions.add_tts(2.0)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].function_calls[0].name == "nonexistent_tool"
+    assert tool_executed_events[0].function_call_outputs[0].is_error is True
+    assert "Unknown function" in tool_executed_events[0].function_call_outputs[0].output
+
+    chat_ctx_items = agent.chat_ctx.items
+    error_outputs = [
+        item
+        for item in chat_ctx_items
+        if item.type == "function_call_output" and item.is_error is True
+    ]
+    assert len(error_outputs) == 1
+    assert "Unknown function: nonexistent_tool" in error_outputs[0].output
 
 
 # helpers

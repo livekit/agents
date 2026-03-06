@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -44,7 +43,7 @@ class DtmfAgent(Agent):
             ),
         )
 
-        self.phone_number: Optional[str] = None
+        self.phone_number: str | None = None
 
     async def on_enter(self) -> None:
         self.session.generate_reply(

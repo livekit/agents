@@ -4,7 +4,6 @@ import asyncio
 import ctypes
 from collections import deque
 from collections.abc import AsyncGenerator
-from typing import Union
 
 import aiofiles
 
@@ -14,7 +13,7 @@ from ..log import logger
 from .aio.utils import cancel_and_wait
 
 # deprecated aliases
-AudioBuffer = Union[list[rtc.AudioFrame], rtc.AudioFrame]
+AudioBuffer = list[rtc.AudioFrame] | rtc.AudioFrame
 
 combine_frames = rtc.combine_audio_frames
 merge_frames = rtc.combine_audio_frames

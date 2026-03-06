@@ -44,6 +44,8 @@ COMMON_INSTRUCTIONS = (
     "E.g: a hamburger isn't a cheeseburger\n"
     "Do not ask for size unless the item has more than one size option specified. \n"
     "If an item does not require a size according to the menu, **NEVER** ask the customer to choose one or mention size at all. \n"
+    "\n\n"
+    "If there is any error from the tool, you should inform the customer and ask them to try again."
 )
 
 

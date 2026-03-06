@@ -5,7 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 import aiohttp
 
@@ -229,7 +229,10 @@ class TTS(tts.TTS):
 
         minimax_api_key = api_key or os.environ.get("MINIMAX_API_KEY")
         if not minimax_api_key:
-            raise ValueError("MINIMAX_API_KEY must be set")
+            raise ValueError(
+                "MiniMax API key is required, either as argument or set"
+                " MINIMAX_API_KEY environment variable"
+            )
 
         if not (0.5 <= speed <= 2.0):
             raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
@@ -309,7 +312,7 @@ class TTS(tts.TTS):
             self._opts.voice_id = voice
 
         if utils.is_given(emotion):
-            self._opts.emotion = cast(Optional[TTSEmotion], emotion)
+            self._opts.emotion = emotion
 
         if utils.is_given(speed):
             self._opts.speed = speed
@@ -336,7 +339,7 @@ class TTS(tts.TTS):
             self._opts.timbre = timbre
 
         if utils.is_given(language_boost):
-            self._opts.language_boost = cast(Optional[TTSLanguageBoost], language_boost)
+            self._opts.language_boost = language_boost
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

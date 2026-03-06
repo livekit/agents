@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -188,9 +188,7 @@ class MockBankService:
     def list_deposit_accounts(self, customer_id: str) -> tuple[DepositAccount, ...]:
         return self.get_profile(customer_id).deposit_accounts
 
-    def find_deposit_account(
-        self, customer_id: str, account_number: str
-    ) -> Optional[DepositAccount]:  # noqa: UP007
+    def find_deposit_account(self, customer_id: str, account_number: str) -> DepositAccount | None:  # noqa: UP007
         for acct in self.list_deposit_accounts(customer_id):
             if acct.account_number == account_number:
                 return acct

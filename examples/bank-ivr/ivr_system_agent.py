@@ -4,7 +4,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from dotenv import load_dotenv
 from mock_bank_service import (
@@ -53,9 +52,9 @@ class TaskOutcome(str, Enum):
 
 @dataclass
 class SessionState:
-    customer_id: Optional[str] = None  # noqa: UP007
-    customer_name: Optional[str] = None  # noqa: UP007
-    branch_name: Optional[str] = None  # noqa: UP007
+    customer_id: str | None = None  # noqa: UP007
+    customer_name: str | None = None  # noqa: UP007
+    branch_name: str | None = None  # noqa: UP007
     deposit_cache: dict[str, tuple[DepositAccount, ...]] = field(default_factory=dict)
     card_cache: dict[str, tuple[CreditCard, ...]] = field(default_factory=dict)
     loan_cache: dict[str, tuple[LoanAccount, ...]] = field(default_factory=dict)

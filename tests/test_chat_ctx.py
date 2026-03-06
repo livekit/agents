@@ -240,3 +240,80 @@ async def test_summarize():
         summary = await chat_ctx._summarize(llm, keep_last_turns=1)
         print("\n=== Summary ===\n")
         print(json.dumps(summary.to_dict(), indent=2))
+
+
+# --- truncate tests ---
+
+
+def _make_ctx(*roles: str):
+    """Build a ChatContext with messages of the given roles."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    for role in roles:
+        if role == "function_call":
+            ctx.items.append(FunctionCall(name="fn", call_id="c1", arguments="{}"))
+        elif role == "function_call_output":
+            ctx.items.append(
+                FunctionCallOutput(name="fn", call_id="c1", output="{}", is_error=False)
+            )
+        else:
+            ctx.add_message(role=role, content=f"msg-{role}")
+    return ctx
+
+
+def test_truncate_noop_when_under_limit():
+    ctx = _make_ctx("system", "user", "assistant")
+    original_ids = [item.id for item in ctx.items]
+    ctx.truncate(max_items=5)
+    assert [item.id for item in ctx.items] == original_ids
+
+
+def test_truncate_basic():
+    ctx = _make_ctx("user", "assistant", "user", "assistant")
+    ctx.truncate(max_items=2)
+    assert len(ctx.items) == 2
+    assert ctx.items[0].role == "user"
+    assert ctx.items[1].role == "assistant"
+
+
+def test_truncate_preserves_system_instruction():
+    ctx = _make_ctx("system", "user", "assistant", "user", "assistant")
+    ctx.truncate(max_items=2)
+    # system should be re-inserted at the front
+    assert ctx.items[0].role == "system"
+    assert len(ctx.items) == 3  # system + last 2
+
+
+def test_truncate_preserves_developer_instruction():
+    ctx = _make_ctx("developer", "user", "assistant", "user", "assistant")
+    ctx.truncate(max_items=2)
+    assert ctx.items[0].role == "developer"
+    assert len(ctx.items) == 3
+
+
+def test_truncate_no_duplication():
+    """When the instruction is already in the truncated tail, don't insert it again."""
+    ctx = _make_ctx("system", "user", "assistant")
+    ctx.truncate(max_items=3)
+    # system is already within the last 3 items, so no duplication
+    system_items = [item for item in ctx.items if getattr(item, "role", None) == "system"]
+    assert len(system_items) == 1
+    assert len(ctx.items) <= 3
+
+
+def test_truncate_multiple_instructions():
+    """Only the first instruction by position is preserved."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="first")
+    ctx.add_message(role="developer", content="second")
+    ctx.add_message(role="user", content="u1")
+    ctx.add_message(role="user", content="u2")
+    ctx.add_message(role="user", content="u3")
+
+    ctx.truncate(max_items=2)
+    # first instruction is the system msg
+    assert ctx.items[0].role == "system"
+    assert ctx.items[0].content == ["first"]

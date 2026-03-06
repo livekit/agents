@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sys
-from typing import Callable, ClassVar
+from collections.abc import Callable
+from typing import ClassVar
 
 __all__ = ["readchar", "readkey", "key"]
 

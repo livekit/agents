@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Annotated, Optional
+from typing import Annotated
 
 import yaml
 from dotenv import load_dotenv
@@ -37,22 +37,22 @@ voices = {
 
 @dataclass
 class UserData:
-    customer_name: Optional[str] = None
-    customer_phone: Optional[str] = None
+    customer_name: str | None = None
+    customer_phone: str | None = None
 
-    reservation_time: Optional[str] = None
+    reservation_time: str | None = None
 
-    order: Optional[list[str]] = None
+    order: list[str] | None = None
 
-    customer_credit_card: Optional[str] = None
-    customer_credit_card_expiry: Optional[str] = None
-    customer_credit_card_cvv: Optional[str] = None
+    customer_credit_card: str | None = None
+    customer_credit_card_expiry: str | None = None
+    customer_credit_card_cvv: str | None = None
 
-    expense: Optional[float] = None
-    checked_out: Optional[bool] = None
+    expense: float | None = None
+    checked_out: bool | None = None
 
     agents: dict[str, Agent] = field(default_factory=dict)
-    prev_agent: Optional[Agent] = None
+    prev_agent: Agent | None = None
 
     def summarize(self) -> str:
         data = {

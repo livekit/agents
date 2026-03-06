@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 import itertools
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 

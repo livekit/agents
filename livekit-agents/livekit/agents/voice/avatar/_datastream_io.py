@@ -4,9 +4,9 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
-from typing import Any, Callable, Union
+from typing import Any
 
 from livekit import rtc
 
@@ -290,7 +290,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
-        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
+        self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
 
         self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False

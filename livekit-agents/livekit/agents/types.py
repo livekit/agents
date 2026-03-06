@@ -1,7 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, TypeVar, Union
-
-from typing_extensions import TypeAlias
+from typing import Literal, TypeAlias, TypeVar
 
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
@@ -92,7 +90,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NotGivenOr: TypeAlias = Union[_T, NotGiven]
+NotGivenOr: TypeAlias = _T | NotGiven
 NOT_GIVEN = NotGiven()
 
 
