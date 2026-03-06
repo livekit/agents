@@ -1416,7 +1416,7 @@ class RealtimeSessionBeta(
             assert item.name is not None, "name is None"
             assert item.arguments is not None, "arguments is None"
 
-            if (remote_item := self._remote_chat_ctx.get(item.id)) and isinstance(
+            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
                 remote_item.item, llm.FunctionCall
             ):
                 fnc_call = remote_item.item
