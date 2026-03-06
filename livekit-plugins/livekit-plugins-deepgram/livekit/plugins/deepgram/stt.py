@@ -33,7 +33,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -51,7 +51,7 @@ from .models import DeepgramLanguages, DeepgramModels
 
 @dataclass
 class STTOptions:
-    language: Language | None
+    language: LanguageCode | None
     detect_language: bool
     interim_results: bool
     punctuate: bool
@@ -164,7 +164,7 @@ class STT(stt.STT):
         _validate_keyterm(model, language, keyterm, keywords)
 
         self._opts = STTOptions(
-            language=Language(language) if language else None,
+            language=LanguageCode(language) if language else None,
             detect_language=detect_language,
             interim_results=interim_results,
             punctuate=punctuate,
@@ -301,7 +301,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(model):
             self._opts.model = _validate_model(model, language)
         if is_given(interim_results):
@@ -367,7 +367,7 @@ class STT(stt.STT):
     ) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if is_given(language):
-            config.language = Language(language)
+            config.language = LanguageCode(language)
 
         if config.detect_language:
             config.language = None
@@ -435,7 +435,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(model):
             self._opts.model = _validate_model(model, language)
         if is_given(interim_results):
@@ -734,7 +734,7 @@ def live_transcription_to_speech_data(
             speaker = None
 
         sd = stt.SpeechData(
-            language=Language(language),
+            language=LanguageCode(language),
             start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
             end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
             confidence=alt["confidence"],
@@ -753,7 +753,7 @@ def live_transcription_to_speech_data(
             else None,
         )
         if language == "multi" and "languages" in alt:
-            sd.language = Language(alt["languages"][0])  # TODO: handle multiple languages
+            sd.language = LanguageCode(alt["languages"][0])  # TODO: handle multiple languages
         speech_data.append(sd)
     return speech_data
 
@@ -769,14 +769,14 @@ def prerecorded_transcription_to_speech_event(
 
     # Use the detected language if enabled
     # https://developers.deepgram.com/docs/language-detection
-    detected_language = Language(channel.get("detected_language", ""))
+    detected_language = LanguageCode(channel.get("detected_language", ""))
 
     return stt.SpeechEvent(
         request_id=request_id,
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             stt.SpeechData(
-                language=Language(language or detected_language),
+                language=LanguageCode(language or detected_language),
                 start_time=alt["words"][0]["start"] if alt["words"] else 0,
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],

@@ -13,7 +13,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..language import Language
+from ..language import LanguageCode
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -61,8 +61,8 @@ class _TurnDetector(Protocol):
         return "unknown"
 
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: Language | None) -> float | None: ...
-    async def supports_language(self, language: Language | None) -> bool: ...
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
+    async def supports_language(self, language: LanguageCode | None) -> bool: ...
 
     async def predict_end_of_turn(
         self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
@@ -139,7 +139,7 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
-        self._last_language: Language | None = None
+        self._last_language: LanguageCode | None = None
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -256,9 +256,13 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
-    ) -> None:
+    ) -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
         if not self._stt or self._closing.is_set():
-            return
+            fut.set_result("")
+            return fut
 
         async def _commit_user_turn() -> None:
             if self._last_final_transcript_time is None or (
@@ -305,7 +309,7 @@ class AudioRecognition:
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         alternatives=[
                             stt.SpeechData(
-                                language=Language(""), text=self._audio_interim_transcript
+                                language=LanguageCode(""), text=self._audio_interim_transcript
                             )
                         ],
                     )
@@ -316,15 +320,28 @@ class AudioRecognition:
                     f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
                 )
 
+            transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx, skip_reply=skip_reply)
             self._user_turn_committed = True
+            if not fut.done():
+                fut.set_result(transcript)
+
+        def _on_task_done(task: asyncio.Task[None]) -> None:
+            if fut.done():
+                return
+            if task.cancelled():
+                fut.cancel()
+            elif exc := task.exception():
+                fut.set_exception(exc)
 
         if self._commit_user_turn_atask is not None:
             self._commit_user_turn_atask.cancel()
 
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
+        self._commit_user_turn_atask.add_done_callback(_on_task_done)
+        return fut
 
     @property
     def current_transcript(self) -> str:

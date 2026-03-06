@@ -19,6 +19,7 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from time import time as _wall_time
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -141,6 +142,7 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._pushed_duration: float = 0.0
         self._capture_start: float = 0.0
         self._flush_task: asyncio.Task[None] | None = None
+        self._playback_started_fired: bool = False
 
         self._output_buf = bytearray()
         self._audio_lock = threading.Lock()
@@ -150,6 +152,9 @@ class ConsoleAudioOutput(io.AudioOutput):
 
         self._paused_at: float | None = None
         self._paused_duration: float = 0.0
+
+        # track the segment id to avoid stale async operations
+        self._segment_id = 0
 
     @property
     def audio_lock(self) -> threading.Lock:
@@ -175,7 +180,6 @@ class ConsoleAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             self._capture_start = time.monotonic()
-            self.on_playback_started(created_at=time.time())
 
         self._pushed_duration += frame.duration
         with self._audio_lock:
@@ -195,6 +199,9 @@ class ConsoleAudioOutput(io.AudioOutput):
         with self._audio_lock:
             self._output_buf.clear()
             self._output_buf_empty.set()
+            # redundant (_wait_for_playout does the same, albeit async) but defensive
+            self._segment_id += 1
+            self._playback_started_fired = False
 
         if self._pushed_duration:
             self._interrupted_ev.set()
@@ -248,6 +255,24 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._interrupted_ev.clear()
         with self._audio_lock:
             self._output_buf_empty.set()
+            self._playback_started_fired = False
+            self._segment_id += 1
+
+    def _maybe_mark_playback_started(self) -> None:
+        """Mark the playback as started if it hasn't been already. Must be called under ``audio_lock``."""
+        if self._playback_started_fired:
+            return
+        self._playback_started_fired = True
+        t = _wall_time()
+        segment_id = self._segment_id
+        self._loop.call_soon_threadsafe(
+            lambda: self._on_playback_started(created_at=t, segment_id=segment_id)
+        )
+
+    def _on_playback_started(self, *, created_at: float, segment_id: int) -> None:
+        if self._segment_id != segment_id:
+            return
+        self.on_playback_started(created_at=created_at)
 
 
 class AgentsConsole:
@@ -698,6 +723,8 @@ class AgentsConsole:
                 bytes_needed = frames * 2
                 if len(self._io_audio_output.audio_buffer) < bytes_needed:
                     available_bytes = len(self._io_audio_output.audio_buffer)
+                    if available_bytes > 0:
+                        self._io_audio_output._maybe_mark_playback_started()
                     outdata[: available_bytes // 2, 0] = np.frombuffer(
                         self._io_audio_output.audio_buffer,
                         dtype=np.int16,
@@ -707,6 +734,7 @@ class AgentsConsole:
                     del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
                     self.io_loop.call_soon_threadsafe(self._io_audio_output.mark_output_empty)
                 else:
+                    self._io_audio_output._maybe_mark_playback_started()
                     chunk = self._io_audio_output.audio_buffer[:bytes_needed]
                     outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
                     del self._io_audio_output.audio_buffer[:bytes_needed]

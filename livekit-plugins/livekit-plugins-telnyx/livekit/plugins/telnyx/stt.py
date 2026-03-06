@@ -19,7 +19,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -35,7 +35,7 @@ TranscriptionEngine = Literal["telnyx", "google", "deepgram", "azure"]
 @dataclass
 class _STTOptions:
     api_key: str
-    language: Language
+    language: LanguageCode
     transcription_engine: TranscriptionEngine
     interim_results: bool
     base_url: str
@@ -63,7 +63,7 @@ class STT(stt.STT):
 
         self._opts = _STTOptions(
             api_key=get_api_key(api_key),
-            language=Language(language),
+            language=LanguageCode(language),
             transcription_engine=transcription_engine,
             interim_results=interim_results,
             base_url=base_url,
@@ -87,7 +87,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        resolved_language = Language(language) if is_given(language) else self._opts.language
+        resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
 
         stream = self.stream(language=language, conn_options=conn_options)
         try:
@@ -120,7 +120,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        resolved_language = Language(language) if is_given(language) else self._opts.language
+        resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -169,7 +169,7 @@ class SpeechStream(stt.RecognizeStream):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        language: Language,
+        language: LanguageCode,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
         self._stt: STT = stt

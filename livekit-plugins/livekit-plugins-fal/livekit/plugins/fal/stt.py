@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import fal_client
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, Language, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -17,7 +17,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 @dataclass
 class _STTOptions:
-    language: Language = Language("en")
+    language: LanguageCode = LanguageCode("en")
     task: str = "transcribe"
     chunk_level: str = "segment"
     version: str = "3"
@@ -39,7 +39,7 @@ class WizperSTT(stt.STT):
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
         self._opts = _STTOptions(
-            language=Language(language) if is_given(language) else Language("en")
+            language=LanguageCode(language) if is_given(language) else LanguageCode("en")
         )
         self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
@@ -53,7 +53,7 @@ class WizperSTT(stt.STT):
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
 
     async def _recognize_impl(
         self,
@@ -64,7 +64,7 @@ class WizperSTT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = Language(language)
+                self._opts.language = LanguageCode(language)
             data_uri = fal_client.encode(
                 rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
