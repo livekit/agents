@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, Awaitable
+from collections.abc import AsyncIterable, Awaitable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -207,3 +207,16 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def start_user_activity(self) -> None:
         """notifies the model that user activity has started"""
         pass
+
+
+@runtime_checkable
+class DualChatContextSyncSession(Protocol):
+    """Optional capability for realtime sessions that handles synchronization between a local and a
+    remote chat context, where certain items may arrive in remote context before local context.
+
+    This capability allows external entities to notify the session that certain items have arrived
+    in local context.
+    """
+
+    # Notify that function calls have been started/completed, and are therefore in local context
+    def notify_fc_processed(self, item_ids: Sequence[str]) -> None: ...

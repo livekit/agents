@@ -8,7 +8,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -537,6 +537,7 @@ class RealtimeSessionBeta(
 
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+        self._inflight_fc_ids: set[str] = set()
 
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
@@ -1019,6 +1020,8 @@ class RealtimeSessionBeta(
             )
 
         for msg_id in diff_ops.to_remove:
+            if msg_id in self._inflight_fc_ids:
+                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1026,6 +1029,8 @@ class RealtimeSessionBeta(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
+            if msg_id in self._inflight_fc_ids:
+                continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
 
@@ -1299,6 +1304,10 @@ class RealtimeSessionBeta(
                 ["text"] if item_type == "text" else ["audio", "text"]
             )
 
+    def notify_fc_processed(self, item_ids: Sequence[str]) -> None:
+        for item_id in item_ids:
+            self._inflight_fc_ids.discard(item_id)
+
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
@@ -1310,6 +1319,9 @@ class RealtimeSessionBeta(
             logger.warning(
                 f"failed to insert item `{event.item.id}`: {str(e)}",
             )
+
+        if event.item.type == "function_call":
+            self._inflight_fc_ids.add(event.item.id)
 
         if fut := self._item_create_future.pop(event.item.id, None):
             fut.set_result(None)
@@ -1323,6 +1335,8 @@ class RealtimeSessionBeta(
             logger.warning(
                 f"failed to delete item `{event.item_id}`: {str(e)}",
             )
+
+        self._inflight_fc_ids.discard(event.item_id)
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             fut.set_result(None)
