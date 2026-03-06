@@ -182,7 +182,7 @@ def build_update_record(mutable_fields: list[str] | None = None) -> FunctionTool
             "insurance": (GetInsuranceTask, "insurance"),
         }
         task_class, attr = field_map[field]
-        chat_ctx = llm.ChatContext()
+        chat_ctx = context.session.history.copy()
         chat_ctx.add_message(
             role="system", content=f"The user provided the new field: {updated_detail}"
         )
@@ -205,6 +205,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             instructions="""You will now assist the user with selecting a doctor and appointment time.
             Do not be verbose and ask for any unnecessary information unless instructed to.
             Avoid using special characters like bullet points when listing out doctors and available timeslots, maintain a natural tone.
+            You will focus on confirming the doctor the user selects first. Do not ask for appointment times preemptively.
             """
             + GLOBAL_INSTRUCTIONS,
             tools=[
@@ -232,20 +233,9 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
         chat_ctx = self.chat_ctx.copy()
-        chat_ctx.items = [
-            item
-            for item in chat_ctx.items
-            if not (
-                item.type == "message"
-                and item.role == "system"
-                and (item.text_content or "").startswith(
-                    "These doctors are compatible with the user's insurance:"
-                )
-            )
-        ]
         chat_ctx.add_message(
             role="system",
-            content=f"These doctors are compatible with the user's insurance: {available_doctors}",
+            content=f"These doctors are now compatible with the user's insurance: {available_doctors}",
         )
         await self.update_chat_ctx(chat_ctx)
 
@@ -280,11 +270,9 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             return "No profile was found to update"
         self.session.userdata.profile["insurance"] = result.insurance
         await self._setup_doctor_selection()
-        compatible_doctors = [doc["name"] for doc in self._compatible_doctor_records]
-        return f"The insurance has been updated, inform the user of the doctors now compatible to them: {compatible_doctors}"
+        return "The insurance has been updated, prompt the user to choose a compatible doctor."
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
-
         @function_tool()
         async def confirm_doctor_selection(
             selected_doctor: Annotated[
@@ -547,7 +535,7 @@ class HealthcareAgent(Agent):
                 results = await task_group
             except ProfileFound:
                 self.session.generate_reply(
-                    instructions="Inform the user that an existing profile has been found."
+                    instructions="Inform the user that an existing profile has been found with their details."
                 )
             else:
                 patient_name = f"{results.task_results['get_name_task'].first_name} {results.task_results['get_name_task'].last_name}"
@@ -714,7 +702,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=openai.responses.LLM(model="gpt-4.1"),
+        llm=openai.responses.LLM(),
         tts=inference.TTS("inworld/inworld-tts-1"),
         vad=silero.VAD.load(),
         preemptive_generation=True,
