@@ -48,6 +48,8 @@ import numpy as np
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import AudioBuffer
 
 from .client import ValenceWebSocketClient
 from .log import logger
@@ -152,7 +154,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: str = "",
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> EmotionAwareRecognizeStream:
         """Create a streaming recognition session with emotion awareness.
@@ -174,9 +176,9 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: stt.AudioBuffer,
+        buffer: AudioBuffer,
         *,
-        language: str,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         """Recognize speech from an audio buffer with emotion awareness.
@@ -201,15 +203,16 @@ class STT(stt.STT):
         # If we have audio and Valence is connected, detect emotion per sentence
         if self._valence_client and self._valence_connected:
             try:
-                # Convert buffer to numpy array for Valence
-                samples = np.frombuffer(buffer.data, dtype=np.int16)
+                # Combine frames if buffer is a list of AudioFrames
+                combined = rtc.combine_audio_frames(buffer) if isinstance(buffer, list) else buffer
+                samples = np.frombuffer(combined.data, dtype=np.int16)
 
                 # Enrich the transcription with emotions per sentence
                 if result.alternatives:
                     new_alternatives = []
                     for alt in result.alternatives:
                         enriched_text = await self._enrich_text_with_emotions(
-                            alt.text, samples, buffer.sample_rate
+                            alt.text, samples, combined.sample_rate
                         )
                         new_alternatives.append(
                             stt.SpeechData(
@@ -250,6 +253,7 @@ class STT(stt.STT):
 
         # If only one sentence, detect emotion for the whole audio
         if len(sentences) == 1:
+            assert self._valence_client is not None
             emotions = await self._valence_client.process_audio(samples, sample_rate)
             emotion = emotions.get("dominant", "neutral")
             confidence = emotions.get("confidence", 0.0)
@@ -274,6 +278,7 @@ class STT(stt.STT):
 
             if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
                 try:
+                    assert self._valence_client is not None
                     emotions = await self._valence_client.process_audio(audio_segment, sample_rate)
                     emotion = emotions.get("dominant", "neutral")
                     confidence = emotions.get("confidence", 0.0)
@@ -350,8 +355,8 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         stt_instance: STT,
         underlying_stt: stt.STT,
         min_confidence: float,
-        language: str,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(stt=stt_instance, conn_options=conn_options)
 
@@ -385,6 +390,8 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
 
         frame_count = 0
 
+        _background_tasks: set[asyncio.Task[None]] = set()
+
         async def forward_audio() -> None:
             """Forward audio frames to underlying STT and stream to Valence."""
             nonlocal frame_count
@@ -405,13 +412,15 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
 
                     # Stream to Valence API continuously (fire-and-forget)
                     if valence_client and valence_connected:
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             valence_client.send_audio_chunk(
-                                audio_data=frame.data,
+                                audio_data=bytes(frame.data),
                                 sample_rate=frame.sample_rate,
                                 samples_per_channel=frame.samples_per_channel,
                             )
                         )
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
 
             logger.debug(f"Input ended. Total frames: {frame_count}")
             underlying_stream.end_input()
@@ -436,6 +445,8 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         try:
             await asyncio.gather(forward_task, receive_task)
         finally:
+            for task in _background_tasks:
+                task.cancel()
             if valence_client and valence_connected:
                 await valence_client.stop_streaming()
             await underlying_stream.aclose()

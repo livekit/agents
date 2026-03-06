@@ -24,7 +24,7 @@ from typing import Literal
 import numpy as np
 
 try:
-    import socketio
+    import socketio  # type: ignore[import-untyped]
 except ImportError as e:
     raise ImportError(
         "python-socketio package is required. Install it with: pip install python-socketio[asyncio_client] aiohttp"
@@ -88,7 +88,7 @@ class ValenceWebSocketClient:
     @property
     def is_connected(self) -> bool:
         """Check if the WebSocket connection is active."""
-        return self._sio.connected
+        return bool(self._sio.connected)
 
     @property
     def session_id(self) -> str | None:
@@ -103,16 +103,16 @@ class ValenceWebSocketClient:
     def _setup_handlers(self) -> None:
         """Set up Socket.IO event handlers."""
 
-        @self._sio.on("connect")
+        @self._sio.on("connect")  # type: ignore[untyped-decorator]
         async def on_connect() -> None:
             logger.debug(f"Connected to Valence API at {self._server_url}")
 
-        @self._sio.on("connected")
+        @self._sio.on("connected")  # type: ignore[untyped-decorator]
         async def on_connected(data: dict) -> None:
             self._session_id = data.get("session_id")
             logger.info(f"Valence session established: {self._session_id}")
 
-        @self._sio.on("prediction")
+        @self._sio.on("prediction")  # type: ignore[untyped-decorator]
         async def on_prediction(prediction: dict) -> None:
             emotion_entry = {
                 "dominant": prediction.get("main_emotion", "neutral"),
@@ -135,20 +135,22 @@ class ValenceWebSocketClient:
                 if len(self._emotion_history) > 20:
                     self._emotion_history = self._emotion_history[-20:]
 
+                history_size = len(self._emotion_history)
+                prev_entry = self._emotion_history[-2] if history_size > 1 else None
+
             logger.debug(
                 f"Emotion prediction at {self._total_audio_sent_ms:.0f}ms: "
                 f"{emotion_entry['dominant']} ({emotion_entry['confidence']:.1%})"
             )
 
             # Log prediction gap for performance monitoring
-            if len(self._emotion_history) > 1:
-                prev = self._emotion_history[-2]
-                gap_ms = emotion_entry["timestamp_ms"] - prev["timestamp_ms"]
+            if prev_entry is not None:
+                gap_ms = emotion_entry["timestamp_ms"] - prev_entry["timestamp_ms"]
                 logger.info(
                     f"[PERF] VALENCE | prediction_gap={gap_ms:.0f}ms "
                     f"emotion={emotion_entry['dominant']} "
                     f"confidence={emotion_entry['confidence']:.1%} "
-                    f"history_size={len(self._emotion_history)}"
+                    f"history_size={history_size}"
                 )
             else:
                 logger.info(
@@ -162,11 +164,11 @@ class ValenceWebSocketClient:
             if self._prediction_event:
                 self._prediction_event.set()
 
-        @self._sio.on("error")
+        @self._sio.on("error")  # type: ignore[untyped-decorator]
         async def on_error(error: dict) -> None:
             logger.error(f"Valence API error: {error}")
 
-        @self._sio.on("disconnect")
+        @self._sio.on("disconnect")  # type: ignore[untyped-decorator]
         async def on_disconnect() -> None:
             logger.debug("Disconnected from Valence API")
 
