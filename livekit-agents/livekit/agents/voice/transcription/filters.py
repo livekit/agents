@@ -2,7 +2,7 @@ import re
 from collections.abc import AsyncIterable, Sequence
 from typing import Literal
 
-TextTransforms = Literal["filter_markdown", "filter_emoji"]
+TextTransforms = Literal["filter_markdown", "filter_emoji", "filter_ssml"]
 
 
 def apply_text_transforms(
@@ -11,6 +11,7 @@ def apply_text_transforms(
     all_transforms = {
         "filter_markdown": filter_markdown,
         "filter_emoji": filter_emoji,
+        "filter_ssml": filter_ssml,
     }
 
     for transform in transforms:
@@ -175,3 +176,42 @@ async def filter_emoji(text: AsyncIterable[str]) -> AsyncIterable[str]:
     async for chunk in text:
         filtered_chunk = EMOJI_PATTERN.sub("", chunk)
         yield filtered_chunk
+
+
+# Matches SSML tags: self-closing (e.g. <break time="1s"/>), opening (e.g. <speak>),
+# and closing (e.g. </prosody>). Uses a non-greedy match to handle multiple tags per chunk.
+SSML_TAG_PATTERN = re.compile(r"</?[a-zA-Z][^>]*?>")
+
+
+def strip_ssml(text: str) -> str:
+    """Strip SSML tags from a string, returning only the plain text content."""
+    return SSML_TAG_PATTERN.sub("", text)
+
+
+async def filter_ssml(text: AsyncIterable[str]) -> AsyncIterable[str]:
+    """
+    Filter out SSML tags (e.g. ``<break time="1s"/>``, ``<speak>``, ``</prosody>``)
+    from the text, keeping only the plain text content.
+
+    Handles incomplete tags that may span across streaming chunks by buffering
+    text after an unmatched ``<`` until the closing ``>`` arrives.
+    """
+    buffer = ""
+
+    async for chunk in text:
+        buffer += chunk
+
+        # check for a potential incomplete tag at the end of the buffer
+        last_open = buffer.rfind("<")
+        if last_open != -1 and ">" not in buffer[last_open:]:
+            # incomplete tag - yield everything before it and keep buffering
+            complete = buffer[:last_open]
+            if complete:
+                yield SSML_TAG_PATTERN.sub("", complete)
+            buffer = buffer[last_open:]
+        else:
+            yield SSML_TAG_PATTERN.sub("", buffer)
+            buffer = ""
+
+    if buffer:
+        yield SSML_TAG_PATTERN.sub("", buffer)
