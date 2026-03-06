@@ -95,7 +95,7 @@ class TTS(tts.TTS):
                 "OpenAI API key is required, either as argument or set"
                 " OPENAI_API_KEY environment variable"
             )
-
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
@@ -184,7 +184,7 @@ class TTS(tts.TTS):
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
-        return TTS(
+        tts = TTS(
             model=model,
             voice=voice,
             speed=speed,
@@ -192,6 +192,8 @@ class TTS(tts.TTS):
             client=azure_client,
             response_format=response_format,
         )
+        tts._owns_client = True
+        return tts
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -214,6 +216,9 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         if self._prewarm_task:
             await aio.cancel_and_wait(self._prewarm_task)
+
+        if self._owns_client:
+            await self._client.close()
 
 
 class AudioChunkedStream(tts.ChunkedStream):
