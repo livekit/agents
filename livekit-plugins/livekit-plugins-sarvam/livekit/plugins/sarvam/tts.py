@@ -36,12 +36,18 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
     tokenize,
     tts,
     utils,
 )
 
+try:
+    from livekit.agents import Language
+except Exception:
+    try:
+        from livekit.agents.language import Language
+    except Exception:
+        from livekit.agents.language import LanguageCode as Language
 from .log import logger
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
@@ -647,7 +653,7 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message="Sarvam TTS API Error",
+                        message=f"Sarvam TTS API Error ({res.status}): {error_text}",
                         status_code=res.status,
                         body=error_text,
                     )
@@ -742,6 +748,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -749,7 +757,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(f"TTS stream failed: {e}") from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
             output_emitter.end_input()
@@ -818,8 +826,38 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
+                        close_code = ws.close_code if ws.close_code is not None else msg.data
+                        close_reason = msg.extra
+                        is_expected_close = close_code in (1000, 1001, None)
+                        if not is_expected_close:
+                            logger.error(
+                                "WebSocket connection closed by server",
+                                extra={
+                                    **self._build_log_context(),
+                                    "close_code": close_code,
+                                    "close_reason": close_reason,
+                                },
+                            )
+                            raw_close = {
+                                "msg_type": str(msg.type),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            }
+                            raise APIStatusError(
+                                message=(
+                                    "Sarvam TTS WebSocket closed with non-graceful status: "
+                                    f"{json.dumps(raw_close, ensure_ascii=False)}"
+                                ),
+                                status_code=int(close_code) if isinstance(close_code, int) else -1,
+                                body=raw_close,
+                            )
                         logger.info(
-                            "WebSocket connection closed by server", extra=self._build_log_context()
+                            "WebSocket connection closed by server",
+                            extra={
+                                **self._build_log_context(),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            },
                         )
                         break
 
@@ -877,6 +915,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._connection_state = ConnectionState.FAILED
             logger.error(f"Connection failed: {e}", extra=self._build_log_context())
             raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            self._connection_state = ConnectionState.FAILED
+            raise
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
             logger.error(
@@ -934,7 +975,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 extra=self._build_log_context(),
                 exc_info=True,
             )
-            raise APIStatusError(f"Message processing error: {e}") from e
+            raise APIStatusError(
+                message=f"Message processing error: {e}. Raw server message: {msg_data}",
+                body={"raw_message": msg_data},
+            ) from e
 
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
@@ -959,6 +1003,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         error_data = resp.get("data", {})
         error_msg = error_data.get("message", "Unknown error")
         error_code = error_data.get("code", "unknown")
+        raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
 
         logger.error(
             f"TTS API error: {error_msg}",
@@ -966,6 +1011,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_message": error_msg,
+                "raw_message": resp,
             },
         )
 
@@ -974,9 +1020,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         is_recoverable = any(err in str(error_msg).lower() for err in recoverable_errors)
 
         if is_recoverable:
-            raise APIConnectionError(f"Recoverable TTS API error: {error_msg}")
+            raise APIConnectionError(f"Recoverable TTS API error from Sarvam: {raw_error_message}")
         else:
-            raise APIStatusError(message=f"TTS API error: {error_msg}", status_code=500)
+            raise APIStatusError(
+                message=f"TTS API error from Sarvam: {raw_error_message}",
+                status_code=500,
+                body=resp,
+            )
 
     async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""
