@@ -132,7 +132,7 @@ async def transfer_to_human(context: RunContext) -> None:
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
-    def __init__(self, chat_ctx: llm.ChatContext | None = None):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = False):
         super().__init__(
             instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
