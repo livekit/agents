@@ -67,7 +67,7 @@ class _ProcClient:
             import blockguard
 
             blockguard.install()
-        except ImportError:
+        except Exception:
             pass
 
         try:
@@ -87,7 +87,7 @@ class _ProcClient:
                 import blockguard
 
                 blockguard.uninstall()
-            except (ImportError, RuntimeError):
+            except Exception:
                 pass
             loop.run_until_complete(loop.shutdown_default_executor())
 

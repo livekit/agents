@@ -58,7 +58,17 @@ ensure_initialized(void)
     InitializeConditionVariable(&g.cv);
 #else
     pthread_mutex_init(&g.mu, NULL);
+#ifdef __linux__
+    {
+        pthread_condattr_t cattr;
+        pthread_condattr_init(&cattr);
+        pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+        pthread_cond_init(&g.cv, &cattr);
+        pthread_condattr_destroy(&cattr);
+    }
+#else
     pthread_cond_init(&g.cv, NULL);
+#endif
 #endif
     g_initialized = 1;
 }
@@ -220,7 +230,11 @@ watchdog_body(void *arg)
         LeaveCriticalSection(&g.mu);
 #else
         struct timespec deadline;
+#ifdef __linux__
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+#else
         clock_gettime(CLOCK_REALTIME, &deadline);
+#endif
         {
             long add_ns = (long)(g.poll_ms * 1e6);
             deadline.tv_nsec += add_ns;
