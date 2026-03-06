@@ -1559,9 +1559,7 @@ class RealtimeSession(
         if isinstance(usage, UsageTranscriptTextUsageTokens):
             details = usage.input_token_details
             input_audio_tokens = (
-                details.audio_tokens
-                if details and details.audio_tokens is not None
-                else 0
+                details.audio_tokens if details and details.audio_tokens is not None else 0
             )
             stt_metrics = STTMetrics(
                 request_id=event.event_id,
