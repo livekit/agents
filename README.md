@@ -226,6 +226,8 @@ async def test_no_availability() -> None:
 
 ## Examples
 
+For more examples and detailed setup instructions, see the [examples directory](examples/). For even more examples, see the [python-agents-examples](https://github.com/livekit-examples/python-agents-examples) repository.
+
 <table>
 <tr>
 <td width="50%">
@@ -368,7 +370,53 @@ Runs the agent with production-ready optimizations.
 
 ## Contributing
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
+The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit Slack community](https://livekit.io/join-slack).
+
+### Development setup
+
+This project uses [uv](https://docs.astral.sh/uv/) for package management. To install dependencies for development:
+
+```shell
+uv sync --all-extras --dev
+```
+
+### Examples
+
+This project includes many examples in the [`examples`](examples/) directory. To run them, create the file `examples/.env` with credentials for LiveKit Server and any necessary model providers (see `examples/.env.example`), then run:
+
+```shell
+uv run examples/voice_agents/basic_agent.py dev
+```
+
+For more information, see the [examples README](examples/README.md).
+
+### Tests
+
+Unit tests are in the `tests` directory and can be run with:
+
+```shell
+uv run pytest tests/test_tools.py
+```
+
+Integration tests for each plugin require various API credentials and run automatically in GitHub CI for PRs submitted by project maintainers. See the [tests workflow](.github/workflows/tests.yml) for details.
+
+### Formatting
+
+This project uses [ruff](https://github.com/astral-sh/ruff) for formatting and linting:
+
+```shell
+uv run ruff format
+uv run ruff check --fix
+```
+
+### Documentation
+
+To generate docs locally with [pdoc](https://github.com/pdoc3/pdoc):
+
+```shell
+uv sync --all-extras --group docs
+uv run --active pdoc --skip-errors --html --output-dir=docs livekit
+```
 
 <!--BEGIN_REPO_NAV-->
 <br/><table>
