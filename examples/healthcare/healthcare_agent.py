@@ -158,39 +158,43 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
         self.complete(GetInsuranceResult(insurance=insurance))
 
 
-@function_tool()
-async def update_record(
-    context: RunContext,
-    field: Annotated[str, Field(json_schema_extra={"enum": ["name", "dob", "phone", "insurance"]})],
-    updated_detail: str,
-):
-    """Call when the user requests to modify information in their existing patient record
+def build_update_record(mutable_fields: list[str] | None = None) -> FunctionTool:
+    if mutable_fields is None:
+        mutable_fields = ["dob", "phone", "insurance"]
 
-    Args:
-        field (str): The field to update
-        updated_detail (str): The new field to be updated to
-    """
-    if field == "name":
-        await context.session.generate_reply(instructions="The user may not change their name.")
-        return
-    field_map = {
-        "dob": (GetDOBTask, "date_of_birth"),
-        "phone": (GetPhoneNumberTask, "phone_number"),
-        "insurance": (GetInsuranceTask, "insurance"),
-    }
-    task_class, attr = field_map[field]
-    chat_ctx = llm.ChatContext()
-    chat_ctx.add_message(
-        role="system", content=f"The user provided the new field: {updated_detail}"
-    )
-    result = await task_class(require_confirmation=False, chat_ctx=chat_ctx)
-    value = getattr(result, attr)
+    @function_tool()
+    async def update_record(
+        context: RunContext,
+        field: Annotated[str, Field(json_schema_extra={"enum": mutable_fields})],
+        updated_detail: str,
+    ):
+        """Call when the user requests to modify information in their existing patient record
 
-    name = context.session.userdata.profile["name"]
-    updated = context.session.userdata.database.update_patient_record(name, **{attr: value})
-    if not updated:
-        return "No profile was found to update"
-    return f"The user's {field} has been updated."
+        Args:
+            field (str): The field to update
+            updated_detail (str): The new field to be updated to
+        """
+        field_map = {
+            "dob": (GetDOBTask, "date_of_birth"),
+            "phone": (GetPhoneNumberTask, "phone_number"),
+            "insurance": (GetInsuranceTask, "insurance"),
+        }
+        task_class, attr = field_map[field]
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(
+            role="system", content=f"The user provided the new field: {updated_detail}"
+        )
+        result = await task_class(require_confirmation=False, chat_ctx=chat_ctx)
+        value = getattr(result, attr)
+
+        name = context.session.userdata.profile["name"]
+        updated = context.session.userdata.database.update_patient_record(name, **{attr: value})
+        if not updated:
+            return "No profile was found to update"
+        context.session.userdata.profile[attr] = value
+        return f"The user's {field} has been updated."
+
+    return update_record
 
 
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
@@ -202,7 +206,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             """
             + GLOBAL_INSTRUCTIONS,
             tools=[
-                update_record,
+                build_update_record(["dob", "phone"]),
                 transfer_to_human,
                 EndCallTool(
                     end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
@@ -214,12 +218,10 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         self._selected_doctor: str | None = None
         self._appointment_time: datetime | None = None
 
-    async def on_enter(self):
+    async def _setup_doctor_selection(self):
         database = self.session.userdata.database
         insurance = self.session.userdata.profile["insurance"]
-
         self._compatible_doctor_records = database.get_compatible_doctors(insurance=insurance)
-
         available_doctors = [doctor["name"] for doctor in self._compatible_doctor_records]
         doctor_confirmation_tool = self._build_doctor_selection_tool(
             available_doctors=available_doctors
@@ -233,6 +235,9 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             content=f"These doctors are compatible with the user's insurance: {available_doctors}",
         )
         await self.update_chat_ctx(chat_ctx)
+
+    async def on_enter(self):
+        await self._setup_doctor_selection()
         if len(self._compatible_doctor_records) > 1:
             await self.session.generate_reply(
                 instructions="Inform the user of the doctors compatible to them, and prompt the user to choose one. Avoid special notation when listing out the doctors."
@@ -241,6 +246,28 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             await self.session.generate_reply(
                 instructions="Inform the user of their compatible doctor and confirm if they would like to select that doctor. Avoid special notation when listing out the doctors.."
             )
+
+    @function_tool()
+    async def update_insurance(self, context: RunContext, updated_insurance: str):
+        """Call when the user requests to update their health insurance.
+
+        Args:
+            updated_insurance (str): The new insurance value provided by the user
+        """
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(
+            role="system", content=f"The user provided the new insurance: {updated_insurance}"
+        )
+        result = await GetInsuranceTask(require_confirmation=False, chat_ctx=chat_ctx)
+        name = self.session.userdata.profile["name"]
+        updated = self.session.userdata.database.update_patient_record(
+            name, insurance=result.insurance
+        )
+        if not updated:
+            return "No profile was found to update"
+        self.session.userdata.profile["insurance"] = result.insurance
+        await self._setup_doctor_selection()
+        return "Insurance updated. Re-present the updated list of compatible doctors."
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
         @function_tool()
@@ -345,7 +372,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
             + GLOBAL_INSTRUCTIONS,
             chat_ctx=chat_ctx,
             tools=[
-                update_record,
+                build_update_record(),
                 transfer_to_human,
                 EndCallTool(
                     end_instructions="Disclose that the call is ending because the user refuses to cooperate or provide information and say goodbye.",
@@ -416,7 +443,7 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                     ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
-                result = await ScheduleAppointmentTask()
+                result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
                 self.complete(
                     ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
@@ -540,7 +567,7 @@ class HealthcareAgent(Agent):
                 self._database.add_patient_record(info=profile)
 
             current_tools = [t for t in self.tools if t.id != "update_record"]
-            current_tools.append(update_record)
+            current_tools.append(build_update_record())
             await self.update_tools(current_tools)
 
     @function_tool()
