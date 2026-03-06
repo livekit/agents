@@ -552,11 +552,11 @@ async def _execute_tools_task(
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
 
+            fnc_call.status = "running"
             tool_execution_started_cb(fnc_call)
             try:
                 from .run_result import _MockToolsContextVar
 
-                fnc_call.status = "running"
                 mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
                     type(session.current_agent), {}
                 )
