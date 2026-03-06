@@ -32,8 +32,6 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 from livekit.plugins import openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
@@ -75,6 +73,11 @@ class ScheduleAppointmentResult:
 class ModifyAppointmentResult:
     new_appointment: ScheduleAppointmentResult | None
     old_appointment: dict
+
+
+class ProfileFound(ToolError):
+    def __init__(self) -> None:
+        super().__init__("An existing profile has been found")
 
 
 @function_tool()
@@ -129,7 +132,7 @@ async def transfer_to_human(context: RunContext) -> None:
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
-    def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = True):
+    def __init__(self, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
             instructions="""
             You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
@@ -137,7 +140,6 @@ class GetInsuranceTask(AgentTask[GetInsuranceResult]):
             tools=[transfer_to_human],
             chat_ctx=chat_ctx,
         )
-        self._require_confirmation = require_confirmation
 
     async def on_enter(self):
         await self.session.generate_reply(
@@ -230,6 +232,17 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         current_tools.append(doctor_confirmation_tool)
         await self.update_tools(current_tools)
         chat_ctx = self.chat_ctx.copy()
+        chat_ctx.items = [
+            item
+            for item in chat_ctx.items
+            if not (
+                item.type == "message"
+                and item.role == "system"
+                and (item.text_content or "").startswith(
+                    "These doctors are compatible with the user's insurance:"
+                )
+            )
+        ]
         chat_ctx.add_message(
             role="system",
             content=f"These doctors are compatible with the user's insurance: {available_doctors}",
@@ -258,7 +271,7 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         chat_ctx.add_message(
             role="system", content=f"The user provided the new insurance: {updated_insurance}"
         )
-        result = await GetInsuranceTask(require_confirmation=False, chat_ctx=chat_ctx)
+        result = await GetInsuranceTask(chat_ctx=chat_ctx)
         name = self.session.userdata.profile["name"]
         updated = self.session.userdata.database.update_patient_record(
             name, insurance=result.insurance
@@ -267,9 +280,11 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             return "No profile was found to update"
         self.session.userdata.profile["insurance"] = result.insurance
         await self._setup_doctor_selection()
-        return "Insurance updated. Re-present the updated list of compatible doctors."
+        compatible_doctors = [doc["name"] for doc in self._compatible_doctor_records]
+        return f"The insurance has been updated, inform the user of the doctors now compatible to them: {compatible_doctors}"
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
+
         @function_tool()
         async def confirm_doctor_selection(
             selected_doctor: Annotated[
@@ -443,7 +458,8 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
                     ModifyAppointmentResult(new_appointment=None, old_appointment=appointment)
                 )
             else:
-                result = await ScheduleAppointmentTask(chat_ctx=self.chat_ctx)
+                chat_ctx = await self.chat_ctx.copy()._summarize(self.session.llm)
+                result = await ScheduleAppointmentTask(chat_ctx=chat_ctx)
                 self.complete(
                     ModifyAppointmentResult(new_appointment=result, old_appointment=appointment)
                 )
@@ -468,7 +484,6 @@ class HealthcareAgent(Agent):
                 transfer_to_human,
             ],
         )
-        self._found_profile: NotGivenOr[bool] = NOT_GIVEN
         self._pending_name: str | None = None
 
         self._database = database
@@ -484,35 +499,17 @@ class HealthcareAgent(Agent):
             if self.session.userdata.profile:
                 # in the case that the user creates a new profile or restarts, the recorded session profile is cleared
                 self.session.userdata.profile = {}
-                self._found_profile = NOT_GIVEN
 
-        # each profile field is injected into the taskgroup context before the respective task is executed
         if event.task_id == "get_dob_task":
             existing_record = self._database.get_patient_by_name_and_dob(
                 self._pending_name, event.result.date_of_birth
             )
             if existing_record:
-                logger.info(f"Found existing patient profile for {self._pending_name}")
-                self._found_profile = True
-                self.session.userdata.profile = existing_record
-            if self._found_profile:
-                chat_ctx = task_group.chat_ctx.copy()
                 logger.info(
-                    f"Found phone number on file: {self.session.userdata.profile['phone_number']}"
+                    f"Found existing patient profile for {self._pending_name}, with the details: {existing_record}"
                 )
-                chat_ctx.add_message(
-                    role="system",
-                    content=f"An existing patient record has been found. The phone number on file is {self.session.userdata.profile['phone_number']}. Call 'update_phone_number' with this value.",
-                )
-                await task_group.update_chat_ctx(chat_ctx)
-        if event.task_id == "get_phone_number_task" and self._found_profile:
-            chat_ctx = task_group.chat_ctx.copy()
-            logger.info(f"Found insurance on file: {self.session.userdata.profile['insurance']}")
-            chat_ctx.add_message(
-                role="system",
-                content=f"The insurance on file is {self.session.userdata.profile['insurance']}. Call 'record_health_insurance' with this value.",
-            )
-            await task_group.update_chat_ctx(chat_ctx)
+                self.session.userdata.profile = existing_record
+                raise ProfileFound()
 
     async def profile_authenticator(self) -> None:
         """Creates a TaskGroup that collects user information"""
@@ -537,9 +534,7 @@ class HealthcareAgent(Agent):
                 description="Gathers the user's date of birth",
             )
             task_group.add(
-                lambda: GetPhoneNumberTask(
-                    require_confirmation=False if is_given(self._found_profile) else NOT_GIVEN,
-                ),
+                lambda: GetPhoneNumberTask(),
                 id="get_phone_number_task",
                 description="Gathers the user's phone number",
             )
@@ -548,21 +543,20 @@ class HealthcareAgent(Agent):
                 id="get_insurance_task",
                 description="Gathers the user's insurance",
             )
-
-            results = await task_group
-
-            patient_name = f"{results.task_results['get_name_task'].first_name} {results.task_results['get_name_task'].last_name}"
-            profile = {
-                "name": patient_name,
-                "date_of_birth": results.task_results["get_dob_task"].date_of_birth,
-                "phone_number": results.task_results["get_phone_number_task"].phone_number,
-                "insurance": results.task_results["get_insurance_task"].insurance,
-            }
-
-            if self._found_profile:
-                self._database.update_patient_record(patient_name, **profile)
-                self.session.userdata.profile = self._database.get_patient_by_name(patient_name)
+            try:
+                results = await task_group
+            except ProfileFound:
+                self.session.generate_reply(
+                    instructions="Inform the user that an existing profile has been found."
+                )
             else:
+                patient_name = f"{results.task_results['get_name_task'].first_name} {results.task_results['get_name_task'].last_name}"
+                profile = {
+                    "name": patient_name,
+                    "date_of_birth": results.task_results["get_dob_task"].date_of_birth,
+                    "phone_number": results.task_results["get_phone_number_task"].phone_number,
+                    "insurance": results.task_results["get_insurance_task"].insurance,
+                }
                 self.session.userdata.profile = profile
                 self._database.add_patient_record(info=profile)
 
