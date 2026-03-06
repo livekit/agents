@@ -59,16 +59,27 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
+            tool_result_content: list[dict[str, Any]]
+            if msg.is_error:
+                tool_result_content = [{"text": llm.utils.tool_output_to_text(msg.output)}]
+            else:
+                tool_result_content = []
+                for part in llm.utils.tool_output_parts(msg.output):
+                    if isinstance(part, str):
+                        tool_result_content.append({"text": part})
+                    else:
+                        try:
+                            tool_result_content.append(_build_image(part))
+                        except ValueError:
+                            tool_result_content.append(
+                                {"text": llm.utils.TOOL_OUTPUT_IMAGE_PLACEHOLDER}
+                            )
             current_content.append(
                 {
                     "toolResult": {
                         "toolUseId": msg.call_id,
-                        "content": [
-                            {"json": msg.output}
-                            if isinstance(msg.output, dict)
-                            else {"text": msg.output}
-                        ],
-                        "status": "success",
+                        "content": tool_result_content,
+                        "status": "error" if msg.is_error else "success",
                     }
                 }
             )
@@ -95,10 +106,26 @@ def _build_image(image: llm.ImageContent) -> dict:
 
     return {
         "image": {
-            "format": "jpeg",
+            "format": _bedrock_image_format_from_mime_type(img.mime_type),
             "source": {"bytes": img.data_bytes},
         }
     }
+
+
+def _bedrock_image_format_from_mime_type(mime_type: str | None) -> str:
+    if not mime_type:
+        return "jpeg"
+
+    mime_base = mime_type.split(";", 1)[0].strip().lower()
+    if mime_base in {"image/jpeg", "image/jpg", "image/pjpeg"}:
+        return "jpeg"
+
+    if mime_base.startswith("image/"):
+        image_format = mime_base.split("/", 1)[1]
+        if image_format in {"png", "gif", "webp"}:
+            return image_format
+
+    raise ValueError(f"Unsupported mime_type {mime_type!r} for AWS Bedrock image format.")
 
 
 def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:

@@ -174,6 +174,8 @@ class ChatMessage(BaseModel):
 
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
+ToolOutputContent: TypeAlias = str | ImageContent
+FunctionCallOutputValue: TypeAlias = ToolOutputContent | list[ToolOutputContent]
 
 
 class FunctionCall(BaseModel):
@@ -197,7 +199,7 @@ class FunctionCallOutput(BaseModel):
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
     call_id: str
-    output: str
+    output: FunctionCallOutputValue
     is_error: bool
     created_at: float = Field(default_factory=time.time)
 
@@ -459,6 +461,16 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+            elif item.type == "function_call_output" and exclude_image:
+                item = item.model_copy()
+                if isinstance(item.output, ImageContent):
+                    item.output = ""
+                elif isinstance(item.output, list):
+                    filtered: list[ToolOutputContent] = []
+                    for content in item.output:
+                        if isinstance(content, str):
+                            filtered.append(content)
+                    item.output = filtered if filtered else ""
 
             items.append(item)
 
@@ -483,7 +495,16 @@ class ChatContext:
     @overload
     def to_provider_format(
         self,
-        format: Literal["openai", "openai.responses"],
+        format: Literal["openai"],
+        *,
+        inject_dummy_user_message: bool = True,
+        supports_tool_image_output: bool = False,
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
+    def to_provider_format(
+        self,
+        format: Literal["openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
     ) -> tuple[list[dict], Literal[None]]: ...

@@ -56,7 +56,7 @@ def get_tool_results_for_realtime(
         if msg.type == "function_call_output":
             res = types.FunctionResponse(
                 name=msg.name,
-                response={"output": msg.output},
+                response={"output": llm_utils.tool_output_to_text(msg.output)},
             )
             if is_given(tool_response_scheduling):
                 # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle

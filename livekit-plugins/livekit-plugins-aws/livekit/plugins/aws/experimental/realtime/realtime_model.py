@@ -1641,7 +1641,7 @@ class RealtimeSession(  # noqa: F811
                 if item.is_error:
                     tool_result = json.dumps({"error": str(item.output)})
                 else:
-                    tool_result = item.output
+                    tool_result = llm.utils.tool_output_to_text(item.output)
 
                 self._tool_results_ch.send_nowait(
                     {

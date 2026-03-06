@@ -46,10 +46,11 @@ def _format_items(items: list) -> str:
         elif item.type == "function_call":
             parts.append(f"[function call: {item.name}({item.arguments})]")
         elif item.type == "function_call_output":
+            output_text = llm_utils.tool_output_to_text(item.output)
             if item.is_error:
-                parts.append(f"[function error: {item.output}]")
+                parts.append(f"[function error: {output_text}]")
             else:
-                parts.append(f"[function output: {item.output}]")
+                parts.append(f"[function output: {output_text}]")
         elif item.type == "agent_handoff":
             parts.append(f"[agent handoff: {item.old_agent_id} -> {item.new_agent_id}]")
         elif item.type == "agent_config_update":
