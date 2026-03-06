@@ -49,12 +49,12 @@ from livekit.agents.utils.misc import is_given
 # from livekit.agents import Language
 
 try:
-    from livekit.agents import Language
+    pass
 except Exception:
     try:
-        from livekit.agents.language import Language
+        pass
     except Exception:
-        from livekit.agents.language import LanguageCode as Language
+        pass
 
 from .log import logger
 
