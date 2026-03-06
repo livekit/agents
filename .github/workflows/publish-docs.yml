@@ -37,7 +37,7 @@ jobs:
 
       - name: Build Markdown Docs
         run: |
-          uv run --active python scripts/convert_html_docs.py docs/ docs-md -v --check-links
+          uv run --active python .github/convert_html_docs.py docs/ docs-md -v --check-links
 
       - name: S3 Upload
         run: |

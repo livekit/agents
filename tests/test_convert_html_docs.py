@@ -1,21 +1,30 @@
-"""Tests for scripts/convert_html_docs.py — pdoc3 HTML to markdown converter."""
+"""Tests for .github/convert_html_docs.py — pdoc3 HTML to markdown converter."""
 
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
 
-from scripts.convert_html_docs import (
-    ContentFingerprint,
-    PageConverter,
-    convert_directory,
-    extract_fingerprint,
-    map_link,
-    map_output_path,
-    validate_links,
-    validate_markdown,
-)
+# The module lives at .github/convert_html_docs.py which isn't a regular
+# package, so we load it by file path.
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / ".github" / "convert_html_docs.py"
+_spec = importlib.util.spec_from_file_location("convert_html_docs", _SCRIPT_PATH)
+assert _spec and _spec.loader
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["convert_html_docs"] = _mod
+_spec.loader.exec_module(_mod)
+
+ContentFingerprint = _mod.ContentFingerprint
+PageConverter = _mod.PageConverter
+convert_directory = _mod.convert_directory
+extract_fingerprint = _mod.extract_fingerprint
+map_link = _mod.map_link
+map_output_path = _mod.map_output_path
+validate_links = _mod.validate_links
+validate_markdown = _mod.validate_markdown
 
 MINIMAL_MODULE_HTML = """\
 <html><body><main>

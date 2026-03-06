@@ -13,7 +13,7 @@ Path mapping (canonical, no ambiguity):
     livekit/agents/vad.html   -> livekit/agents/vad.md
 
 Usage:
-    uv run python scripts/convert_html_docs.py INPUT_DIR OUTPUT_DIR [options]
+    uv run python .github/convert_html_docs.py INPUT_DIR OUTPUT_DIR [options]
       --validate-only    Only validate existing markdown against HTML
       --no-validate      Skip validation after conversion
       --verbose / -v     Show per-file validation details
