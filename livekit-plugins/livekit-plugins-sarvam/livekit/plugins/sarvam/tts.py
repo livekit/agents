@@ -37,7 +37,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     __version__ as livekit_version,
     tokenize,
     tts,
