@@ -374,8 +374,27 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            text_chunks = self._get_text_chunks()
+            encoding = self._opts.encoding
+
+            # Container-based formats (MP3, OGG_OPUS) cannot be naively
+            # concatenated when text is split into multiple chunks because each
+            # API response is an independently encoded file with its own
+            # headers.  Fall back to PCM which is raw sample data and safe to
+            # concatenate.
+            if len(text_chunks) > 1 and encoding not in (
+                texttospeech.AudioEncoding.PCM,
+                texttospeech.AudioEncoding.LINEAR16,
+            ):
+                logger.debug(
+                    "text was split into %d chunks, forcing PCM encoding "
+                    "to avoid corrupted audio from concatenated container files",
+                    len(text_chunks),
+                )
+                encoding = texttospeech.AudioEncoding.PCM  # type: ignore
+
             audio_config = texttospeech.AudioConfig(
-                audio_encoding=self._opts.encoding,
+                audio_encoding=encoding,
                 sample_rate_hertz=self._opts.sample_rate,
                 pitch=self._opts.pitch,
                 effects_profile_id=self._opts.effects_profile_id,
@@ -387,10 +406,10 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                mime_type=_encoding_to_mimetype(self._opts.encoding),
+                mime_type=_encoding_to_mimetype(encoding),
             )
 
-            for chunk in self._get_text_chunks():
+            for chunk in text_chunks:
                 tts_input = self._build_synthesis_input(chunk)
                 response: SynthesizeSpeechResponse = (
                     await self._tts._ensure_client().synthesize_speech(
