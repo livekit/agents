@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
 from ..ipc import channel
 from ..job import JobAcceptArguments, RunningJobInfo
@@ -57,6 +58,10 @@ class ActiveJobsResponse:
             channel.write_string(b, running_job.token)
             channel.write_string(b, running_job.worker_id)
             channel.write_bool(b, running_job.fake_job)
+            channel.write_string(b, running_job.text_endpoint)
+            channel.write_bool(b, running_job.text_request is not None)
+            if running_job.text_request is not None:
+                channel.write_bytes(b, running_job.text_request.SerializeToString())
 
         channel.write_int(b, self.reload_count)
 
@@ -64,20 +69,25 @@ class ActiveJobsResponse:
         for _ in range(channel.read_int(b)):
             job = agent.Job()
             job.ParseFromString(channel.read_bytes(b))
-            self.jobs.append(
-                RunningJobInfo(
-                    accept_arguments=JobAcceptArguments(
-                        name=channel.read_string(b),
-                        identity=channel.read_string(b),
-                        metadata=channel.read_string(b),
-                    ),
-                    job=job,
-                    url=channel.read_string(b),
-                    token=channel.read_string(b),
-                    worker_id=channel.read_string(b),
-                    fake_job=channel.read_bool(b),
-                )
+            job_info = RunningJobInfo(
+                accept_arguments=JobAcceptArguments(
+                    name=channel.read_string(b),
+                    identity=channel.read_string(b),
+                    metadata=channel.read_string(b),
+                ),
+                job=job,
+                url=channel.read_string(b),
+                token=channel.read_string(b),
+                worker_id=channel.read_string(b),
+                fake_job=channel.read_bool(b),
+                text_endpoint=channel.read_string(b),
             )
+            has_text_request = channel.read_bool(b)
+            if has_text_request:
+                text_request = agent_text.TextMessageRequest()
+                text_request.ParseFromString(channel.read_bytes(b))
+                job_info.text_request = text_request
+            self.jobs.append(job_info)
 
         self.reload_count = channel.read_int(b)
 

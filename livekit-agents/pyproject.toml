@@ -31,8 +31,10 @@ dependencies = [
     "certifi>=2025.6.15",
     "livekit==1.1.2",
     "livekit-api>=1.0.7,<2",
-    "livekit-protocol>=1.1,<2",
+    "livekit-protocol>=1.1.2,<2",
     "livekit-blingfire~=1.1,<2",
+    "livekit-durable~=0.1 ",
+    "apsw~=3.0",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4",
@@ -54,6 +56,7 @@ dependencies = [
     "prometheus-client>=0.22",
     "openai>=2",
     "aiofiles>=24",
+    "cryptography>=46.0.5",
 ]
 
 [project.optional-dependencies]

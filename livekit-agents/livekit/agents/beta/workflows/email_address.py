@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
@@ -13,6 +13,7 @@ from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ...voice.agent import _AgentState
     from ...voice.audio_recognition import TurnDetectionMode
 
 EMAIL_REGEX = (
@@ -39,6 +40,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        self._init_kwargs = {
+            "extra_instructions": extra_instructions,
+            "allow_interruptions": allow_interruptions,
+        }
         super().__init__(
             instructions=(
                 "You are only a single step in a broader system, responsible solely for capturing an email address.\n"
@@ -83,6 +88,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         # speech_handle/turn used to update the email address.
         # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
         self._email_update_speech_handle: SpeechHandle | None = None
+
+    def get_init_kwargs(self) -> dict[str, Any]:
+        return self._init_kwargs
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide an email address.")
@@ -146,3 +154,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         if is_given(self._require_confirmation):
             return self._require_confirmation
         return ctx.speech_handle.input_details.modality == "audio"
+
+    def _get_state(self) -> _AgentState:
+        state = super()._get_state()
+        state.extra_state["current_email"] = self._current_email
+        return state
+
+    def _set_state(self, state: _AgentState) -> None:
+        super()._set_state(state)
+        self._current_email = state.extra_state["current_email"]

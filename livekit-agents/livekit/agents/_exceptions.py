@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from livekit.protocol.agent_pb import agent_text
+
 
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
@@ -100,6 +102,28 @@ class APITimeoutError(APIConnectionError):
 
 class CLIError(Exception):
     pass
+
+
+class TextMessageError(Exception):
+    def __init__(
+        self,
+        message: str,
+        code: agent_text.TextMessageErrorCode = agent_text.INTERNAL_ERROR,
+    ) -> None:
+        super().__init__(message)
+        self._message = message
+        self._code = code
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @property
+    def code(self) -> agent_text.TextMessageErrorCode:
+        return self._code
+
+    def to_proto(self) -> agent_text.TextMessageError:
+        return agent_text.TextMessageError(message=self._message, code=self._code)
 
 
 def create_api_error_from_http(
