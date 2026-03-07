@@ -1615,14 +1615,23 @@ class RealtimeSession(
         assert item.name is not None, "name is None"
         assert item.arguments is not None, "arguments is None"
 
-        self._current_generation.function_ch.send_nowait(
-            llm.FunctionCall(
+        if (remote_item := self._remote_chat_ctx.get(item.id)) and isinstance(
+            remote_item.item, llm.FunctionCall
+        ):
+            fnc_call = remote_item.item
+        else:
+            # fallback to create a new function call
+            logger.warning(
+                "function call not found in remote chat ctx, creating a new one",
+                extra={"item_id": item.id},
+            )
+            fnc_call = llm.FunctionCall(
                 id=item.id,
                 call_id=item.call_id,
                 name=item.name,
                 arguments=item.arguments,
             )
-        )
+        self._current_generation.function_ch.send_nowait(fnc_call)
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:

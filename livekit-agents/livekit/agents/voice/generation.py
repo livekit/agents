@@ -471,6 +471,7 @@ async def _execute_tools_task(
     from .events import RunContext
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
+        out.fnc_call.status = "completed"
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
 
@@ -485,6 +486,7 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                fnc_call.status = "completed"
                 continue
 
             # TODO(theomonnom): assert other tool_choice values
@@ -550,6 +552,7 @@ async def _execute_tools_task(
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
 
+            fnc_call.status = "running"
             tool_execution_started_cb(fnc_call)
             try:
                 from .run_result import _MockToolsContextVar
@@ -730,7 +733,7 @@ def make_tool_output(
             fnc_call=fnc_call, output=None, exception=exception
         )
         return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
+            fnc_call=fnc_call,
             fnc_call_out=base_result.fnc_call_out,
             agent_task=None,
             raw_output=output,
@@ -753,7 +756,7 @@ def make_tool_output(
                 extra={"call_id": fnc_call.call_id, "output": output},
             )
             return ToolExecutionOutput(
-                fnc_call=fnc_call.model_copy(),
+                fnc_call=fnc_call,
                 fnc_call_out=None,
                 agent_task=None,
                 raw_output=output,
@@ -780,7 +783,7 @@ def make_tool_output(
     )
 
     return ToolExecutionOutput(
-        fnc_call=fnc_call.model_copy(),
+        fnc_call=fnc_call,
         fnc_call_out=base_result.fnc_call_out,
         reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
