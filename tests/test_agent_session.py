@@ -131,16 +131,18 @@ async def test_events_and_metrics() -> None:
 
     # metrics
     metrics_events = [ev for ev in metrics_events if ev.metrics.type != "vad_metrics"]
-    assert len(metrics_events) == 3
-    assert metrics_events[0].metrics.type == "eou_metrics"
-    check_timestamp(metrics_events[0].metrics.end_of_utterance_delay, 0.5, speed_factor=speed)
-    check_timestamp(metrics_events[0].metrics.transcription_delay, 0.2, speed_factor=speed)
-    assert metrics_events[1].metrics.type == "llm_metrics"
-    check_timestamp(metrics_events[1].metrics.ttft, 0.1, speed_factor=speed)
-    check_timestamp(metrics_events[1].metrics.duration, 0.3, speed_factor=speed)
-    assert metrics_events[2].metrics.type == "tts_metrics"
-    check_timestamp(metrics_events[2].metrics.ttfb, 0.2, speed_factor=speed)
-    check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
+    assert len(metrics_events) == 4
+    assert metrics_events[0].metrics.type == "stt_metrics"
+    assert metrics_events[0].metrics.streamed is True
+    assert metrics_events[1].metrics.type == "eou_metrics"
+    check_timestamp(metrics_events[1].metrics.end_of_utterance_delay, 0.5, speed_factor=speed)
+    check_timestamp(metrics_events[1].metrics.transcription_delay, 0.2, speed_factor=speed)
+    assert metrics_events[2].metrics.type == "llm_metrics"
+    check_timestamp(metrics_events[2].metrics.ttft, 0.1, speed_factor=speed)
+    check_timestamp(metrics_events[2].metrics.duration, 0.3, speed_factor=speed)
+    assert metrics_events[3].metrics.type == "tts_metrics"
+    check_timestamp(metrics_events[3].metrics.ttfb, 0.2, speed_factor=speed)
+    check_timestamp(metrics_events[3].metrics.audio_duration, 2.0, speed_factor=speed)
 
 
 async def test_tool_call() -> None:
