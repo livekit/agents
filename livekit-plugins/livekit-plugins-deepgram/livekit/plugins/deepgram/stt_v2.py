@@ -550,6 +550,7 @@ def _parse_transcription(
                 text=word.get("word", ""),
                 start_time=word.get("start", 0) + start_time_offset,
                 end_time=word.get("end", 0) + start_time_offset,
+                confidence=word["confidence"],
                 start_time_offset=start_time_offset,
             )
             for word in words
