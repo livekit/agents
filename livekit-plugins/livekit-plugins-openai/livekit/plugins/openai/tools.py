@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from livekit.agents import ProviderTool
 from openai.types import responses
@@ -11,13 +11,16 @@ class OpenAITool(ProviderTool, ABC):
     def to_dict(self) -> dict[str, Any]: ...
 
 
-@dataclass(slots=True)
+@dataclass
 class WebSearch(OpenAITool):
     """Enable web search tool to access up-to-date information from the internet"""
 
-    filters: Optional[responses.web_search_tool.Filters] = None
-    search_context_size: Optional[Literal["low", "medium", "high"]] = "medium"
-    user_location: Optional[responses.web_search_tool.UserLocation] = None
+    filters: responses.web_search_tool.Filters | None = None
+    search_context_size: Literal["low", "medium", "high"] | None = "medium"
+    user_location: responses.web_search_tool.UserLocation | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="openai_web_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -32,14 +35,17 @@ class WebSearch(OpenAITool):
         return result
 
 
-@dataclass(slots=True)
+@dataclass
 class FileSearch(OpenAITool):
     """Enable file search tool to search uploaded document collections"""
 
     vector_store_ids: list[str] = field(default_factory=list)
-    filters: Optional[responses.file_search_tool.Filters] = None
-    max_num_results: Optional[int] = None
-    ranking_options: Optional[responses.file_search_tool.RankingOptions] = None
+    filters: responses.file_search_tool.Filters | None = None
+    max_num_results: int | None = None
+    ranking_options: responses.file_search_tool.RankingOptions | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="openai_file_search")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -58,11 +64,14 @@ class FileSearch(OpenAITool):
         return result
 
 
-@dataclass(slots=True)
+@dataclass
 class CodeInterpreter(OpenAITool):
     """Enable the code interpreter tool to write and execute Python code in a sandboxed environment"""
 
-    container: Optional[str | dict[str, Any]]
+    container: str | dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="openai_code_interpreter")
 
     def to_dict(self) -> dict[str, Any]:
         result = {"type": "code_interpreter", "container": self.container}

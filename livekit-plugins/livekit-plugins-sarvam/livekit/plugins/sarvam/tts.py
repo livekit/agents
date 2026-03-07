@@ -36,6 +36,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -47,7 +48,10 @@ SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
 # Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2"]
+SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
+SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
+
+ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -74,6 +78,34 @@ SarvamTTSSpeakers = Literal[
     "abhilash",
     "karun",
     "hitesh",
+    # bulbul:v3-beta Customer Care
+    "shubh",
+    "ritu",
+    "rahul",
+    "pooja",
+    "simran",
+    "kavya",
+    "amit",
+    "ratan",
+    "rohan",
+    "dev",
+    "ishita",
+    "shreya",
+    "manan",
+    "sumit",
+    "priya",
+    # bulbul:v3-beta Content Creation
+    "aditya",
+    "kabir",
+    "neha",
+    "varun",
+    "roopa",
+    "aayan",
+    "ashutosh",
+    "advait",
+    # bulbul:v3-beta International
+    "amelia",
+    "sophia",
 ]
 
 # Model-Speaker compatibility mapping
@@ -82,7 +114,123 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    }
+    },
+    "bulbul:v3-beta": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
+    "bulbul:v3": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
 }
 
 
@@ -123,6 +271,10 @@ class SarvamTTSOptions:
         pitch: Voice pitch adjustment (-20.0 to 20.0)
         pace: Speech rate multiplier (0.5 to 2.0)
         loudness: Volume multiplier (0.5 to 2.0)
+        temperature: Sampling temperature (0.01 to 1.0), used for v3 and v3-beta
+        output_audio_bitrate: Output audio bitrate
+        min_buffer_size: Minimum character length for flushing
+        max_chunk_length: Maximum chunk length for sentence splitting
         speech_sample_rate: Audio sample rate (8000, 16000, 22050, or 24000)
         enable_preprocessing: Whether to use text preprocessing
         model: The Sarvam TTS model to use
@@ -134,13 +286,17 @@ class SarvamTTSOptions:
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
     api_key: str  # Sarvam.ai API key
     text: str | None = None  # Will be provided by the stream adapter
-    speaker: SarvamTTSSpeakers | str = "anushka"  # Default speaker compatible with v2
+    speaker: SarvamTTSSpeakers | str | None = None
     pitch: float = 0.0
     pace: float = 1.0
     loudness: float = 1.0
+    temperature: float = 0.6
+    output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k"
+    min_buffer_size: int = 50
+    max_chunk_length: int = 150
     speech_sample_rate: int = 22050  # Default 22050 Hz
     enable_preprocessing: bool = False
-    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2 as it has more recent speakers
+    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
@@ -162,6 +318,10 @@ class TTS(tts.TTS):
         pitch: Voice pitch adjustment (-20.0 to 20.0) - only supported in v2 for now
         pace: Speech rate multiplier (0.5 to 2.0)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
+        temperature: Sampling temperature (0.01 to 1.0), only used in v3 and v3-beta
+        output_audio_bitrate: Output audio bitrate (default 128k)
+        min_buffer_size: Minimum character length for flushing (30 to 200)
+        max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
         enable_preprocessing: Whether to use text preprocessing
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
@@ -174,12 +334,16 @@ class TTS(tts.TTS):
         *,
         target_language_code: SarvamTTSLanguages | str,
         model: SarvamTTSModels | str = "bulbul:v2",
-        speaker: SarvamTTSSpeakers | str = "anushka",
+        speaker: SarvamTTSSpeakers | str | None = None,
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
         pitch: float = 0.0,
         pace: float = 1.0,
         loudness: float = 1.0,
+        temperature: float = 0.6,
+        output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k",
+        min_buffer_size: int = 50,
+        max_chunk_length: int = 150,
         enable_preprocessing: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
@@ -204,8 +368,12 @@ class TTS(tts.TTS):
             raise ValueError("Target language code is required and cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
-        if not speaker or not speaker.strip():
-            raise ValueError("Speaker is required and cannot be empty")
+        if speaker is None:
+            # speaker = "shubh"
+            if model == "bulbul:v3-beta" or model == "bulbul:v3":
+                speaker = "shubh"
+            else:
+                speaker = "anushka"
 
         # Validate parameter ranges
         if not -20.0 <= pitch <= 20.0:
@@ -214,6 +382,16 @@ class TTS(tts.TTS):
             raise ValueError("Pace must be between 0.5 and 2.0")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
+        if not 0.01 <= temperature <= 1.0:
+            raise ValueError("Temperature must be between 0.01 and 1.0")
+        if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
+            raise ValueError(
+                f"output_audio_bitrate must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
+            )
+        if not 30 <= min_buffer_size <= 200:
+            raise ValueError("min_buffer_size must be between 30 and 200")
+        if not 50 <= max_chunk_length <= 500:
+            raise ValueError("max_chunk_length must be between 50 and 500")
         if speech_sample_rate not in [8000, 16000, 22050, 24000]:
             raise ValueError("Sample rate must be 8000, 16000, 22050, or 24000 Hz")
 
@@ -229,13 +407,17 @@ class TTS(tts.TTS):
         word_tokenizer = tokenize.basic.SentenceTokenizer()
 
         self._opts = SarvamTTSOptions(
-            target_language_code=target_language_code,
+            target_language_code=LanguageCode(target_language_code),
             model=model,
             speaker=speaker,
             speech_sample_rate=speech_sample_rate,
             pitch=pitch,
             pace=pace,
             loudness=loudness,
+            temperature=temperature,
+            output_audio_bitrate=output_audio_bitrate,
+            min_buffer_size=min_buffer_size,
+            max_chunk_length=max_chunk_length,
             enable_preprocessing=enable_preprocessing,
             api_key=self._api_key,
             base_url=base_url,
@@ -302,21 +484,37 @@ class TTS(tts.TTS):
         self,
         *,
         model: str | None = None,
+        target_language_code: SarvamTTSLanguages | str | None = None,
         speaker: str | None = None,
         pitch: float | None = None,
         pace: float | None = None,
         loudness: float | None = None,
-        enable_preprocessing: bool | None = False,
-        send_completion_event: bool | None = True,
+        temperature: float | None = None,
+        output_audio_bitrate: SarvamTTSOutputAudioBitrate | str | None = None,
+        min_buffer_size: int | None = None,
+        max_chunk_length: int | None = None,
+        enable_preprocessing: bool | None = None,
+        send_completion_event: bool | None = None,
     ) -> None:
         """Update TTS options with validation."""
+        if target_language_code is not None:
+            if not target_language_code.strip():
+                raise ValueError("Target language code cannot be empty")
+            self._opts.target_language_code = LanguageCode(target_language_code)
+
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            if model not in ["bulbul:v2"]:
-                raise ValueError(f"Unsupported model: {model}")
             self._opts.model = model
-
+            if speaker is None and self._opts.speaker is not None:
+                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+                        "all", []
+                    )
+                    raise ValueError(
+                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Compatible speakers: {', '.join(compatible_speakers)}"
+                    )
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
@@ -344,6 +542,29 @@ class TTS(tts.TTS):
             if not 0.5 <= loudness <= 2.0:
                 raise ValueError("Loudness must be between 0.5 and 2.0")
             self._opts.loudness = loudness
+
+        if temperature is not None:
+            if not 0.01 <= temperature <= 1.0:
+                raise ValueError("Temperature must be between 0.01 and 1.0")
+            self._opts.temperature = temperature
+
+        if output_audio_bitrate is not None:
+            if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
+                raise ValueError(
+                    "output_audio_bitrate must be one of "
+                    f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
+                )
+            self._opts.output_audio_bitrate = output_audio_bitrate
+
+        if min_buffer_size is not None:
+            if not 30 <= min_buffer_size <= 200:
+                raise ValueError("min_buffer_size must be between 30 and 200")
+            self._opts.min_buffer_size = min_buffer_size
+
+        if max_chunk_length is not None:
+            if not 50 <= max_chunk_length <= 500:
+                raise ValueError("max_chunk_length must be between 50 and 500")
+            self._opts.max_chunk_length = max_chunk_length
 
         if enable_preprocessing is not None:
             self._opts.enable_preprocessing = enable_preprocessing
@@ -393,17 +614,21 @@ class ChunkedStream(tts.ChunkedStream):
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
-            "pitch": self._opts.pitch,
             "pace": self._opts.pace,
-            "loudness": self._opts.loudness,
             "speech_sample_rate": self._opts.speech_sample_rate,
-            "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
+            "output_audio_bitrate": self._opts.output_audio_bitrate,
+            "min_buffer_size": self._opts.min_buffer_size,
+            "max_chunk_length": self._opts.max_chunk_length,
         }
-        # Only include pitch and loudness for v2 model (not supported in v3-beta)
+        # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
+            payload["enable_preprocessing"] = self._opts.enable_preprocessing
+        # temperature is supported only for v3 and v3-beta; ignored for v2
+        if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
+            payload["temperature"] = self._opts.temperature
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
@@ -422,8 +647,9 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}",
+                        message="Sarvam TTS API Error",
                         status_code=res.status,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
@@ -539,18 +765,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 # Send initial config
-                config_msg = {
-                    "type": "config",
-                    "data": {
-                        "target_language_code": self._opts.target_language_code,
-                        "speaker": self._opts.speaker,
-                        "pitch": self._opts.pitch,
-                        "pace": self._opts.pace,
-                        "loudness": self._opts.loudness,
-                        "enable_preprocessing": self._opts.enable_preprocessing,
-                        "model": self._opts.model,
-                    },
+                data: dict[str, object] = {
+                    "target_language_code": self._opts.target_language_code,
+                    "speaker": self._opts.speaker,
+                    "pace": self._opts.pace,
+                    "model": self._opts.model,
+                    "output_audio_bitrate": self._opts.output_audio_bitrate,
+                    "min_buffer_size": self._opts.min_buffer_size,
+                    "max_chunk_length": self._opts.max_chunk_length,
                 }
+                if self._opts.model == "bulbul:v2":
+                    data["pitch"] = self._opts.pitch
+                    data["loudness"] = self._opts.loudness
+                    data["enable_preprocessing"] = self._opts.enable_preprocessing
+                if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
+                    data["temperature"] = self._opts.temperature
+                config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
@@ -679,7 +909,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 return True
 
-            logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
+            # logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)

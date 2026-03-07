@@ -101,17 +101,23 @@ class DummyAgent(Agent):
 
 
 class DummyProviderTool(ProviderTool):
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self, id: str):
+        super().__init__(id=id)
 
 
 class MockToolset1(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_1")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_1, mock_tool_2]
 
 
 class MockToolset2(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_2")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_2, DummyProviderTool("provider1")]
@@ -308,7 +314,13 @@ class TestToolExecution:
 
         schema4 = function_arguments_to_pydantic_model(agent.raw_tool_in_agent)
         assert schema4.model_json_schema() == {
-            "properties": {"raw_arguments": {"title": "Raw Arguments", "type": "object"}},
+            "properties": {
+                "raw_arguments": {
+                    "additionalProperties": True,
+                    "title": "Raw Arguments",
+                    "type": "object",
+                }
+            },
             "required": ["raw_arguments"],
             "title": "RawToolInAgentArgs",
             "type": "object",

@@ -1,5 +1,5 @@
 import os
-from collections.abc import Coroutine, Generator
+from collections.abc import Callable, Coroutine, Generator
 from types import (
     AsyncGeneratorType,
     CodeType,
@@ -12,8 +12,6 @@ from types import (
 )
 from typing import (
     Any,
-    Callable,
-    Optional,
     TypeVar,
     cast,
 )
@@ -257,7 +255,7 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
     def send(self, send: _SendT) -> _YieldT:
         return self.coroutine.send(send)
 
-    def throw(self, typ, val=None, tb: Optional[TracebackType] = None) -> _YieldT:
+    def throw(self, typ, val=None, tb: TracebackType | None = None) -> _YieldT:
         return self.coroutine.throw(typ, val, tb)
 
     def close(self) -> None:
@@ -288,7 +286,7 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
         return self.coroutine.cr_await
 
     @property
-    def cr_origin(self) -> Optional[tuple[tuple[str, int, str], ...]]:
+    def cr_origin(self) -> tuple[tuple[str, int, str], ...] | None:
         return self.coroutine.cr_origin
 
     def __repr__(self) -> str:
@@ -305,7 +303,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         self,
         generator: GeneratorType,
         registered_fn: RegisteredFunction,
-        coroutine: Optional[DurableCoroutine],
+        coroutine: DurableCoroutine | None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -321,7 +319,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
     def send(self, send: _SendT) -> _YieldT:
         return self.generator.send(send)
 
-    def throw(self, typ, val=None, tb: Optional[TracebackType] = None) -> _YieldT:
+    def throw(self, typ, val=None, tb: TracebackType | None = None) -> _YieldT:
         return self.generator.throw(typ, val, tb)
 
     def close(self) -> None:
@@ -348,7 +346,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         return self.generator.gi_frame
 
     @property
-    def gi_yieldfrom(self) -> Optional[GeneratorType]:
+    def gi_yieldfrom(self) -> GeneratorType | None:
         return self.generator.gi_yieldfrom
 
     def __repr__(self) -> str:

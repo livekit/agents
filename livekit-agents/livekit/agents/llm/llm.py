@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, ClassVar, Generic, Literal, TypeVar, Union
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
@@ -56,6 +56,12 @@ class FunctionToolCall(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
+
+
 class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
@@ -84,7 +90,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -166,7 +172,8 @@ class LLMStream(ABC):
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
@@ -190,7 +197,13 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        self._llm_request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+            }
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
@@ -202,6 +215,10 @@ class LLMStream(ABC):
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
 
                 if self._conn_options.max_retry == 0 or not e.retryable:
@@ -216,8 +233,7 @@ class LLMStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
-                        exc_info=e,
+                        f"failed to generate LLM completion: {e}, retrying in {retry_interval}s",  # noqa: E501
                         extra={
                             "llm": self._llm._label,
                             "attempt": i + 1,
@@ -346,6 +362,8 @@ class LLMStream(ABC):
             self._llm_request_span.end()
             self._llm_request_span = None
 
+        await self._tee_aiter.aclose()
+
     async def __anext__(self) -> ChatChunk:
         try:
             val = await self._event_aiter.__anext__()
@@ -384,3 +402,39 @@ class LLMStream(ABC):
                         yield chunk.delta.content
 
         return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                if result.fnc_call_out:
+                    ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+        )

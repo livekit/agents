@@ -81,11 +81,11 @@ def read_string(b: io.BytesIO) -> str:
 
 
 def write_int(b: io.BytesIO, i: int) -> None:
-    b.write(i.to_bytes(4, "big"))
+    b.write(i.to_bytes(4, "big", signed=True))
 
 
 def read_int(b: io.BytesIO) -> int:
-    return int.from_bytes(b.read(4), "big")
+    return int.from_bytes(b.read(4), "big", signed=True)
 
 
 def write_bool(b: io.BytesIO, bi: bool) -> None:

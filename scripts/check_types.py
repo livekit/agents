@@ -15,6 +15,11 @@ EXCLUDED_PLUGINS = [
     "rtzr",
 ]
 
+# Stub packages that mypy --install-types pulls in but that break our type checking
+EXCLUDED_STUBS = [
+    "scipy-stubs",
+]
+
 
 def get_packages(repo_root: Path) -> list[str]:
     """Return all packages to type-check."""
@@ -37,17 +42,9 @@ def main() -> int:
     repo_root = Path(__file__).parent.parent
     packages = get_packages(repo_root)
 
-    # Build mypy command
-    cmd = [
-        "uv",
-        "run",
-        "mypy",
-        "--install-types",
-        "--non-interactive",
-        "--untyped-calls-exclude=smithy_aws_core",
-    ]
+    pkg_args: list[str] = []
     for pkg in packages:
-        cmd.extend(["-p", pkg])
+        pkg_args.extend(["-p", pkg])
 
     # Ensure pip is available (required for mypy --install-types)
     subprocess.run(
@@ -56,8 +53,25 @@ def main() -> int:
         cwd=repo_root,
     )
 
-    # Run mypy
-    result = subprocess.run(cmd, cwd=repo_root)
+    # First pass: let mypy install missing type stubs
+    subprocess.run(
+        ["uv", "run", "mypy", "--install-types", "--non-interactive", *pkg_args],
+        capture_output=True,
+        cwd=repo_root,
+    )
+
+    # Remove stubs that break our type checking
+    subprocess.run(
+        ["uv", "pip", "uninstall", "-y", *EXCLUDED_STUBS],
+        capture_output=True,
+        cwd=repo_root,
+    )
+
+    # Second pass: actual type check
+    result = subprocess.run(
+        ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
+        cwd=repo_root,
+    )
     return result.returncode
 
 

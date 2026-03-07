@@ -5,9 +5,9 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -61,7 +61,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[Union[str, FlushSentinel]]()
+    text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -98,7 +98,12 @@ async def _llm_inference_task(
     current_span.set_attributes(
         {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+                chat_ctx.to_dict(
+                    exclude_audio=True,
+                    exclude_image=True,
+                    exclude_timestamp=True,
+                    exclude_metrics=True,
+                )
             ),
             trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
             trace_types.ATTR_PROVIDER_TOOLS: [
@@ -116,6 +121,7 @@ async def _llm_inference_task(
     # are using the newer tools.
     # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
+    tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
         data.generated_text = llm_node
@@ -145,6 +151,14 @@ async def _llm_inference_task(
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
                             continue
+
+                        # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
+                        if (
+                            tool_ctx.get_function_tool(tool.name) is None
+                            and tools != tools_snapshot
+                        ):
+                            tool_ctx.update_tools(tools)
+                            tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
                             id=f"{data.id}/fnc_{len(data.generated_functions)}",
@@ -195,7 +209,7 @@ def perform_tts_inference(
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
-    timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
+    timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
@@ -483,6 +497,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                    )
+                )
                 continue
 
             if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
@@ -492,6 +513,13 @@ async def _execute_tools_task(
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
                     },
+                )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Unknown tool type for function: {fnc_call.name}"),
+                    )
                 )
                 continue
 
@@ -570,7 +598,7 @@ async def _execute_tools_task(
                         bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
                         bound.apply_defaults()
 
-                        if asyncio.iscoroutinefunction(mock):
+                        if inspect.iscoroutinefunction(mock):
                             return await mock(*bound.args, **bound.kwargs)
                         else:
                             return mock(*bound.args, **bound.kwargs)
@@ -604,7 +632,16 @@ async def _execute_tools_task(
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        if not isinstance(e, StopResponse):
+                        if isinstance(e, ToolError):
+                            logger.warning(
+                                "ToolError while executing tool: %s",
+                                e.message,
+                                extra={
+                                    "function": fnc_call.name,
+                                    "speech_id": speech_handle.id,
+                                },
+                            )
+                        elif not isinstance(e, StopResponse):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},
@@ -623,7 +660,10 @@ async def _execute_tools_task(
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
-                task = asyncio.create_task(_traceable_fnc_tool(function_callable, fnc_call))
+                task = asyncio.create_task(
+                    _traceable_fnc_tool(function_callable, fnc_call),
+                    name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
+                )
                 _set_activity_task_info(
                     task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
                 )
@@ -666,26 +706,6 @@ async def _execute_tools_task(
             )
 
 
-def _is_valid_function_output(value: Any) -> bool:
-    VALID_TYPES = (str, int, float, bool, complex, type(None))
-
-    if isinstance(value, VALID_TYPES):
-        return True
-    elif (
-        isinstance(value, list)
-        or isinstance(value, set)
-        or isinstance(value, frozenset)
-        or isinstance(value, tuple)
-    ):
-        return all(_is_valid_function_output(item) for item in value)
-    elif isinstance(value, dict):
-        return all(
-            isinstance(key, VALID_TYPES) and _is_valid_function_output(val)
-            for key, val in value.items()
-        )
-    return False
-
-
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
@@ -701,43 +721,17 @@ def make_tool_output(
 ) -> ToolExecutionOutput:
     from .agent import Agent
 
-    # support returning Exception instead of raising them (for devex purposes inside evals)
     if isinstance(output, BaseException):
         exception = output
         output = None
 
-    if isinstance(exception, ToolError):
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=exception.message,
-                is_error=True,
-            ),
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
-
-    if isinstance(exception, StopResponse):
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=None,
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
-
     if exception is not None:
+        base_result = llm_utils.make_function_call_output(
+            fnc_call=fnc_call, output=None, exception=exception
+        )
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
-            fnc_call_out=llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
-                is_error=True,
-            ),
+            fnc_call_out=base_result.fnc_call_out,
             agent_task=None,
             raw_output=output,
             raw_exception=exception,
@@ -756,12 +750,8 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={
-                    "call_id": fnc_call.call_id,
-                    "output": output,
-                },
+                extra={"call_id": fnc_call.call_id, "output": output},
             )
-
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
                 fnc_call_out=None,
@@ -785,32 +775,13 @@ def make_tool_output(
         task = fnc_out
         fnc_out = None
 
-    if not _is_valid_function_output(fnc_out):
-        logger.error(
-            f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={
-                "call_id": fnc_call.call_id,
-                "output": output,
-            },
-        )
-        return ToolExecutionOutput(
-            fnc_call=fnc_call.model_copy(),
-            fnc_call_out=None,
-            agent_task=None,
-            raw_output=output,
-            raw_exception=exception,
-        )
+    base_result = llm_utils.make_function_call_output(
+        fnc_call=fnc_call, output=fnc_out, exception=None
+    )
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
-        fnc_call_out=(
-            llm.FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=str(fnc_out or ""),  # take the string representation of the output
-                is_error=False,
-            )
-        ),
+        fnc_call_out=base_result.fnc_call_out,
         reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,

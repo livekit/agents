@@ -6,13 +6,20 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union, overload
+from typing import Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import NotRequired
 
 from .. import tokenize, tts, utils
-from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from .._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    create_api_error_from_http,
+)
+from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -51,7 +58,7 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 
-TTSModels = Union[CartesiaModels, DeepgramModels, ElevenlabsModels, RimeModels, InworldModels]
+TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -87,7 +94,7 @@ class FallbackModel(TypedDict):
     """Extra configuration for the model."""
 
 
-FallbackModelType = Union[FallbackModel, str]
+FallbackModelType = FallbackModel | str
 
 
 def _normalize_fallback(
@@ -139,7 +146,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 class _TTSOptions:
     model: TTSModels | str
     voice: NotGivenOr[str]
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     encoding: TTSEncoding
     sample_rate: int
     base_url: str
@@ -291,7 +298,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model" format
+            model (TTSModels | str): TTS model to use, in "provider/model[:voice]" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -311,6 +318,13 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        # Parse voice from model string if provided: "provider/model:voice"
+        if isinstance(model, str):
+            parsed_model, parsed_voice = _parse_model_string(model)
+            model = parsed_model
+            if parsed_voice is not None and not is_given(voice):
+                voice = parsed_voice
 
         lk_base_url = (
             base_url
@@ -345,7 +359,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate,
             base_url=lk_base_url,
@@ -400,14 +414,12 @@ class TTS(tts.TTS):
                 session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
                 timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            asyncio.TimeoutError,
-            aiohttp.ClientResponseError,
-        ) as e:
-            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
-            raise APIConnectionError("failed to connect to LiveKit TTS") from e
+        except aiohttp.ClientResponseError as e:
+            raise create_api_error_from_http(e.message, status=e.status) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("LiveKit Inference TTS connection timed out.") from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to LiveKit Inference TTS") from e
 
         params: dict[str, Any] = {
             "type": "session.create",
@@ -443,7 +455,9 @@ class TTS(tts.TTS):
             await ws.send_str(json.dumps(params))
         except Exception as e:
             await ws.close()
-            raise APIConnectionError("failed to send session.create message to LiveKit TTS") from e
+            raise APIConnectionError(
+                "failed to send session.create message to LiveKit Inference TTS"
+            ) from e
 
         return ws
 
@@ -479,7 +493,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(extra_kwargs):
             self._opts.extra_kwargs.update(extra_kwargs)
 
@@ -594,7 +608,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
-                    raise APIError(f"LiveKit TTS returned error: {msg.data}")
+                    raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
                 else:
                     logger.warning("unexpected message %s", data)
 
@@ -617,9 +631,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
 
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
+
+        except APIError:
+            raise
 
         except Exception as e:
             raise APIConnectionError() from e

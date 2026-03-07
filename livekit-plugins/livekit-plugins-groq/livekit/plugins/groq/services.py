@@ -50,7 +50,7 @@ class LLM(OpenAILLM):
             if model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
                 reasoning_effort = "low"
             elif model in ["qwen/qwen3-32b"]:
-                reasoning_effort = "none"  # type: ignore[assignment]
+                reasoning_effort = "none"
 
         super().__init__(
             model=model,
