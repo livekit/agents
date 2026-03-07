@@ -2,8 +2,6 @@
 
 Support for the [AvatarTalk](https://avatartalk.ai/) virtual avatar.
 
-See the [AvatarTalk integration docs](https://docs.livekit.io/agents/models/avatar/plugins/avatartalk/) for more information.
-
 ## Installation
 
 ```bash
