@@ -1,6 +1,6 @@
 # xAI plugin for LiveKit Agents
 
-Support for the [xAI](https://x.ai/) realtime model.
+Support for [xAI](https://x.ai/)'s [Grok Voice Agent API](https://docs.x.ai/docs/guides/voice).
 
 See the [xAI integration docs](https://docs.livekit.io/agents/models/realtime/plugins/xai/) for more information.
 
