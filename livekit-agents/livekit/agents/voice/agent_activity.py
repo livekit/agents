@@ -2090,6 +2090,7 @@ class AgentActivity(RecognitionHooks):
             # reset the `created_at` to the start time of the tool execution
             fnc_call.created_at = time.time()
             speech_handle._item_added([fnc_call])
+            self._session._update_agent_state("processing")
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2344,6 +2345,7 @@ class AgentActivity(RecognitionHooks):
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
+            self._session._update_agent_state("thinking")
             current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
             if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
@@ -2563,6 +2565,7 @@ class AgentActivity(RecognitionHooks):
         )
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            self._session._update_agent_state("processing")
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
@@ -2593,7 +2596,8 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-            self._session._update_agent_state("listening")
+            if exe_task.done():
+                self._session._update_agent_state("listening")
             current_span.set_attribute(
                 trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
             )
