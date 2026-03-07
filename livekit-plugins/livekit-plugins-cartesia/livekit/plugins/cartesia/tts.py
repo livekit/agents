@@ -397,6 +397,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokens = deque[str]()
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        flush_on_chunk = isinstance(self._tts._sentence_tokenizer, tokenize.SentenceTokenizer)
         if self._tts._stream_pacer:
             sent_tokenizer_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_tokenizer_stream,
@@ -407,6 +408,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
         ) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
+            if flush_on_chunk is True:
+                base_pkt["max_buffer_delay_ms"] = 0
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = cartesia_context_id
