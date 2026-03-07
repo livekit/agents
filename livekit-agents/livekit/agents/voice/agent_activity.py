@@ -16,6 +16,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
+from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
     FunctionToolInfo,
     RawFunctionToolInfo,
@@ -63,6 +64,7 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    apply_instructions_modality,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -871,7 +873,7 @@ class AgentActivity(RecognitionHooks):
         *,
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
@@ -947,7 +949,7 @@ class AgentActivity(RecognitionHooks):
             # this matches the behavior of the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
             if instructions:
-                instructions = "\n".join([self._agent.instructions, instructions])
+                instructions = self._agent.instructions + "\n" + instructions
 
             task = self._create_speech_task(
                 self._pipeline_reply_task(
@@ -1883,7 +1885,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | None = None,
+        instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1914,7 +1916,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | None = None,
+        instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1947,6 +1949,9 @@ class AgentActivity(RecognitionHooks):
                 update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
             except ValueError:
                 logger.exception("failed to update the instructions")
+
+        # apply the correct variant of the instructions for the turn's input modality
+        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
