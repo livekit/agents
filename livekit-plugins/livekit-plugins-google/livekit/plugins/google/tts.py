@@ -303,16 +303,54 @@ class ChunkedStream(tts.ChunkedStream):
         """Split input text into chunks that respect Google TTS byte limits.
 
         Google Cloud TTS API rejects input.text or input.ssml longer than
-        5000 bytes. This method splits plain text accordingly using the
-        sentence tokenizer. Structured content (SSML, markup) is returned
-        as-is because naive sentence splitting would break tag structure.
+        5000 bytes. Uses the configured sentence tokenizer (blingfire by
+        default) for boundary detection, with a word tokenizer fallback for
+        sentences that individually exceed the byte limit. Structured content
+        (SSML, markup) is returned as-is because naive sentence splitting
+        would break tag structure.
         """
         if self._opts.enable_ssml or self._opts.use_markup:
             return [self._input_text]
 
-        return _split_text_by_bytes(
-            self._input_text, GOOGLE_TTS_MAX_INPUT_BYTES, self._opts.tokenizer
-        )
+        max_bytes = GOOGLE_TTS_MAX_INPUT_BYTES
+
+        if len(self._input_text.encode("utf-8")) <= max_bytes:
+            return [self._input_text]
+
+        sentences = self._opts.tokenizer.tokenize(text=self._input_text)
+        word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+
+        chunks: list[str] = []
+        current = ""
+
+        for sentence in sentences:
+            if not sentence:
+                continue
+            candidate = (current + " " + sentence) if current else sentence
+            if len(candidate.encode("utf-8")) <= max_bytes:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                if len(sentence.encode("utf-8")) > max_bytes:
+                    # split oversized sentence using word tokenizer
+                    words = word_tokenizer.tokenize(text=sentence)
+                    current = ""
+                    for word in words:
+                        word_candidate = (current + " " + word) if current else word
+                        if len(word_candidate.encode("utf-8")) <= max_bytes:
+                            current = word_candidate
+                        else:
+                            if current:
+                                chunks.append(current)
+                            current = word
+                else:
+                    current = sentence
+
+        if current:
+            chunks.append(current)
+
+        return chunks
 
     def _build_synthesis_input(self, text: str) -> texttospeech.SynthesisInput:
         if self._opts.use_markup:
@@ -501,88 +539,3 @@ def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
         return "audio/opus"
     else:
         raise RuntimeError(f"encoding {encoding} isn't supported")
-
-
-def _split_text_by_bytes(
-    text: str, max_bytes: int, sentence_tokenizer: tokenize.SentenceTokenizer
-) -> list[str]:
-    """Split text into chunks that each fit within max_bytes when UTF-8 encoded.
-
-    Uses the provided sentence tokenizer (e.g. blingfire) for sentence boundary
-    detection, then falls back to whitespace and character boundaries when a
-    single sentence still exceeds the byte limit.
-    """
-    if len(text.encode("utf-8")) <= max_bytes:
-        return [text]
-
-    # use the tokenizer for sentence boundary detection
-    sentences = sentence_tokenizer.tokenize(text=text)
-    chunks: list[str] = []
-    current = ""
-
-    for sentence in sentences:
-        if not sentence:
-            continue
-        candidate = (current + " " + sentence) if current else sentence
-        if len(candidate.encode("utf-8")) <= max_bytes:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            # if a single sentence still exceeds the limit, split it by words
-            if len(sentence.encode("utf-8")) > max_bytes:
-                chunks.extend(_split_on_words(sentence, max_bytes))
-                current = ""
-            else:
-                current = sentence
-
-    if current:
-        chunks.append(current)
-
-    return chunks
-
-
-def _split_on_words(text: str, max_bytes: int) -> list[str]:
-    """Split text on whitespace boundaries to fit within max_bytes."""
-    words = text.split()
-    chunks: list[str] = []
-    current = ""
-
-    for word in words:
-        candidate = current + " " + word if current else word
-        if len(candidate.encode("utf-8")) <= max_bytes:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            # if a single word exceeds the limit, split by characters
-            if len(word.encode("utf-8")) > max_bytes:
-                chunks.extend(_split_on_chars(word, max_bytes))
-                current = ""
-            else:
-                current = word
-
-    if current:
-        chunks.append(current)
-
-    return chunks
-
-
-def _split_on_chars(text: str, max_bytes: int) -> list[str]:
-    """Split text character-by-character to fit within max_bytes."""
-    chunks: list[str] = []
-    current = ""
-
-    for char in text:
-        candidate = current + char
-        if len(candidate.encode("utf-8")) <= max_bytes:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            current = char
-
-    if current:
-        chunks.append(current)
-
-    return chunks
