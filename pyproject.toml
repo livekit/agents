@@ -56,6 +56,7 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-typecast = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
