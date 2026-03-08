@@ -1095,9 +1095,9 @@ class AgentActivity(RecognitionHooks):
                     continue
                 self._current_speech = speech
                 if self.min_consecutive_speech_delay > 0.0:
-                    await asyncio.sleep(
-                        self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
-                    )
+                    delay = self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
                     # check again if speech is done after sleep delay
                     if speech.done():
                         # skip done speech (interrupted during delay)
