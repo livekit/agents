@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..llm import ChatContext
+from ..metrics import ModelUsage
 from .agent_session import AgentSessionOptions, RecordingOptions
 from .events import AgentEvent
 
@@ -26,6 +27,8 @@ class SessionReport:
     """Timestamp when the session started"""
     timestamp: float = field(default_factory=time.time)
     """Timestamp when the session report was created, typically at the end of the session"""
+    model_usage: list[ModelUsage] | None = None
+    """Usage summaries for the session, one per model/provider combination"""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
@@ -46,12 +49,14 @@ class SessionReport:
             ),
             "audio_recording_started_at": self.audio_recording_started_at,
             "options": {
-                "allow_interruptions": self.options.allow_interruptions,
-                "discard_audio_if_uninterruptible": self.options.discard_audio_if_uninterruptible,
-                "min_interruption_duration": self.options.min_interruption_duration,
-                "min_interruption_words": self.options.min_interruption_words,
-                "min_endpointing_delay": self.options.min_endpointing_delay,
-                "max_endpointing_delay": self.options.max_endpointing_delay,
+                "allow_interruptions": self.options.interruption["enabled"],
+                "discard_audio_if_uninterruptible": self.options.interruption[
+                    "discard_audio_if_uninterruptible"
+                ],
+                "min_interruption_duration": self.options.interruption["min_duration"],
+                "min_interruption_words": self.options.interruption["min_words"],
+                "min_endpointing_delay": self.options.endpointing["min_delay"],
+                "max_endpointing_delay": self.options.endpointing["max_delay"],
                 "max_tool_steps": self.options.max_tool_steps,
                 "user_away_timeout": self.options.user_away_timeout,
                 "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
@@ -59,4 +64,10 @@ class SessionReport:
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
+            "usage": self._usage_to_dict() if self.model_usage else None,
         }
+
+    def _usage_to_dict(self) -> list[dict] | None:
+        if self.model_usage is None:
+            return None
+        return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
