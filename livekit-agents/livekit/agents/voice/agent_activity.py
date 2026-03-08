@@ -906,7 +906,7 @@ class AgentActivity(RecognitionHooks):
                 filtered_tools: list[llm.Tool | llm.Toolset] = []
                 for tool in tools:
                     info: RawFunctionToolInfo | FunctionToolInfo | None = None
-                    if isinstance(tool, (llm.RawFunctionTool, llm.FunctionTool)):
+                    if isinstance(tool, llm.RawFunctionTool | llm.FunctionTool):
                         info = tool.info
 
                     if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
@@ -1874,6 +1874,9 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+        if audio_out is not None:
+            audio_out.cancel()
+
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -2182,6 +2185,9 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("thinking")
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
+
+        if audio_out is not None:
+            audio_out.cancel()
 
         await text_tee.aclose()
 
@@ -2670,6 +2676,9 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+        if audio_out is not None:
+            audio_out.cancel()
 
         for tee in tees:
             await tee.aclose()

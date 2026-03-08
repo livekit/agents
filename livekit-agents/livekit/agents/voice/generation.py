@@ -353,6 +353,14 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    def resolve(self, ev: io.PlaybackStartedEvent) -> None:
+        if not self.first_frame_fut.done():
+            self.first_frame_fut.set_result(ev.created_at)
+
+    def cancel(self) -> None:
+        if not self.first_frame_fut.done():
+            self.first_frame_fut.cancel()
+
 
 def perform_audio_forwarding(
     *,
@@ -360,6 +368,11 @@ def perform_audio_forwarding(
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
+    # out should be cancelled in the caller after the playout is finished or interrupted
+    audio_output.on("playback_started", out.resolve)
+    out.first_frame_fut.add_done_callback(
+        lambda _: audio_output.off("playback_started", out.resolve)
+    )
     task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
     return task, out
 
@@ -372,12 +385,7 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
-    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-        if not out.first_frame_fut.done():
-            out.first_frame_fut.set_result(ev.created_at)
-
     try:
-        audio_output.on("playback_started", _on_playback_started)
         audio_output.resume()
 
         async for frame in tts_output:
@@ -406,11 +414,6 @@ async def _audio_forwarding_task(
                 await audio_output.capture_frame(frame)
 
     finally:
-        audio_output.off("playback_started", _on_playback_started)
-
-        if not out.first_frame_fut.done():
-            out.first_frame_fut.cancel()
-
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
@@ -506,7 +509,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
+            if not isinstance(function_tool, llm.FunctionTool | llm.RawFunctionTool):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
