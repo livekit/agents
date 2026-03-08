@@ -409,11 +409,11 @@ class RealtimeSession(
 
                 if getattr(item, "is_error", False):
                     tool_result.error_type = "implementation-error"
-                    tool_result.error_message = getattr(item, "error_message", None) or str(
-                        getattr(item, "output", "")
+                    tool_result.error_message = getattr(item, "error_message", None) or (
+                        llm.utils.tool_output_to_text(getattr(item, "output", ""))
                     )
                 else:
-                    tool_result.result = str(getattr(item, "output", ""))
+                    tool_result.result = llm.utils.tool_output_to_text(getattr(item, "output", ""))
 
                 self._send_client_event(tool_result)
 

@@ -35,6 +35,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
+from ..llm import utils as llm_utils
 from ..log import logger
 from . import trace_types
 
@@ -262,10 +263,11 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
                 )
             )
         elif item.type == "function_call_output":
+            output_text = llm_utils.tool_output_to_text(item.output)
             events.append(
                 (
                     trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
-                    {"content": item.output, "name": item.name, "id": item.call_id},
+                    {"content": output_text, "name": item.name, "id": item.call_id},
                 )
             )
     return events
@@ -335,7 +337,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fco.id = item.id
         fco.name = item.name
         fco.call_id = item.call_id
-        fco.output = item.output
+        fco.output = llm_utils.tool_output_to_text(item.output)
         fco.is_error = item.is_error
         fco.created_at.FromMilliseconds(int(item.created_at * 1000))
 
