@@ -68,6 +68,16 @@ async def raw_tool_2() -> str:
     return "raw2"
 
 
+@function_tool
+async def mock_tool_required_fields(a: int, b: int) -> dict[str, int]:
+    """Test tool with two required fields.
+    Args:
+        a: First required integer
+        b: Second required integer
+    """
+    return {"a": a, "b": b}
+
+
 class DummyAgent(Agent):
     def __init__(self):
         super().__init__(instructions="You are a dummy agent.")
@@ -444,3 +454,35 @@ class TestTruncatedJsonRepair:
         result = _try_repair_json('{"path": "C:\\\\Users\\\\name\\')
         assert result is not None
         assert "path" in result
+
+    def test_repaired_json_rejected_when_schema_validation_fails(self):
+        """Repaired JSON that drops required fields must raise ValueError.
+
+        This is the exact scenario from the PR review: '{"a": 1' might have been
+        '{"a": 1, "b": 2}' but repair produces '{"a": 1}' — missing required "b".
+        The schema validation safety net catches this and raises so the caller
+        can retry the LLM call.
+        """
+        with pytest.raises(ValueError, match="schema validation"):
+            prepare_function_arguments(
+                fnc=mock_tool_required_fields,
+                json_arguments='{"a": 1',  # truncated; "b" is missing
+            )
+
+    def test_repair_disabled_raises_immediately(self):
+        """When repair_json=False, malformed JSON raises without attempting repair."""
+        with pytest.raises(ValueError, match="Failed to parse"):
+            prepare_function_arguments(
+                fnc=mock_tool_1,
+                json_arguments='{"arg1": "hello"',
+                repair_json=False,
+            )
+
+    def test_repair_succeeds_when_all_required_fields_present(self):
+        """Repair should succeed when all required fields are present in the
+        truncated JSON — only structural closers are missing."""
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_required_fields,
+            json_arguments='{"a": 1, "b": 2',  # just missing closing brace
+        )
+        assert args == (1, 2)

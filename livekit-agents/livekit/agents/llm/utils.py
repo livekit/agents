@@ -431,33 +431,69 @@ def prepare_function_arguments(
     fnc: FunctionTool | RawFunctionTool,
     json_arguments: str,  # raw function output from the LLM
     call_ctx: RunContext[Any] | None = None,
+    repair_json: bool = True,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
     Create the positional and keyword arguments to call a function tool from
     the raw function output from the LLM.
+
+    Args:
+        repair_json: When True (default), attempt to repair truncated JSON from
+            LLM streaming before raising. Repaired arguments are validated
+            against the tool's schema — if validation fails, the original parse
+            error is raised so the caller can retry the LLM call instead.
+            Set to False to always raise on malformed JSON without attempting
+            repair.
     """
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
     try:
         args_dict = from_json(json_arguments)
-    except ValueError:
+    except ValueError as original_parse_error:
+        if not repair_json:
+            raise ValueError(
+                f"Failed to parse tool call arguments as JSON: "
+                f"{json_arguments[:200]!r}{'…' if len(json_arguments) > 200 else ''}"
+            ) from None
+
         # LLMs may return truncated JSON in streaming tool calls (e.g., EOF
         # while parsing a string). Attempt to repair the JSON before giving up.
         try:
             args_dict = _try_repair_json(json_arguments)
-            logger.warning(
-                "repaired truncated JSON in tool call arguments",
-                extra={
-                    "raw_arguments_preview": json_arguments[:200],
-                    "raw_arguments_length": len(json_arguments),
-                },
-            )
         except Exception:
             raise ValueError(
                 f"Failed to parse tool call arguments as JSON "
-                f"(and repair attempt failed): {json_arguments!r}"
+                f"(and repair attempt failed): "
+                f"{json_arguments[:200]!r}{'…' if len(json_arguments) > 200 else ''}"
             ) from None
+
+        # Validate repaired args against the tool's Pydantic schema before
+        # executing.  Repair can produce structurally valid JSON that is
+        # semantically incomplete — e.g. '{"arr": [{"a": 1' repairs to
+        # '{"arr": [{"a": 1}]}' but the tool may require a "b" field too.
+        # If validation fails, we re-raise so the caller can retry the LLM
+        # call rather than invoking the tool with wrong arguments.
+        if isinstance(fnc, FunctionTool):
+            try:
+                model_type = function_arguments_to_pydantic_model(fnc)
+                model_type.model_validate(args_dict)
+            except Exception:
+                raise ValueError(
+                    f"Repaired JSON failed schema validation for tool "
+                    f"'{fnc.id}'; raising so the caller can retry the "
+                    f"LLM call. Args preview: "
+                    f"{json_arguments[:200]!r}"
+                ) from original_parse_error
+
+        logger.warning(
+            "repaired truncated JSON in tool call arguments",
+            extra={
+                "tool_name": fnc.id,
+                "raw_arguments_preview": json_arguments[:200],
+                "raw_arguments_length": len(json_arguments),
+            },
+        )
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
