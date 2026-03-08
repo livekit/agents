@@ -17,6 +17,7 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
 from livekit.agents.utils import hw
+from livekit.agents.voice.audio_recognition import _TurnDetector
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
@@ -197,7 +198,7 @@ class EOUPlugin(Plugin):
         self._runner_class._download_files()
 
 
-class EOUModelBase(ABC):
+class EOUModelBase(_TurnDetector, ABC):
     def __init__(
         self,
         model_type: EOUModelType = "en",  # default to smaller, english-only model
