@@ -21,6 +21,9 @@ class UsageSummary:
     tts_characters_count: int = 0
     tts_audio_duration: float = 0.0
     stt_audio_duration: float = 0.0
+    stt_input_tokens: int = 0
+    stt_output_tokens: int = 0
+    stt_input_audio_tokens: int = 0
 
     # properties for naming consistency: prompt = input, completion = output
     @property
@@ -87,6 +90,10 @@ class UsageCollector:
 
         elif isinstance(metrics, STTMetrics):
             self._summary.stt_audio_duration += metrics.audio_duration
+            if metrics.input_tokens is not None:
+                self._summary.stt_input_tokens += metrics.input_tokens
+                self._summary.stt_output_tokens += metrics.output_tokens or 0
+                self._summary.stt_input_audio_tokens += metrics.input_audio_tokens or 0
 
     def get_summary(self) -> UsageSummary:
         return deepcopy(self._summary)

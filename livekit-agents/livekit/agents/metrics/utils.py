@@ -76,10 +76,14 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             },
         )
     elif isinstance(metrics, STTMetrics):
-        logger.info(
-            "STT metrics",
-            extra=metadata
-            | {
-                "audio_duration": round(metrics.audio_duration, 2),
-            },
-        )
+        extra: dict[str, str | float | int] = {
+            "audio_duration": round(metrics.audio_duration, 2),
+        }
+        if metrics.input_tokens is not None:
+            extra |= {
+                "input_tokens": metrics.input_tokens,
+                "output_tokens": metrics.output_tokens or 0,
+                "total_tokens": metrics.total_tokens or 0,
+                "input_audio_tokens": metrics.input_audio_tokens or 0,
+            }
+        logger.info("STT metrics", extra=metadata | extra)
