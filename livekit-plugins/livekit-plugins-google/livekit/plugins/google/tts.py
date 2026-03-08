@@ -48,6 +48,7 @@ DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 # Google Cloud TTS API limit: input.text or input.ssml must not exceed 5000 bytes
 GOOGLE_TTS_MAX_INPUT_BYTES = 5000
+_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
 
 @dataclass
@@ -318,39 +319,7 @@ class ChunkedStream(tts.ChunkedStream):
             return [self._input_text]
 
         sentences = self._opts.tokenizer.tokenize(text=self._input_text)
-        word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
-
-        chunks: list[str] = []
-        current = ""
-
-        for sentence in sentences:
-            if not sentence:
-                continue
-            candidate = (current + " " + sentence) if current else sentence
-            if len(candidate.encode("utf-8")) <= max_bytes:
-                current = candidate
-            else:
-                if current:
-                    chunks.append(current)
-                if len(sentence.encode("utf-8")) > max_bytes:
-                    # split oversized sentence using word tokenizer
-                    words = word_tokenizer.tokenize(text=sentence)
-                    current = ""
-                    for word in words:
-                        word_candidate = (current + " " + word) if current else word
-                        if len(word_candidate.encode("utf-8")) <= max_bytes:
-                            current = word_candidate
-                        else:
-                            if current:
-                                chunks.append(current)
-                            current = word
-                else:
-                    current = sentence
-
-        if current:
-            chunks.append(current)
-
-        return chunks
+        return _split_sentences_by_bytes(sentences, max_bytes)
 
     def _build_synthesis_input(self, text: str) -> texttospeech.SynthesisInput:
         if self._opts.use_markup:
@@ -535,6 +504,45 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
         finally:
             await input_gen.aclose()
+
+
+def _split_sentences_by_bytes(sentences: list[str], max_bytes: int) -> list[str]:
+    """Merge tokenized sentences into chunks that fit within a byte limit.
+
+    When a single sentence exceeds *max_bytes*, it is further split at word
+    boundaries using the module-level ``_word_tokenizer``.
+    """
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        if not sentence:
+            continue
+        candidate = (current + " " + sentence) if current else sentence
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            if len(sentence.encode("utf-8")) > max_bytes:
+                # split oversized sentence at word boundaries
+                words = _word_tokenizer.tokenize(text=sentence)
+                current = ""
+                for word in words:
+                    word_candidate = (current + " " + word) if current else word
+                    if len(word_candidate.encode("utf-8")) <= max_bytes:
+                        current = word_candidate
+                    else:
+                        if current:
+                            chunks.append(current)
+                        current = word
+            else:
+                current = sentence
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
