@@ -361,7 +361,6 @@ class AgentsConsole:
             self._io_loop = loop
             self._io_context = contextvars.copy_context()
 
-            # Use TCP audio I/O if a TCP transport is available
             if self._tcp_transport is not None:
                 assert self._tcp_audio_input is not None
                 assert self._tcp_audio_output is not None
@@ -379,7 +378,6 @@ class AgentsConsole:
             self._io_session = session
 
         if session:
-            # Set the session transport for TCP mode
             if self._tcp_transport is not None:
                 session._session_transport = self._tcp_transport
                 session._session_transport_audio_input = self._tcp_audio_input
@@ -1526,7 +1524,6 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
 
         server._job_executor_type = JobExecutorType.THREAD
 
-        # Set up console for TCP mode
         console_inst = AgentsConsole.get_instance()
         console_inst.enabled = True
         console_inst._tcp_transport = transport
