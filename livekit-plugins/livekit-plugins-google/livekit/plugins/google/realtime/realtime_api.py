@@ -547,7 +547,21 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
-            self._mark_restart_needed()
+
+            async with self._session_lock:
+                if not self._active_session:
+                    # No active session yet — restart will pick up new instructions via _build_connect_config
+                    self._mark_restart_needed()
+                    return
+
+            # Active session exists — send mid-session system instruction update (no reconnect needed)
+            logger.warning(f"Updating instructions: {instructions}")
+            self._send_client_event(
+                types.LiveClientContent(
+                    turns=[types.Content(role="model", parts=[types.Part(text=instructions)])],
+                    turn_complete=False,
+                )
+            )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
