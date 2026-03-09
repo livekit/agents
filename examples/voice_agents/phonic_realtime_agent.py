@@ -55,7 +55,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     await asyncio.sleep(10)
-    if session.agentState == "initializing":
+    if session.agent_state == "initializing":
         return
     agent = session.current_agent
     chat_ctx = agent.chat_ctx.copy()
