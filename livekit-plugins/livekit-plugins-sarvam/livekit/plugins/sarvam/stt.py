@@ -533,7 +533,7 @@ class STT(stt.STT):
                     error_text = await res.text()
                     self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message="Sarvam API Error",
+                        message=f"Sarvam API Error ({res.status}): {error_text}",
                         status_code=res.status,
                         body=error_text,
                     )
@@ -1113,7 +1113,10 @@ class SpeechStream(stt.SpeechStream):
                             extra={**self._build_log_context(), "error": str(e)},
                             exc_info=True,
                         )
-                        raise APIStatusError(f"Message processing error: {e}") from e
+                        raise APIStatusError(
+                            message=f"Message processing error: {e}. Raw server message: {msg.data}",
+                            body={"raw_message": msg.data},
+                        ) from e
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     error_msg = f"WebSocket error: {ws.exception()}"
@@ -1125,9 +1128,39 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    close_code = ws.close_code if ws.close_code is not None else msg.data
+                    close_reason = msg.extra
+                    is_expected_close = close_code in (1000, 1001, None)
+
+                    if not is_expected_close:
+                        self._logger.error(
+                            f"WebSocket closed: {msg.type}",
+                            extra={
+                                **self._build_log_context(),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            },
+                        )
+                        raw_close = {
+                            "msg_type": str(msg.type),
+                            "close_code": close_code,
+                            "close_reason": close_reason,
+                        }
+                        raise APIStatusError(
+                            message=(
+                                "Sarvam STT WebSocket closed with non-graceful status: "
+                                f"{json.dumps(raw_close, ensure_ascii=False)}"
+                            ),
+                            status_code=int(close_code) if isinstance(close_code, int) else -1,
+                            body=raw_close,
+                        )
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",
-                        extra=self._build_log_context(),
+                        extra={
+                            **self._build_log_context(),
+                            "close_code": close_code,
+                            "close_reason": close_reason,
+                        },
                     )
                     break
 
@@ -1307,8 +1340,15 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_error_message(self, data: dict) -> None:
         """Handle error messages from the API."""
-        error_info = data.get("error", "Unknown error")
-        error_code = data.get("code", "unknown")
+        error_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+        error_info = (
+            data.get("error")
+            or error_data.get("error")
+            or error_data.get("message")
+            or "Unknown error"
+        )
+        error_code = data.get("code", error_data.get("code", "unknown"))
+        raw_error_message = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         self._maybe_set_server_request_id(data)
 
         self._logger.error(
@@ -1321,15 +1361,12 @@ class SpeechStream(stt.SpeechStream):
             },
         )
 
-        # Determine if error is recoverable based on error code/type
-        recoverable_codes = ["rate_limit", "temporary_unavailable", "timeout"]
-        recoverable_keywords = ["rate limit", "temporary", "timeout", "connection"]
+        status_code = int(error_code) if isinstance(error_code, int) else -1
+        if isinstance(error_code, str) and error_code.isdigit():
+            status_code = int(error_code)
 
-        is_recoverable = error_code in recoverable_codes or any(
-            keyword in str(error_info).lower() for keyword in recoverable_keywords
+        raise APIStatusError(
+            message=f"Sarvam streaming API error: {raw_error_message}",
+            status_code=status_code,
+            body=data,
         )
-
-        if is_recoverable:
-            raise APIConnectionError(f"Recoverable API error: {error_info}")
-        else:
-            raise APIStatusError(f"API error: {error_info}")
