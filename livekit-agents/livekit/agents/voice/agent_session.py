@@ -41,7 +41,6 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
-from .remote_session import RoomSessionTransport, _SessionHost
 from .events import (
     AgentEvent,
     AgentState,
@@ -56,6 +55,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
+from .remote_session import RoomSessionTransport, SessionTransport, _SessionHost
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 
@@ -390,6 +390,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._session_transport: SessionTransport | None = None
         self._session_host: _SessionHost | None = None
 
         self._agent: Agent | None = None
@@ -643,8 +644,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                self._session_host = _SessionHost(RoomSessionTransport(self._room_io.room))
-                self._session_host.register_session(self)
+                self._session_transport = RoomSessionTransport(self._room_io.room)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -717,7 +717,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
 
-            if self._session_host is not None:
+            if self._session_transport is not None:
+                self._session_host = _SessionHost(self._session_transport)
+                self._session_host.register_session(self)
                 await self._session_host.start()
 
             # important: no await should be done after this!
