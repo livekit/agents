@@ -46,15 +46,6 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
-# from livekit.agents import Language
-
-try:
-    pass
-except Exception:
-    try:
-        pass
-    except Exception:
-        pass
 
 from .log import logger
 

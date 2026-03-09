@@ -42,13 +42,6 @@ from livekit.agents import (
     utils,
 )
 
-try:
-    pass
-except Exception:
-    try:
-        pass
-    except Exception:
-        pass
 from .log import logger
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
