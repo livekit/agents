@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -18,6 +18,7 @@ from .. import llm, utils
 from ..llm import (
     ChatChunk,
     ChatContext,
+    Instructions,
     StopResponse,
     ToolContext,
     ToolError,
@@ -795,7 +796,9 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
+def update_instructions(
+    chat_ctx: ChatContext, *, instructions: str | Instructions, add_if_missing: bool
+) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
@@ -825,6 +828,23 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
             0,
             llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
         )
+
+
+def apply_instructions_modality(
+    chat_ctx: ChatContext, *, modality: Literal["audio", "text"]
+) -> None:
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None and (item := chat_ctx.items[idx]).type == "message":
+        has_modality_specific = any(isinstance(c, Instructions) for c in item.content)
+        if not has_modality_specific:
+            return
+
+        # ChatContext.copy shadows the original item, create a new instance to avoid mutating the original
+        new_item = item.model_copy()
+        new_item.content = [
+            c.as_modality(modality) if isinstance(c, Instructions) else c for c in new_item.content
+        ]
+        chat_ctx.items[idx] = new_item
 
 
 def remove_instructions(chat_ctx: ChatContext) -> None:
