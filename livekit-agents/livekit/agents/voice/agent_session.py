@@ -60,6 +60,7 @@ from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.filters import TextTransforms
@@ -391,6 +392,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
         self._session_transport: SessionTransport | None = None
+        self._session_transport_audio_input: TcpAudioInput | None = None
+        self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: _SessionHost | None = None
 
         self._agent: Agent | None = None
@@ -718,7 +721,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await utils.aio.cancel_and_wait(*tasks)
 
             if self._session_transport is not None:
-                self._session_host = _SessionHost(self._session_transport)
+                self._session_host = _SessionHost(
+                    self._session_transport,
+                    audio_input=self._session_transport_audio_input,
+                    audio_output=self._session_transport_audio_output,
+                )
                 self._session_host.register_session(self)
                 await self._session_host.start()
 

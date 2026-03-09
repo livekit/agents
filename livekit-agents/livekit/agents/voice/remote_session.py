@@ -34,6 +34,7 @@ from .events import (
 )
 
 if TYPE_CHECKING:
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from .agent_session import AgentSession
 
 
@@ -295,8 +296,15 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
 
 class _SessionHost:
 
-    def __init__(self, transport: SessionTransport) -> None:
+    def __init__(
+        self,
+        transport: SessionTransport,
+        audio_input: TcpAudioInput | None = None,
+        audio_output: TcpAudioOutput | None = None,
+    ) -> None:
         self._transport = transport
+        self._audio_input = audio_input
+        self._audio_output = audio_output
         self._started = False
         self._recv_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
@@ -361,17 +369,10 @@ class _SessionHost:
     def _dispatch_transport_message(
         self, msg_type: str, msg: agent_pb.AgentSessionMessage
     ) -> None:
-        if self._session is None:
-            return
-
-        if msg_type == "audio_input":
-            audio_in = self._session.input.audio
-            if audio_in is not None and hasattr(audio_in, "push_frame"):
-                audio_in.push_frame(msg.audio_input)
-        elif msg_type == "audio_playback_finished":
-            audio_out = self._session.output.audio
-            if audio_out is not None and hasattr(audio_out, "notify_playout_finished"):
-                audio_out.notify_playout_finished()
+        if msg_type == "audio_input" and self._audio_input is not None:
+            self._audio_input.push_frame(msg.audio_input)
+        elif msg_type == "audio_playback_finished" and self._audio_output is not None:
+            self._audio_output.notify_playout_finished()
 
     # -- event forwarding --
 
