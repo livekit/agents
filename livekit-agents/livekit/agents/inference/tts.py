@@ -148,6 +148,7 @@ class RimeOptions(TypedDict, total=False):
     """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
     See: https://docs.rime.ai/api-reference/endpoint/websockets-json
     """
+
     speed_alpha: float  # default 1.0, <1 = faster, >1 = slower
     pause_between_brackets: bool  # default False
     phonemize_between_brackets: bool  # default False
