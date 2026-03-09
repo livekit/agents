@@ -122,7 +122,9 @@ class LemonSliceAPI:
             payload.update(extra_payload)
 
         response_data = await self._post(payload)
-        return response_data["session_id"]  # type: ignore
+        session_id = response_data["session_id"]
+        logger.debug(f"LemonSlice Session ID = {session_id}")
+        return session_id  # type: ignore
 
     async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
@@ -156,7 +158,6 @@ class LemonSliceAPI:
                                 "LemonSlice Server returned an error",
                                 status_code=response.status,
                                 body=text,
-                                retryable=False,
                             )
                         return await response.json()  # type: ignore
                 except Exception as e:
