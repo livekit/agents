@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+import httpx
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
+    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -234,11 +235,12 @@ class MCPServerHTTP(MCPServer):
         ]
     ]:
         if self._use_streamable_http:
-            return streamablehttp_client(  # type: ignore[no-any-return]
+            return streamable_http_client(  # type: ignore[no-any-return]
                 url=self.url,
-                headers=self.headers,
-                timeout=timedelta(seconds=self._timeout),
-                sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
+                http_client=httpx.AsyncClient(
+                    headers=self.headers or {},
+                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+                ),
             )
         else:
             return sse_client(  # type: ignore[no-any-return]
