@@ -353,13 +353,9 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
-    def resolve(self, ev: io.PlaybackStartedEvent) -> None:
+    def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
         if not self.first_frame_fut.done():
             self.first_frame_fut.set_result(ev.created_at)
-
-    def cancel(self) -> None:
-        if not self.first_frame_fut.done():
-            self.first_frame_fut.cancel()
 
 
 def perform_audio_forwarding(
@@ -368,10 +364,10 @@ def perform_audio_forwarding(
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
-    # out should be cancelled in the caller after the playout is finished or interrupted
-    audio_output.on("playback_started", out.resolve)
+    # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
+    audio_output.on("playback_started", out._resolve_first_frame_fut)
     out.first_frame_fut.add_done_callback(
-        lambda _: audio_output.off("playback_started", out.resolve)
+        lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
     )
     task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
     return task, out

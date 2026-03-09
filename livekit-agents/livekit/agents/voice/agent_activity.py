@@ -1874,8 +1874,8 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-        if audio_out is not None:
-            audio_out.cancel()
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -2186,8 +2186,8 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-        if audio_out is not None:
-            audio_out.cancel()
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
 
         await text_tee.aclose()
 
@@ -2677,8 +2677,8 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-        if audio_out is not None:
-            audio_out.cancel()
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
 
         for tee in tees:
             await tee.aclose()
