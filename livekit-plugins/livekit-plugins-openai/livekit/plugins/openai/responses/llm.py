@@ -243,11 +243,13 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        if self._opts.use_websocket:
+        if self._opts.use_websocket and self._ws is not None:
             from urllib.parse import urlparse
 
             return urlparse(self._ws._base_url).netloc
-        return self._client._base_url.netloc.decode("utf-8")
+        if self._client is not None:
+            return self._client._base_url.netloc.decode("utf-8")
+        return ""
 
     def chat(
         self,

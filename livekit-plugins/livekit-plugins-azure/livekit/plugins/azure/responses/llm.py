@@ -69,3 +69,8 @@ class LLM(openai.responses.LLM):
             tool_choice=tool_choice,
             reasoning=reasoning,
         )
+        self._azure_client = azure_client
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        await self._azure_client.close()
