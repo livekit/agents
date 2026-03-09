@@ -27,6 +27,7 @@ from phonic.types import (
     AudioChunkPayload,
     AudioChunkResponsePayload,
     ConfigPayload,
+    GenerateReplyPayload,
     InputTextPayload,
     ToolCallInterruptedPayload,
     ToolCallOutputPayload,
@@ -327,10 +328,19 @@ class RealtimeSession(llm.RealtimeSession):
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        raise NotImplementedError(
-            "generate_reply is not yet supported by the Phonic realtime model. "
-            "Consider using `welcome_message` instead."
-        )
+        if self._socket:
+            payload = GenerateReplyPayload(
+                system_message=instructions if is_given(instructions) else None,
+            )
+            asyncio.create_task(self._socket.send_generate_reply(payload))
+        else:
+            logger.warning("Cannot send generate_reply: WebSocket not available")
+
+        self._close_current_generation(interrupted=False)
+        generation_ev = self._start_new_assistant_turn(user_initiated=True)
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        fut.set_result(generation_ev)
+        return fut
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
@@ -501,7 +511,7 @@ class RealtimeSession(llm.RealtimeSession):
                 self._emit_error(e, recoverable=True)
                 raise e
 
-    def _start_new_assistant_turn(self) -> None:
+    def _start_new_assistant_turn(self, user_initiated: bool = False) -> llm.GenerationCreatedEvent:
         if self._current_generation:
             self._close_current_generation(interrupted=True)
 
@@ -527,15 +537,14 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
-        self.emit(
-            "generation_created",
-            llm.GenerationCreatedEvent(
-                message_stream=self._current_generation.message_ch,
-                function_stream=self._current_generation.function_ch,
-                user_initiated=False,
-                response_id=response_id,
-            ),
+        generation_ev = llm.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+            user_initiated=user_initiated,
+            response_id=response_id,
         )
+        self.emit("generation_created", generation_ev)
+        return generation_ev
 
     def _close_current_generation(self, interrupted: bool) -> None:
         gen = self._current_generation
