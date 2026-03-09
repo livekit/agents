@@ -382,6 +382,8 @@ class AgentsConsole:
             # Set the session transport for TCP mode
             if self._tcp_transport is not None:
                 session._session_transport = self._tcp_transport
+                session._session_transport_audio_input = self._tcp_audio_input
+                session._session_transport_audio_output = self._tcp_audio_output
 
             self._update_sess_io(
                 session,
