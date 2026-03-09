@@ -236,6 +236,14 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        if self._opts.use_websocket:
+            from urllib.parse import urlparse
+
+            return urlparse(self._ws._base_url).netloc
+        return self._client._base_url.netloc.decode("utf-8")
+
     def chat(
         self,
         *,

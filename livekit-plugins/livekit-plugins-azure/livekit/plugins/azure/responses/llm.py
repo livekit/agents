@@ -62,6 +62,7 @@ class LLM(openai.responses.LLM):
         super().__init__(
             model=model,
             client=azure_client,
+            use_websocket=False,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
