@@ -40,6 +40,7 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
+from ..log import logger
 from ..models import _supports_reasoning_effort
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
@@ -174,6 +175,10 @@ class LLM(llm.LLM):
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
+
+        if client is not None and use_websocket:
+            logger.warning("use_websocket is ignored when a custom client is provided, disabling")
+            use_websocket = False
 
         self._opts = _LLMOptions(
             model=model,
