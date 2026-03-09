@@ -1519,8 +1519,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
     asyncio.set_event_loop(loop)
 
     async def _tcp_main() -> None:
-        transport = await TcpSessionTransport.connect(host, port)
-        await transport.start()
+        transport = TcpSessionTransport(host, port)
 
         server._job_executor_type = JobExecutorType.THREAD
 

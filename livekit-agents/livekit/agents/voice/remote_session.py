@@ -152,6 +152,7 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
+
     def __init__(self, host: str, port: int) -> None:
         self._host = host
         self._port = port
