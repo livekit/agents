@@ -60,6 +60,7 @@ livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
+livekit-plugins-phonic = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
@@ -82,7 +83,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "playwright>=1.58.0",
 ]
-docs = ["pdoc3", "setuptools"]
+docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 
 [tool.ruff]
 line-length = 100

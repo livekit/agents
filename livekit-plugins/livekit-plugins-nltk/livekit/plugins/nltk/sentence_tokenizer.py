@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import nltk  # type: ignore
 from livekit import agents
-from livekit.agents import Language
+from livekit.agents import LanguageCode
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html
@@ -39,7 +39,7 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
     def _sanitize_options(self, language: str | None = None) -> _TokenizerOptions:
         config = dataclasses.replace(self._config)
         if language:
-            lang = Language(language)
+            lang = LanguageCode(language)
             config.language = lang.to_language_name() or language
         return config
 

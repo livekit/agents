@@ -154,7 +154,7 @@ class RealtimeModel(llm.RealtimeModel):
         temperature : float, optional
             Controls response randomness (0.0-1.0). Lower values are more deterministic.
         language_hint : str, optional
-            Language hint for better multilingual support (e.g., 'en', 'es', 'fr').
+            LanguageCode hint for better multilingual support (e.g., 'en', 'es', 'fr').
         max_duration : str, optional
             Maximum call duration (e.g., '30m', '1h'). Call ends when exceeded.
         time_exceeded_message : str, optional

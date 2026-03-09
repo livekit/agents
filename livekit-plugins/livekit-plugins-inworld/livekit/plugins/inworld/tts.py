@@ -51,9 +51,9 @@ from .version import __version__
 USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
-DEFAULT_ENCODING = "OGG_OPUS"
-DEFAULT_MODEL = "inworld-tts-1"
-DEFAULT_SAMPLE_RATE = 48000
+DEFAULT_ENCODING = "LINEAR16"
+DEFAULT_MODEL = "inworld-tts-1.5-max"
+DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
@@ -805,10 +805,10 @@ class TTS(tts.TTS):
             api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
-            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
-            encoding (str, optional): The encoding to use. Defaults to "OGG_OPUS".
+            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1.5-max".
+            encoding (str, optional): The encoding to use. Defaults to "LINEAR16".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 48000.
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
                 Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
@@ -1126,6 +1126,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
+                            output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
                             message=error.get("message"),
@@ -1133,7 +1134,6 @@ class ChunkedStream(tts.ChunkedStream):
                             request_id=x_request_id,
                             body=None,
                         )
-                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -1230,11 +1230,10 @@ def _parse_timestamp_info(
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        last_idx = len(words) - 1
-        for idx, (word, start, end) in enumerate(zip(words, starts, ends, strict=False)):
+        for word, start, end in zip(words, starts, ends, strict=False):
             # Each word gets a trailing space so that when the synchronizer concatenates
             # them via `pushed_text += text`, the transcript reads naturally.
-            text = f"{word} " if idx < last_idx else word
+            text = f"{word} "
             timed_strings.append(
                 TimedString(
                     text,

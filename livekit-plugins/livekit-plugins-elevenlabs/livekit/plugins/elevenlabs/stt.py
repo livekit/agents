@@ -31,7 +31,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -68,7 +68,7 @@ class STTOptions:
     model_id: ElevenLabsSTTModels | str
     api_key: str
     base_url: str
-    language_code: Language | None
+    language_code: LanguageCode | None
     tag_audio_events: bool
     include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
@@ -150,7 +150,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            language_code=Language(language_code) if language_code else None,
+            language_code=LanguageCode(language_code) if language_code else None,
             tag_audio_events=tag_audio_events,
             sample_rate=sample_rate,
             server_vad=server_vad,
@@ -183,7 +183,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         if is_given(language):
-            self._opts.language_code = Language(language)
+            self._opts.language_code = LanguageCode(language)
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
@@ -232,7 +232,7 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        normalized_language = Language(language_code or self._opts.language_code or "")
+        normalized_language = LanguageCode(language_code or self._opts.language_code or "")
         return self._transcription_to_speech_event(
             language_code=normalized_language,
             text=extracted_text,
@@ -256,7 +256,7 @@ class STT(stt.STT):
             alternatives=[
                 stt.SpeechData(
                     text=text,
-                    language=Language(language_code),
+                    language=LanguageCode(language_code),
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
@@ -527,7 +527,7 @@ class SpeechStream(stt.SpeechStream):
         end_time = words[-1].get("end", 0) if words else 0
         language_code = data.get("language_code", self._language)
 
-        normalized_language = Language(language_code) if language_code else Language("en")
+        normalized_language = LanguageCode(language_code) if language_code else LanguageCode("en")
 
         # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(

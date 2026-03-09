@@ -35,7 +35,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    Language,
+    LanguageCode,
     stt,
     utils,
 )
@@ -65,7 +65,7 @@ NUM_CHANNELS = 1
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: Language
+    language: LanguageCode
     detect_language: bool
     turn_detection: SessionTurnDetection
     prompt: NotGivenOr[str] = NOT_GIVEN
@@ -122,7 +122,7 @@ class STT(stt.STT):
             }
 
         self._opts = _STTOptions(
-            language=Language(language),
+            language=LanguageCode(language),
             detect_language=detect_language,
             model=model,
             prompt=prompt,
@@ -302,7 +302,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -336,10 +336,10 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = Language(language)
+            self._opts.language = LanguageCode(language)
         if is_given(detect_language):
             self._opts.detect_language = detect_language
-            self._opts.language = Language("")
+            self._opts.language = LanguageCode("")
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
@@ -417,7 +417,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = Language(language)
+                self._opts.language = LanguageCode(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.omit
 
@@ -441,7 +441,7 @@ class STT(stt.STT):
 
             sd = stt.SpeechData(text=resp.text, language=self._opts.language)
             if isinstance(resp, TranscriptionVerbose) and resp.language:
-                sd.language = Language(resp.language)
+                sd.language = LanguageCode(resp.language)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -478,7 +478,7 @@ class SpeechStream(stt.SpeechStream):
         *,
         language: str,
     ) -> None:
-        self._language = Language(language)
+        self._language = LanguageCode(language)
         self._pool.invalidate()
         self._reconnect_event.set()
 
