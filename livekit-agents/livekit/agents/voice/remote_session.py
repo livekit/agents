@@ -5,7 +5,7 @@ import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -789,3 +789,120 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
                 )
             )
     return agent_pb.AgentSessionUsage(model_usage=model_usages)
+
+
+RemoteSessionEventTypes = Literal[
+    "agent_state_changed",
+    "user_state_changed",
+    "conversation_item_added",
+    "user_input_transcribed",
+    "function_tools_executed",
+    "session_usage_updated",
+    "error",
+]
+
+
+class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
+
+    def __init__(self, transport: SessionTransport) -> None:
+        super().__init__()
+        self._transport = transport
+        self._started = False
+        self._pending_requests: dict[str, asyncio.Future[agent_pb.SessionResponse]] = {}
+        self._recv_task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
+        transport = RoomSessionTransport(room, agent_identity)
+        return cls(transport)
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        await self._transport.start()
+        self._recv_task = asyncio.create_task(self._recv_loop())
+
+    async def aclose(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+
+        for future in self._pending_requests.values():
+            future.cancel()
+        self._pending_requests.clear()
+
+        if self._recv_task:
+            await utils.aio.cancel_and_wait(self._recv_task)
+
+        await self._transport.close()
+
+    async def _recv_loop(self) -> None:
+        try:
+            async for msg in self._transport:
+                if msg.HasField("response"):
+                    self._dispatch_response(msg.response)
+                elif msg.HasField("event"):
+                    event_field = msg.event.WhichOneof("event")
+                    if event_field:
+                        self.emit(event_field, msg.event)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("error processing session message", exc_info=True)
+
+    def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
+        future = self._pending_requests.pop(response.request_id, None)
+        if future and not future.done():
+            future.set_result(response)
+
+    async def _send_request(
+        self,
+        request: agent_pb.SessionRequest,
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse:
+        future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
+        self._pending_requests[request.request_id] = future
+
+        try:
+            msg = agent_pb.AgentSessionMessage(request=request)
+            await self._transport.send_message(msg)
+            return await asyncio.wait_for(future, timeout=timeout)
+        except (asyncio.TimeoutError, Exception):
+            self._pending_requests.pop(request.request_id, None)
+            raise
+
+    async def wait_for_ready(self, timeout: float = 5.0) -> None:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            ping=agent_pb.SessionRequest.Ping(),
+        )
+        await self._send_request(req, timeout=timeout)
+
+    async def fetch_chat_history(self) -> agent_pb.SessionRequest.GetChatHistoryResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_chat_history
+
+    async def fetch_agent_info(self) -> agent_pb.SessionRequest.GetAgentInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_agent_info
+
+    async def run(
+        self, text: str, timeout: float = 60.0
+    ) -> agent_pb.SessionResponse.RunInputResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            run_input=agent_pb.SessionRequest.RunInput(text=text),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        if resp.error:
+            raise RuntimeError(resp.error)
+        return resp.run_input

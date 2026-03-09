@@ -58,7 +58,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
-from .remote_session import RoomSessionTransport, SessionHost
+from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .turn import (
@@ -72,6 +72,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
@@ -421,6 +422,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._session_transport: SessionTransport | None = None
+        self._session_transport_audio_input: TcpAudioInput | None = None
+        self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: SessionHost | None = None
 
         self._agent: Agent | None = None
@@ -715,10 +719,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.start()
 
                 if is_primary:
-                    # only the primary session can have a session host
-                    transport = RoomSessionTransport(room)
-                    self._session_host = SessionHost(transport)
-                    self._session_host.register_session(self)
+                    # only the primary session can have a session transport
+                    self._session_transport = RoomSessionTransport(room)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -779,7 +781,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
 
-            if self._session_host is not None:
+            if self._session_transport is not None:
+                self._session_host = SessionHost(
+                    self._session_transport,
+                    audio_input=self._session_transport_audio_input,
+                    audio_output=self._session_transport_audio_output,
+                )
+                self._session_host.register_session(self)
                 await self._session_host.start()
 
             # important: no await should be done after this!
