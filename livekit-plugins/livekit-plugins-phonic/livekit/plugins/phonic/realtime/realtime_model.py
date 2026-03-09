@@ -24,6 +24,7 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.types import (
+    AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
     ConfigPayload,
@@ -229,6 +230,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
+        self._system_prompt_postfix: str = ""
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -260,8 +262,38 @@ class RealtimeSession(llm.RealtimeSession):
         self._instructions_ready.set()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        tool_call_result_sent = False
-        for item in chat_ctx.items:
+        if not self._config_sent:
+            messages = [
+                item
+                for item in chat_ctx.items
+                if isinstance(item, llm.ChatMessage)
+                and item.text_content
+                and item.text_content.strip()
+            ]
+            if messages:
+                turn_history = "\n".join(f"{m.role}: {m.text_content}" for m in messages)
+                if turn_history.strip():
+                    logger.debug(
+                        "update_chat_ctx called with messages prior to config being sent to "
+                        "Phonic. Including conversation state in system instructions."
+                    )
+                    self._system_prompt_postfix = (
+                        "\n\nThis conversation is being continued from an existing "
+                        "conversation. You are the assistant speaking to the user. "
+                        "The following is the conversation history:\n" + turn_history
+                    )
+                self._chat_ctx = chat_ctx.copy()
+            return
+
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+        sent_tool_call_output = False
+        sent_system_message = False
+
+        for _, item_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if item is None:
+                continue
+
             if (
                 isinstance(item, llm.FunctionCallOutput)
                 and item.call_id in self._pending_tool_call_ids
@@ -275,15 +307,27 @@ class RealtimeSession(llm.RealtimeSession):
                             output=str(item.output),
                         )
                     )
-                    tool_call_result_sent = True
+                    sent_tool_call_output = True
 
-        if tool_call_result_sent:
-            self._start_new_assistant_turn()
-        elif self._config_sent:
+            if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
+                text = item.text_content
+                if text:
+                    logger.debug(f"Sending add system message: {text}")
+                    if self._socket:
+                        await self._socket.send_add_system_message(
+                            AddSystemMessagePayload(system_message=text)
+                        )
+                        sent_system_message = True
+
+        self._chat_ctx = chat_ctx.copy()
+
+        if not sent_tool_call_output and not sent_system_message:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
             )
+        if sent_tool_call_output:
+            self._start_new_assistant_turn()
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         if self._config_sent:
@@ -314,7 +358,11 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("update_options is not supported by the Phonic realtime model.")
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._session_should_close.is_set() or not self._ready_to_start.is_set() or not self._socket:
+        if (
+            self._session_should_close.is_set()
+            or not self._ready_to_start.is_set()
+            or not self._socket
+        ):
             return
 
         for f in self._resample_audio(frame):
@@ -406,13 +454,17 @@ class RealtimeSession(llm.RealtimeSession):
                 tools_payload.extend(self._opts.phonic_tools)
             tools_payload.extend(self._tool_definitions)
 
+            if not is_given(self._opts.instructions):
+                logger.warning("Instructions are not set. Phonic will not start a conversation.")
+                return
+
             config = {
                 "type": "config",
                 "agent": self._opts.phonic_agent,
                 "project": self._opts.project,
                 "welcome_message": self._opts.welcome_message,
                 "generate_welcome_message": self._opts.generate_welcome_message,
-                "system_prompt": self._opts.instructions,
+                "system_prompt": self._opts.instructions + self._system_prompt_postfix,
                 "voice_id": self._opts.voice,
                 "input_format": "pcm_44100",
                 "output_format": "pcm_44100",
