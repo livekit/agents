@@ -5,6 +5,8 @@ import pytest
 from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
 from livekit.agents.llm.utils import (
+    build_legacy_openai_schema,
+    build_strict_openai_schema,
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
@@ -392,3 +394,27 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestNoParametersSchema:
+    """Test that functions with no parameters generate valid JSON schema with properties field."""
+
+    def test_legacy_schema_no_parameters(self):
+        """Test legacy schema for function with no parameters."""
+        # mock_tool_3 has no parameters
+        legacy_schema = build_legacy_openai_schema(mock_tool_3)
+        params = legacy_schema["function"]["parameters"]
+        assert "properties" in params, "properties field missing in legacy schema"
+        assert params["properties"] == {}, "properties should be empty dict"
+        assert "required" in params, "required field missing in legacy schema"
+        assert params["required"] == [], "required should be empty list"
+
+    def test_strict_schema_no_parameters(self):
+        """Test strict schema for function with no parameters."""
+        # mock_tool_3 has no parameters
+        strict_schema = build_strict_openai_schema(mock_tool_3)
+        params = strict_schema["function"]["parameters"]
+        assert "properties" in params, "properties field missing in strict schema"
+        assert params["properties"] == {}, "properties should be empty dict"
+        assert "required" in params, "required field missing in strict schema"
+        assert params["required"] == [], "required should be empty list"

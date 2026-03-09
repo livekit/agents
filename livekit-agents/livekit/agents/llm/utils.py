@@ -200,7 +200,9 @@ def build_legacy_openai_schema(
     info = function_tool.info
     schema = model.model_json_schema()
 
-    # Ensure 'required' field exists for compatibility with strict APIs like Groq
+    # Ensure 'properties' and 'required' fields exist for compatibility with strict APIs
+    if "properties" not in schema:
+        schema["properties"] = {}
     if "required" not in schema:
         schema["required"] = []
 
@@ -230,7 +232,9 @@ def build_strict_openai_schema(
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
 
-    # Ensure 'required' field exists for compatibility with strict APIs
+    # Ensure 'properties' and 'required' fields exist for compatibility with strict APIs
+    if "properties" not in schema:
+        schema["properties"] = {}
     if "required" not in schema:
         schema["required"] = []
 
