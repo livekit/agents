@@ -124,28 +124,27 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 class TcpSessionTransport(SessionTransport):
 
-    def __init__(
-        self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        self._reader = reader
-        self._writer = writer
+    def __init__(self, host: str, port: int) -> None:
+        self._host = host
+        self._port = port
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
         self._closed = False
-        self._loop = asyncio.get_running_loop()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
-    @classmethod
-    async def connect(cls, host: str, port: int) -> TcpSessionTransport:
-        reader, writer = await asyncio.open_connection(host, port)
+    async def start(self) -> None:
+        reader, writer = await asyncio.open_connection(self._host, self._port)
         sock = writer.transport.get_extra_info("socket")
         if sock is not None:
             import socket
 
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        return cls(reader, writer)
+        self._reader = reader
+        self._writer = writer
+        self._loop = asyncio.get_running_loop()
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
-        if self._closed:
+        if self._closed or self._writer is None:
             return
         data = msg.SerializeToString()
         header = struct.pack(">I", len(data))
@@ -154,7 +153,7 @@ class TcpSessionTransport(SessionTransport):
             await self._writer.drain()
 
     def send_message_threadsafe(self, msg: agent_pb.AgentSessionMessage) -> None:
-        if self._closed:
+        if self._closed or self._writer is None or self._loop is None:
             return
         data = msg.SerializeToString()
         payload = struct.pack(">I", len(data)) + data
@@ -164,17 +163,18 @@ class TcpSessionTransport(SessionTransport):
         if self._closed:
             return
         self._closed = True
-        try:
-            self._writer.close()
-            await self._writer.wait_closed()
-        except (ConnectionError, OSError):
-            pass
+        if self._writer is not None:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
     def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]:
         return self
 
     async def __anext__(self) -> agent_pb.AgentSessionMessage:
-        if self._closed:
+        if self._closed or self._reader is None:
             raise StopAsyncIteration
 
         try:
