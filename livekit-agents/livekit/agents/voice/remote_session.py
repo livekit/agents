@@ -374,8 +374,6 @@ class _SessionHost:
         elif msg_type == "audio_playback_finished" and self._audio_output is not None:
             self._audio_output.notify_playout_finished()
 
-    # -- event forwarding --
-
     def _send_event(self, event: agent_pb.SessionEvent) -> None:
         msg = agent_pb.AgentSessionMessage(event=event)
         self._tasks.create_task(self._transport.send_message(msg))
@@ -461,8 +459,6 @@ class _SessionHost:
                 )
             )
         )
-
-    # -- request handling --
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
