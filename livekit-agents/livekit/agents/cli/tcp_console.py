@@ -1,71 +1,21 @@
-"""TCP console mode: connects to the Go CLI's TCP server for audio I/O and events."""
-
 from __future__ import annotations
 
 import asyncio
-import logging
 import queue as stdlib_queue
 import time
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+from ..log import logger
 from ..voice import io
-from ..voice.events import (
-    AgentState,
-    AgentStateChangedEvent,
-    ConversationItemAddedEvent,
-    ErrorEvent,
-    FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
-    UserInputTranscribedEvent,
-    UserState,
-    UserStateChangedEvent,
-)
-from ..voice.tcp_transport import TcpSessionTransport
+from ..voice.remote_session import _SessionHost, TcpSessionTransport
 
-logger = logging.getLogger(__name__)
-
-# The Go CLI pipeline runs at 48kHz mono; the agent session runs at 24kHz mono.
 WIRE_SAMPLE_RATE = 48000
 AGENT_SAMPLE_RATE = 24000
 
-# Mappings from Python string states to proto enums
-_AGENT_STATE_MAP: dict[AgentState, int] = {
-    "initializing": agent_pb.SESSION_AGENT_STATE_INITIALIZING,
-    "idle": agent_pb.SESSION_AGENT_STATE_IDLE,
-    "listening": agent_pb.SESSION_AGENT_STATE_LISTENING,
-    "thinking": agent_pb.SESSION_AGENT_STATE_THINKING,
-    "speaking": agent_pb.SESSION_AGENT_STATE_SPEAKING,
-}
-
-_USER_STATE_MAP: dict[UserState, int] = {
-    "speaking": agent_pb.SESSION_USER_STATE_SPEAKING,
-    "listening": agent_pb.SESSION_USER_STATE_LISTENING,
-    "away": agent_pb.SESSION_USER_STATE_AWAY,
-}
-
-_METRICS_FIELDS = (
-    "transcription_delay",
-    "end_of_turn_delay",
-    "on_user_turn_completed_delay",
-    "llm_node_ttft",
-    "tts_node_ttfb",
-    "e2e_latency",
-)
-
-
-def _metrics_to_proto(metrics: dict | None) -> agent_pb.MetricsReport:
-    """Convert a ChatMessage.metrics dict to a MetricsReport proto."""
-    if not metrics:
-        return agent_pb.MetricsReport()
-    kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
-    return agent_pb.MetricsReport(**kwargs)
-
 
 class TcpAudioInput(io.AudioInput):
-    """Audio input that receives frames from the TCP transport."""
-
     def __init__(self) -> None:
         super().__init__(label="TCP Console")
         self._queue: stdlib_queue.Queue[rtc.AudioFrame] = stdlib_queue.Queue()
@@ -76,7 +26,6 @@ class TcpAudioInput(io.AudioInput):
         )
 
     def push_frame(self, frame: agent_pb.SessionAudioFrame) -> None:
-        """Push a proto AudioFrame from the transport (48kHz) into the queue (24kHz)."""
         audio_frame = rtc.AudioFrame(
             data=frame.data,
             sample_rate=frame.sample_rate,
@@ -93,8 +42,6 @@ class TcpAudioInput(io.AudioInput):
 
 
 class TcpAudioOutput(io.AudioOutput):
-    """Audio output that sends frames to the TCP transport."""
-
     def __init__(self, transport: TcpSessionTransport) -> None:
         super().__init__(
             label="TCP Console",
@@ -199,15 +146,15 @@ class TcpAudioOutput(io.AudioOutput):
         self._interrupted_ev.clear()
 
 
-class TcpConsoleSession:
-    """Manages the TCP console session lifecycle."""
+class TcpConsoleSession(_SessionHost):
 
     def __init__(self, transport: TcpSessionTransport) -> None:
-        self._transport = transport
+        super().__init__(transport)
         self._audio_input = TcpAudioInput()
         self._audio_output = TcpAudioOutput(transport)
-        self._recv_task: asyncio.Task | None = None
-        self._session: object | None = None
+
+        self.on("audio_input", self._on_audio_input)
+        self.on("audio_playback_finished", self._on_audio_playback_finished)
 
     @property
     def audio_input(self) -> TcpAudioInput:
@@ -217,179 +164,17 @@ class TcpConsoleSession:
     def audio_output(self) -> TcpAudioOutput:
         return self._audio_output
 
-    async def start(self) -> None:
-        self._recv_task = asyncio.create_task(self._recv_loop())
-
     async def close(self) -> None:
-        if self._recv_task:
-            self._recv_task.cancel()
-            try:
-                await self._recv_task
-            except asyncio.CancelledError:
-                pass
-        await self._transport.close()
-
-    def _send_event(self, event: agent_pb.SessionEvent) -> None:
-        msg = agent_pb.AgentSessionMessage(event=event)
-        self._transport.send_message_threadsafe(msg)
-
-    def on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
-        old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.SESSION_AGENT_STATE_IDLE)
-        new_pb = _AGENT_STATE_MAP.get(event.new_state, agent_pb.SESSION_AGENT_STATE_IDLE)
-        self._send_event(
-            agent_pb.SessionEvent(
-                agent_state_changed=agent_pb.SessionEvent.AgentStateChanged(
-                    old_state=old_pb,
-                    new_state=new_pb,
-                )
-            )
-        )
-
-    def on_user_state_changed(self, event: UserStateChangedEvent) -> None:
-        old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.SESSION_USER_STATE_LISTENING)
-        new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.SESSION_USER_STATE_LISTENING)
-        self._send_event(
-            agent_pb.SessionEvent(
-                user_state_changed=agent_pb.SessionEvent.UserStateChanged(
-                    old_state=old_pb,
-                    new_state=new_pb,
-                )
-            )
-        )
-
-    def on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
-        self._send_event(
-            agent_pb.SessionEvent(
-                user_input_transcribed=agent_pb.SessionEvent.UserInputTranscribed(
-                    transcript=event.transcript,
-                    is_final=event.is_final,
-                )
-            )
-        )
-
-    def on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
-        from ..llm import ChatMessage, FunctionCall, FunctionCallOutput
-
-        item = event.item
-        chat_item = agent_pb.ChatContext.ChatItem()
-        if isinstance(item, ChatMessage):
-            role_map = {
-                "developer": agent_pb.DEVELOPER,
-                "system": agent_pb.SYSTEM,
-                "user": agent_pb.USER,
-                "assistant": agent_pb.ASSISTANT,
-            }
-            pb_role = role_map.get(item.role, agent_pb.ASSISTANT)
-            content = []
-            if item.text_content:
-                content.append(agent_pb.ChatMessage.ChatContent(text=item.text_content))
-            pb_msg = agent_pb.ChatMessage(
-                id=item.id,
-                role=pb_role,
-                content=content,
-                metrics=_metrics_to_proto(item.metrics),
-            )
-            chat_item = agent_pb.ChatContext.ChatItem(message=pb_msg)
-        elif isinstance(item, FunctionCall):
-            chat_item = agent_pb.ChatContext.ChatItem(
-                function_call=agent_pb.FunctionCall(
-                    id=item.id or "",
-                    call_id=item.call_id or "",
-                    name=item.name or "",
-                    arguments=item.raw_arguments or "",
-                )
-            )
-        elif isinstance(item, FunctionCallOutput):
-            chat_item = agent_pb.ChatContext.ChatItem(
-                function_call_output=agent_pb.FunctionCallOutput(
-                    call_id=item.call_id or "",
-                    output=item.output or "",
-                    is_error=item.is_error,
-                )
-            )
-
-        self._send_event(
-            agent_pb.SessionEvent(
-                conversation_item_added=agent_pb.SessionEvent.ConversationItemAdded(
-                    item=chat_item,
-                )
-            )
-        )
-
-    def on_function_tools_executed(self, event: FunctionToolsExecutedEvent) -> None:
-        pb_calls = []
-        for fc in event.function_calls:
-            pb_calls.append(
-                agent_pb.FunctionCall(
-                    name=fc.name or "",
-                    arguments=fc.raw_arguments or "",
-                    call_id=fc.call_id or "",
-                )
-            )
-        pb_outputs = []
-        for fco in event.function_call_outputs:
-            pb_outputs.append(
-                agent_pb.FunctionCallOutput(
-                    call_id=fco.call_id or "",
-                    output=fco.output or "",
-                    is_error=fco.is_error,
-                )
-            )
-        self._send_event(
-            agent_pb.SessionEvent(
-                function_tools_executed=agent_pb.SessionEvent.FunctionToolsExecuted(
-                    function_calls=pb_calls,
-                    function_call_outputs=pb_outputs,
-                )
-            )
-        )
-
-    def on_metrics_collected(self, event: MetricsCollectedEvent) -> None:
-        pass
-
-    def on_error(self, event: ErrorEvent) -> None:
-        self._send_event(
-            agent_pb.SessionEvent(
-                error=agent_pb.SessionEvent.Error(
-                    message=str(event.error) if event.error else "Unknown error",
-                )
-            )
-        )
+        await self.aclose()
 
     def register_on_session(self, session: object) -> None:
-        self._session = session
-        session.on("agent_state_changed", self.on_agent_state_changed)  # type: ignore[attr-defined]
-        session.on("user_state_changed", self.on_user_state_changed)  # type: ignore[attr-defined]
-        session.on("conversation_item_added", self.on_conversation_item_added)  # type: ignore[attr-defined]
-        session.on("user_input_transcribed", self.on_user_input_transcribed)  # type: ignore[attr-defined]
-        session.on("function_tools_executed", self.on_function_tools_executed)  # type: ignore[attr-defined]
-        session.on("metrics_collected", self.on_metrics_collected)  # type: ignore[attr-defined]
-        session.on("error", self.on_error)  # type: ignore[attr-defined]
+        from ..voice.agent_session import AgentSession
 
-    async def _recv_loop(self) -> None:
-        while True:
-            msg = await self._transport.recv_message()
-            if msg is None:
-                logger.info("TCP connection closed")
-                break
+        assert isinstance(session, AgentSession)
+        self.register_session(session)
 
-            if msg.HasField("audio_input"):
-                self._audio_input.push_frame(msg.audio_input)
-            elif msg.HasField("audio_playback_finished"):
-                self._audio_output.notify_playout_finished()
-            elif msg.HasField("request"):
-                await self._handle_request(msg.request)
+    def _on_audio_input(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self._audio_input.push_frame(msg.audio_input)
 
-    async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
-        if req.HasField("ping"):
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    pong=agent_pb.SessionResponse.Pong(),
-                )
-            )
-            await self._transport.send_message(resp)
-        elif req.HasField("send_message"):
-            text = req.send_message.text
-            if self._session is not None and text:
-                self._session.generate_reply(user_input=text)  # type: ignore[attr-defined]
+    def _on_audio_playback_finished(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self._audio_output.notify_playout_finished()
