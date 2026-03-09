@@ -12,10 +12,10 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
 
     metadata: dict[str, str | float] = {}
     if metrics.metadata:
-        metadata |= {
-            "model_name": metrics.metadata.model_name or "unknown",
-            "model_provider": metrics.metadata.model_provider or "unknown",
-        }
+        metadata.update(
+            model_name=metrics.metadata.model_name or "unknown",
+            model_provider=metrics.metadata.model_provider or "unknown",
+        )
 
     if isinstance(metrics, LLMMetrics):
         logger.info(
@@ -80,10 +80,10 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             "audio_duration": round(metrics.audio_duration, 2),
         }
         if metrics.input_tokens is not None:
-            extra |= {
-                "input_tokens": metrics.input_tokens,
-                "output_tokens": metrics.output_tokens or 0,
-                "total_tokens": metrics.total_tokens or 0,
-                "input_audio_tokens": metrics.input_audio_tokens or 0,
-            }
+            extra.update(
+                input_tokens=metrics.input_tokens,
+                output_tokens=metrics.output_tokens or 0,
+                total_tokens=metrics.total_tokens or 0,
+                input_audio_tokens=metrics.input_audio_tokens or 0,
+            )
         logger.info("STT metrics", extra=metadata | extra)
