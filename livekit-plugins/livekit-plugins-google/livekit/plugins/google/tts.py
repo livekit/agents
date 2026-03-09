@@ -48,7 +48,6 @@ DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 # Google Cloud TTS API limit: input.text or input.ssml must not exceed 5000 bytes
 GOOGLE_TTS_MAX_INPUT_BYTES = 5000
-_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
 
 @dataclass
@@ -305,10 +304,9 @@ class ChunkedStream(tts.ChunkedStream):
 
         Google Cloud TTS API rejects input.text or input.ssml longer than
         5000 bytes. Uses the configured sentence tokenizer (blingfire by
-        default) for boundary detection, with a word tokenizer fallback for
-        sentences that individually exceed the byte limit. Structured content
-        (SSML, markup) is returned as-is because naive sentence splitting
-        would break tag structure.
+        default) for boundary detection. Structured content (SSML, markup)
+        is returned as-is because naive sentence splitting would break tag
+        structure.
         """
         if self._opts.enable_ssml or self._opts.use_markup:
             return [self._input_text]
@@ -509,8 +507,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 def _split_sentences_by_bytes(sentences: list[str], max_bytes: int) -> list[str]:
     """Merge tokenized sentences into chunks that fit within a byte limit.
 
-    When a single sentence exceeds *max_bytes*, it is further split at word
-    boundaries using the module-level ``_word_tokenizer``.
+    If a single sentence exceeds *max_bytes* it is included as-is and a warning
+    is logged.  Splitting mid-sentence would generally produce incorrect
+    intonation from the TTS engine.
     """
     chunks: list[str] = []
     current = ""
@@ -525,19 +524,13 @@ def _split_sentences_by_bytes(sentences: list[str], max_bytes: int) -> list[str]
             if current:
                 chunks.append(current)
             if len(sentence.encode("utf-8")) > max_bytes:
-                # split oversized sentence at word boundaries
-                words = _word_tokenizer.tokenize(text=sentence)
-                current = ""
-                for word in words:
-                    word_candidate = (current + " " + word) if current else word
-                    if len(word_candidate.encode("utf-8")) <= max_bytes:
-                        current = word_candidate
-                    else:
-                        if current:
-                            chunks.append(current)
-                        current = word
-            else:
-                current = sentence
+                logger.warning(
+                    "single sentence exceeds Google TTS byte limit (%d bytes), "
+                    "synthesis may fail: %.100s...",
+                    len(sentence.encode("utf-8")),
+                    sentence,
+                )
+            current = sentence
 
     if current:
         chunks.append(current)
