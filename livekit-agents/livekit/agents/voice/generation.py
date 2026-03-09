@@ -833,7 +833,7 @@ def apply_instructions_modality(
         # ChatContext.copy shadows the original item, create a new instance to avoid mutating the original
         new_item = item.model_copy()
         new_item.content = [
-            c.for_modality(modality) if isinstance(c, Instructions) else c for c in new_item.content
+            c.as_modality(modality) if isinstance(c, Instructions) else c for c in new_item.content
         ]
         chat_ctx.items[idx] = new_item
 

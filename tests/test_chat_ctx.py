@@ -404,33 +404,33 @@ def test_instructions_string_operations():
     assert result.text == "text A audio B"
 
 
-def test_instructions_for_modality():
-    """for_modality() bakes the correct variant into str() while preserving both variants."""
+def test_instructions_as_modality():
+    """as_modality() bakes the correct variant into str() while preserving both variants."""
     from livekit.agents.llm import ChatContext, ChatMessage
     from livekit.agents.llm.chat_context import Instructions
     from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
 
     instr = Instructions("audio instructions", text="text instructions")
 
-    # for_modality('audio')
-    resolved = instr.for_modality("audio")
+    # as_modality('audio')
+    resolved = instr.as_modality("audio")
     assert str(resolved) == "audio instructions"
     assert resolved.audio == "audio instructions"
     assert resolved.text == "text instructions"
 
-    # for_modality('text')
-    resolved = instr.for_modality("text")
+    # as_modality('text')
+    resolved = instr.as_modality("text")
     assert str(resolved) == "text instructions"
 
     # Can switch modality after resolving
-    resolved_text = instr.for_modality("text")
-    resolved_audio = resolved_text.for_modality("audio")
+    resolved_text = instr.as_modality("text")
+    resolved_audio = resolved_text.as_modality("audio")
     assert str(resolved_audio) == "audio instructions"
 
     # Instructions without text variant returns audio for both modalities
     audio_only = Instructions("audio only")
-    assert str(audio_only.for_modality("audio")) == "audio only"
-    assert str(audio_only.for_modality("text")) == "audio only"
+    assert str(audio_only.as_modality("audio")) == "audio only"
+    assert str(audio_only.as_modality("text")) == "audio only"
 
     # apply_instructions_modality() on ChatContext
     ctx = ChatContext([ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])])

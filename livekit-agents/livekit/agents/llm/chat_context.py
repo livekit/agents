@@ -37,11 +37,11 @@ class Instructions(str):
     """Instructions that adapt based on the user's input modality (audio vs. text).
 
     ``str(self)`` is what providers see when treating this as a plain string.
-    By default it equals the ``audio`` variant; after :meth:`for_modality` it
+    By default it equals the ``audio`` variant; after :meth:`as_modality` it
     equals the chosen variant.
 
     ``_audio_variant`` and ``_text_variant`` are always preserved so
-    :meth:`for_modality` can be called again for a different modality (e.g.,
+    :meth:`as_modality` can be called again for a different modality (e.g.,
     when the same ``ChatContext`` is reused across tool-call turns).
     """
 
@@ -75,14 +75,14 @@ class Instructions(str):
         """
         return self._text_variant if self._text_variant is not None else self._audio_variant
 
-    def for_modality(self, modality: Literal["audio", "text"]) -> Instructions:
+    def as_modality(self, modality: Literal["audio", "text"]) -> Instructions:
         """Return a copy whose ``str`` value is the correct variant for *modality*.
 
         Both ``_audio_variant`` and ``_text_variant`` are preserved so this can
         be called again for a different modality (e.g. across tool-call turns).
         """
         return Instructions(
-            self._audio_variant,
+            audio=self._audio_variant,
             text=self._text_variant,
             _represent=self.audio if modality == "audio" else self.text,
         )
@@ -92,13 +92,13 @@ class Instructions(str):
         if isinstance(other, Instructions):
             has_text = self._text_variant is not None or other._text_variant is not None
             return Instructions(
-                self.audio + other.audio,
+                audio=self.audio + other.audio,
                 text=(self.text + other.text) if has_text else None,
                 _represent=str(self) + str(other),
             )
         if isinstance(other, str):
             return Instructions(
-                self.audio + other,
+                audio=self.audio + other,
                 text=(self._text_variant + other) if self._text_variant is not None else None,
                 _represent=str(self) + other,
             )
@@ -108,7 +108,7 @@ class Instructions(str):
         """Support ``plain_str + Instructions``, propagating both variants."""
         if isinstance(other, str):
             return Instructions(
-                other + self.audio,
+                audio=other + self.audio,
                 text=(other + self._text_variant) if self._text_variant is not None else None,
                 _represent=other + str(self),
             )
