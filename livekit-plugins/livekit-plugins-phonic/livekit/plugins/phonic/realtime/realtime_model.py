@@ -225,8 +225,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._instructions_ready = asyncio.Event()
         self._tools_ready = asyncio.Event()
+        self._ready_to_start = asyncio.Event()
         self._config_sent = False
-        self._ready_to_start = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
 
@@ -314,7 +314,7 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("update_options is not supported by the Phonic realtime model.")
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._session_should_close.is_set() or not self._ready_to_start or not self._socket:
+        if self._session_should_close.is_set() or not self._ready_to_start.is_set() or not self._socket:
             return
 
         for f in self._resample_audio(frame):
@@ -328,19 +328,21 @@ class RealtimeSession(llm.RealtimeSession):
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        if self._socket:
-            payload = GenerateReplyPayload(
-                system_message=instructions if is_given(instructions) else None,
-            )
-            asyncio.create_task(self._socket.send_generate_reply(payload))
-        else:
-            logger.warning("Cannot send generate_reply: WebSocket not available")
+        payload = GenerateReplyPayload(
+            system_message=instructions if is_given(instructions) else None,
+        )
+        asyncio.create_task(self._send_generate_reply(payload))
 
         self._close_current_generation(interrupted=False)
         generation_ev = self._start_new_assistant_turn(user_initiated=True)
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         fut.set_result(generation_ev)
         return fut
+
+    async def _send_generate_reply(self, payload: GenerateReplyPayload) -> None:
+        await self._ready_to_start.wait()
+        if self._socket:
+            await self._socket.send_generate_reply(payload)
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
@@ -373,6 +375,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._send_ch.close()
         self._instructions_ready.set()
         self._tools_ready.set()
+        self._ready_to_start.set()
 
         self._close_current_generation(interrupted=False)
 
@@ -504,7 +507,7 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "tool_call_interrupted":
                     self._handle_tool_call_interrupted(message)
                 elif msg_type == "ready_to_start_conversation":
-                    self._ready_to_start = True
+                    self._ready_to_start.set()
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
