@@ -555,7 +555,7 @@ class RealtimeSession(llm.RealtimeSession):
                     return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
-            logger.warning(f"Updating instructions: {instructions}")
+            logger.debug("Updating instructions mid-session")
             self._send_client_event(
                 types.LiveClientContent(
                     turns=[types.Content(role="model", parts=[types.Part(text=instructions)])],
