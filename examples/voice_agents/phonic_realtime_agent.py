@@ -54,6 +54,20 @@ async def entrypoint(ctx: JobContext):
         instructions="Greet the user, asking about their day.",
     )
 
+    await asyncio.sleep(10)
+    if session.agentState == "initializing":
+        return
+    agent = session.current_agent
+    chat_ctx = agent.chat_ctx.copy()
+    chat_ctx.add_message(
+        role="system",
+        content=(
+            "The user's name is Alex. He is from San Francisco and likes hiking. "
+            "Use this information in your conversation."
+        ),
+    )
+    await agent.update_chat_ctx(chat_ctx)
+
 
 if __name__ == "__main__":
     cli.run_app(server)
