@@ -41,7 +41,6 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .audio_recognition import TurnDetectionMode
-from .client_events import ClientEventsHandler
 from .events import (
     AgentEvent,
     AgentState,
@@ -56,10 +55,12 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
+from .remote_session import RoomSessionTransport, SessionTransport, _SessionHost
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.filters import TextTransforms
@@ -390,7 +391,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
-        self._client_events_handler: ClientEventsHandler | None = None
+        self._session_transport: SessionTransport | None = None
+        self._session_transport_audio_input: TcpAudioInput | None = None
+        self._session_transport_audio_output: TcpAudioOutput | None = None
+        self._session_host: _SessionHost | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -590,7 +594,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._recorded_events = []
             self._room_io = None
             self._recorder_io = None
-            self._client_events_handler = None
+            self._session_host = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -643,18 +647,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                # Initialize the client events handler for exposing session state to clients
-                self._client_events_handler = ClientEventsHandler(
-                    session=self,
-                    room_io=self._room_io,
-                )
+                self._session_transport = RoomSessionTransport(self._room_io.room)
 
-                # Register text input handler if configured
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
-                    self._client_events_handler.register_text_input(text_input_opts.text_input_cb)
+                    self._room_io.register_text_input(text_input_opts.text_input_cb)
 
-                # Note: client_events_handler.start() is called after room connection below
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -722,9 +720,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
 
-            # Start client events handler after room is connected (requires local_participant)
-            if self._client_events_handler is not None:
-                await self._client_events_handler.start()
+            if self._session_transport is not None:
+                self._session_host = _SessionHost(
+                    self._session_transport,
+                    audio_input=self._session_transport_audio_input,
+                    audio_output=self._session_transport_audio_output,
+                )
+                self._session_host.register_session(self)
+                await self._session_host.start()
 
             # important: no await should be done after this!
 
@@ -922,10 +925,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._tts_error_counts = 0
             self._root_span_context = None
 
-            # close client events handler before room io
-            if self._client_events_handler:
-                await self._client_events_handler.aclose()
-                self._client_events_handler = None
+            if self._session_host:
+                await self._session_host.aclose()
+                self._session_host = None
 
             # close room io after close event is emitted
             if self._room_io:

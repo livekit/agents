@@ -58,6 +58,9 @@ TRACE_LOG_LEVEL = 5
 if TYPE_CHECKING:
     import sounddevice as sd  # type: ignore
 
+    from ..voice.remote_session import TcpSessionTransport
+    from .tcp_console import TcpAudioInput, TcpAudioOutput
+
 HANDLED_SIGNALS = (
     signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
     signal.SIGTERM,
@@ -115,7 +118,6 @@ class ConsoleAudioInput(io.AudioInput):
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if not self._attached:
-            # drop frames if the input is detached
             return
         self._audio_ch.send_nowait(frame)
 
@@ -330,6 +332,9 @@ class AgentsConsole:
 
         self._enabled = False
         self._record = False
+        self._tcp_transport: TcpSessionTransport | None = None
+        self._tcp_audio_input: TcpAudioInput | None = None
+        self._tcp_audio_output: TcpAudioOutput | None = None
 
         self._last_metrics_text: Text | None = None
         self._last_user_metrics: llm.MetricsReport | None = None
@@ -355,8 +360,16 @@ class AgentsConsole:
             self._io_acquired = True
             self._io_loop = loop
             self._io_context = contextvars.copy_context()
-            self._io_audio_input = ConsoleAudioInput(loop)
-            self._io_audio_output = ConsoleAudioOutput(loop)
+
+            if self._tcp_transport is not None:
+                assert self._tcp_audio_input is not None
+                assert self._tcp_audio_output is not None
+                self._io_audio_input = self._tcp_audio_input
+                self._io_audio_output = self._tcp_audio_output
+            else:
+                self._io_audio_input = ConsoleAudioInput(loop)
+                self._io_audio_output = ConsoleAudioOutput(loop)
+
             self._io_transcription_sync = TranscriptSynchronizer(
                 next_in_chain_audio=self._io_audio_output,
                 next_in_chain_text=None,
@@ -365,35 +378,10 @@ class AgentsConsole:
             self._io_session = session
 
         if session:
-            from ..voice.events import (
-                AgentStateChangedEvent,
-                ConversationItemAddedEvent,
-            )
-
-            @session.on("conversation_item_added")
-            def _on_conversation_item_added(event: ConversationItemAddedEvent) -> None:
-                if not isinstance(event.item, llm.ChatMessage):
-                    return
-
-                if event.item.role == "user":
-                    self._last_user_metrics = event.item.metrics
-                elif event.item.role == "assistant":
-                    self._last_metrics_text = _format_turn_metrics(
-                        self._last_user_metrics, event.item.metrics
-                    )
-                    self._last_user_metrics = None
-
-            @session.on("agent_state_changed")
-            def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
-                if event.new_state == "speaking":
-                    early = session._early_assistant_metrics
-                    if early:
-                        self._last_metrics_text = _format_turn_metrics(
-                            self._last_user_metrics, early
-                        )
-                        session._early_assistant_metrics = None
-                elif event.new_state == "thinking":
-                    self._last_metrics_text = None
+            if self._tcp_transport is not None:
+                session._session_transport = self._tcp_transport
+                session._session_transport_audio_input = self._tcp_audio_input
+                session._session_transport_audio_output = self._tcp_audio_output
 
             self._update_sess_io(
                 session,
@@ -485,7 +473,7 @@ class AgentsConsole:
         self,
         sess: AgentSession,
         mode: ConsoleMode,
-        audio_input: ConsoleAudioInput,
+        audio_input: io.AudioInput,
         audio_output: io.AudioOutput,
         text_output: io.TextOutput,
     ) -> None:
@@ -972,17 +960,45 @@ class RichLoggingHandler(logging.Handler):
             self.handleError(record)
 
 
-def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
+class _TcpConsoleFormatter(logging.Formatter):
+    """Plain text formatter that includes extra key-value pairs."""
+
+    # Keys set by LogRecord.__init__ + keys added during format()
+    _RESERVED = frozenset(
+        logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
+        | {"message", "asctime"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__(
+            "%(asctime)s %(levelname)-5s %(name)s  %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in self._RESERVED and not k.startswith("_")
+        }
+        if extras:
+            kv = "  ".join(f"{k}={v}" for k, v in extras.items())
+            return f"{base}  {kv}"
+        return base
+
+
+def _default_stream_handler() -> logging.Handler:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    return handler
+
+
+def _configure_logger(handler: logging.Handler, log_level: int | str) -> None:
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
     root = logging.getLogger()
-    if c:
-        root.addHandler(c._log_handler)
-    else:
-        handler = logging.StreamHandler(sys.stdout)
-        root.addHandler(handler)
-        handler.setFormatter(JsonFormatter())
-
+    root.addHandler(handler)
     root.setLevel(log_level)
 
     _silence_noisy_loggers()
@@ -1486,6 +1502,54 @@ class _ConsoleWorker:
         self._loop.run_until_complete(_async_main())
 
 
+def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
+    """Run console in TCP mode — connects to the Go CLI's TCP server."""
+    from ..voice.remote_session import TcpSessionTransport
+    from .tcp_console import TcpAudioInput, TcpAudioOutput
+
+    host, port_str = connect_addr.rsplit(":", 1)
+    port = int(port_str)
+
+    # Use plain text logs for TCP console (Go CLI displays them as-is)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_TcpConsoleFormatter())
+    _configure_logger(handler, logging.DEBUG)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def _tcp_main() -> None:
+        transport = await TcpSessionTransport.connect(host, port)
+        await transport.start()
+
+        server._job_executor_type = JobExecutorType.THREAD
+
+        console_inst = AgentsConsole.get_instance()
+        console_inst.enabled = True
+        console_inst._tcp_transport = transport
+        console_inst._tcp_audio_input = TcpAudioInput()
+        console_inst._tcp_audio_output = TcpAudioOutput(transport)
+
+        @server.once("worker_started")
+        def _simulate_job() -> None:
+            asyncio.run_coroutine_threadsafe(
+                server.simulate_job(
+                    "console-room", agent_identity="console", fake_job=True
+                ),
+                loop,
+            )
+
+        try:
+            await server.run(devmode=True, unregistered=True)
+        finally:
+            await transport.close()
+
+    try:
+        loop.run_until_complete(_tcp_main())
+    except KeyboardInterrupt:
+        pass
+
+
 def _run_console(
     *,
     server: AgentServer,
@@ -1688,10 +1752,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
+        connect_addr: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(
+                "--connect-addr",
+                help="TCP address to connect to (e.g. 127.0.0.1:12345). Used by lk agent console.",
+            ),
+        ] = None,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
         """
+        if connect_addr:
+            _run_tcp_console(server=server, connect_addr=connect_addr)
+            return
+
         if list_devices:
             _print_audio_devices()
             raise typer.Exit()
