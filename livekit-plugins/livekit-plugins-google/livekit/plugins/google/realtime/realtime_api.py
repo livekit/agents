@@ -555,10 +555,15 @@ class RealtimeSession(llm.RealtimeSession):
                     return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
-            logger.warning(f"Updating instructions: {instructions}")
+            logger.debug("Updating instructions mid-session")
             self._send_client_event(
                 types.LiveClientContent(
-                    turns=[types.Content(role="model", parts=[types.Part(text=instructions)])],
+                    turns=[types.Content(
+                        parts=[types.Part(text=instructions)],
+                        # Vertex AI ignores role=None or role="system" and only works with role="model".
+                        # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
+                        role="model" if self._opts.vertexai else None,
+                    )],
                     turn_complete=False,
                 )
             )
