@@ -1501,7 +1501,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
     """Run console in TCP mode — connects to the Go CLI's TCP server."""
     from .tcp_console import TcpConsoleSession
 
-    from ..voice.tcp_transport import TcpSessionTransport
+    from ..voice.remote_session import TcpSessionTransport
 
     host, port_str = connect_addr.rsplit(":", 1)
     port = int(port_str)
