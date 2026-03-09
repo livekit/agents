@@ -9,7 +9,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ..log import logger
 from ..voice import io
-from ..voice.remote_session import _SessionHost, TcpSessionTransport
+from ..voice.remote_session import TcpSessionTransport
 
 WIRE_SAMPLE_RATE = 48000
 AGENT_SAMPLE_RATE = 24000
@@ -144,37 +144,3 @@ class TcpAudioOutput(io.AudioOutput):
 
         self._pushed_duration = 0.0
         self._interrupted_ev.clear()
-
-
-class TcpConsoleSession(_SessionHost):
-
-    def __init__(self, transport: TcpSessionTransport) -> None:
-        super().__init__(transport)
-        self._audio_input = TcpAudioInput()
-        self._audio_output = TcpAudioOutput(transport)
-
-        self.on("audio_input", self._on_audio_input)
-        self.on("audio_playback_finished", self._on_audio_playback_finished)
-
-    @property
-    def audio_input(self) -> TcpAudioInput:
-        return self._audio_input
-
-    @property
-    def audio_output(self) -> TcpAudioOutput:
-        return self._audio_output
-
-    async def close(self) -> None:
-        await self.aclose()
-
-    def register_on_session(self, session: object) -> None:
-        from ..voice.agent_session import AgentSession
-
-        assert isinstance(session, AgentSession)
-        self.register_session(session)
-
-    def _on_audio_input(self, msg: agent_pb.AgentSessionMessage) -> None:
-        self._audio_input.push_frame(msg.audio_input)
-
-    def _on_audio_playback_finished(self, msg: agent_pb.AgentSessionMessage) -> None:
-        self._audio_output.notify_playout_finished()

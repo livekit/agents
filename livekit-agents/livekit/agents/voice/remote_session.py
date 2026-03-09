@@ -293,38 +293,87 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
     return agent_pb.ChatContext.ChatItem()
 
 
-class _EventForwarder:
+class _SessionHost:
 
-    def __init__(self, session: AgentSession, transport: SessionTransport) -> None:
-        self._session = session
+    def __init__(self, transport: SessionTransport) -> None:
         self._transport = transport
-        self._registered = False
+        self._started = False
+        self._recv_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
+        self._session: AgentSession | None = None
+        self._events_registered = False
 
-    def start(self) -> None:
-        if self._registered:
+    def register_session(self, session: AgentSession) -> None:
+        self._session = session
+        if not self._events_registered:
+            self._events_registered = True
+            session.on("agent_state_changed", self._on_agent_state_changed)
+            session.on("user_state_changed", self._on_user_state_changed)
+            session.on("conversation_item_added", self._on_conversation_item_added)
+            session.on("user_input_transcribed", self._on_user_input_transcribed)
+            session.on("function_tools_executed", self._on_function_tools_executed)
+            session.on("metrics_collected", self._on_metrics_collected)
+            session.on("error", self._on_error)
+
+    async def start(self) -> None:
+        if self._started:
             return
-        self._registered = True
-        self._session.on("agent_state_changed", self._on_agent_state_changed)
-        self._session.on("user_state_changed", self._on_user_state_changed)
-        self._session.on("conversation_item_added", self._on_conversation_item_added)
-        self._session.on("user_input_transcribed", self._on_user_input_transcribed)
-        self._session.on("function_tools_executed", self._on_function_tools_executed)
-        self._session.on("metrics_collected", self._on_metrics_collected)
-        self._session.on("error", self._on_error)
+        self._started = True
+        await self._transport.start()
+        self._recv_task = asyncio.create_task(self._recv_loop())
 
     async def aclose(self) -> None:
-        if not self._registered:
+        if not self._started:
             return
-        self._registered = False
-        self._session.off("agent_state_changed", self._on_agent_state_changed)
-        self._session.off("user_state_changed", self._on_user_state_changed)
-        self._session.off("conversation_item_added", self._on_conversation_item_added)
-        self._session.off("user_input_transcribed", self._on_user_input_transcribed)
-        self._session.off("function_tools_executed", self._on_function_tools_executed)
-        self._session.off("metrics_collected", self._on_metrics_collected)
-        self._session.off("error", self._on_error)
+        self._started = False
+
+        if self._session and self._events_registered:
+            self._events_registered = False
+            self._session.off("agent_state_changed", self._on_agent_state_changed)
+            self._session.off("user_state_changed", self._on_user_state_changed)
+            self._session.off("conversation_item_added", self._on_conversation_item_added)
+            self._session.off("user_input_transcribed", self._on_user_input_transcribed)
+            self._session.off("function_tools_executed", self._on_function_tools_executed)
+            self._session.off("metrics_collected", self._on_metrics_collected)
+            self._session.off("error", self._on_error)
+
+        if self._recv_task:
+            await utils.aio.cancel_and_wait(self._recv_task)
+
         await utils.aio.cancel_and_wait(*self._tasks.tasks)
+        await self._transport.close()
+
+    async def _recv_loop(self) -> None:
+        try:
+            async for msg in self._transport:
+                if msg.HasField("request"):
+                    if self._session is not None:
+                        self._tasks.create_task(self._handle_request_safe(msg.request))
+                else:
+                    msg_type = msg.WhichOneof("message")
+                    if msg_type:
+                        self._dispatch_transport_message(msg_type, msg)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("error processing session message", exc_info=True)
+
+    def _dispatch_transport_message(
+        self, msg_type: str, msg: agent_pb.AgentSessionMessage
+    ) -> None:
+        if self._session is None:
+            return
+
+        if msg_type == "audio_input":
+            audio_in = self._session.input.audio
+            if audio_in is not None and hasattr(audio_in, "push_frame"):
+                audio_in.push_frame(msg.audio_input)
+        elif msg_type == "audio_playback_finished":
+            audio_out = self._session.output.audio
+            if audio_out is not None and hasattr(audio_out, "notify_playout_finished"):
+                audio_out.notify_playout_finished()
+
+    # -- event forwarding --
 
     def _send_event(self, event: agent_pb.SessionEvent) -> None:
         msg = agent_pb.AgentSessionMessage(event=event)
@@ -412,14 +461,9 @@ class _EventForwarder:
             )
         )
 
+    # -- request handling --
 
-class _RequestHandler:
-
-    def __init__(self, session: AgentSession, transport: SessionTransport) -> None:
-        self._session = session
-        self._transport = transport
-
-    async def handle_request(self, req: agent_pb.SessionRequest) -> None:
+    async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
             await self._handle_request(req)
         except Exception:
@@ -440,6 +484,8 @@ class _RequestHandler:
                 pass
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
+        assert self._session is not None
+
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -499,75 +545,6 @@ class _RequestHandler:
                 )
             )
             await self._transport.send_message(resp)
-
-
-_SessionHostEventTypes = Literal[
-    "audio_input",
-    "audio_output",
-    "audio_playback_flush",
-    "audio_playback_clear",
-    "audio_playback_finished",
-]
-
-
-class _SessionHost(rtc.EventEmitter[_SessionHostEventTypes]):
-
-    def __init__(self, transport: SessionTransport) -> None:
-        super().__init__()
-        self._transport = transport
-        self._started = False
-        self._recv_task: asyncio.Task[None] | None = None
-        self._tasks = utils.aio.TaskSet()
-        self._event_forwarder: _EventForwarder | None = None
-        self._request_handler: _RequestHandler | None = None
-
-    @property
-    def transport(self) -> SessionTransport:
-        return self._transport
-
-    def register_session(self, session: AgentSession) -> None:
-        self._event_forwarder = _EventForwarder(session, self._transport)
-        self._event_forwarder.start()
-        self._request_handler = _RequestHandler(session, self._transport)
-
-    async def start(self) -> None:
-        if self._started:
-            return
-        self._started = True
-        await self._transport.start()
-        self._recv_task = asyncio.create_task(self._recv_loop())
-
-    async def aclose(self) -> None:
-        if not self._started:
-            return
-        self._started = False
-
-        if self._event_forwarder:
-            await self._event_forwarder.aclose()
-            self._event_forwarder = None
-
-        if self._recv_task:
-            await utils.aio.cancel_and_wait(self._recv_task)
-
-        await utils.aio.cancel_and_wait(*self._tasks.tasks)
-        await self._transport.close()
-
-    async def _recv_loop(self) -> None:
-        try:
-            async for msg in self._transport:
-                if msg.HasField("request"):
-                    if self._request_handler:
-                        self._tasks.create_task(
-                            self._request_handler.handle_request(msg.request)
-                        )
-                else:
-                    msg_type = msg.WhichOneof("message")
-                    if msg_type:
-                        self.emit(msg_type, msg)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.warning("error processing session message", exc_info=True)
 
 
 RemoteSessionEventTypes = Literal[

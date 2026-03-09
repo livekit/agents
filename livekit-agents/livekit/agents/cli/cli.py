@@ -58,7 +58,8 @@ TRACE_LOG_LEVEL = 5
 if TYPE_CHECKING:
     import sounddevice as sd  # type: ignore
 
-    from .tcp_console import TcpConsoleSession
+    from ..voice.remote_session import TcpSessionTransport
+    from .tcp_console import TcpAudioInput, TcpAudioOutput
 
 HANDLED_SIGNALS = (
     signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
@@ -331,7 +332,9 @@ class AgentsConsole:
 
         self._enabled = False
         self._record = False
-        self._tcp_session: TcpConsoleSession | None = None
+        self._tcp_transport: TcpSessionTransport | None = None
+        self._tcp_audio_input: TcpAudioInput | None = None
+        self._tcp_audio_output: TcpAudioOutput | None = None
 
         self._last_metrics_text: Text | None = None
         self._last_user_metrics: llm.MetricsReport | None = None
@@ -358,10 +361,12 @@ class AgentsConsole:
             self._io_loop = loop
             self._io_context = contextvars.copy_context()
 
-            # Use TCP audio I/O if a TCP session is available
-            if self._tcp_session is not None:
-                self._io_audio_input = self._tcp_session.audio_input
-                self._io_audio_output = self._tcp_session.audio_output
+            # Use TCP audio I/O if a TCP transport is available
+            if self._tcp_transport is not None:
+                assert self._tcp_audio_input is not None
+                assert self._tcp_audio_output is not None
+                self._io_audio_input = self._tcp_audio_input
+                self._io_audio_output = self._tcp_audio_output
             else:
                 self._io_audio_input = ConsoleAudioInput(loop)
                 self._io_audio_output = ConsoleAudioOutput(loop)
@@ -374,9 +379,9 @@ class AgentsConsole:
             self._io_session = session
 
         if session:
-            # Register TCP event forwarding if in TCP mode
-            if self._tcp_session is not None:
-                self._tcp_session.register_on_session(session)
+            # Set the session transport for TCP mode
+            if self._tcp_transport is not None:
+                session._session_transport = self._tcp_transport
 
             self._update_sess_io(
                 session,
@@ -1499,9 +1504,8 @@ class _ConsoleWorker:
 
 def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
     """Run console in TCP mode — connects to the Go CLI's TCP server."""
-    from .tcp_console import TcpConsoleSession
-
     from ..voice.remote_session import TcpSessionTransport
+    from .tcp_console import TcpAudioInput, TcpAudioOutput
 
     host, port_str = connect_addr.rsplit(":", 1)
     port = int(port_str)
@@ -1516,15 +1520,16 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
 
     async def _tcp_main() -> None:
         transport = await TcpSessionTransport.connect(host, port)
-        tcp_session = TcpConsoleSession(transport)
-        await tcp_session.start()
+        await transport.start()
 
         server._job_executor_type = JobExecutorType.THREAD
 
         # Set up console for TCP mode
         console_inst = AgentsConsole.get_instance()
         console_inst.enabled = True
-        console_inst._tcp_session = tcp_session
+        console_inst._tcp_transport = transport
+        console_inst._tcp_audio_input = TcpAudioInput()
+        console_inst._tcp_audio_output = TcpAudioOutput(transport)
 
         @server.once("worker_started")
         def _simulate_job() -> None:
@@ -1538,7 +1543,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
         try:
             await server.run(devmode=True, unregistered=True)
         finally:
-            await tcp_session.close()
+            await transport.close()
 
     try:
         loop.run_until_complete(_tcp_main())
