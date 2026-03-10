@@ -89,13 +89,15 @@ class MyAgent(Agent):
         """Called when the user wants to register for the weather event."""
         logger.info("register_for_weather called")
 
-        get_email_task = GetEmailTask(
-            chat_ctx=self.chat_ctx.copy(
-                exclude_function_call=True, exclude_instructions=True, exclude_config_update=True
-            ),
+        chat_ctx = self.chat_ctx.copy(
+            exclude_function_call=True, exclude_instructions=True, exclude_config_update=True
         )
-
-        email_result = await EffectCall(get_email_task)
+        email_result = await EffectCall(
+            GetEmailTask(
+                chat_ctx=chat_ctx,
+                setup_fnc=lambda agent: agent.configure(llm="openai/gpt-4.1"),
+            )
+        )
         email_address = email_result.email_address
 
         logger.info(f"User's email address: {email_address}")

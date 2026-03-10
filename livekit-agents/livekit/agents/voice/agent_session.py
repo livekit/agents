@@ -980,7 +980,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             userdata=self._userdata,
             tools=[tool.id for tool in self.tools],
             history=history,
-            agent=self._agent._get_state(),
+            agent=self._agent._snapshot(),
         )
 
     async def _rehydrate(self, state: _AgentSessionState) -> Agent:
@@ -1010,7 +1010,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         try:
             # rehydrate agent recursively and register them to the session
             # the order of rehydration is from current to oldest
-            agent = Agent._rehydrate(state.agent)
+            agent = Agent._create_from_snapshot(state.agent)
 
             # restore the durable functions in the order of oldest to current
             # if any Agent failed, discard the rest and use the failed one as the current agent

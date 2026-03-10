@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Generator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -63,6 +63,7 @@ class Agent:
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        setup_fnc: Callable[[Agent], None] | None = None,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -101,8 +102,11 @@ class Agent:
         self._activity: AgentActivity | None = None
         self._rehydrated = False
         self._pending_durable_state: bytes | None = None
+        self._setup_fnc: Callable[[Agent], None] | None = setup_fnc
+        if setup_fnc is not None:
+            setup_fnc(self)
 
-    def get_init_kwargs(self) -> dict[str, Any]:
+    def export_init_kwargs(self) -> dict[str, Any]:
         return {
             "instructions": self._instructions,
             "id": self._id,
@@ -428,7 +432,7 @@ class Agent:
 
         return self._activity
 
-    def _get_state(self) -> _AgentState:
+    def _snapshot(self) -> _AgentState:
         chat_ctx: dict[str, Any] = self.chat_ctx.to_dict(
             exclude_image=True,
             exclude_audio=True,
@@ -438,9 +442,9 @@ class Agent:
         )
 
         init_kwargs: dict[str, Any] = {}
-        if "get_init_kwargs" in type(self).__dict__:
-            # only use get_init_kwargs if it's defined directly on type(self), not inherited
-            init_kwargs = self.get_init_kwargs()
+        if "export_init_kwargs" in type(self).__dict__:
+            # only use export_init_kwargs if it's defined directly on type(self), not inherited
+            init_kwargs = self.export_init_kwargs()
 
         # durable functions
         durable_state: bytes | None = None
@@ -450,6 +454,15 @@ class Agent:
             except Exception:
                 logger.exception("error checkpointing durable functions")
 
+        extra_state: dict[str, Any] = {}
+        if self._setup_fnc is not None:
+            import cloudpickle
+
+            try:
+                extra_state["__setup_fnc"] = cloudpickle.dumps(self._setup_fnc)
+            except Exception:
+                logger.exception("failed to serialize setup_fnc, skipping it in the snapshot")
+
         return _AgentState(
             cls=type(self),
             id=self._id,
@@ -458,9 +471,10 @@ class Agent:
             chat_ctx=chat_ctx,
             parent_agent=None,
             durable_state=durable_state,
+            extra_state=extra_state,
         )
 
-    def _set_state(self, state: _AgentState) -> None:
+    def _restore(self, state: _AgentState) -> None:
         # read tools
         tool_by_id = {tool.id: tool for tool in self.tools}
         valid_tools: list[llm.Tool | llm.Toolset] = []
@@ -480,12 +494,24 @@ class Agent:
         self._chat_ctx = llm.ChatContext.from_dict(state.chat_ctx)
 
     @staticmethod
-    def _rehydrate(state: _AgentState) -> Agent:
+    def _create_from_snapshot(state: _AgentState) -> Agent:
         """Create the Agent instance from the saved state. Must be only called by `AgentSession.rehydrate()`"""
 
         from .agent_session import _AgentSessionContextVar
 
         agent: Agent = state.cls(**state.init_kwargs)
+
+        setup_fnc: Callable[[Agent], None] | None = None
+        if setup_fnc_bytes := state.extra_state.get("__setup_fnc"):
+            import cloudpickle
+
+            try:
+                setup_fnc = cloudpickle.loads(setup_fnc_bytes)
+                if setup_fnc is not None:
+                    agent._setup_fnc = setup_fnc
+                    setup_fnc(agent)
+            except Exception:
+                logger.exception("failed to deserialize setup_fnc, skipping setup")
 
         # register the agent to the AgentSession's rehydrated agents collection
         # the pickled reference in tool calls will be resolved from this collection
@@ -493,7 +519,7 @@ class Agent:
         if session:
             session._register_rehydrated_agent(agent)
 
-        agent._set_state(state)  # rehydrate the parent agent if it exists
+        agent._restore(state)  # rehydrate the parent agent if it exists
         agent._rehydrated = True
         agent._pending_durable_state = state.durable_state
 
@@ -841,6 +867,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        setup_fnc: Callable[[Agent], None] | None = None,
     ) -> None:
         tools = tools or []
         super().__init__(
@@ -856,6 +883,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             allow_interruptions=allow_interruptions,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
+            setup_fnc=setup_fnc,
         )
 
         self.__started = False
@@ -1077,17 +1105,17 @@ class AgentTask(Agent, Generic[TaskResult_T]):
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
 
-    def _get_state(self) -> _AgentState:
-        state = super()._get_state()
-        state.parent_agent = self._old_agent._get_state() if self._old_agent else None
+    def _snapshot(self) -> _AgentState:
+        state = super()._snapshot()
+        state.parent_agent = self._old_agent._snapshot() if self._old_agent else None
         state.extra_state["__started"] = self.__started
         return state
 
-    def _set_state(self, state: _AgentState) -> None:
-        super()._set_state(state)
+    def _restore(self, state: _AgentState) -> None:
+        super()._restore(state)
         self.__started = state.extra_state.get("__started", False)
         if parent_state := state.parent_agent:
-            self._old_agent = Agent._rehydrate(parent_state)
+            self._old_agent = Agent._create_from_snapshot(parent_state)
 
     async def _wait_for_inactive(self) -> None:
         await self.__inactive_ev.wait()
