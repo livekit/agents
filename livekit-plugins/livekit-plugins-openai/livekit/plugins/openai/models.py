@@ -312,7 +312,7 @@ SarvamChatModels = Literal[
     "sarvam-30b",
     "sarvam-30b-16k",
     "sarvam-105b",
-    "sarvam-105b-32k"
+    "sarvam-105b-32k",
 ]
 
 

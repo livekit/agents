@@ -22,7 +22,10 @@ from typing import Any
 import httpx
 import openai
 from openai.types import ReasoningEffort
-from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
+from openai.types.chat import (
+    ChatCompletionToolChoiceOptionParam,
+    completion_create_params,
+)
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
