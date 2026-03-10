@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Union
 
 DeepgramModels = Literal[
     "nova-general",
@@ -37,7 +37,7 @@ DeepgramModels = Literal[
 
 V2Models = Literal["flux-general-en"]
 
-DeepgramLanguages = Literal[
+DeepgramNova3Languages = Literal[
     "ar",
     "ar-AE",
     "ar-DZ",
@@ -120,10 +120,63 @@ DeepgramLanguages = Literal[
     "uk",
     "ur",
     "vi",
+]
+
+DeepgramNova2Languages = Literal[
+    "bg",
+    "ca",
+    "cs",
+    "da",
+    "da-DK",
+    "de",
+    "de-CH",
+    "el",
+    "en",
+    "en-AU",
+    "en-GB",
+    "en-IN",
+    "en-NZ",
+    "en-US",
+    "es",
+    "es-419",
+    "et",
+    "fi",
+    "fr",
+    "fr-CA",
+    "hi",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "ko",
+    "ko-KR",
+    "lt",
+    "lv",
+    "ms",
+    "multi",
+    "nl",
+    "nl-BE",
+    "no",
+    "pl",
+    "pt",
+    "pt-BR",
+    "pt-PT",
+    "ro",
+    "ru",
+    "sk",
+    "sv",
+    "sv-SE",
+    "th",
+    "th-TH",
+    "tr",
+    "uk",
+    "vi",
     "zh",
     "zh-CN",
+    "zh-HK",
     "zh-Hans",
     "zh-Hant",
-    "zh-HK",
     "zh-TW",
 ]
+
+DeepgramLanguages = Union[DeepgramNova3Languages, DeepgramNova2Languages]
