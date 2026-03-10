@@ -31,6 +31,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -70,7 +71,7 @@ class _TTSOptions:
     volume: float | None
     word_timestamps: bool
     api_key: str
-    language: str | None
+    language: LanguageCode | None
     base_url: str
     api_version: str
     pronunciation_dict_id: str | None
@@ -146,7 +147,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
-            language=language,
+            language=LanguageCode(language) if language else None,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -183,7 +184,7 @@ class TTS(tts.TTS):
         if word_timestamps:
             if "preview" not in self._opts.model and (
                 self._opts.language is not None
-                and self._opts.language
+                and self._opts.language.language
                 not in {
                     "en",
                     "de",
@@ -261,7 +262,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language) if language else None
         if is_given(voice):
             self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
@@ -396,6 +397,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokens = deque[str]()
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        flush_on_chunk = isinstance(self._tts._sentence_tokenizer, tokenize.SentenceTokenizer)
         if self._tts._stream_pacer:
             sent_tokenizer_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_tokenizer_stream,
@@ -406,6 +408,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
         ) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
+            if flush_on_chunk is True:
+                base_pkt["max_buffer_delay_ms"] = 0
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = cartesia_context_id
@@ -565,7 +569,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             "encoding": opts.encoding,
             "sample_rate": opts.sample_rate,
         },
-        "language": opts.language,
+        "language": opts.language.language if opts.language else None,
     }
 
     if opts.pronunciation_dict_id:

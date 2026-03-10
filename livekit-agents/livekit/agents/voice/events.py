@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
+from ..language import LanguageCode
 from ..llm import (
     LLM,
     ChatMessage,
@@ -134,7 +135,7 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
-    language: str | None = None
+    language: LanguageCode | None = None
     created_at: float = Field(default_factory=time.time)
 
 

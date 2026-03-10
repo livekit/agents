@@ -157,8 +157,11 @@ class SupervisedProc(ABC):
             mp_log_pch, mp_log_cch = socket.socketpair()
 
             sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
+            pch: duplex_unix._AsyncDuplex | None = None
+            log_listener: LogQueueListener | None = None
             try:
-                self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+                pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+                self._pch = pch
 
                 log_pch = duplex_unix._Duplex.open(mp_log_pch)
                 log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
@@ -176,6 +179,14 @@ class SupervisedProc(ABC):
                 for s in sockets:
                     with contextlib.suppress(OSError):
                         s.close()
+
+                if pch is not None:
+                    with contextlib.suppress(duplex_unix.DuplexClosed):
+                        await pch.aclose()
+
+                if log_listener is not None:
+                    with contextlib.suppress(duplex_unix.DuplexClosed):
+                        log_listener.stop()
                 raise
 
             mp_log_cch.close()

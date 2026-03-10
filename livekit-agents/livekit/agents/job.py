@@ -625,7 +625,7 @@ class JobContext:
                 return
 
             room_options = rtc.RoomOptions(
-                e2ee=e2ee,
+                encryption=e2ee,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
             )

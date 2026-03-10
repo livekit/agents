@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, cast
 
+import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
@@ -116,6 +117,7 @@ class LLM(llm.LLM):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -175,6 +177,11 @@ class LLM(llm.LLM):
         else:
             gcp_project = None
             gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -219,6 +226,7 @@ class LLM(llm.LLM):
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
+            credentials=credentials,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
@@ -562,7 +570,7 @@ class LLMStream(llm.LLMStream):
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     tool_calls=[tool_call],
-                    content=part.text,
+                    content=None,
                 ),
             )
             return chat_chunk

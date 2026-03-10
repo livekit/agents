@@ -19,6 +19,8 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.4",
+    "gpt-5.3-chat-latest",
     "gpt-5.2",
     "gpt-5.2-chat-latest",
     "gpt-5.1",
@@ -56,6 +58,7 @@ ChatModels = Literal[
 ]
 RealtimeModels = Literal[
     "gpt-realtime",
+    "gpt-realtime-1.5",
     "gpt-realtime-2025-08-28",
     "gpt-4o-realtime-preview",
 ]
@@ -308,6 +311,7 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-5.4",
         "gpt-5.2",
         "gpt-5.1",
         "gpt-5",
