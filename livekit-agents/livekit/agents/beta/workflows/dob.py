@@ -119,6 +119,9 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         self._current_dob: date | None = None
         self._current_time: time | None = None
 
+        if include_time:
+            self._tools.append(self._build_update_time_tool())
+
     async def on_enter(self) -> None:
         prompt = "Ask the user to provide their date of birth."
         if self._include_time:
@@ -183,58 +186,58 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         return response
 
-    @function_tool
-    async def update_time(
-        self,
-        hour: int,
-        minute: int,
-        ctx: RunContext,
-    ) -> str | None:
-        """Update the time of birth provided by the user.
+    def _build_update_time_tool(self) -> llm.FunctionTool:
+        @function_tool()
+        async def update_time(hour: int, minute: int, ctx: RunContext) -> str | None:
+            """Update the time of birth provided by the user.
 
-        Args:
-            hour: The birth hour (0-23)
-            minute: The birth minute (0-59)
-        """
-        try:
-            birth_time = time(hour, minute)
-        except ValueError as e:
-            raise ToolError(f"Invalid time: {e}") from None
+            Args:
+                hour: The birth hour (0-23)
+                minute: The birth minute (0-59)
+            """
+            try:
+                birth_time = time(hour, minute)
+            except ValueError as e:
+                raise ToolError(f"Invalid time: {e}") from None
 
-        self._current_time = birth_time
+            self._current_time = birth_time
 
-        if not self._confirmation_required(ctx) and self._current_dob is not None:
-            if not self.done():
-                self.complete(
-                    GetDOBResult(
-                        date_of_birth=self._current_dob,
-                        time_of_birth=self._current_time,
+            if not self._confirmation_required(ctx) and self._current_dob is not None:
+                if not self.done():
+                    self.complete(
+                        GetDOBResult(
+                            date_of_birth=self._current_dob,
+                            time_of_birth=self._current_time,
+                        )
                     )
+                return None
+
+            if self._confirmation_required(ctx):
+                confirm_tool = self._build_confirm_tool(dob=self._current_dob)
+                current_tools = [t for t in self.tools if t.id != "confirm_dob"]
+                current_tools.append(confirm_tool)
+                await self.update_tools(current_tools)
+
+            formatted_time = birth_time.strftime("%I:%M %p")
+            response = f"The time of birth has been updated to {formatted_time}"
+
+            if self._current_dob:
+                formatted_date = self._current_dob.strftime("%B %d, %Y")
+                response = f"The date and time of birth has been updated to {formatted_date} at {formatted_time}"
+
+            if self._confirmation_required(ctx):
+                response += (
+                    "\nRepeat the time back to the user in a natural spoken format.\n"
+                    "Prompt the user for confirmation, do not call `confirm_dob` directly"
                 )
-            return None
+            else:
+                response += (
+                    "\nThe date of birth has not been provided yet, ask the user to provide it."
+                )
 
-        if self._confirmation_required(ctx):
-            confirm_tool = self._build_confirm_tool(dob=self._current_dob)
-            current_tools = [t for t in self.tools if t.id != "confirm_dob"]
-            current_tools.append(confirm_tool)
-            await self.update_tools(current_tools)
+            return response
 
-        formatted_time = birth_time.strftime("%I:%M %p")
-        response = f"The time of birth has been updated to {formatted_time}"
-
-        if self._current_dob:
-            formatted_date = self._current_dob.strftime("%B %d, %Y")
-            response = f"The date and time of birth has been updated to {formatted_date} at {formatted_time}"
-
-        if self._confirmation_required(ctx):
-            response += (
-                "\nRepeat the time back to the user in a natural spoken format.\n"
-                "Prompt the user for confirmation, do not call `confirm_dob` directly"
-            )
-        else:
-            response += "\nThe date of birth has not been provided yet, ask the user to provide it."
-
-        return response
+        return update_time
 
     def _build_confirm_tool(self, *, dob: date | None) -> llm.FunctionTool:
         # confirm tool is only injected after update_dob/update_time is called,
