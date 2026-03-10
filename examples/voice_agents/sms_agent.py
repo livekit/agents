@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Any, override
 
 import aiohttp
 from dotenv import load_dotenv
@@ -17,12 +16,9 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.beta.workflows import GetEmailTask
-from livekit.agents.llm import ToolFlag, function_tool
+from livekit.agents.llm import Instructions, ToolFlag, function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-# uncomment to enable Krisp background voice/noise cancellation
-# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
 
@@ -32,26 +28,27 @@ PORT = int(os.getenv("PORT", 8081))
 
 
 class MyAgent(Agent):
-    def __init__(self, *, text_mode: bool) -> None:
+    BASE_INSTRUCTIONS = (
+        "Your name is Kelly. You would interact with users via {modality}. "
+        "with that in mind keep your responses concise and to the point. "
+        "{modality_specific}"
+        "You are curious and friendly, and have a sense of humor. "
+        "When user want to register for the weather event, call the `register_for_weather` function. "
+    )
+
+    def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Kelly. You would interact with users via voice."
-            "with that in mind keep your responses concise and to the point."
-            "do not use emojis, asterisks, markdown, or other special characters in your responses."
-            "You are curious and friendly, and have a sense of humor."
-            "you will speak english to the user",
+            instructions=Instructions(
+                audio=self.BASE_INSTRUCTIONS.format(
+                    modality="voice",
+                    modality_specific="do not use emojis, asterisks, markdown, or other special characters in your responses.",
+                ),
+                text=self.BASE_INSTRUCTIONS.format(
+                    modality="text",
+                    modality_specific="you can use emojis to make your responses more engaging.",
+                ),
+            ),
         )
-        self._text_mode = text_mode
-
-    @override
-    def get_init_kwargs(self) -> dict[str, Any]:
-        return {
-            "text_mode": self._text_mode,
-        }
-
-    async def on_enter(self):
-        if not self._text_mode:
-            logger.debug("greeting the user")
-            self.session.generate_reply(allow_interruptions=False)
 
     @function_tool
     async def get_weather(
@@ -93,12 +90,6 @@ class MyAgent(Agent):
         logger.info("register_for_weather called")
 
         get_email_task = GetEmailTask(
-            extra_instructions=(
-                "You are communicate to the user via text messages, "
-                "so there is no need to verify the email address with the user multiple times."
-            )
-            if self._text_mode
-            else "",
             chat_ctx=self.chat_ctx.copy(
                 exclude_function_call=True, exclude_instructions=True, exclude_config_update=True
             ),
@@ -126,7 +117,7 @@ async def text_handler(ctx: TextMessageContext):
     )
 
     start_result = await session.start(
-        agent=ctx.session_state if ctx.session_state else MyAgent(text_mode=True),
+        agent=ctx.session_state if ctx.session_state else MyAgent(),
         capture_run=True,
         wait_run_state=False,
     )
@@ -149,7 +140,9 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    await session.start(agent=MyAgent(text_mode=False), room=ctx.room)
+    await session.start(agent=MyAgent(), room=ctx.room)
+
+    session.generate_reply(instructions="greeting the user", input_modality="audio")
 
 
 if __name__ == "__main__":
