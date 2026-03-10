@@ -37,7 +37,7 @@ class STT(stt.STT):
                  reads from BLAZE_API_URL environment.
         language: Language code for transcription (default: "vi").
         auth_token: Bearer token for authentication. If not provided,
-                    reads from BLAZE_AUTH_TOKEN environment.
+                    reads from BLAZE_API_TOKEN environment.
         sample_rate: Audio sample rate in Hz (default: 16000).
         normalization_rules: Dict mapping input strings to replacements
                             applied to transcription results.
@@ -198,10 +198,7 @@ class STT(stt.STT):
                 bits_per_sample=16,
             )
 
-            # Prepare request
-            files = {
-                "audio_file": ("audio.wav", io.BytesIO(wav_data), "audio/wav"),
-            }
+            # Make request with retry logic (shared client for connection pooling)
             params = {
                 "language": lang,
                 "enable_segments": "false",
@@ -211,10 +208,14 @@ class STT(stt.STT):
             if self._auth_token:
                 headers["Authorization"] = f"Bearer {self._auth_token}"
 
-            # Make request with retry logic (shared client for connection pooling)
             result: Dict = {}
 
             for attempt in range(conn_options.max_retry + 1):
+                # Recreate BytesIO on each attempt — httpx reads it to EOF on send,
+                # so reusing the same object would send empty audio on retries.
+                files = {
+                    "audio_file": ("audio.wav", io.BytesIO(wav_data), "audio/wav"),
+                }
                 try:
                     response = await self._client.post(
                         self._transcribe_url,
