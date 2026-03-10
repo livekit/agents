@@ -27,4 +27,4 @@ llm = blaze.LLM(bot_id="my-chatbot")
 | Variable | Description | Default |
 |---|---|---|
 | `BLAZE_API_URL` | Base URL for Blaze API gateway | `https://api.blaze.vn` |
-| `BLAZE_AUTH_TOKEN` | Bearer token for authentication | |
+| `BLAZE_API_TOKEN` | Bearer token for authentication | |

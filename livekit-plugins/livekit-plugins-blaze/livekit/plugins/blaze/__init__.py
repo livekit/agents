@@ -25,7 +25,7 @@ Example:
 
 Environment Variables:
     BLAZE_API_URL: Base URL for Blaze API gateway
-    BLAZE_AUTH_TOKEN: Bearer token for API authentication
+    BLAZE_API_TOKEN: Bearer token for API authentication
 """
 
 from .version import __version__
