@@ -35,7 +35,7 @@ class LLM(llm.LLM):
         api_url: Base URL for the chat service. If not provided,
                  reads from BLAZE_API_URL environment.
         auth_token: Bearer token for authentication. If not provided,
-                    reads from BLAZE_AUTH_TOKEN environment.
+                    reads from BLAZE_API_TOKEN environment.
         deep_search: Enable deep search mode for enhanced retrieval.
         agentic_search: Enable agentic search capabilities.
         enable_tools: Enable tool/function calling.
@@ -342,7 +342,7 @@ class LLMStream(llm.LLMStream):
                                     if content:
                                         full_response += content
                                         chunk = llm.ChatChunk(
-                                            id=self._request_id,
+                                            id=request_id,
                                             delta=llm.ChoiceDelta(
                                                 role="assistant",
                                                 content=content,
@@ -364,7 +364,7 @@ class LLMStream(llm.LLMStream):
                                     if content:
                                         full_response += content
                                         chunk = llm.ChatChunk(
-                                            id=self._request_id,
+                                            id=request_id,
                                             delta=llm.ChoiceDelta(
                                                 role="assistant",
                                                 content=content,

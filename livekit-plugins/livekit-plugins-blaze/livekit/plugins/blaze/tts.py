@@ -36,7 +36,7 @@ class TTS(tts.TTS):
         language: Language code for synthesis (default: "vi").
         speaker_id: Speaker voice identifier (default: "default").
         auth_token: Bearer token for authentication. If not provided,
-                    reads from BLAZE_AUTH_TOKEN environment.
+                    reads from BLAZE_API_TOKEN environment.
         model: TTS model to use (default: "v1_5_pro").
         sample_rate: Output audio sample rate (default: 24000).
         normalization_rules: Dict for text preprocessing before synthesis.
