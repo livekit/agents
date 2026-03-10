@@ -1082,7 +1082,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.clear_user_turn()
 
     def commit_user_turn(
-        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
     ) -> asyncio.Future[str]:
         """Commit the user turn and generate a reply.
 
@@ -1095,6 +1099,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript.
+            skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
             asyncio.Future[str]: A future that resolves with the audio transcript.
@@ -1106,7 +1111,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         return self._activity.commit_user_turn(
-            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+            transcript_timeout=transcript_timeout,
+            stt_flush_duration=stt_flush_duration,
+            skip_reply=skip_reply,
         )
 
     def update_agent(self, agent: Agent) -> None:
