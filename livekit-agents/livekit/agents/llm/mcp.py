@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -235,13 +235,19 @@ class MCPServerHTTP(MCPServer):
         ]
     ]:
         if self._use_streamable_http:
-            return streamable_http_client(  # type: ignore[no-any-return]
-                url=self.url,
-                http_client=httpx.AsyncClient(
+
+            @asynccontextmanager
+            async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
+                async with httpx.AsyncClient(
                     headers=self.headers or {},
                     timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
-                ),
-            )
+                ) as http_client:
+                    async with streamable_http_client(
+                        url=self.url, http_client=http_client
+                    ) as streams:
+                        yield streams
+
+            return _streamable_http_with_client()  # type: ignore[return-value]
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
