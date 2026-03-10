@@ -201,7 +201,19 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
+def _has_user_configured_handlers() -> bool:
+    """Return True if a non-NullHandler exists on the root or livekit.agents logger."""
+    for lg in (logging.getLogger(), logging.getLogger("livekit.agents")):
+        for h in lg.handlers:
+            if not isinstance(h, logging.NullHandler):
+                return True
+    return False
+
+
 def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
+    if _has_user_configured_handlers():
+        return
+
     root = logging.getLogger()
 
     handler = logging.StreamHandler(sys.stdout)
