@@ -224,6 +224,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._session_lock = asyncio.Lock()
 
+        self._generate_reply_task: asyncio.Task[None] | None = None
         self._instructions_ready = asyncio.Event()
         self._tools_ready = asyncio.Event()
         self._ready_to_start = asyncio.Event()
@@ -379,6 +380,8 @@ class RealtimeSession(llm.RealtimeSession):
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,
         )
+        if self._generate_reply_task and not self._generate_reply_task.done():
+            self._generate_reply_task.cancel()
         self._generate_reply_task = asyncio.create_task(self._send_generate_reply(payload))
 
         self._close_current_generation(interrupted=False)
@@ -389,6 +392,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def _send_generate_reply(self, payload: GenerateReplyPayload) -> None:
         await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
         if self._socket:
             await self._socket.send_generate_reply(payload)
 
@@ -426,6 +431,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._ready_to_start.set()
 
         self._close_current_generation(interrupted=False)
+
+        if self._generate_reply_task and not self._generate_reply_task.done():
+            await utils.aio.cancel_and_wait(self._generate_reply_task)
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
