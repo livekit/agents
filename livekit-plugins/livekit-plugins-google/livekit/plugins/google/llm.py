@@ -81,7 +81,7 @@ class _LLMOptions:
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
     response_mime_type: NotGivenOr[str]
-    response_schema: NotGivenOr[types.SchemaUnion | type[llm_utils.ResponseFormatT]]
+    response_schema: NotGivenOr[types.SchemaUnion | type]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
 
 
@@ -326,11 +326,17 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)
+            if isinstance(response_format, (dict, types.Schema)):
+                extra["response_schema"] = response_format
+            else:
+                extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
         else:
             if is_given(self._opts.response_schema):
-                extra["response_schema"] = to_response_format(self._opts.response_schema)
+                if isinstance(self._opts.response_schema, (dict, types.Schema)):
+                    extra["response_schema"] = self._opts.response_schema
+                else:
+                    extra["response_schema"] = to_response_format(self._opts.response_schema)
                 extra["response_mime_type"] = (
                     self._opts.response_mime_type
                     if is_given(self._opts.response_mime_type)
