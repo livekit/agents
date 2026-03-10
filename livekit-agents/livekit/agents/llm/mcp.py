@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-import httpx
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
+    import httpx
     import mcp.types
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
