@@ -133,7 +133,7 @@ async def transfer_to_human(context: RunContext) -> None:
 
 _GET_INSURANCE_BASE_INSTRUCTIONS = """\
 You will be gathering the user's health insurance.
-{modality_specific}"""
+{modality_specific}{extra_instructions}"""
 
 _GET_INSURANCE_AUDIO_SPECIFIC = "You are speaking with the user over voice. Avoid using dashes and special characters in your response. Confirm the insurance choice verbally before recording it."
 
@@ -198,14 +198,22 @@ _HEALTHCARE_AGENT_TEXT_SPECIFIC = (
 
 
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
-    def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = False):
+    def __init__(
+        self,
+        extra_instructions: str = "",
+        chat_ctx: llm.ChatContext | None = None,
+        require_confirmation: bool = False,
+    ):
+        extra = f"\n{extra_instructions}" if extra_instructions else ""
         super().__init__(
             instructions=Instructions(
                 _GET_INSURANCE_BASE_INSTRUCTIONS.format(
                     modality_specific=_GET_INSURANCE_AUDIO_SPECIFIC,
+                    extra_instructions=extra,
                 ),
                 text=_GET_INSURANCE_BASE_INSTRUCTIONS.format(
                     modality_specific=_GET_INSURANCE_TEXT_SPECIFIC,
+                    extra_instructions=extra,
                 ),
             ),
             tools=[transfer_to_human],
@@ -334,7 +342,10 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
         chat_ctx.add_message(
             role="system", content=f"The user provided the new insurance: {updated_insurance}"
         )
-        result = await GetInsuranceTask(chat_ctx=chat_ctx)
+        result = await GetInsuranceTask(
+            chat_ctx=chat_ctx,
+            extra_instructions="Do not confirm the compatible doctors until retrieved.",
+        )
         name = self.session.userdata.profile["name"]
         updated = self.session.userdata.database.update_patient_record(
             name, insurance=result.insurance
@@ -343,7 +354,8 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
             return "No profile was found to update"
         self.session.userdata.profile["insurance"] = result.insurance
         await self._setup_doctor_selection()
-        return "The insurance has been updated, prompt the user to choose a compatible doctor."
+        available_doctors = [doctor["name"] for doctor in self._compatible_doctor_records]
+        return f"The insurance has been updated. The new compatible doctors are: {available_doctors}. Prompt the user to choose from these doctors."
 
     def _build_doctor_selection_tool(self, *, available_doctors: list[str]) -> FunctionTool | None:
         @function_tool()
