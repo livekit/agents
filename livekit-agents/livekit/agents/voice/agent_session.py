@@ -1286,7 +1286,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer = None
 
     def _on_aec_warmup_expired(self) -> None:
-        if self._aec_warmup_remaining > 0:
+        if self._aec_warmup_remaining > 0 and not self._closing:
             logger.debug("aec warmup expired, re-enabling interruptions")
 
         self._aec_warmup_remaining = 0.0
@@ -1330,6 +1330,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             state == "speaking"
             and self._aec_warmup_remaining > 0
             and self._aec_warmup_timer is None
+            and self._output.audio_enabled
+            and self._output.audio is not None
         ):
             self._aec_warmup_timer = self._loop.call_later(
                 self._aec_warmup_remaining, self._on_aec_warmup_expired
