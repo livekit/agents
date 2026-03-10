@@ -1032,15 +1032,15 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(
-        self, *, transcript_timeout: float, stt_flush_duration: float
+        self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
     ) -> asyncio.Future[str]:
-        skip_reply: bool = False
         if self._rt_session is not None:
-            # commit audio buffer and trigger response generation
+            # commit audio buffer and conditionally trigger response generation
+            self._rt_session.commit_audio()
+            if not skip_reply:
+                self._session.generate_reply()
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
-            self._rt_session.commit_audio()
-            self._session.generate_reply()
             skip_reply = True
 
         assert self._audio_recognition is not None
@@ -1530,6 +1530,12 @@ class AgentActivity(RecognitionHooks):
                         self._session._conversation_item_added(user_message)
                     return
                 self._rt_session.commit_audio()
+
+        if info.skip_reply:
+            if info.new_transcript != "":
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
+            return
 
         if (current_speech := self._current_speech) is not None:
             if not current_speech.allow_interruptions:
