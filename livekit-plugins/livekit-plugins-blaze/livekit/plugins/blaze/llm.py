@@ -3,7 +3,7 @@ Blaze LLM Plugin for LiveKit Voice Agent
 
 LLM plugin that interfaces with Blaze's chatbot service.
 
-API Endpoint: POST /voicebot/{bot_id}/chat-conversion?stream=true
+API Endpoint: POST /v1/voicebot-call/{bot_id}/chat-conversion-stream
 Input: JSON array of messages [{ "role": "user"|"assistant", "content": str }]
 Output: SSE streaming with data: { "content": str } format
 """
@@ -91,7 +91,7 @@ class LLM(llm.LLM):
         self._timeout = timeout or self._config.llm_timeout
 
         # Build chat URL
-        self._chat_url = f"{self._api_url}/voicebot/{bot_id}/chat-conversion"
+        self._chat_url = f"{self._api_url}/v1/voicebot-call/{bot_id}/chat-conversion-stream"
 
         # Shared HTTP client for connection pooling
         self._client = httpx.AsyncClient(
@@ -250,11 +250,14 @@ class LLMStream(llm.LLMStream):
                 return
 
             # Build URL with query parameters using httpx for proper encoding
-            query_params: Dict[str, str] = {"stream": "true"}
+            query_params: Dict[str, str] = {
+                "is_voice_call": "true",
+                "use_tool_based": "true",
+            }
             if self._llm._deep_search:
-                query_params["deepSearch"] = "true"
+                query_params["deep_search"] = "true"
             if self._llm._agentic_search:
-                query_params["agenticSearch"] = "true"
+                query_params["agentic_search"] = "true"
 
             # Add demographics if available
             if self._llm._demographics:
