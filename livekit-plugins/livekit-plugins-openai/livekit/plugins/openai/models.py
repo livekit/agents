@@ -315,6 +315,7 @@ SarvamChatModels = Literal[
     "sarvam-105b-32k"
 ]
 
+
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
         "gpt-5.4",
