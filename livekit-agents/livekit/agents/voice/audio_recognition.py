@@ -148,7 +148,7 @@ class AudioRecognition:
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
-        self._vad_speech_was_started: bool = False
+        self._vad_speech_started: bool = False
 
     def update_options(
         self,
@@ -492,9 +492,9 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration
-            if not self._vad_speech_was_started:
+            if not self._vad_speech_started:
                 self._speech_start_time = speech_start_time
-                self._vad_speech_was_started = True
+                self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev)
@@ -518,7 +518,7 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._vad_speech_was_started = False
+            self._vad_speech_started = False
             self._speaking = False
 
             if self._vad_base_turn_detection or (
