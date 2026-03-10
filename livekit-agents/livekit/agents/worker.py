@@ -314,7 +314,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
-        self._agent_name = ""
+        self._agent_name = os.environ.get("LIVEKIT_AGENT_NAME", "")
+        if self._agent_name:
+            logger.info(
+                "using agent name from LIVEKIT_AGENT_NAME",
+                extra={"agent_name": self._agent_name},
+            )
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -446,7 +451,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name
+            if agent_name:
+                self._agent_name = agent_name
             self._server_type = type
             return f
 
@@ -596,16 +602,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
-            if not self._ws_url:
-                raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
+            if not unregistered:
+                if not self._ws_url:
+                    raise ValueError(
+                        "ws_url is required, or set LIVEKIT_URL environment variable"
+                    )
 
-            if not self._api_key:
-                raise ValueError("api_key is required, or set LIVEKIT_API_KEY environment variable")
+                if not self._api_key:
+                    raise ValueError(
+                        "api_key is required, or set LIVEKIT_API_KEY environment variable"
+                    )
 
-            if not self._api_secret:
-                raise ValueError(
-                    "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
-                )
+                if not self._api_secret:
+                    raise ValueError(
+                        "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
+                    )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
@@ -634,9 +645,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     except Exception as e:
                         logger.warning(f"failed to remove {file_path}", exc_info=e)
 
-            os.environ["LIVEKIT_URL"] = self._ws_url
-            os.environ["LIVEKIT_API_KEY"] = self._api_key
-            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            if self._ws_url:
+                os.environ["LIVEKIT_URL"] = self._ws_url
+            if self._api_key:
+                os.environ["LIVEKIT_API_KEY"] = self._api_key
+            if self._api_secret:
+                os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
             logger.info(
                 "starting worker",
@@ -679,9 +693,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
-            self._api = api.LiveKitAPI(
-                self._ws_url, self._api_key, self._api_secret, session=self._http_session
-            )
+            if self._ws_url:
+                self._api = api.LiveKitAPI(
+                    self._ws_url, self._api_key, self._api_secret, session=self._http_session
+                )
             self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
@@ -862,13 +877,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
-            token = token or (
-                api.AccessToken(self._api_key, self._api_secret)
-                .with_identity(agent_identity)
-                .with_kind("agent")
-                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                .to_jwt()
-            )
+            if not token:
+                if fake_job and (not self._api_key or not self._api_secret):
+                    token = ""
+                else:
+                    token = (
+                        api.AccessToken(self._api_key, self._api_secret)
+                        .with_identity(agent_identity)
+                        .with_kind("agent")
+                        .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                        .to_jwt()
+                    )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
@@ -891,7 +910,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             assert self._close_future is not None
             assert self._http_session is not None
-            assert self._api is not None
             assert self._http_server is not None
 
             self._closed = True
@@ -917,7 +935,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._prometheus_server:
                 await self._prometheus_server.aclose()
 
-            await self._api.aclose()  # type: ignore
+            if self._api is not None:
+                await self._api.aclose()  # type: ignore
 
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
