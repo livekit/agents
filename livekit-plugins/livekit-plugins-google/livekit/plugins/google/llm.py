@@ -80,6 +80,8 @@ class _LLMOptions:
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
+    response_mime_type: NotGivenOr[str]
+    response_schema: NotGivenOr[types.SchemaUnion | type[llm_utils.ResponseFormatT]]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
 
 
@@ -116,6 +118,10 @@ class LLM(llm.LLM):
         ] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
+        response_mime_type: NotGivenOr[str] = NOT_GIVEN,
+        response_schema: NotGivenOr[
+            types.SchemaUnion | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
@@ -147,6 +153,8 @@ class LLM(llm.LLM):
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
+            response_mime_type (str, optional): Output MIME type, e.g. "application/json" or "text/plain". Can be used alone without response_schema. Defaults to None.
+            response_schema (SchemaUnion | type, optional): Schema to constrain the JSON output structure. When set, response_mime_type defaults to "application/json" if not explicitly provided. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
         super().__init__()
@@ -219,6 +227,8 @@ class LLM(llm.LLM):
             automatic_function_calling_config=automatic_function_calling_config,
             http_options=http_options,
             seed=seed,
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
             safety_settings=safety_settings,
         )
         self._client = Client(
@@ -316,6 +326,16 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
+        else:
+            if is_given(self._opts.response_schema):
+                extra["response_schema"] = to_response_format(self._opts.response_schema)
+                extra["response_mime_type"] = (
+                    self._opts.response_mime_type
+                    if is_given(self._opts.response_mime_type)
+                    else "application/json"
+                )
+            elif is_given(self._opts.response_mime_type):
+                extra["response_mime_type"] = self._opts.response_mime_type
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
