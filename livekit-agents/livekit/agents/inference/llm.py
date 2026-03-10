@@ -80,6 +80,8 @@ OpenAIModels = Literal[
     "openai/gpt-5.1-chat-latest",
     "openai/gpt-5.2",
     "openai/gpt-5.2-chat-latest",
+    "openai/gpt-5.3-chat-latest",
+    "openai/gpt-5.4",
     "openai/gpt-oss-120b",
 ]
 
