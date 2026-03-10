@@ -26,7 +26,7 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
-from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm import AgentHandoff, ChatContext, Instructions, MetricsReport
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -1006,7 +1006,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
@@ -1082,7 +1082,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.clear_user_turn()
 
     def commit_user_turn(
-        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
     ) -> asyncio.Future[str]:
         """Commit the user turn and generate a reply.
 
@@ -1095,6 +1099,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript.
+            skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
             asyncio.Future[str]: A future that resolves with the audio transcript.
@@ -1106,7 +1111,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         return self._activity.commit_user_turn(
-            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+            transcript_timeout=transcript_timeout,
+            stt_flush_duration=stt_flush_duration,
+            skip_reply=skip_reply,
         )
 
     def update_agent(self, agent: Agent) -> None:
@@ -1286,7 +1293,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer = None
 
     def _on_aec_warmup_expired(self) -> None:
-        if self._aec_warmup_remaining > 0:
+        if self._aec_warmup_remaining > 0 and not self._closing:
             logger.debug("aec warmup expired, re-enabling interruptions")
 
         self._aec_warmup_remaining = 0.0
@@ -1330,6 +1337,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             state == "speaking"
             and self._aec_warmup_remaining > 0
             and self._aec_warmup_timer is None
+            and self._output.audio_enabled
+            and self._output.audio is not None
         ):
             self._aec_warmup_timer = self._loop.call_later(
                 self._aec_warmup_remaining, self._on_aec_warmup_expired
