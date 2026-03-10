@@ -379,7 +379,7 @@ class RealtimeSession(llm.RealtimeSession):
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,
         )
-        asyncio.create_task(self._send_generate_reply(payload))
+        self._generate_reply_task = asyncio.create_task(self._send_generate_reply(payload))
 
         self._close_current_generation(interrupted=False)
         generation_ev = self._start_new_assistant_turn(user_initiated=True)
