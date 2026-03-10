@@ -1,4 +1,4 @@
-from typing import Literal, Union
+from typing import Literal
 
 DeepgramModels = Literal[
     "nova-general",
@@ -179,4 +179,4 @@ DeepgramNova2Languages = Literal[
     "zh-TW",
 ]
 
-DeepgramLanguages = Union[DeepgramNova3Languages, DeepgramNova2Languages]
+DeepgramLanguages = DeepgramNova3Languages | DeepgramNova2Languages
