@@ -31,7 +31,7 @@ from livekit.agents.beta.workflows import (
     TaskGroup,
     WarmTransferTask,
 )
-from livekit.agents.llm import ToolError, function_tool
+from livekit.agents.llm import Instructions, ToolError, function_tool
 from livekit.plugins import openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
@@ -131,12 +131,83 @@ async def transfer_to_human(context: RunContext) -> None:
     context.session.shutdown()
 
 
+_GET_INSURANCE_BASE_INSTRUCTIONS = """\
+You will be gathering the user's health insurance.
+{modality_specific}"""
+
+_GET_INSURANCE_AUDIO_SPECIFIC = "You are speaking with the user over voice. Avoid using dashes and special characters in your response. Confirm the insurance choice verbally before recording it."
+
+_GET_INSURANCE_TEXT_SPECIFIC = (
+    "You are communicating with the user over text. Accept the typed insurance selection directly."
+)
+
+
+_SCHEDULE_APPT_BASE_INSTRUCTIONS = (
+    "You will now assist the user with selecting a doctor and appointment time.\n"
+    "Do not be verbose and ask for any unnecessary information unless instructed to.\n"
+    "You will focus on confirming the doctor the user selects first. Do not ask for appointment times preemptively.\n"
+    "If the user requests to update their insurance, after confirming their new insurance, their compatible doctor(s) may change.\n"
+    "In this case, do not prompt for a doctor confirmation until their insurance is fully updated and their compatible doctors are retrieved.\n"
+    "{modality_specific}\n" + GLOBAL_INSTRUCTIONS
+)
+
+_SCHEDULE_APPT_AUDIO_SPECIFIC = (
+    "You are speaking with the user over voice. "
+    "Avoid using bullet points or special characters when listing out doctors and available timeslots, maintain a natural spoken tone."
+)
+
+_SCHEDULE_APPT_TEXT_SPECIFIC = (
+    "You are communicating with the user over text. "
+    "Present doctors and available timeslots clearly."
+)
+
+
+_MODIFY_APPT_BASE_INSTRUCTIONS = (
+    "You will now assist the user with modifying their appointment.\n"
+    "Do not be verbose and ask for any unnecessary information unless instructed to.\n"
+    "Do not preemptively ask for information and refrain from listing made-up appointment times.\n"
+    "{modality_specific}\n" + GLOBAL_INSTRUCTIONS
+)
+
+_MODIFY_APPT_AUDIO_SPECIFIC = (
+    "You are speaking with the user over voice. "
+    "Avoid using special characters, maintain a natural spoken tone."
+)
+
+_MODIFY_APPT_TEXT_SPECIFIC = (
+    "You are communicating with the user over text. Present appointment information clearly."
+)
+
+
+_HEALTHCARE_AGENT_BASE_INSTRUCTIONS = (
+    "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. "
+    "If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
+    "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. "
+    "Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
+    "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'.\n"
+    "{modality_specific}\n" + GLOBAL_INSTRUCTIONS
+)
+
+_HEALTHCARE_AGENT_AUDIO_SPECIFIC = (
+    "You are speaking with the user over a voice call. Maintain a natural conversational tone."
+)
+
+_HEALTHCARE_AGENT_TEXT_SPECIFIC = (
+    "You are communicating with the user over text. Be clear and direct in your responses."
+)
+
+
 class GetInsuranceTask(AgentTask[GetInsuranceResult]):
     def __init__(self, chat_ctx: llm.ChatContext | None = None, require_confirmation: bool = False):
         super().__init__(
-            instructions="""
-            You will be gathering the user's health insurance. Be sure to confirm their answer. Avoid using dashes and special characters in your response.
-        """,
+            instructions=Instructions(
+                _GET_INSURANCE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_GET_INSURANCE_AUDIO_SPECIFIC,
+                ),
+                text=_GET_INSURANCE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_GET_INSURANCE_TEXT_SPECIFIC,
+                ),
+            ),
             tools=[transfer_to_human],
             chat_ctx=chat_ctx,
         )
@@ -202,12 +273,14 @@ def build_update_record(mutable_fields: list[str] | None = None) -> FunctionTool
 class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
     def __init__(self, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="""You will now assist the user with selecting a doctor and appointment time.
-            Do not be verbose and ask for any unnecessary information unless instructed to.
-            Avoid using special characters like bullet points when listing out doctors and available timeslots, maintain a natural tone.
-            You will focus on confirming the doctor the user selects first. Do not ask for appointment times preemptively.
-            """
-            + GLOBAL_INSTRUCTIONS,
+            instructions=Instructions(
+                _SCHEDULE_APPT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_SCHEDULE_APPT_AUDIO_SPECIFIC,
+                ),
+                text=_SCHEDULE_APPT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_SCHEDULE_APPT_TEXT_SPECIFIC,
+                ),
+            ),
             tools=[
                 build_update_record(["dob", "phone"]),
                 transfer_to_human,
@@ -367,12 +440,14 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
 class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
     def __init__(self, function: str, chat_ctx: llm.ChatContext | None = None):
         super().__init__(
-            instructions="""You will now assist the user with modifying their appointment.
-            Do not be verbose and ask for any unnecessary information unless instructed to.
-            Avoid using special characters like bullet points, maintain a natural tone.
-            Do not preemptively ask for information and refrain from listing made-up appointment times.
-            """
-            + GLOBAL_INSTRUCTIONS,
+            instructions=Instructions(
+                _MODIFY_APPT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_MODIFY_APPT_AUDIO_SPECIFIC,
+                ),
+                text=_MODIFY_APPT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_MODIFY_APPT_TEXT_SPECIFIC,
+                ),
+            ),
             chat_ctx=chat_ctx,
             tools=[
                 build_update_record(),
@@ -458,11 +533,13 @@ class ModifyAppointmentTask(AgentTask[ModifyAppointmentResult]):
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
-            instructions=(
-                "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
-                "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
-                "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'."
-                + GLOBAL_INSTRUCTIONS
+            instructions=Instructions(
+                _HEALTHCARE_AGENT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_HEALTHCARE_AGENT_AUDIO_SPECIFIC,
+                ),
+                text=_HEALTHCARE_AGENT_BASE_INSTRUCTIONS.format(
+                    modality_specific=_HEALTHCARE_AGENT_TEXT_SPECIFIC,
+                ),
             ),
             tools=[
                 EndCallTool(
