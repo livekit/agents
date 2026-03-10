@@ -5,6 +5,7 @@ from datetime import date, time
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
+from ...llm import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
@@ -13,6 +14,41 @@ from ...voice.events import RunContext
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
+
+_BASE_INSTRUCTIONS = """
+You are only a single step in a broader system, responsible solely for capturing a date of birth.
+{modality_specific}
+{time_instructions}Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)
+Don't invent dates, stick strictly to what the user said.
+{confirmation_instructions}
+When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.
+If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Avoid verbosity by not sharing example dates or formats unless prompted to do so. Do not deviate from the goal of collecting the user's birthday.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
+{extra_instructions}
+"""
+
+_AUDIO_SPECIFIC = """
+Handle input as noisy voice transcription. Expect that users will say dates aloud with formats like:
+- 'January 15th 1990'
+- 'the fifteenth of January nineteen ninety'
+- '01 15 1990' or 'one fifteen ninety'
+- 'Jan 15 90'
+- '15th January 1990'
+Normalize common spoken patterns silently:
+- Convert spoken numbers and ordinals to their numeric form: 'fifteenth' → 15, 'ninety' → 1990.
+- Recognize month names in various forms: 'Jan', 'January', etc.
+- Handle two-digit years appropriately: '90' likely means 1990, '05' likely means 2005.
+- Filter out filler words or hesitations.
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
+"""
+
+_TEXT_SPECIFIC = """
+Handle input as typed text. Expect users to type their date of birth directly.
+Accept common date formats like 'MM/DD/YYYY', 'January 15, 1990', or '1990-01-15'.
+Handle two-digit years appropriately: '90' likely means 1990, '05' likely means 2005.
+"""
 
 
 @dataclass
@@ -44,37 +80,29 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 "The time is optional - if the user doesn't know it, proceed without it.\n"
             )
         )
+        confirmation_instructions = (
+            "Call `confirm_dob` after the user confirmed the date of birth is correct."
+        )
+        extra = extra_instructions if extra_instructions else ""
 
         super().__init__(
-            instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing a date of birth.\n"
-                "Handle input as noisy voice transcription. Expect that users will say dates aloud with formats like:\n"
-                "- 'January 15th 1990'\n"
-                "- 'the fifteenth of January nineteen ninety'\n"
-                "- '01 15 1990' or 'one fifteen ninety'\n"
-                "- 'Jan 15 90'\n"
-                "- '15th January 1990'\n"
-                "Normalize common spoken patterns silently:\n"
-                "- Convert spoken numbers and ordinals to their numeric form: 'fifteenth' → 15, 'ninety' → 1990.\n"
-                "- Recognize month names in various forms: 'Jan', 'January', etc.\n"
-                "- Handle two-digit years appropriately: '90' likely means 1990, '05' likely means 2005.\n"
-                "- Filter out filler words or hesitations.\n"
-                "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                f"{time_instructions}"
-                "Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. "
-                "(before asking any questions or providing any answers.)\n"
-                "Don't invent dates, stick strictly to what the user said.\n"
-                + (
-                    "Call `confirm_dob` after the user confirmed the date of birth is correct.\n"
-                    if require_confirmation is not False
-                    else ""
-                )
-                + "When reading back dates, use a natural spoken format like 'January fifteenth, nineteen ninety'.\n"
-                "If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.\n"
-                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
-                "Avoid verbosity by not sharing example dates or formats unless prompted to do so. Do not deviate from the goal of collecting the user's birthday.\n"
-                "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
-                + extra_instructions
+            instructions=Instructions(
+                _BASE_INSTRUCTIONS.format(
+                    modality_specific=_AUDIO_SPECIFIC,
+                    time_instructions=time_instructions,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is not False else ""
+                    ),
+                    extra_instructions=extra,
+                ),
+                text=_BASE_INSTRUCTIONS.format(
+                    modality_specific=_TEXT_SPECIFIC,
+                    time_instructions=time_instructions,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is True else ""
+                    ),
+                    extra_instructions=extra,
+                ),
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,

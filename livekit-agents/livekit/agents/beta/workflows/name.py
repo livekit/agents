@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
+from ...llm import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
@@ -12,6 +13,41 @@ from ...voice.events import RunContext
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
+
+_BASE_INSTRUCTIONS = """
+You are only a single step in a broader system, responsible solely for capturing the user's name.
+You need to naturally collect the name parts in this order: {name_format}.
+{modality_specific}
+{spelling_instructions}Call `update_name` at the first opportunity whenever you form a new hypothesis about the name. (before asking any questions or providing any answers.)
+Don't invent names, stick strictly to what the user said.
+{confirmation_instructions}
+If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
+{extra_instructions}
+"""
+
+_AUDIO_SPECIFIC = """
+Handle input as noisy voice transcription. Expect that users will say names aloud and may:
+- Say their name followed by spelling: e.g., 'Michael m i c h a e l'
+- Use phonetic alphabet: e.g., 'Mike as in Mike India Charlie Hotel Alpha Echo Lima'
+- Have names with special characters or hyphens: e.g., 'Mary-Jane' or 'O'Brien'
+- Have names from various cultural backgrounds with different pronunciation patterns
+Normalize common spoken patterns silently:
+- Convert 'dash' or 'hyphen' to `-`.
+- Convert 'apostrophe' to `'`.
+- Recognize when users spell out their name letter by letter.
+- Filter out filler words or hesitations.
+- Capitalize the first letter of each name part appropriately.
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
+"""
+
+_TEXT_SPECIFIC = """
+Handle input as typed text. Expect users to type their name directly.
+Capitalize the first letter of each name part appropriately.
+If the name contains special characters or hyphens (e.g., 'Mary-Jane' or 'O'Brien'), preserve them as typed.
+"""
 
 
 @dataclass
@@ -69,37 +105,31 @@ class GetNameTask(AgentTask[GetNameResult]):
                 "When confirming, spell out each name part letter by letter to the user. "
             )
         )
+        confirmation_instructions = (
+            "Call `confirm_name` after the user confirmed the name is correct."
+        )
+        extra = extra_instructions if extra_instructions else ""
 
         super().__init__(
-            instructions=(
-                f"You are only a single step in a broader system, responsible solely for capturing the user's name.\n"
-                f"You need to naturally collect the name parts in this order: {self._name_format}.\n"
-                "Handle input as noisy voice transcription. Expect that users will say names aloud and may:\n"
-                "- Say their name followed by spelling: e.g., 'Michael m i c h a e l'\n"
-                "- Use phonetic alphabet: e.g., 'Mike as in Mike India Charlie Hotel Alpha Echo Lima'\n"
-                "- Have names with special characters or hyphens: e.g., 'Mary-Jane' or 'O'Brien'\n"
-                "- Have names from various cultural backgrounds with different pronunciation patterns\n"
-                "Normalize common spoken patterns silently:\n"
-                "- Convert 'dash' or 'hyphen' to `-`.\n"
-                "- Convert 'apostrophe' to `'`.\n"
-                "- Recognize when users spell out their name letter by letter.\n"
-                "- Filter out filler words or hesitations.\n"
-                "- Capitalize the first letter of each name part appropriately.\n"
-                "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                f"{spelling_instructions}"
-                "Call `update_name` at the first opportunity whenever you form a new hypothesis about the name. "
-                "(before asking any questions or providing any answers.)\n"
-                "Don't invent names, stick strictly to what the user said.\n"
-                + (
-                    "Call `confirm_name` after the user confirmed the name is correct.\n"
-                    if require_confirmation is not False
-                    else ""
-                )
-                + "If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.\n"
-                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n"
-                "Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.\n"
-                "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
-                + extra_instructions
+            instructions=Instructions(
+                _BASE_INSTRUCTIONS.format(
+                    name_format=self._name_format,
+                    modality_specific=_AUDIO_SPECIFIC,
+                    spelling_instructions=spelling_instructions,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is not False else ""
+                    ),
+                    extra_instructions=extra,
+                ),
+                text=_BASE_INSTRUCTIONS.format(
+                    name_format=self._name_format,
+                    modality_specific=_TEXT_SPECIFIC,
+                    spelling_instructions=spelling_instructions,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is True else ""
+                    ),
+                    extra_instructions=extra,
+                ),
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
@@ -123,8 +153,8 @@ class GetNameTask(AgentTask[GetNameResult]):
     @function_tool()
     async def update_name(
         self,
-        first_name: str,
         ctx: RunContext,
+        first_name: str | None = None,
         middle_name: str | None = None,
         last_name: str | None = None,
     ) -> str | None:

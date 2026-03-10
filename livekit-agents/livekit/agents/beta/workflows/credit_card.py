@@ -5,6 +5,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
+from ...llm import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
@@ -18,12 +19,75 @@ if TYPE_CHECKING:
 
 CARD_ISSUERS_LOOKUP = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
 
+_CARD_NUMBER_BASE_INSTRUCTIONS = """
+You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the card number.
+{modality_specific}
+If the user refuses to provide a number, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's card number, back to the user.
+{confirmation_instructions}
+"""
+
+_CARD_NUMBER_AUDIO_SPECIFIC = """
+Handle input as noisy voice transcription. Expect users to read the card number digit by digit.
+Normalize spoken digits silently: 'four' → 4, 'zero' / 'oh' → 0.
+Filter out filler words or hesitations.
+"""
+
+_CARD_NUMBER_TEXT_SPECIFIC = """
+Handle input as typed text. Users may type the number with or without spaces or dashes (e.g. '4152 6374 8901 2345').
+"""
+
+_SECURITY_CODE_BASE_INSTRUCTIONS = """
+You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card's security code.
+{modality_specific}
+If the user refuses to provide a code, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's security code, back to the user.
+{confirmation_instructions}
+"""
+
+_SECURITY_CODE_AUDIO_SPECIFIC = """
+Handle input as noisy voice transcription. Expect users to read the security code digit by digit.
+Normalize spoken digits silently: 'four' → 4, 'zero' / 'oh' → 0.
+Filter out filler words or hesitations.
+"""
+
+_SECURITY_CODE_TEXT_SPECIFIC = """
+Handle input as typed text. Users will type the security code directly.
+"""
+
+_EXPIRATION_DATE_BASE_INSTRUCTIONS = """
+You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card's expiration date.
+{modality_specific}
+If the user refuses to provide a date, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's expiration date, back to the user.
+{confirmation_instructions}
+"""
+
+_EXPIRATION_DATE_AUDIO_SPECIFIC = """
+Handle input as noisy voice transcription. Expect users to say the expiration date in formats like 'April twenty five', 'oh four twenty five', 'four slash twenty five', or 'April 2025'.
+Normalize spoken months and digits silently.
+Filter out filler words or hesitations.
+"""
+
+_EXPIRATION_DATE_TEXT_SPECIFIC = """
+Handle input as typed text. Expect users to type the expiration date in formats like '04/25', '04/2025', or 'April 2025'.
+"""
+
 
 @dataclass
 class GetCreditCardResult:
     cardholder_name: str
     issuer: str
-    card_number: int
+    card_number: str
     security_code: str
     expiration_date: str
 
@@ -31,7 +95,7 @@ class GetCreditCardResult:
 @dataclass
 class GetCardNumberResult:
     issuer: str
-    card_number: int
+    card_number: str
 
 
 @dataclass
@@ -94,18 +158,27 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         *,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        confirmation_instructions = (
+            "Call `confirm_card_number` once the user has repeated their card number."
+        )
         super().__init__(
-            instructions=(
-                "You are a single step in a broader process of collecting credit card information.\n"
-                "You are solely responsible for collecting the card number.\n"
-                "If the user refuses to provide a number, call decline_card_capture().\n"
-                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
-                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
-                "Never repeat any sensitive information, such as the user's card number, back to the user.\n"
+            instructions=Instructions(
+                _CARD_NUMBER_BASE_INSTRUCTIONS.format(
+                    modality_specific=_CARD_NUMBER_AUDIO_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is not False else ""
+                    ),
+                ),
+                text=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
+                    modality_specific=_CARD_NUMBER_TEXT_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is True else ""
+                    ),
+                ),
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
-        self._card_number = 0
+        self._card_number = ""
         self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
@@ -117,20 +190,15 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
     async def record_card_number(
         self,
         context: RunContext,
-        card_number: int,
+        card_number: str,
     ) -> str | None:
         """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
 
         Args:
-            card_number (int): The credit card number as an integer with no dashes or spaces
+            card_number (str): The credit card number as a string with no dashes or spaces
         """
-        if card_number < 0:
-            self.session.generate_reply(
-                instructions="The card number cannot be negative, ask the user to repeat their card number."
-            )
-            return None
-        card_number_str = str(card_number)
-        if len(card_number_str) < 13 or len(card_number_str) > 19:
+        card_number = "".join([d for d in card_number if d.isdigit()])
+        if len(card_number) < 13 or len(card_number) > 19:
             self.session.generate_reply(
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
@@ -144,8 +212,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                         instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
                     )
                 else:
-                    first_digit = str(self._card_number)[0]
-                    issuer = CARD_ISSUERS_LOOKUP.get(first_digit, "Other")
+                    issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
                     if not self.done():
                         self.complete(
                             GetCardNumberResult(issuer=issuer, card_number=self._card_number)
@@ -162,14 +229,15 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 "Ask them to repeat the number, do not repeat the number back to them.\n"
             )
 
-    def _build_confirm_tool(self, *, card_number: int) -> llm.FunctionTool:
+    def _build_confirm_tool(self, *, card_number: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_card_number(repeated_card_number: int) -> None:
+        async def confirm_card_number(repeated_card_number: str) -> None:
             """Call after the user repeats their card number for confirmation.
 
             Args:
-                repeated_card_number (int): The card number repeated by the user as an integer
+                repeated_card_number (str): The card number repeated by the user as a string
             """
+            repeated_card_number = "".join([d for d in repeated_card_number if d.isdigit()])
             if repeated_card_number != card_number:
                 self.session.generate_reply(
                     instructions="The repeated card number does not match, ask the user to try again."
@@ -181,18 +249,19 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                     instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
                 )
             else:
-                first_digit = str(card_number)[0]
-                issuer = CARD_ISSUERS_LOOKUP.get(first_digit, "Other")
+                issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
                 if not self.done():
                     self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
 
         return confirm_card_number
 
-    def validate_card_number(self, card_number: int) -> bool:
-        """Validates card number via the Luhn algorithm and checks if positive"""
+    def validate_card_number(self, card_number: str) -> bool:
+        """Validates card number via the Luhn algorithm"""
+        if not card_number or not card_number.isdigit():
+            return False
         total_sum = 0
 
-        reversed_number = str(card_number)[::-1]
+        reversed_number = card_number[::-1]
         for index, digit in enumerate(reversed_number):
             if index % 2 == 1:
                 doubled_digit = int(digit) * 2
@@ -203,7 +272,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             else:
                 total_sum += int(digit)
 
-        return (total_sum % 10 == 0) and (card_number > 0)
+        return total_sum % 10 == 0
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
@@ -217,14 +286,23 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
         *,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        confirmation_instructions = (
+            "Call `confirm_security_code` once the user has repeated their security code."
+        )
         super().__init__(
-            instructions=(
-                "You are a single step in a broader process of collecting credit card information.\n"
-                "You are solely responsible for collecting the user's card's security code.\n"
-                "If the user refuses to provide a code, call decline_card_capture().\n"
-                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
-                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
-                "Never repeat any sensitive information, such as the user's security code, back to the user.\n"
+            instructions=Instructions(
+                _SECURITY_CODE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_SECURITY_CODE_AUDIO_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is not False else ""
+                    ),
+                ),
+                text=_SECURITY_CODE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_SECURITY_CODE_TEXT_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is True else ""
+                    ),
+                ),
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
@@ -269,6 +347,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
             return (
                 "The security code has been updated.\n"
                 "Do not repeat the security code back to the user, ask them to repeat themselves.\n"
+                "Call `confirm_security_code` once the user confirms, do not call it preemptively.\n"
             )
 
     def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
@@ -302,14 +381,23 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         *,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        confirmation_instructions = (
+            "Call `confirm_expiration_date` once the user has repeated their expiration date."
+        )
         super().__init__(
-            instructions=(
-                "You are a single step in a broader process of collecting credit card information.\n"
-                "You are solely responsible for collecting the user's card's expiration date.\n"
-                "If the user refuses to provide a date, call decline_card_capture().\n"
-                "If the user wishes to start over the card collection process, call restart_card_collection().\n"
-                "Avoid listing out questions with bullet points or numbers, use a natural conversational tone.\n"
-                "Never repeat any sensitive information, such as the user's expiration date, back to the user.\n"
+            instructions=Instructions(
+                _EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_EXPIRATION_DATE_AUDIO_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is not False else ""
+                    ),
+                ),
+                text=_EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
+                    modality_specific=_EXPIRATION_DATE_TEXT_SPECIFIC,
+                    confirmation_instructions=(
+                        confirmation_instructions if require_confirmation is True else ""
+                    ),
+                ),
             ),
             tools=[decline_card_capture, restart_card_collection],
         )
@@ -367,6 +455,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             return (
                 "The expiration date has been updated.\n"
                 "Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
+                "Call `confirm_expiration_date` once the user confirms, do not call it preemptively.\n"
             )
 
     def _build_confirm_tool(

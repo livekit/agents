@@ -493,9 +493,7 @@ class HealthcareAgent(Agent):
                 self._pending_name, event.result.date_of_birth
             )
             if existing_record:
-                logger.info(
-                    f"Found existing patient profile for {self._pending_name}, with the details: {existing_record}"
-                )
+                logger.info(f"Found existing patient profile for {self._pending_name}")
                 self.session.userdata.profile = existing_record
                 raise ProfileFound()
 
@@ -534,7 +532,7 @@ class HealthcareAgent(Agent):
             try:
                 results = await task_group
             except ProfileFound:
-                self.session.generate_reply(
+                await self.session.generate_reply(
                     instructions="Inform the user that an existing profile has been found with their details."
                 )
             else:
@@ -677,7 +675,7 @@ class HealthcareAgent(Agent):
 
             result = await GetCreditCardTask()
 
-            last_four_digits = str(result.card_number)[-4:]
+            last_four_digits = result.card_number[-4:]
             remaining = self._database.apply_payment(name, amount)
             logger.info(
                 f"Payment of ${amount} confirmed for {name}, card ending in {last_four_digits}, remaining balance: ${remaining}"
