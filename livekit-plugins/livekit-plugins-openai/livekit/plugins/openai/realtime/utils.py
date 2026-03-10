@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
+import math
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 from livekit import rtc
 from livekit.agents import llm
@@ -291,3 +293,29 @@ def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> realtime.RealtimeT
         )
 
     return DEFAULT_TOOL_CHOICE
+
+
+class LogProbItem(Protocol):
+    logprob: float
+
+
+def calculate_confidence_from_logprobs(
+    logprobs: Sequence[LogProbItem] | None,
+) -> float | None:
+    """Calculate a confidence score from token log probabilities.
+
+    Converts log probabilities to probabilities (using exp) and returns
+    the geometric mean of all token probabilities as the confidence score.
+
+    Args:
+        logprobs: Sequence of objects with a logprob attribute, or None
+
+    Returns:
+        Confidence score between 0.0 and 1.0, or None if logprobs is None/empty
+    """
+    if not logprobs:
+        return None
+
+    total_logprob = sum(lp.logprob for lp in logprobs)
+    geometric_mean = math.exp(total_logprob / len(logprobs))
+    return geometric_mean
