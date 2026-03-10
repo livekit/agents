@@ -33,9 +33,13 @@ class STTMetrics(BaseModel):
     request_id: str
     timestamp: float
     duration: float
-    """The request duration in seconds, 0.0 if the STT is streaming."""
+    """The request duration in seconds,
+    0.0 if the STT is streaming.
+    0.0 if the duration is meaningless because there is no blocking request (e.g. gpt-realtime model).
+    """
     audio_duration: float
-    """The duration of the pushed audio in seconds."""
+    """The duration of the pushed audio in seconds.
+    0.0 if duration irrelevant/ or unknown due to token-based billing."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
     input_tokens: int | None = None

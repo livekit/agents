@@ -1564,9 +1564,11 @@ class RealtimeSession(
             stt_metrics = STTMetrics(
                 request_id=event.event_id,
                 timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events
                 duration=0.0,
                 label=self._realtime_model.label,
                 audio_duration=0.0,
+                # uses websocket but results are not streamed incrementally so streamed=False
                 streamed=False,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
@@ -1579,9 +1581,11 @@ class RealtimeSession(
             stt_metrics = STTMetrics(
                 request_id=event.event_id,
                 timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events)
                 duration=0.0,
                 label=self._realtime_model.label,
                 audio_duration=usage.seconds,
+                # uses websocket but results are not streamed incrementally so streamed=False
                 streamed=False,
                 metadata=metadata,
             )
