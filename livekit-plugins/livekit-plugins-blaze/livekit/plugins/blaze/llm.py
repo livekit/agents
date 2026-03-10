@@ -221,7 +221,7 @@ class LLMStream(llm.LLMStream):
             text = msg.text_content
             if not text:
                 continue
-            if msg.role in ("system"):
+            if msg.role == "system":
                 system_parts.append(text)
             elif msg.role == "user":
                 messages.append({"role": "user", "content": text})
