@@ -16,6 +16,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
+from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
     FunctionToolInfo,
     RawFunctionToolInfo,
@@ -63,6 +64,7 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    apply_instructions_modality,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -871,7 +873,7 @@ class AgentActivity(RecognitionHooks):
         *,
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
@@ -906,7 +908,7 @@ class AgentActivity(RecognitionHooks):
                 filtered_tools: list[llm.Tool | llm.Toolset] = []
                 for tool in tools:
                     info: RawFunctionToolInfo | FunctionToolInfo | None = None
-                    if isinstance(tool, (llm.RawFunctionTool, llm.FunctionTool)):
+                    if isinstance(tool, llm.RawFunctionTool | llm.FunctionTool):
                         info = tool.info
 
                     if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
@@ -947,7 +949,7 @@ class AgentActivity(RecognitionHooks):
             # this matches the behavior of the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
             if instructions:
-                instructions = "\n".join([self._agent.instructions, instructions])
+                instructions = self._agent.instructions + "\n" + instructions
 
             task = self._create_speech_task(
                 self._pipeline_reply_task(
@@ -1029,7 +1031,9 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.clear_audio()
 
-    def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
+    def commit_user_turn(
+        self, *, transcript_timeout: float, stt_flush_duration: float
+    ) -> asyncio.Future[str]:
         skip_reply: bool = False
         if self._rt_session is not None:
             # commit audio buffer and trigger response generation
@@ -1040,7 +1044,7 @@ class AgentActivity(RecognitionHooks):
             skip_reply = True
 
         assert self._audio_recognition is not None
-        self._audio_recognition.commit_user_turn(
+        return self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
@@ -1093,9 +1097,9 @@ class AgentActivity(RecognitionHooks):
                     continue
                 self._current_speech = speech
                 if self.min_consecutive_speech_delay > 0.0:
-                    await asyncio.sleep(
-                        self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
-                    )
+                    delay = self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
                     # check again if speech is done after sleep delay
                     if speech.done():
                         # skip done speech (interrupted during delay)
@@ -1872,6 +1876,9 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
+
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -1881,7 +1888,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | None = None,
+        instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1912,7 +1919,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | None = None,
+        instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1945,6 +1952,9 @@ class AgentActivity(RecognitionHooks):
                 update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
             except ValueError:
                 logger.exception("failed to update the instructions")
+
+        # apply the correct variant of the instructions for the turn's input modality
+        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
@@ -2181,6 +2191,9 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
+
         await text_tee.aclose()
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
@@ -2199,12 +2212,14 @@ class AgentActivity(RecognitionHooks):
         # important: no agent output should be used after this point
 
         if len(tool_output.output) > 0:
-            if speech_handle.num_steps >= self._session.options.max_tool_steps + 1:
+            max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
+
+            if max_steps_reached:
                 logger.warning(
-                    "maximum number of function calls steps reached",
+                    "maximum number of function calls steps reached, "
+                    "generating final response with tool_choice='none'",
                     extra={"speech_id": speech_handle.id},
                 )
-                return
 
             speech_handle._num_steps += 1
 
@@ -2254,9 +2269,11 @@ class AgentActivity(RecognitionHooks):
                         tools=tools,
                         model_settings=ModelSettings(
                             # Avoid setting tool_choice to "required" or a specific function when
-                            # passing tool response back to the LLM
+                            # passing tool response back to the LLM.
+                            # Force tool_choice="none" when max steps reached to guarantee
+                            # a final text response instead of silently stopping.
                             tool_choice="none"
-                            if draining or model_settings.tool_choice == "none"
+                            if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
@@ -2668,6 +2685,9 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+        if audio_out is not None and not audio_out.first_frame_fut.done():
+            audio_out.first_frame_fut.cancel()
 
         for tee in tees:
             await tee.aclose()
