@@ -30,6 +30,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -540,7 +541,7 @@ def _parse_transcription(
     confidence = sum(word["confidence"] for word in words) / len(words) if words else 0
 
     sd = stt.SpeechData(
-        language=language,
+        language=LanguageCode(language),
         start_time=data.get("audio_window_start", 0) + start_time_offset,
         end_time=data.get("audio_window_end", 0) + start_time_offset,
         confidence=confidence,
@@ -550,6 +551,7 @@ def _parse_transcription(
                 text=word.get("word", ""),
                 start_time=word.get("start", 0) + start_time_offset,
                 end_time=word.get("end", 0) + start_time_offset,
+                confidence=word["confidence"],
                 start_time_offset=start_time_offset,
             )
             for word in words

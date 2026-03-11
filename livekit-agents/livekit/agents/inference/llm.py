@@ -80,6 +80,8 @@ OpenAIModels = Literal[
     "openai/gpt-5.1-chat-latest",
     "openai/gpt-5.2",
     "openai/gpt-5.2-chat-latest",
+    "openai/gpt-5.3-chat-latest",
+    "openai/gpt-5.4",
     "openai/gpt-oss-120b",
 ]
 
@@ -248,7 +250,7 @@ class LLM(llm.LLM):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
         extra_tool_choice = self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
-        tool_choice = tool_choice if is_given(tool_choice) else extra_tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else extra_tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):

@@ -27,6 +27,7 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -135,6 +136,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    aec_warmup_duration: float | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -204,6 +206,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -292,6 +295,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            aec_warmup_duration (float, optional): The duration in seconds that the agent
+                will ignore user's audio interruptions after the agent starts speaking.
+                This is useful to prevent the agent from being interrupted by echo before AEC is ready.
+                Set to ``None`` to disable. Default ``3.0`` s.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -337,6 +344,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            aec_warmup_duration=aec_warmup_duration,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -361,6 +369,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
         self._tts_error_counts = 0
+
+        # aec warmup: disable interruptions while AEC warms up
+        self._aec_warmup_remaining = aec_warmup_duration or 0.0
+        self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -836,6 +848,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._closing = True
             self._cancel_user_away_timer()
+            self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -994,7 +1007,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
@@ -1070,9 +1083,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.clear_user_turn()
 
     def commit_user_turn(
-        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
-    ) -> None:
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
+    ) -> asyncio.Future[str]:
         """Commit the user turn and generate a reply.
+
+        Returns a future that resolves with the user's audio transcript once STT
+        is complete and end-of-turn detection has been triggered.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
@@ -1080,6 +1100,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript.
+            skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
+
+        Returns:
+            asyncio.Future[str]: A future that resolves with the audio transcript.
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
@@ -1087,8 +1111,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn(
-            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+        return self._activity.commit_user_turn(
+            transcript_timeout=transcript_timeout,
+            stt_flush_duration=stt_flush_duration,
+            skip_reply=skip_reply,
         )
 
     def update_agent(self, agent: Agent) -> None:
@@ -1267,6 +1293,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
+    def _on_aec_warmup_expired(self) -> None:
+        if self._aec_warmup_remaining > 0 and not self._closing:
+            logger.debug("aec warmup expired, re-enabling interruptions")
+
+        self._aec_warmup_remaining = 0.0
+        if self._aec_warmup_timer is not None:
+            self._aec_warmup_timer.cancel()
+            self._aec_warmup_timer = None
+
     def _update_agent_state(
         self,
         state: AgentState,
@@ -1297,6 +1332,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
+
+        # aec warmup: start a one-shot wall-clock timer on the first speaking turn
+        if (
+            state == "speaking"
+            and self._aec_warmup_remaining > 0
+            and self._aec_warmup_timer is None
+            and self._output.audio_enabled
+            and self._output.audio is not None
+        ):
+            self._aec_warmup_timer = self._loop.call_later(
+                self._aec_warmup_remaining, self._on_aec_warmup_expired
+            )
+            logger.debug(
+                "aec warmup active, disabling interruptions for %.2fs",
+                self._aec_warmup_remaining,
+            )
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()

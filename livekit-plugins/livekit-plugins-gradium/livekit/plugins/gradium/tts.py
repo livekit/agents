@@ -44,6 +44,7 @@ SUPPORTED_SAMPLE_RATE = 48000
 class _TTSOptions:
     voice: str | None
     voice_id: str | None
+    pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
     json_config: dict[str, Any] | None = None
 
@@ -57,6 +58,7 @@ class TTS(tts.TTS):
         model_name: str = "default",
         voice: str | None = None,
         voice_id: str | None = "YTpq7expH9539ERJ",
+        pronunciation_id: str | None = None,
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
@@ -70,6 +72,7 @@ class TTS(tts.TTS):
             model_name (str): Model name.
             voice (str): Speaker voice.
             voice_id (str): Speaker voice ID.
+            pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
         """
         super().__init__(
@@ -103,6 +106,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice,
             voice_id=voice_id,
+            pronunciation_id=pronunciation_id,
             word_tokenizer=word_tokenizer,
             json_config=json_config,
         )
@@ -210,6 +214,8 @@ class ChunkedStream(tts.ChunkedStream):
                     setup_msg["voice"] = self._opts.voice
                 if self._opts.voice_id is not None:
                     setup_msg["voice_id"] = self._opts.voice_id
+                if self._opts.pronunciation_id is not None:
+                    setup_msg["pronunciation_id"] = self._opts.pronunciation_id
                 if self._opts.json_config is not None:
                     setup_msg["json_config"] = json.dumps(self._opts.json_config)
                 await ws.send_str(json.dumps(setup_msg))
@@ -328,6 +334,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 setup_msg["voice"] = self._opts.voice
             if self._opts.voice_id is not None:
                 setup_msg["voice_id"] = self._opts.voice_id
+            if self._opts.pronunciation_id is not None:
+                setup_msg["pronunciation_id"] = self._opts.pronunciation_id
             if self._opts.json_config is not None:
                 setup_msg["json_config"] = json.dumps(self._opts.json_config)
 

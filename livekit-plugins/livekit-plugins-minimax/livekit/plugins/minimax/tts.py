@@ -5,7 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import aiohttp
 
@@ -327,7 +327,7 @@ class TTS(tts.TTS):
             self._opts.text_normalization = text_normalization
 
         if utils.is_given(audio_format):
-            self._opts.audio_format = cast(TTSAudioFormat, audio_format)
+            self._opts.audio_format = audio_format
 
         if utils.is_given(pronunciation_dict):
             self._opts.pronunciation_dict = pronunciation_dict
