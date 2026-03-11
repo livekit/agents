@@ -95,9 +95,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         if isinstance(instructions, InstructionParts | NotGiven):
             default = self.INSTRUCTION_PARTS.copy()
-            default.context = default.context.format(
-                conversation_history=self._format_conversation_history(chat_ctx)
-            )
+            if is_given(default.context):
+                default.context = default.context.format(
+                    conversation_history=self._format_conversation_history(chat_ctx)
+                )
             instructions = build_instructions(
                 parts=instructions or InstructionParts(extra=extra_instructions),
                 defaults=default,
