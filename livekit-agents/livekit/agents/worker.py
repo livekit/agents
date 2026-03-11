@@ -257,7 +257,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     _default_num_idle_processes = ServerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
     )
-    _default_port = ServerEnvOption(dev_default=0, prod_default=9090)
+    _default_port = ServerEnvOption(dev_default=0, prod_default=8880)
 
     def __init__(
         self,
