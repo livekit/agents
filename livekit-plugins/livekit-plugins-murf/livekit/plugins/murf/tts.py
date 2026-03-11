@@ -1,3 +1,17 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import asyncio
@@ -47,6 +61,8 @@ class _TTSOptions:
     sample_rate: int
     encoding: TTSEncoding
     base_url: str
+    min_buffer_size: int
+    max_buffer_delay_in_ms: int
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -72,6 +88,9 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
+        min_buffer_size: int = 3,
+        max_buffer_delay_in_ms: int = 0,
+        streaming: bool = True,
     ) -> None:
         """
         Create a new instance of Murf AI TTS.
@@ -90,12 +109,17 @@ class TTS(tts.TTS):
             encoding (str, optional): The audio encoding format. Defaults to "pcm".
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Murf AI API. Defaults to "https://global.api.murf.ai".
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT).
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.basic.SentenceTokenizer(min_sentence_len=min_buffer_size).
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
+            min_buffer_size (int, optional):Minimum characters to buffer before sending text to audio when no sentence boundary is detected. Higher values improve quality; lower values reduce TTFB. Defaults to 3.
+            max_buffer_delay_in_ms (int, optional): Maximum wait time before sending buffered text if min_buffer_size isn’t reached. Defaults to 0.
+            streaming (bool, optional): If True, uses WebSocket streaming for real-time audio. If False, uses HTTP requests. Defaults to True.
         """  # noqa: E501
 
+        self._streaming = streaming
+
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -115,6 +139,8 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             encoding=encoding,
             base_url=base_url,
+            min_buffer_size=min_buffer_size,
+            max_buffer_delay_in_ms=max_buffer_delay_in_ms,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -125,7 +151,9 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer
+            if is_given(tokenizer)
+            else tokenize.blingfire.SentenceTokenizer(min_sentence_len=min_buffer_size)
         )
         self._stream_pacer: tts.SentenceStreamPacer | None = None
         if text_pacing is True:
@@ -222,6 +250,8 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+
         try:
             async with self._tts._ensure_session().post(
                 self._opts.get_http_url("/v1/speech/stream"),
@@ -242,7 +272,7 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
 
                 output_emitter.initialize(
-                    request_id=utils.shortuuid(),
+                    request_id=request_id,
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
                     mime_type="audio/pcm",
@@ -392,4 +422,6 @@ def _to_murf_websocket_pkt(opts: _TTSOptions) -> dict[str, Any]:
 
     return {
         "voice_config": voice_config,
+        "min_buffer_size": opts.min_buffer_size,
+        "max_buffer_delay_in_ms": opts.max_buffer_delay_in_ms,
     }

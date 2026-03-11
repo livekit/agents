@@ -45,6 +45,7 @@ members = [
     "livekit-plugins-minimal",
     "livekit-plugins-minimax-ai",
     "livekit-plugins-mistralai",
+    "livekit-plugins-murf",
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
@@ -1861,6 +1862,9 @@ minimax = [
 mistralai = [
     { name = "livekit-plugins-mistralai" },
 ]
+murf = [
+    { name = "livekit-plugins-murf" },
+]
 neuphonic = [
     { name = "livekit-plugins-neuphonic" },
 ]
@@ -1977,6 +1981,7 @@ requires-dist = [
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
     { name = "livekit-plugins-minimax-ai", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
     { name = "livekit-plugins-mistralai", marker = "extra == 'mistralai'", editable = "livekit-plugins/livekit-plugins-mistralai" },
+    { name = "livekit-plugins-murf", marker = "extra == 'murf'", editable = "livekit-plugins/livekit-plugins-murf" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
@@ -2021,7 +2026,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2540,6 +2545,16 @@ requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "mistralai", specifier = ">=1.9.11" },
 ]
+
+[[package]]
+name = "livekit-plugins-murf"
+source = { editable = "livekit-plugins/livekit-plugins-murf" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-neuphonic"
