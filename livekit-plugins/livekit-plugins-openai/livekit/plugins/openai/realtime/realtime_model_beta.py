@@ -71,6 +71,7 @@ from openai.types.beta.realtime.session import (
 
 from ..log import logger
 from ..models import RealtimeModels
+from .utils import calculate_confidence_from_logprobs
 
 # This file contains the implementation for Realtime API beta
 # the beta version of the API does not support new features such as images.
@@ -1330,9 +1331,12 @@ class RealtimeSessionBeta(
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        confidence = calculate_confidence_from_logprobs(event.logprobs)
+
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             assert isinstance(remote_item.item, llm.ChatMessage)
             remote_item.item.content.append(event.transcript)
+            remote_item.item.transcript_confidence = confidence
 
         self.emit(
             "input_audio_transcription_completed",
@@ -1340,6 +1344,7 @@ class RealtimeSessionBeta(
                 item_id=event.item_id,
                 transcript=event.transcript,
                 is_final=True,
+                confidence=confidence,
             ),
         )
 

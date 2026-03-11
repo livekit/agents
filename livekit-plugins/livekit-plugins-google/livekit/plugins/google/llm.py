@@ -260,9 +260,7 @@ class LLM(llm.LLM):
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        tool_choice = (
-            cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-        )
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         retrieval_config = (
             self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
         )

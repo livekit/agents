@@ -6,7 +6,7 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -16,11 +16,12 @@ from urllib.parse import urlparse
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
+    import httpx
     import mcp.types
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
+    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -271,12 +272,19 @@ class MCPServerHTTP(MCPServer):
         ]
     ]:
         if self._use_streamable_http:
-            return streamablehttp_client(  # type: ignore[no-any-return]
-                url=self.url,
-                headers=self.headers,
-                timeout=timedelta(seconds=self._timeout),
-                sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
-            )
+
+            @asynccontextmanager
+            async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
+                async with httpx.AsyncClient(
+                    headers=self.headers or {},
+                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+                ) as http_client:
+                    async with streamable_http_client(
+                        url=self.url, http_client=http_client
+                    ) as streams:
+                        yield streams
+
+            return _streamable_http_with_client()  # type: ignore[return-value]
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,

@@ -18,12 +18,12 @@ from .. import llm, utils
 from ..llm import (
     ChatChunk,
     ChatContext,
-    Instructions,
     StopResponse,
     ToolContext,
     ToolError,
     utils as llm_utils,
 )
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
