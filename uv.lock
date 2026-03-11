@@ -49,7 +49,6 @@ members = [
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
     "livekit-plugins-openai",
-    "livekit-plugins-personaplex",
     "livekit-plugins-phonic",
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
@@ -2570,15 +2569,22 @@ requires-dist = [
 name = "livekit-plugins-nvidia"
 source = { editable = "livekit-plugins/livekit-plugins-nvidia" }
 dependencies = [
-    { name = "livekit-agents" },
+    { name = "livekit-agents", extra = ["codecs"] },
     { name = "nvidia-riva-client" },
+]
+
+[package.optional-dependencies]
+personaplex = [
+    { name = "sphn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "nvidia-riva-client" },
+    { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
+provides-extras = ["personaplex"]
 
 [[package]]
 name = "livekit-plugins-openai"
@@ -2600,20 +2606,6 @@ requires-dist = [
     { name = "openai", extras = ["realtime"], specifier = ">=2" },
 ]
 provides-extras = ["vertex"]
-
-[[package]]
-name = "livekit-plugins-personaplex"
-source = { editable = "livekit-plugins/livekit-plugins-personaplex" }
-dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
-    { name = "sphn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "sphn", specifier = ">=0.2.0" },
-]
 
 [[package]]
 name = "livekit-plugins-phonic"

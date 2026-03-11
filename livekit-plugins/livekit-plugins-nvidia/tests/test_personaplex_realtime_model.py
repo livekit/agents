@@ -1,12 +1,12 @@
-"""Tests for PersonaPlex realtime model plugin."""
+"""Tests for PersonaPlex realtime model plugin (nvidia.experimental.personaplex)."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from livekit.plugins.personaplex import RealtimeModel
-from livekit.plugins.personaplex.realtime.realtime_model import (
+from livekit.plugins.nvidia.experimental.personaplex import RealtimeModel
+from livekit.plugins.nvidia.experimental.personaplex.realtime.realtime_model import (
     _SPECIAL_TOKENS,
     INITIAL_RETRY_DELAY,
     MAX_RETRY_DELAY,
