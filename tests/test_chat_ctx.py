@@ -36,7 +36,8 @@ def test_args_model():
 
 def test_dict():
     from livekit import rtc
-    from livekit.agents.llm import ChatContext, ImageContent, Instructions
+    from livekit.agents.beta import Instructions
+    from livekit.agents.llm import ChatContext, ImageContent
 
     chat_ctx = ChatContext()
     chat_ctx.add_message(
@@ -328,8 +329,8 @@ def test_truncate_multiple_instructions():
 
 def test_instructions_serialization():
     """Instructions must survive Pydantic validation, to_dict, and from_dict round-trips."""
+    from livekit.agents.beta import Instructions
     from livekit.agents.llm import ChatContext, ChatMessage
-    from livekit.agents.llm.chat_context import Instructions
 
     # Pydantic preserves Instructions type
     instr = Instructions("audio variant", text="text variant")
@@ -369,7 +370,7 @@ def test_instructions_serialization():
 
 def test_instructions_string_operations():
     """Instructions supports + and r+ operations, propagating both variants."""
-    from livekit.agents.llm.chat_context import Instructions
+    from livekit.agents.beta import Instructions
 
     # Instructions + Instructions
     a = Instructions("audio A", text="text A")
@@ -406,8 +407,8 @@ def test_instructions_string_operations():
 
 def test_instructions_as_modality():
     """as_modality() bakes the correct variant into str() while preserving both variants."""
+    from livekit.agents.beta import Instructions
     from livekit.agents.llm import ChatContext, ChatMessage
-    from livekit.agents.llm.chat_context import Instructions
     from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
 
     instr = Instructions("audio instructions", text="text instructions")
