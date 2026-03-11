@@ -1,0 +1,156 @@
+{
+  "customers": [
+    {
+      "customer_id": "10000001",
+      "pin": "0000",
+      "full_name": "Jordan Carter",
+      "branch_name": "Downtown Austin",
+      "deposit_accounts": [
+        {
+          "account_number": "031890246",
+          "account_type": "Checking",
+          "balance": 4821.37,
+          "available_balance": 4615.92,
+          "interest_rate": 0.10,
+          "recent_transactions": [
+            {
+              "posted_at": "2025-10-08",
+              "description": "PAYROLL DEP - HORIZON TECH",
+              "amount": 3250.0
+            },
+            {
+              "posted_at": "2025-10-05",
+              "description": "ZELLE TO ALEX R",
+              "amount": -120.45
+            },
+            {
+              "posted_at": "2025-10-04",
+              "description": "COFFEE ROASTERS",
+              "amount": -5.85
+            }
+          ]
+        },
+        {
+          "account_number": "712450987",
+          "account_type": "High-Yield Savings",
+          "balance": 18250.41,
+          "available_balance": 18250.41,
+          "interest_rate": 3.30,
+          "recent_transactions": [
+            {
+              "posted_at": "2025-09-30",
+              "description": "INT EARNED",
+              "amount": 8.91
+            },
+            {
+              "posted_at": "2025-09-15",
+              "description": "TRANSFER TO CHECKING",
+              "amount": -400.0
+            }
+          ]
+        }
+      ],
+      "credit_cards": [
+        {
+          "card_number": "4485 1399 2211 0099",
+          "product_name": "Platinum Travel Rewards",
+          "credit_limit": 15000.0,
+          "statement_balance": 2150.76,
+          "minimum_due": 68.0,
+          "payment_due_date": "2025-10-18",
+          "rewards_earn_rate": "3x travel, 2x dining"
+        }
+      ],
+      "loans": [
+        {
+          "loan_id": "HOME-88421",
+          "loan_type": "30-Year Fixed Mortgage",
+          "original_principal": 420000.0,
+          "outstanding_balance": 367425.19,
+          "interest_rate": 3.45,
+          "next_payment_due": "2025-10-12",
+          "monthly_payment": 1954.32,
+          "autopay_enabled": true
+        }
+      ],
+      "rewards": {
+        "tier": "Platinum",
+        "points_balance": 138940,
+        "expiring_next_statement": 4000,
+        "cashback_available": 182.55
+      }
+    },
+    {
+      "customer_id": "20000002",
+      "pin": "1111",
+      "full_name": "Riley Martinez",
+      "branch_name": "North Loop",
+      "deposit_accounts": [
+        {
+          "account_number": "601244555",
+          "account_type": "Checking",
+          "balance": 2145.82,
+          "available_balance": 2012.68,
+          "interest_rate": 0.05,
+          "recent_transactions": [
+            {
+              "posted_at": "2025-10-06",
+              "description": "FREELANCE PAYMENT",
+              "amount": 1500.0
+            },
+            {
+              "posted_at": "2025-10-03",
+              "description": "GROCERY MARKET",
+              "amount": -212.12
+            },
+            {
+              "posted_at": "2025-09-29",
+              "description": "ELECTRIC UTILITY",
+              "amount": -108.44
+            }
+          ]
+        }
+      ],
+      "credit_cards": [
+        {
+          "card_number": "5317 8810 4410 2256",
+          "product_name": "Cashback Everyday",
+          "credit_limit": 8000.0,
+          "statement_balance": 412.09,
+          "minimum_due": 25.0,
+          "payment_due_date": "2025-10-20",
+          "rewards_earn_rate": "1.5% unlimited cashback"
+        }
+      ],
+      "loans": [
+        {
+          "loan_id": "AUTO-22901",
+          "loan_type": "Auto Loan",
+          "original_principal": 28000.0,
+          "outstanding_balance": 18642.77,
+          "interest_rate": 4.99,
+          "next_payment_due": "2025-10-10",
+          "monthly_payment": 415.17,
+          "autopay_enabled": false
+        },
+        {
+          "loan_id": "STUDENT-00218",
+          "loan_type": "Private Student Loan",
+          "original_principal": 42000.0,
+          "outstanding_balance": 19880.43,
+          "interest_rate": 5.25,
+          "next_payment_due": "2025-10-28",
+          "monthly_payment": 290.1,
+          "autopay_enabled": true
+        }
+      ],
+      "rewards": {
+        "tier": "Gold",
+        "points_balance": 4820,
+        "expiring_next_statement": 0,
+        "cashback_available": 32.18
+      }
+    }
+  ]
+}
+

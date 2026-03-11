@@ -6,7 +6,7 @@ Environment variables used:
 - `FISH_API_KEY` for authentication (required)
 """
 
-from fish_audio_sdk.schemas import Backends  # type: ignore[import-untyped]
+from fish_audio_sdk.schemas import Backends
 
 from livekit.agents import Plugin
 

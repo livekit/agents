@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
-    WorkerOptions,
     cli,
     llm,
 )
@@ -39,7 +39,10 @@ class PreResponseAgent(Agent):
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage):
         # Create a short "silence filler" response to quickly acknowledge the user's input
         fast_llm_ctx = turn_ctx.copy(
-            exclude_instructions=True, exclude_function_call=True
+            exclude_instructions=True,
+            exclude_function_call=True,
+            exclude_handoff=True,
+            exclude_config_update=True,
         ).truncate(max_items=3)
         fast_llm_ctx.items.insert(0, self._fast_llm_prompt)
         fast_llm_ctx.items.append(new_message)
@@ -71,6 +74,10 @@ class PreResponseAgent(Agent):
         turn_ctx.add_message(role="assistant", content=filler_response, interrupted=False)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -81,4 +88,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

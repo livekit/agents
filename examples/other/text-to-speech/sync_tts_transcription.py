@@ -1,14 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional
 
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
+    AgentServer,
     AutoSubscribe,
     JobContext,
-    WorkerOptions,
     cli,
     transcription,
     tts,
@@ -20,7 +21,10 @@ load_dotenv()
 logger = logging.getLogger("transcription-forwarding-demo")
 logger.setLevel(logging.INFO)
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info("starting transcription protocol example")
     tts_11labs = elevenlabs.TTS()
@@ -57,7 +61,7 @@ async def _eg_single_segment(
     tts_forwarder.push_text(text)
     tts_forwarder.mark_text_segment_end()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
     playout_task = asyncio.create_task(_playout_task(tts_forwarder, playout_q, source))
 
     async for output in tts_11labs.synthesize(text):
@@ -90,7 +94,7 @@ async def _eg_streamed_tts_stream(
     tts_stream.end_input()
     tts_forwarder.mark_text_segment_end()
 
-    playout_q = asyncio.Queue[Optional[rtc.AudioFrame]]()
+    playout_q = asyncio.Queue[rtc.AudioFrame | None]()
 
     async def _synth_task() -> None:
         async for ev in tts_stream:
@@ -141,4 +145,4 @@ def _text_to_chunks(text: str) -> list[str]:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

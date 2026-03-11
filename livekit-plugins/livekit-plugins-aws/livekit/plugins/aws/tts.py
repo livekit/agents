@@ -24,6 +24,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
+    LanguageCode,
     tts,
 )
 from livekit.agents.types import (
@@ -48,7 +49,7 @@ class _TTSOptions:
     speech_engine: TTSSpeechEngine
     region: str | None
     sample_rate: int
-    language: TTSLanguages | str | None
+    language: LanguageCode | None
     text_type: TTSTextType
 
 
@@ -72,7 +73,7 @@ class TTS(tts.TTS):
         ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
         ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
 
-        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
+        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the AWS Polly TTS.
 
         Args:
             voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
@@ -103,7 +104,7 @@ class TTS(tts.TTS):
             speech_engine=speech_engine,
             text_type=text_type,
             region=region or None,
-            language=language or None,
+            language=LanguageCode(language) if is_given(language) and language else None,
             sample_rate=sample_rate,
         )
 
@@ -131,7 +132,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(speech_engine):
             self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
         if is_given(text_type):

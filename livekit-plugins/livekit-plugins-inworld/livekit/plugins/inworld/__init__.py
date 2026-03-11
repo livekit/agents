@@ -17,11 +17,16 @@
 See https://docs.livekit.io/agents/integrations/tts/inworld/ for more information.
 """
 
-from .tts import TTS
+from .tts import TTS, ChunkedStream, Encoding, SynthesizeStream, TextNormalization, TimestampType
 from .version import __version__
 
 __all__ = [
     "TTS",
+    "ChunkedStream",
+    "SynthesizeStream",
+    "Encoding",
+    "TextNormalization",
+    "TimestampType",
     "__version__",
 ]
 

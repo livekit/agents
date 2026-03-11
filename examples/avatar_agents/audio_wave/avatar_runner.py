@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
@@ -5,12 +7,12 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import TOPIC_TRANSCRIPTION
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -28,8 +30,8 @@ logger = logging.getLogger("avatar-example")
 class AudioWaveGenerator(VideoGenerator):
     def __init__(self, options: AvatarOptions):
         self._options = options
-        self._audio_queue = asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]]()
-        self._audio_resampler: Optional[rtc.AudioResampler] = None
+        self._audio_queue = asyncio.Queue[rtc.AudioFrame | AudioSegmentEnd]()
+        self._audio_resampler: rtc.AudioResampler | None = None
 
         self._canvas = np.zeros((options.video_height, options.video_width, 4), dtype=np.uint8)
         self._canvas.fill(255)
@@ -157,6 +159,13 @@ async def main(api_url: str, api_token: str):
     # connect to the room
     room = rtc.Room()
     await room.connect(api_url, api_token)
+
+    def on_transcription_received(reader: rtc.TextStreamReader, participant_identity: str):
+        # ignore transcription from the room
+        pass
+
+    room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_transcription_received)
+
     should_stop = asyncio.Event()
 
     # stop when disconnect from the room or the agent disconnects

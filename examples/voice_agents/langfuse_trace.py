@@ -6,11 +6,22 @@ from dotenv import load_dotenv
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util.types import AttributeValue
 
-from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, metrics
-from livekit.agents.llm import function_tool
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    inference,
+    metrics,
+)
+from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
+from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
+from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("langfuse-trace-example")
@@ -66,9 +77,24 @@ class Kelly(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="Your name is Kelly.",
-            llm=openai.LLM(model="gpt-4o-mini"),
-            stt=deepgram.STT(model="nova-3", language="multi"),
-            tts=openai.TTS(voice="ash"),
+            llm=FallbackLLMAdapter(
+                llm=[
+                    inference.LLM("openai/gpt-4.1-mini"),
+                    inference.LLM("google/gemini-2.5-flash"),
+                ]
+            ),
+            stt=FallbackSTTAdapter(
+                stt=[
+                    inference.STT("deepgram/nova-3"),
+                    inference.STT("cartesia/ink-whisper"),
+                ]
+            ),
+            tts=FallbackTTSAdapter(
+                tts=[
+                    inference.TTS("cartesia"),
+                    inference.TTS("rime/arcana"),
+                ]
+            ),
             turn_detection=MultilingualModel(),
             tools=[lookup_weather],
         )
@@ -104,6 +130,10 @@ class Alloy(Agent):
         return Kelly()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # set up the langfuse tracer
     trace_provider = setup_langfuse(
@@ -129,4 +159,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -8,24 +10,19 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import (
-    ChatContext,
-    FunctionTool,
-    RawFunctionTool,
-    RealtimeModel,
-    find_function_tools,
-)
-from ..llm.chat_context import _ReadOnlyChatContext
+from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, TurnDetectionMode
+    from .agent_session import AgentSession
+    from .audio_recognition import TurnDetectionMode
     from .io import TimedString
 
 
@@ -39,9 +36,10 @@ class Agent:
     def __init__(
         self,
         *,
-        instructions: str,
+        instructions: str | Instructions,
+        id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -55,8 +53,13 @@ class Agent:
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        if type(self) is Agent:
+            self._id = "default_agent"
+        else:
+            self._id = id or misc.camel_to_snake_case(type(self).__name__)
+
         self._instructions = instructions
-        self._tools = tools.copy() + find_function_tools(self)
+        self._tools = [*tools, *find_function_tools(self)]
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
 
@@ -86,15 +89,15 @@ class Agent:
         self._activity: AgentActivity | None = None
 
     @property
-    def label(self) -> str:
-        """
-        Returns:
-            str: The label of the agent.
-        """
-        return f"{type(self).__module__}.{type(self).__name__}"
+    def id(self) -> str:
+        return self._id
 
     @property
-    def instructions(self) -> str:
+    def label(self) -> str:
+        return self.id
+
+    @property
+    def instructions(self) -> str | Instructions:
         """
         Returns:
             str: The core instructions that guide the agent's behavior.
@@ -102,10 +105,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.Tool | llm.Toolset]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool]:
+            list[llm.Tool | llm.ToolSet]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -143,7 +146,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -151,14 +154,24 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool]):
+            tools (list[llm.Tool | llm.ToolSet]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
+        valid_tools: list[llm.Tool | llm.Toolset] = []
+        for tool in tools:
+            if isinstance(tool, (llm.Tool, llm.Toolset)):
+                valid_tools.append(tool)
+            elif resolved_tool := llm.tool_context._resolve_wrapped_tool(tool):
+                valid_tools.append(resolved_tool)
+            else:
+                raise TypeError(f"Invalid tool type: {type(tool)}. Expected Tool or ToolSet.")
+
+        tools = valid_tools
         if self._activity is None:
-            self._tools = list(set(tools))
+            self._tools = list({tool.id: tool for tool in tools}.values())
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
@@ -243,11 +256,11 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[llm.Tool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
@@ -365,6 +378,15 @@ class Agent:
 
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                _audio_input_started_at: float = (
+                    activity.session._recorder_io.recording_started_at
+                    if activity.session._recorder_io
+                    and activity.session._recorder_io.recording_started_at
+                    else activity.session._started_at
+                    if activity.session._started_at
+                    else time.time()
+                )
+                stream.start_time_offset = time.time() - _audio_input_started_at
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -382,9 +404,9 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool | RawFunctionTool],
+            tools: list[llm.Tool],
             model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"
@@ -408,7 +430,11 @@ class Agent:
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
-            assert activity.tts is not None, "tts_node called but no TTS node is available"
+            if activity.tts is None:
+                raise RuntimeError(
+                    "`tts_node` called but no TTS node is available. If audio output is not needed, disable it using "
+                    "`session.output.set_audio_enabled(False)`."
+                )
 
             wrapped_tts = activity.tts
 
@@ -480,6 +506,13 @@ class Agent:
             NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
         """  # noqa: E501
         return self._turn_detection
+
+    @turn_detection.setter
+    def turn_detection(self, value: TurnDetectionMode | None) -> None:
+        self._turn_detection = value
+
+        if self._activity is not None:
+            self._activity.update_options(turn_detection=value)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
@@ -562,8 +595,11 @@ class Agent:
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
         """
-        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
-        before it declares the user’s turn complete.
+        Minimum time-in-seconds since the last detected speech before the agent
+        declares the user’s turn complete. In VAD mode this effectively behaves
+        like max(VAD silence, min_endpointing_delay); in STT mode it is applied
+        after the STT end-of-speech signal, so it can be additive with the STT
+        provider’s endpointing delay.
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
@@ -623,9 +659,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
         *,
-        instructions: str,
+        instructions: str | Instructions,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -654,9 +690,20 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
+        self.__inactive_ev = asyncio.Event()
+        self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
+
+        self._old_agent: Agent | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
+
+    def cancel(self) -> None:
+        if self._activity:
+            self._activity.interrupt(force=True)
+        if self.__fut.done():
+            return
+        self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
@@ -724,6 +771,27 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+        self._old_agent = old_agent
+
+        old_allow_interruptions = True
+        if speech_handle:
+            if speech_handle.interrupted:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
+                )
+
+            # lock the speech handle to prevent interruptions until the task is complete
+            # there should be no await before this line to avoid race conditions
+            old_allow_interruptions = speech_handle.allow_interruptions
+            speech_handle.allow_interruptions = False
+
+        blocked_tasks = [current_task]
+        if (
+            old_activity._on_enter_task
+            and not old_activity._on_enter_task.done()
+            and current_task is not old_activity._on_enter_task
+        ):
+            blocked_tasks.append(old_activity._on_enter_task)
 
         if (
             task_info.function_call
@@ -736,23 +804,39 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        await session._update_activity(
-            self, previous_activity="pause", blocked_tasks=[current_task]
-        )
+        self.__inactive_ev.clear()
+        try:
+            await session._update_activity(
+                self, previous_activity="pause", blocked_tasks=blocked_tasks
+            )
 
-        # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
-        run_state = session._global_run_state
-        if speech_handle and run_state and not run_state.done():
-            # make sure to not deadlock on the current speech handle
-            run_state._unwatch_handle(speech_handle)
-            # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
-            # so handles added inside the on_enter will make sure we're not completing the run_state too early.
-            run_state._mark_done_if_needed(None)
+            if not self._activity and not self.done():
+                self.complete(
+                    ToolError(
+                        f"activity doesn't start for {self.id}, likely due to session closing"
+                    )
+                )
+
+            # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
+            run_state = session._global_run_state
+            if speech_handle and run_state and not run_state.done():
+                # make sure to not deadlock on the current speech handle
+                run_state._unwatch_handle(speech_handle)
+                # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
+                # so handles added inside the on_enter will make sure we're not completing the run_state too early.
+                run_state._mark_done_if_needed(None)
+        except Exception:
+            self.__inactive_ev.set()
+            raise
 
         try:
             return await asyncio.shield(self.__fut)
 
         finally:
+            if speech_handle:
+                with contextlib.suppress(RuntimeError):
+                    speech_handle.allow_interruptions = old_allow_interruptions
+
             # run_state could have changed after self.__fut
             run_state = session._global_run_state
 
@@ -776,9 +860,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 await session._update_activity(
                     old_agent, new_activity="resume", wait_on_enter=False
                 )
+            self.__inactive_ev.set()
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
+
+    async def _wait_for_inactive(self) -> None:
+        await self.__inactive_ev.wait()
 
 
 @dataclass

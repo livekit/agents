@@ -5,9 +5,9 @@ import contextlib
 import socket
 import threading
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -22,6 +22,7 @@ from .job_executor import JobStatus
 class _ProcOpts:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     initialize_timeout: float
     close_timeout: float
     ping_interval: float
@@ -35,6 +36,7 @@ class ThreadJobExecutor:
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
+        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
@@ -47,6 +49,7 @@ class ThreadJobExecutor:
         self._opts = _ProcOpts(
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
+            session_end_fnc=session_end_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             ping_interval=ping_interval,
@@ -64,7 +67,7 @@ class ThreadJobExecutor:
         self._lock = asyncio.Lock()
 
         self._inference_executor = inference_executor
-        self._inference_tasks: list[asyncio.Task[None]] = []
+        self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = utils.shortuuid("THEXEC_")
 
     @property
@@ -120,6 +123,7 @@ class ThreadJobExecutor:
                 mp_cch=mp_cch,
                 initialize_process_fnc=self._opts.initialize_process_fnc,
                 job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
+                session_end_fnc=self._opts.session_end_fnc,
                 user_arguments=self._user_args,
                 join_fnc=_on_join,
             )
@@ -278,7 +282,9 @@ class ThreadJobExecutor:
                 logger.debug("job exiting", extra={"reason": msg.reason, **self.logging_extra()})
 
             if isinstance(msg, proto.InferenceRequest):
-                self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                task = asyncio.create_task(self._do_inference_task(msg))
+                self._inference_tasks.add(task)
+                task.add_done_callback(self._inference_tasks.discard)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:
@@ -296,5 +302,6 @@ class ThreadJobExecutor:
         }
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
+            extra["room_id"] = self._running_job.job.room.sid
 
         return extra

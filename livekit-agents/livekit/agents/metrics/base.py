@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -83,9 +83,6 @@ class EOUMetrics(BaseModel):
     on_user_turn_completed_delay: float
     """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
 
-    last_speaking_time: float
-    """The time the user stopped speaking."""
-
     speech_id: str | None = None
 
     metadata: Metadata | None = None
@@ -135,11 +132,4 @@ class RealtimeModelMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-AgentMetrics = Union[
-    STTMetrics,
-    LLMMetrics,
-    TTSMetrics,
-    VADMetrics,
-    EOUMetrics,
-    RealtimeModelMetrics,
-]
+AgentMetrics = STTMetrics | LLMMetrics | TTSMetrics | VADMetrics | EOUMetrics | RealtimeModelMetrics

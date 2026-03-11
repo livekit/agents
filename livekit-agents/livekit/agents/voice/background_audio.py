@@ -7,13 +7,13 @@ import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import Any, NamedTuple, Union, cast
+from typing import Any, NamedTuple
 
 import numpy as np
 
 from livekit import rtc
 
-from ..cli import cli
+from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, log_exceptions
@@ -27,16 +27,20 @@ atexit.register(_resource_stack.close)
 
 
 class BuiltinAudioClip(enum.Enum):
+    CITY_AMBIENCE = "city-ambience.ogg"
+    FOREST_AMBIENCE = "forest-ambience.ogg"
     OFFICE_AMBIENCE = "office-ambience.ogg"
+    CROWDED_ROOM = "crowded-room.ogg"
     KEYBOARD_TYPING = "keyboard-typing.ogg"
     KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+    HOLD_MUSIC = "hold_music.ogg"
 
     def path(self) -> str:
         file_path = files("livekit.agents.resources") / self.value
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 
-AudioSource = Union[AsyncIterator[rtc.AudioFrame], str, BuiltinAudioClip]
+AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
 class AudioConfig(NamedTuple):
@@ -150,7 +154,7 @@ class BackgroundAudioPlayer:
         if isinstance(source, BuiltinAudioClip):
             return self._normalize_builtin_audio(source), 1.0
         elif isinstance(source, list):
-            selected = self._select_sound_from_list(cast(list[AudioConfig], source))
+            selected = self._select_sound_from_list(source)
             if selected is None:
                 return None
             return selected.source, selected.volume
@@ -246,10 +250,14 @@ class BackgroundAudioPlayer:
             self._agent_session = agent_session or None
             self._track_publish_options = track_publish_options or None
 
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-                logger.warning(
-                    "Background audio is not supported in console mode. Audio will not be played."
-                )
+            try:
+                job_ctx = get_job_context()
+                if job_ctx.is_fake_job():
+                    logger.warning(
+                        "Background audio is not supported in console mode. Audio will not be played."
+                    )
+            except RuntimeError:
+                pass
 
             await self._publish_track()
 
@@ -260,9 +268,7 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(
-                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
-                )
+                normalized = self._normalize_sound_source(self._ambient_sound)
                 if normalized:
                     sound_source, volume = normalized
                     selected_sound = AudioConfig(sound_source, volume)
@@ -316,9 +322,7 @@ class BackgroundAudioPlayer:
                 return
 
             assert self._thinking_sound is not None
-            self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
-            )
+            self._thinking_handle = self.play(self._thinking_sound)
 
         elif self._thinking_handle:
             self._thinking_handle.stop()
@@ -336,8 +340,13 @@ class BackgroundAudioPlayer:
             else:
                 sound = audio_frames_from_file(sound)
 
+        stopped = False
+
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
             async for frame in sound:
+                if stopped:
+                    break
+
                 if volume != 1.0:
                     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
                     data *= 10 ** (np.log10(volume))
@@ -364,7 +373,10 @@ class BackgroundAudioPlayer:
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                await gen.aclose()
+                stopped = True
+                with contextlib.suppress(RuntimeError):
+                    # ignore error caused by race condition between aclose() and gen.__anext__()
+                    await gen.aclose()
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:

@@ -4,16 +4,16 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     StopResponse,
-    WorkerOptions,
     cli,
     llm,
     metrics,
+    room_io,
 )
 from livekit.plugins import openai, silero
 
@@ -40,6 +40,10 @@ class Transcriber(Agent):
         raise StopResponse()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info(f"starting transcriber (speech to text) example, room: {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -56,13 +60,13 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Transcriber(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_enabled=True,
+        room_options=room_io.RoomOptions(
+            text_output=True,
             # disable audio output if it's not needed
-            audio_enabled=False,
+            audio_output=False,
         ),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -60,6 +60,7 @@ class _ArcanaOptions:
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
 
 
 @dataclass
@@ -127,6 +128,7 @@ class TTS(tts.TTS):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 lang=lang,
+                sample_rate=sample_rate,
             )
         elif model == "mistv2":
             self._opts.mistv2_options = _Mistv2Options(
@@ -166,11 +168,60 @@ class TTS(tts.TTS):
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
+        lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN,
+        # Arcana parameters
+        repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        # Mistv2 parameters
+        speed_alpha: NotGivenOr[float] = NOT_GIVEN,
+        reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
+        pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        if is_given(base_url):
+            self._base_url = base_url
         if is_given(model):
             self._opts.model = model
+
+            if model == "arcana" and self._opts.arcana_options is None:
+                self._opts.arcana_options = _ArcanaOptions()
+            elif model == "mistv2" and self._opts.mistv2_options is None:
+                self._opts.mistv2_options = _Mistv2Options()
+
         if is_given(speaker):
             self._opts.speaker = speaker
+
+        if self._opts.model == "arcana" and self._opts.arcana_options is not None:
+            if is_given(repetition_penalty):
+                self._opts.arcana_options.repetition_penalty = repetition_penalty
+            if is_given(temperature):
+                self._opts.arcana_options.temperature = temperature
+            if is_given(top_p):
+                self._opts.arcana_options.top_p = top_p
+            if is_given(max_tokens):
+                self._opts.arcana_options.max_tokens = max_tokens
+            if is_given(lang):
+                self._opts.arcana_options.lang = lang
+            if is_given(sample_rate):
+                self._opts.arcana_options.sample_rate = sample_rate
+
+        elif self._opts.model == "mistv2" and self._opts.mistv2_options is not None:
+            if is_given(lang):
+                self._opts.mistv2_options.lang = lang
+            if is_given(sample_rate):
+                self._opts.mistv2_options.sample_rate = sample_rate
+            if is_given(speed_alpha):
+                self._opts.mistv2_options.speed_alpha = speed_alpha
+            if is_given(reduce_latency):
+                self._opts.mistv2_options.reduce_latency = reduce_latency
+            if is_given(pause_between_brackets):
+                self._opts.mistv2_options.pause_between_brackets = pause_between_brackets
+            if is_given(phonemize_between_brackets):
+                self._opts.mistv2_options.phonemize_between_brackets = phonemize_between_brackets
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -187,7 +238,7 @@ class ChunkedStream(tts.ChunkedStream):
             "text": self._input_text,
             "modelId": self._opts.model,
         }
-        format = "audio/mp3"
+        format = "audio/pcm"
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
             assert arcana_opts is not None
@@ -201,7 +252,8 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["max_tokens"] = arcana_opts.max_tokens
             if is_given(arcana_opts.lang):
                 payload["lang"] = arcana_opts.lang
-            format = "audio/wav"
+            if is_given(arcana_opts.sample_rate):
+                payload["samplingRate"] = arcana_opts.sample_rate
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options
             assert mistv2_opts is not None
@@ -227,7 +279,9 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=self._tts._total_timeout, sock_connect=self._conn_options.timeout
+                ),
             ) as resp:
                 resp.raise_for_status()
 

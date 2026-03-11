@@ -4,15 +4,16 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
-    WorkerOptions,
     beta,
     cli,
+    inference,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("get-email-agent")
 
@@ -47,12 +48,16 @@ class MyAgent(Agent):
         return "The user is confirmed for seat 23 in group LK1. "
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(),
-        tts=cartesia.TTS(),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("cartesia/sonic-3"),
     )
 
     await session.start(agent=MyAgent(), room=ctx.room)
@@ -60,4 +65,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

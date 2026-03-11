@@ -7,8 +7,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    RoomOutputOptions,
     WorkerOptions,
     cli,
 )
@@ -27,7 +25,7 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(model="gpt-4.1-mini"),
         stt=nvidia.STT(),
         tts=nvidia.TTS(),
         preemptive_generation=True,
@@ -40,8 +38,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Agent(instructions="You are a helpful voice AI assistant."),
         room=ctx.room,
-        room_input_options=RoomInputOptions(),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

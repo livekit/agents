@@ -1,15 +1,14 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Annotated, Optional
+from typing import Annotated
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
-from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
@@ -29,7 +28,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 voices = {
-    "greeter": "794f9389-aac1-45b6-b726-9d9369183238",
+    "greeter": "694f9389-aac1-45b6-b726-9d9369183238",
     "reservation": "156fb8d2-335b-4950-9cb3-a2d33befec77",
     "takeaway": "6f84f4b8-58a2-430c-8c79-688dad597532",
     "checkout": "39b376fc-488e-4d0c-8b37-e00b72059fdd",
@@ -38,22 +37,22 @@ voices = {
 
 @dataclass
 class UserData:
-    customer_name: Optional[str] = None
-    customer_phone: Optional[str] = None
+    customer_name: str | None = None
+    customer_phone: str | None = None
 
-    reservation_time: Optional[str] = None
+    reservation_time: str | None = None
 
-    order: Optional[list[str]] = None
+    order: list[str] | None = None
 
-    customer_credit_card: Optional[str] = None
-    customer_credit_card_expiry: Optional[str] = None
-    customer_credit_card_cvv: Optional[str] = None
+    customer_credit_card: str | None = None
+    customer_credit_card_expiry: str | None = None
+    customer_credit_card_cvv: str | None = None
 
-    expense: Optional[float] = None
-    checked_out: Optional[bool] = None
+    expense: float | None = None
+    checked_out: bool | None = None
 
     agents: dict[str, Agent] = field(default_factory=dict)
-    prev_agent: Optional[Agent] = None
+    prev_agent: Agent | None = None
 
     def summarize(self) -> str:
         data = {
@@ -124,7 +123,10 @@ class BaseAgent(Agent):
         # add the previous agent's chat history to the current agent
         if isinstance(userdata.prev_agent, Agent):
             truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
-                exclude_instructions=True, exclude_function_call=False
+                exclude_instructions=True,
+                exclude_function_call=False,
+                exclude_handoff=True,
+                exclude_config_update=True,
             ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
             items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]
@@ -307,6 +309,10 @@ class Checkout(BaseAgent):
         return await self._transfer_to_agent("takeaway", context)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
     userdata = UserData()
@@ -332,13 +338,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=userdata.agents["greeter"],
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
 
     # await agent.say("Welcome to our restaurant! How may I assist you today?")
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

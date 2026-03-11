@@ -5,14 +5,15 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
-    WorkerOptions,
     cli,
+    inference,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("long-running-function")
 logger.setLevel(logging.INFO)
@@ -59,11 +60,15 @@ class MyAgent(Agent):
         return f"I got some results for {query}"
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         vad=silero.VAD.load(),
     )
 
@@ -71,4 +76,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

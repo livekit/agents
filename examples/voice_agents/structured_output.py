@@ -1,6 +1,6 @@
 import logging
-from collections.abc import AsyncIterable
-from typing import Annotated, Callable, Optional, cast
+from collections.abc import AsyncIterable, Callable
+from typing import Annotated, cast
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -10,12 +10,12 @@ from typing_extensions import TypedDict
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
+    AgentServer,
     AgentSession,
     ChatContext,
     FunctionTool,
     JobContext,
     ModelSettings,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import openai, silero
@@ -39,7 +39,7 @@ class ResponseEmotion(TypedDict):
 
 async def process_structured_output(
     text: AsyncIterable[str],
-    callback: Optional[Callable[[ResponseEmotion], None]] = None,
+    callback: Callable[[ResponseEmotion], None] | None = None,
 ) -> AsyncIterable[str]:
     last_response = ""
     acc_text = ""
@@ -123,6 +123,10 @@ class MyAgent(Agent):
         )
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -132,4 +136,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

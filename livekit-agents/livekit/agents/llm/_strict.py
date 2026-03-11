@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, TypeGuard, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
-from typing_extensions import TypeGuard
 
 _T = TypeVar("_T")
 
@@ -158,6 +157,9 @@ def _ensure_strict_json_schema(
                 None,
             )
             assert is_dict(non_null)
+
+            if "type" not in non_null:
+                continue
 
             t = non_null["type"]
             if isinstance(t, str):

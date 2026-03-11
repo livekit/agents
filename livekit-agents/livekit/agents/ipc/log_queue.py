@@ -6,7 +6,7 @@ import pickle
 import queue
 import sys
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .. import utils
 from ..utils.aio import duplex_unix
@@ -30,8 +30,17 @@ class LogQueueListener:
         if self._thread is None:
             return
 
-        self._duplex.close()
-        self._thread.join()
+        # join the thread first so it can drain all remaining log records
+        # from the socket buffer before we close the duplex. The sending end
+        # must already be closed (child process exited) so recv_bytes() will
+        # see EOF after the buffer is consumed and the thread will exit.
+        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            # fallback: force-close the duplex to unblock the thread
+            self._duplex.close()
+            self._thread.join()
+        else:
+            self._duplex.close()
         self._thread = None
 
     def handle(self, record: logging.LogRecord) -> None:
@@ -60,9 +69,13 @@ class LogQueueHandler(logging.Handler):
     def __init__(self, duplex: utils.aio.duplex_unix._Duplex) -> None:
         super().__init__()
         self._duplex = duplex
-        self._send_q = queue.SimpleQueue[Optional[bytes]]()
+        self._send_q = queue.SimpleQueue[bytes | None]()
         self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
         self._send_thread.start()
+
+    @property
+    def thread(self) -> threading.Thread:
+        return self._send_thread
 
     def _forward_logs(self) -> None:
         while True:
@@ -90,7 +103,8 @@ class LogQueueHandler(logging.Handler):
             record.msg = msg
             record.args = None
             record.exc_info = None
-            record.exc_text = None
+            # pass formatted exc_text since stack trace is not pickleable
+            record.exc_text = record.exc_text
             record.stack_info = None
 
             # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json

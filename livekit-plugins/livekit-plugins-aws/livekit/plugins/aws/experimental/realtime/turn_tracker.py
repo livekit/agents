@@ -3,12 +3,16 @@ from __future__ import annotations
 import datetime
 import enum
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from livekit.agents import llm
 
 from ...log import logger
+
+# Nova Sonic's barge-in detection signal (raw content without newline)
+BARGE_IN_CONTENT = '{ "interrupted" : true }'
 
 
 class _Phase(enum.Enum):
@@ -135,8 +139,13 @@ class _TurnTracker:
     def _maybe_emit_generation_created(self, turn: _Turn) -> None:
         if not turn.ev_generation_sent:
             turn.ev_generation_sent = True
+            logger.debug(
+                f"[GEN] TurnTracker calling emit_generation_fn() for turn_id={turn.turn_id}"
+            )
             self._emit_generation_fn()
             turn.phase = _Phase.ASSISTANT_RESPONDING
+        else:
+            logger.debug(f"[GEN] TurnTracker SKIPPED - already sent for turn_id={turn.turn_id}")
 
 
 def _classify(ev: dict) -> str:
@@ -152,7 +161,7 @@ def _classify(ev: dict) -> str:
         if "SPECULATIVE" in add:
             return "ASSISTANT_SPEC_START"
 
-    if "textOutput" in e and e["textOutput"]["content"] == '{ "interrupted" : true }':
+    if "textOutput" in e and e["textOutput"]["content"] == BARGE_IN_CONTENT:
         return "BARGE_IN"
 
     # note: there cannot be any audio events for the user in the output event loop

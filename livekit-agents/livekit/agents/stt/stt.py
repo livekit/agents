@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,9 +15,16 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
+from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
@@ -45,18 +52,24 @@ class SpeechEventType(str, Enum):
 
 @dataclass
 class SpeechData:
-    language: str
+    language: LanguageCode
     text: str
     start_time: float = 0.0
     end_time: float = 0.0
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
+    words: list[TimedString] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
+            self.language = LanguageCode(self.language)
 
 
 @dataclass
 class RecognitionUsage:
     audio_duration: float
+    """Incremental audio duration/usage in seconds"""
 
 
 @dataclass
@@ -72,6 +85,9 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
+    aligned_transcript: Literal["word", "chunk", False] = False
+    offline_recognize: bool = True
+    """Whether the STT supports batch recognition via recognize() method"""
 
 
 class STTError(BaseModel):
@@ -88,7 +104,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -181,10 +197,9 @@ class STT(
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._label,
+                            "stt": self._label,
                             "attempt": i + 1,
                             "streamed": False,
                         },
@@ -262,10 +277,11 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
         )
@@ -278,14 +294,31 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
+        self._start_time_offset: float = 0.0
+
+    @property
+    def start_time_offset(self) -> float:
+        return self._start_time_offset
+
+    @start_time_offset.setter
+    def start_time_offset(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time_offset must be non-negative")
+        self._start_time_offset = value
+
     @abstractmethod
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
+        # we need to record last start time for each run/connection
+        # so that returned transcripts can have linear timestamps
+        last_start_time = time.time()
 
         while self._num_retries <= max_retries:
             try:
+                self._start_time_offset += time.time() - last_start_time
+                last_start_time = time.time()
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:
@@ -301,10 +334,9 @@ class RecognizeStream(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._stt._label,
+                            "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },
@@ -401,7 +433,9 @@ class RecognizeStream(ABC):
         await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
-            await self._metrics_task
+            await aio.cancel_and_wait(self._metrics_task)
+
+        await self._tee.aclose()
 
     async def __anext__(self) -> SpeechEvent:
         try:

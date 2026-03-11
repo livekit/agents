@@ -4,22 +4,21 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.plugins import cartesia
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli, inference
 
 load_dotenv()
 
 logger = logging.getLogger("cartesia-tts-demo")
 logger.setLevel(logging.INFO)
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
-    tts = cartesia.TTS(
-        # speed="fastest",
-        # emotion=["surprise:highest"],
-    )
+    tts = inference.TTS("cartesia/sonic-3")
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
@@ -55,4 +54,4 @@ async def entrypoint(job: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

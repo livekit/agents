@@ -25,7 +25,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -35,7 +35,15 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
-from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL
+
+# Claude 4.6+ no longer supports prefilling (trailing assistant messages).
+_NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
+
+
+def _model_disables_prefill(model: str) -> bool:
+    """Return True if the model does not support assistant message prefilling."""
+    return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
 
 
 @dataclass
@@ -98,9 +106,12 @@ class LLM(llm.LLM):
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
-            raise ValueError("Anthropic API key is required")
+            raise ValueError(
+                "Anthropic API key is required, either as argument or set"
+                " ANTHROPIC_API_KEY environment variable"
+            )
 
-        self._client = anthropic.AsyncClient(
+        self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(
@@ -126,7 +137,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -148,8 +159,21 @@ class LLM(llm.LLM):
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
+        beta_flag: str | None = None
         if tools:
-            extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
+            from .tools import AnthropicTool
+
+            tool_ctx = llm.ToolContext(tools)
+            tool_schemas = tool_ctx.parse_function_tools("anthropic")
+
+            for tool in tool_ctx.provider_tools:
+                if isinstance(tool, AnthropicTool):
+                    tool_schemas.append(tool.to_dict())
+                    if tool.beta_flag:
+                        beta_flag = tool.beta_flag
+
+            extra["tools"] = tool_schemas
+
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -176,7 +200,11 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        anthropic_ctx, extra_data = chat_ctx.to_provider_format(format="anthropic")
+        # Claude 4.6+ does not support prefilling (trailing assistant messages).
+        inject_trailing = _model_disables_prefill(self._opts.model)
+        anthropic_ctx, extra_data = chat_ctx.to_provider_format(
+            format="anthropic", inject_trailing_user_message=inject_trailing
+        )
         messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
         if extra_data.system_messages:
             extra["system"] = [
@@ -188,6 +216,9 @@ class LLM(llm.LLM):
         if self._opts.caching == "ephemeral":
             if extra.get("system"):
                 extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+            if extra.get("tools"):
+                extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
             seen_assistant = False
             for msg in reversed(messages):
@@ -203,17 +234,27 @@ class LLM(llm.LLM):
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
-        stream = self._client.messages.create(
-            messages=messages,
-            model=self._opts.model,
-            stream=True,
-            timeout=conn_options.timeout,
-            **extra,
-        )
+        if beta_flag:
+            stream = self._client.beta.messages.create(
+                betas=[beta_flag],
+                messages=messages,  # type: ignore[arg-type]
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
+        else:
+            stream = self._client.messages.create(
+                messages=messages,
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
 
         return LLMStream(
             self,
-            anthropic_stream=stream,
+            anthropic_stream=stream,  # type: ignore[arg-type]
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
@@ -227,7 +268,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

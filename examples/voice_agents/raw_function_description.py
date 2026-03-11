@@ -4,10 +4,10 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
-    WorkerOptions,
     cli,
     function_tool,
 )
@@ -63,6 +63,10 @@ class RawFunctionAgent(Agent):
         return f"Gate {gate_id} opened successfully"
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         # stt=openai.STT(),
@@ -75,4 +79,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

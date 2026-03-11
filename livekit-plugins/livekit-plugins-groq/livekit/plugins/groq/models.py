@@ -24,34 +24,21 @@ LLMModels = Literal[
 ]
 
 TTSModels = Literal[
-    "playai-tts",
-    "playai-tts-arabic",
+    "canopylabs/orpheus-v1-english",
+    "canopylabs/orpheus-arabic-saudi",
 ]
 
 TTSVoices = Literal[
     # english voices
-    "Arista-PlayAI",
-    "Atlas-PlayAI",
-    "Basil-PlayAI",
-    "Briggs-PlayAI",
-    "Calum-PlayAI",
-    "Celeste-PlayAI",
-    "Cheyenne-PlayAI",
-    "Chip-PlayAI",
-    "Cillian-PlayAI",
-    "Deedee-PlayAI",
-    "Fritz-PlayAI",
-    "Gail-PlayAI",
-    "Indigo-PlayAI",
-    "Mamaw-PlayAI",
-    "Mason-PlayAI",
-    "Mikail-PlayAI",
-    "Mitch-PlayAI",
-    "Quinn-PlayAI",
-    "Thunder-PlayAI",
+    "autumn",
+    "diana",
+    "hannah",
+    "austin",
+    "daniel",
+    "troy",
     # arabic voices
-    "Nasser-PlayAI",
-    "Khalid-PlayAI",
-    "Amira-PlayAI",
-    "Ahmad-PlayAI",
+    "fahad",
+    "sultan",
+    "lulwa",
+    "noura",
 ]

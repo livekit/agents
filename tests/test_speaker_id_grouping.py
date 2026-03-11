@@ -7,7 +7,7 @@ format `[SPEAKER_ID]TEXT[/SPEAKER_ID]` for testing.
 
 import re
 
-from livekit.agents import stt
+from livekit.agents import LanguageCode, stt
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
 
@@ -20,10 +20,9 @@ class TestSpeakerIdGrouping:
             hooks=None,  # type: ignore
             stt=None,
             vad=None,
-            turn_detector=None,
             min_endpointing_delay=0.5,
             max_endpointing_delay=2.0,
-            turn_detection_mode=None,
+            turn_detection=None,
         )
 
     def _format_text(self, text, speaker_id):
@@ -43,7 +42,7 @@ class TestSpeakerIdGrouping:
             speech_data = stt.SpeechData(
                 text=self._format_text(text, speaker_id),
                 speaker_id=speaker_id,
-                language="en",
+                language=LanguageCode("en"),
                 start_time=0,
                 end_time=0,
                 confidence=1.0,

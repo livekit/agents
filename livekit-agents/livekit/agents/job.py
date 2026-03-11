@@ -18,12 +18,16 @@ import asyncio
 import contextvars
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
-from collections.abc import Coroutine
+import tempfile
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -31,13 +35,21 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
-from .cli import cli
-from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+from .observability import Tagger
+from .telemetry import _upload_session_report
+from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
+from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+
+if TYPE_CHECKING:
+    from .ipc.inference_executor import InferenceExecutor
+    from .voice.agent_session import AgentSession, RecordingOptions
+    from .voice.report import SessionReport
 
 
 def get_job_context() -> JobContext:
@@ -81,12 +93,39 @@ class RunningJobInfo:
     url: str
     token: str
     worker_id: str
+    fake_job: bool
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
+
+
+class _ContextLogFieldsFilter(logging.Filter):
+    """Filter that adds job context fields to log records without overwriting."""
+
+    def __init__(self, job_ctx: JobContext) -> None:
+        super().__init__()
+        self.job_ctx = job_ctx
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # only add fields for the current job context
+        if self.job_ctx.proc.executor_type != JobExecutorType.PROCESS:
+            try:
+                ctx = get_job_context()
+            except RuntimeError:
+                return True
+            else:
+                if ctx != self.job_ctx:
+                    return True
+
+        # add context fields only if they don't already exist in the record
+        for key, value in self.job_ctx._log_fields.items():
+            if not hasattr(record, key):
+                setattr(record, key, value)
+
+        return True
 
 
 class JobContext:
@@ -124,37 +163,198 @@ class JobContext:
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
-        self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
+        self._log_filter = _ContextLogFieldsFilter(self)
+        self._handlers_with_filter: list[logging.Handler] = []
+
+        self._primary_agent_session: AgentSession | None = None
+
+        self._tempdir = tempfile.TemporaryDirectory()
+
+        from .cli import AgentsConsole
+
+        c = AgentsConsole.get_instance()
+        if c.enabled:
+            self._session_directory = c.session_directory
+        else:
+            self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
         self._lock = asyncio.Lock()
+        self._tagger = Tagger()
+        self._recording_initialized = False
+        self._early_log_handler: _BufferingHandler | None = None
 
-    def _init_log_factory(self) -> None:
-        old_factory = logging.getLogRecordFactory()
+    def _on_setup(self) -> None:
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers:
+            handler.addFilter(self._log_filter)
+            self._handlers_with_filter.append(handler)
 
-        def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-            record = old_factory(*args, **kwargs)
+    def _start_log_buffering(self) -> None:
+        """Start buffering logs early so crash logs can be uploaded."""
+        if self._info.fake_job or not self._info.job.enable_recording:
+            return
+        if not is_cloud(self._info.url):
+            return
 
-            if self.proc.executor_type != JobExecutorType.PROCESS:
-                try:
-                    ctx = get_job_context()
-                except RuntimeError:
-                    return record
-                else:
-                    if ctx != self:
-                        return record
+        self._early_log_handler = _BufferingHandler()
+        logging.getLogger().addHandler(self._early_log_handler)
 
-            for key, value in self._log_fields.items():
-                setattr(record, key, value)
+    def _stop_log_buffering(self) -> None:
+        """Remove the buffering handler without replaying."""
+        handler = self._early_log_handler
+        if handler is None:
+            return
+        logging.getLogger().removeHandler(handler)
+        self._early_log_handler = None
 
-            return record
+    def _flush_early_log_buffer(self, *, replay: bool) -> None:
+        """Remove buffering handler and optionally replay records through OTLP."""
+        handler = self._early_log_handler
+        if handler is None:
+            return
 
-        logging.setLogRecordFactory(record_factory)
+        logging.getLogger().removeHandler(handler)
+        self._early_log_handler = None
+
+        if not replay:
+            return
+
+        # find the OTLP LoggingHandler that _setup_cloud_tracer just added
+        from opentelemetry.sdk._logs import LoggingHandler
+
+        for h in logging.getLogger().handlers:
+            if isinstance(h, LoggingHandler):
+                for record in handler.buffer:
+                    h.emit(record)
+                break
+
+    async def _on_session_end(self) -> None:
+        from .cli import AgentsConsole
+
+        if not (session := self._primary_agent_session):
+            return
+
+        c = AgentsConsole.get_instance()
+        report = self.make_session_report(session)
+
+        # console recording, dump data to a local file
+        if c.enabled and c.record:
+            try:
+                report_json = json.dumps(report.to_dict(), indent=2)
+
+                import aiofiles
+                import aiofiles.os
+
+                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
+                async with aiofiles.open(
+                    self._session_directory / "session_report.json", mode="w"
+                ) as f:
+                    await f.write(report_json)
+
+            except Exception:
+                logger.exception("failed to save session report")
+
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        if (any(report.recording_options.values()) or has_evals) and is_cloud(self._info.url):
+            try:
+                cloud_hostname = urlparse(self._info.url).hostname
+                if not cloud_hostname:
+                    raise ValueError(f"invalid cloud hostname: {self._info.url}")
+                await _upload_session_report(
+                    agent_name=self._info.job.agent_name,
+                    cloud_hostname=cloud_hostname,
+                    report=report,
+                    tagger=self._tagger,
+                    http_session=http_context.http_session(),
+                )
+            except Exception:
+                logger.exception("failed to upload the session report to LiveKit Cloud")
+
+    def _on_cleanup(self) -> None:
+        # if session.start() was never reached and server wanted recording,
+        # set up OTLP now and flush buffered crash logs
+        if self._early_log_handler is not None and not self._recording_initialized:
+            try:
+                from .voice.agent_session import RecordingOptions
+
+                self.init_recording(
+                    RecordingOptions(audio=False, traces=False, logs=True, transcript=False)
+                )
+            except Exception:
+                logger.exception("failed to initialize crash log upload")
+                self._stop_log_buffering()
+
+        self._tempdir.cleanup()
+        _shutdown_telemetry()
+
+        for handler in self._handlers_with_filter:
+            handler.removeFilter(self._log_filter)
+        self._handlers_with_filter.clear()
+
+    def is_fake_job(self) -> bool:
+        return self._info.fake_job
+
+    @property
+    def session_directory(self) -> Path:
+        return Path(self._session_directory)
 
     @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
+
+    @property
+    def tagger(self) -> Tagger:
+        """Returns the Tagger for adding tags and outcomes to the session.
+
+        Tags are uploaded to LiveKit Cloud at session end.
+
+        Example:
+            ```python
+            ctx.tagger.success(reason="Task completed successfully")
+            ctx.tagger.fail(reason="User hung up before completing")
+            ctx.tagger.add("voicemail:true")
+            ```
+        """
+        return self._tagger
+
+    def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
+        from .voice.report import SessionReport
+
+        session = session or self._primary_agent_session
+
+        if not session:
+            raise RuntimeError("Cannot prepare report, no AgentSession was found")
+
+        recorder_io = session._recorder_io
+
+        if recorder_io and recorder_io.recording:
+            raise RuntimeError(
+                "Cannot create the AgentSession report, the RecorderIO is still recording"
+            )
+
+        sr = SessionReport(
+            recording_options=session._recording_options,
+            job_id=self.job.id,
+            room_id=self.job.room.sid,
+            room=self.job.room.name,
+            options=session.options,
+            audio_recording_path=recorder_io.output_path if recorder_io else None,
+            audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
+            started_at=session._started_at,
+            events=session._recorded_events,
+            chat_history=session.history.copy(),
+        )
+
+        if recorder_io:
+            if recorder_io.output_path:
+                sr.audio_recording_path = recorder_io.output_path
+            if recorder_io.recording_started_at:
+                sr.audio_recording_started_at = recorder_io.recording_started_at
+                sr.duration = sr.timestamp - sr.audio_recording_started_at
+
+        return sr
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
@@ -194,6 +394,20 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    @property
+    def primary_session(self) -> AgentSession:
+        """Returns the primary AgentSession for this job."""
+        if not self._primary_agent_session:
+            raise RuntimeError("No AgentSession was started for this job")
+        return self._primary_agent_session
+
+    @property
+    def local_participant_identity(self) -> str:
+        if identity := self.token_claims().identity:
+            return identity
+
+        return self._room.local_participant.identity
 
     @property
     def log_context_fields(self) -> dict[str, Any]:
@@ -272,7 +486,7 @@ class JobContext:
                 return
 
             room_options = rtc.RoomOptions(
-                e2ee=e2ee,
+                encryption=e2ee,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
             )
@@ -285,9 +499,9 @@ class JobContext:
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
 
-    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
+    def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning("job_ctx.delete_room() is not executed while in console mode")
             fut = asyncio.Future[api.DeleteRoomResponse]()
             fut.set_result(api.DeleteRoomResponse())
@@ -295,7 +509,9 @@ class JobContext:
 
         async def _delete_room() -> None:
             try:
-                await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+                await self.api.room.delete_room(
+                    api.DeleteRoomRequest(room=room_name or self._room.name)
+                )
             except aiohttp.ServerDisconnectedError:
                 logger.warning("server disconnected while deleting room")
             except api.TwirpError as e:
@@ -331,7 +547,7 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
             fut = asyncio.Future[api.SIPParticipantInfo]()
             fut.set_result(api.SIPParticipantInfo())
@@ -374,7 +590,7 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning(
                 "job_ctx.transfer_sip_participant() is not executed while in console mode"
             )
@@ -423,6 +639,38 @@ class JobContext:
             raise ValueError("entrypoints cannot be added more than once")
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
+
+    def init_recording(self, options: RecordingOptions) -> None:
+        if self._recording_initialized:
+            self._stop_log_buffering()
+            return
+
+        self._recording_initialized = True
+
+        needs_cloud = (
+            options.get("traces", True)
+            or options.get("logs", True)
+            or options.get("audio", True)
+            or options.get("transcript", True)
+        )
+        if not (needs_cloud and is_cloud(self._info.url)):
+            self._stop_log_buffering()
+            return
+
+        cloud_hostname = urlparse(self._info.url).hostname
+        logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
+        if cloud_hostname:
+            _setup_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                cloud_hostname=cloud_hostname,
+                enable_traces=options["traces"],
+                enable_logs=options["logs"],
+            )
+            # init_recording is typically called during session.start(), at which point a bunch of
+            # the logs would have already been emitted. we want to capture all of the logs as it
+            # relates to the job
+            self._flush_early_log_buffer(replay=options["logs"])
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:
@@ -507,7 +755,7 @@ class JobRequest:
         self,
         *,
         job: agent.Job,
-        on_reject: Callable[[], Coroutine[None, None, None]],
+        on_reject: Callable[[bool], Coroutine[None, None, None]],
         on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
@@ -535,9 +783,9 @@ class JobRequest:
     def agent_name(self) -> str:
         return self._job.agent_name
 
-    async def reject(self) -> None:
-        """Reject the job request. The job may be assigned to another worker"""
-        await self._on_reject()
+    async def reject(self, *, terminate: bool = True) -> None:
+        """Reject the job request. The job will not be assigned to another worker"""
+        await self._on_reject(terminate)
 
     async def accept(
         self,
@@ -559,3 +807,9 @@ class JobRequest:
         )
 
         await self._on_accept(accept_arguments)
+
+
+@dataclass
+class _JobShutdownInfo:
+    user_initiated: bool
+    reason: str

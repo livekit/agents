@@ -5,7 +5,7 @@ from itertools import chain
 from dotenv import load_dotenv
 from google.protobuf.json_format import MessageToDict
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import openai
 
 logger = logging.getLogger("minimal-worker")
@@ -13,7 +13,10 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     await session.start(Agent(instructions="You are a helpful assistant"), room=ctx.room)
@@ -45,4 +48,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -5,12 +5,12 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
     BuiltinAudioClip,
     JobContext,
-    WorkerOptions,
     cli,
     function_tool,
 )
@@ -47,6 +47,10 @@ class FakeWebSearchAgent(Agent):
         return "The request failed, give the users some information based on your knowledge"
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     await session.start(FakeWebSearchAgent(), room=ctx.room)
@@ -68,4 +72,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

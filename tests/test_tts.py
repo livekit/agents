@@ -16,7 +16,7 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, tokenize, tts
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tokenize, tts
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -181,13 +181,6 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": groq.TTS(),
-            "proxy-upstream": "api.groq.com:443",
-        },
-        id="groq",
-    ),
-    pytest.param(
-        lambda: {
             "tts": lmnt.TTS(),
             "proxy-upstream": "api.lmnt.com:443",
         },
@@ -248,6 +241,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": inference.TTS(model="cartesia/sonic-3"),
+            "proxy-upstream": "agent-gateway.livekit.cloud:443",
+        },
+        id="inference-cartesia",
     ),
 ]
 
@@ -450,6 +450,20 @@ STREAM_TTS = [
         },
         id="inworld-stream-adapter",
     ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(tts=groq.TTS()),
+            "proxy-upstream": "api.groq.com:443",
+        },
+        id="groq-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/arcana")),
+            "proxy-upstream": "agent-gateway.livekit.cloud:443",
+        },
+        id="inference-rime",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -511,7 +525,9 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
         assert len(by_segment) >= 1, "expected at least one segment"
 
-        for _, (segment_text, segment_events) in enumerate(zip(segments, by_segment.values())):
+        for _, (segment_text, segment_events) in enumerate(
+            zip(segments, by_segment.values(), strict=False)
+        ):
             *non_final, final = segment_events
 
             # idx = audio_events.index(non_final[0])

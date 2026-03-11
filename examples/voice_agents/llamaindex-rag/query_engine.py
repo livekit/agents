@@ -8,8 +8,17 @@ from llama_index.core import (
     load_index_from_storage,
 )
 
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.plugins import deepgram, openai, silero
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    AutoSubscribe,
+    JobContext,
+    cli,
+    inference,
+    llm,
+)
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -37,6 +46,10 @@ async def query_info(query: str) -> str:
     return str(res)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -47,17 +60,17 @@ async def entrypoint(ctx: JobContext):
             "responses, and avoiding usage of unpronouncable punctuation."
         ),
         vad=silero.VAD.load(),
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=openai.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         tools=[query_info],
     )
 
     session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    await session.say("Hey, how can I help you today?", allow_interruptions=True)
+    await session.say("Hey, how can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
