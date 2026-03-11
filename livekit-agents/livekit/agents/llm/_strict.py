@@ -162,12 +162,13 @@ def _ensure_strict_json_schema(
                 continue
 
             t = non_null["type"]
-            if isinstance(t, str):
-                non_null["type"] = [t, "null"]
+            non_null["type"] = [t, "null"] if isinstance(t, str) else t
+            if "enum" in non_null:
+                non_null["enum"].append(None)
 
-            merged = {k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")}
-            merged.update(non_null)
-            json_schema = merged
+            json_schema = {
+                k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")
+            } | non_null
             break
 
     return json_schema
