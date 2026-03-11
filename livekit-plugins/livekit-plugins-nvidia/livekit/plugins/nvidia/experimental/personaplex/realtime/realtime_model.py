@@ -548,7 +548,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
             if gen._first_token_timestamp is None and len(pcm_bytes) > 0:
                 gen._first_token_timestamp = time.time()
-                self._resolve_pending_generation(gen)
 
             frame = rtc.AudioFrame(
                 data=pcm_bytes,
@@ -619,27 +618,23 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             )
         )
 
+        user_initiated = (
+            self._pending_generation_fut is not None
+            and not self._pending_generation_fut.done()
+        )
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
-            user_initiated=False,
+            user_initiated=user_initiated,
             response_id=response_id,
         )
         self.emit("generation_created", generation_ev)
 
-        logger.debug(f"Started generation {response_id}")
-
-    def _resolve_pending_generation(self, gen: _ResponseGeneration) -> None:
-        """Resolve pending generate_reply future if one exists."""
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            ev = llm.GenerationCreatedEvent(
-                message_stream=gen.message_ch,
-                function_stream=gen.function_ch,
-                user_initiated=True,
-                response_id=gen.response_id,
-            )
-            self._pending_generation_fut.set_result(ev)
+        if user_initiated:
+            self._pending_generation_fut.set_result(generation_ev)
             self._pending_generation_fut = None
+
+        logger.debug(f"Started generation {response_id}")
 
     def _finalize_generation(self, *, interrupted: bool = False) -> None:
         if not self._current_generation or self._current_generation._done:
