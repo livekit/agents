@@ -13,7 +13,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.llm import Instructions
+from livekit.agents.beta import Instructions
 from livekit.plugins import silero
 
 logger = logging.getLogger("instructions-per-modality")
