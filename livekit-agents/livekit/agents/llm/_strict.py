@@ -163,8 +163,9 @@ def _ensure_strict_json_schema(
 
             t = non_null["type"]
             non_null["type"] = [t, "null"] if isinstance(t, str) else t
-            if "enum" in non_null:
-                non_null["enum"].append(None)
+            enum = non_null.get("enum")
+            if is_list(enum):
+                enum.append(None)
 
             json_schema = {
                 k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")
