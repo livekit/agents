@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from ...llm import Instructions
+from ...llm.chat_context import Instructions
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 

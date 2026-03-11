@@ -10,7 +10,7 @@ from livekit import api, rtc
 
 from ... import llm, stt, tts, utils, vad
 from ...job import get_job_context
-from ...llm import Instructions
+from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...log import logger
 from ...types import NOT_GIVEN, NotGiven, NotGivenOr
