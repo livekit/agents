@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
-from ...llm import Instructions
+from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...log import logger
 from ...types import NOT_GIVEN, NotGiven, NotGivenOr
