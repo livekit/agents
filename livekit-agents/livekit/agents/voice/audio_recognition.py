@@ -262,7 +262,7 @@ class AudioRecognition:
     def update_mm_detector(self, detector: MultiModalTurnDetector | None) -> None:
         self._mm_detector = detector
         if detector:
-            self._mm_ch = aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent]()
+            self._mm_ch = aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool]()
             self._mm_atask = asyncio.create_task(
                 self._mm_task(detector, self._mm_ch, self._mm_atask)
             )
@@ -921,7 +921,7 @@ class AudioRecognition:
     async def _mm_task(
         self,
         detector: MultiModalTurnDetector,
-        ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent],
+        ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:

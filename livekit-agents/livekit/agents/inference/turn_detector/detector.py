@@ -63,7 +63,6 @@ class MultiModalTurnDetector:
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-
         lk_base_url = resolve_env_var(base_url, "LIVEKIT_INFERENCE_URL", default=DEFAULT_BASE_URL)
         lk_api_key = resolve_env_var(
             api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY", default=""

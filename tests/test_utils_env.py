@@ -7,7 +7,9 @@ from livekit.agents.utils.env import resolve_env_var
 class TestResolveEnvVar:
     """Tests for the resolve_env_var helper contract."""
 
-    def test_returns_empty_string_when_no_env_or_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_returns_empty_string_when_no_env_or_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("LIVEKIT_INFERENCE_URL", raising=False)
 
         assert resolve_env_var(NOT_GIVEN, "LIVEKIT_INFERENCE_URL") == ""

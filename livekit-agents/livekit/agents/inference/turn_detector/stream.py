@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
 # TODO: @chenghao-mou add tests for this function
 def _chat_ctx_to_proto(chat_ctx: ChatContext) -> PbChatContext:
-
     def _merge_trailing_user_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
         while len(messages) > 1 and messages[-2].role == messages[-1].role == "user":
             messages[-2].content.extend(messages.pop().content)
@@ -250,9 +249,7 @@ class WSStream(MultiModalTurnDetectionStream):
             return
         if active:
             request_id = utils.shortuuid("turn_request_")
-            msg = TurnDetectorClientMessage(
-                inference_start=InferenceStart(request_id=request_id)
-            )
+            msg = TurnDetectorClientMessage(inference_start=InferenceStart(request_id=request_id))
         else:
             msg = TurnDetectorClientMessage(inference_stop=InferenceStop())
         task = asyncio.create_task(ws.send_bytes(msg.SerializeToString()))
@@ -467,10 +464,10 @@ class HTTPStream(MultiModalTurnDetectionStream):
                 return
             last_speaking_time = time.time()
             request_id = utils.shortuuid("turn_request_")
-            if self._latest_eou_probability is not None:
+            if self._detector._latest_eou_probability is not None:
                 with contextlib.suppress(asyncio.InvalidStateError):
-                    self._latest_eou_probability.set_result(0.0)
-            self._latest_eou_probability = asyncio.Future[float]()
+                    self._detector._latest_eou_probability.set_result(0.0)
+            self._detector._latest_eou_probability = asyncio.Future[float]()
 
             await asyncio.sleep(self._inference_interval)
             if self._closed or not self._active.is_set():
