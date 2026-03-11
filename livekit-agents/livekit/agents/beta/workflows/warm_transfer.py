@@ -95,7 +95,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         if isinstance(instructions, InstructionParts | NotGiven):
             instructions = build_instructions(
-                instructions, self.INSTRUCTION_PARTS, _DIRECTIVE
+                parts=instructions or InstructionParts(extra=extra_instructions),
+                defaults=self.INSTRUCTION_PARTS,
+                directive=_DIRECTIVE,
             ).format(conversation_history=self._format_conversation_history(chat_ctx))
 
         super().__init__(

@@ -101,7 +101,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                     else ""
                 ),
             )
-            instructions = build_instructions(instructions, self.INSTRUCTION_PARTS, directive)
+            instructions = build_instructions(
+                parts=instructions or InstructionParts(extra=extra_instructions),
+                defaults=self.INSTRUCTION_PARTS,
+                directive=directive,
+            )
 
         super().__init__(
             instructions=instructions,
