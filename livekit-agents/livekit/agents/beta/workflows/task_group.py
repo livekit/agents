@@ -170,7 +170,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 list[str],
                 Field(
                     description="The IDs of the tasks requested",
-                    json_schema_extra={"items": {"enum": list(task_ids)}},
+                    json_schema_extra={"items": {"type": "string", "enum": list(task_ids)}},
                 ),
             ],
         ) -> None:
