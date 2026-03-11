@@ -382,7 +382,7 @@ class TTS(tts.TTS):
 
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback)
 
         self._opts = _TTSOptions(
             model=model,
