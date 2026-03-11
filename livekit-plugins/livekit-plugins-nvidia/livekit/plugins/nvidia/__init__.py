@@ -13,10 +13,30 @@
 # limitations under the License.
 
 
-from . import experimental
-from .stt import STT, SpeechStream
-from .tts import TTS, SynthesizeStream
-from .version import __version__
+import typing  # noqa: I001
+
+if typing.TYPE_CHECKING:
+    from . import experimental
+
+
+def __getattr__(name: str) -> typing.Any:
+    if name == "experimental":
+        try:
+            from . import experimental
+        except ImportError as e:
+            raise ImportError(
+                "The 'experimental' module requires optional dependencies. "
+                "Please install them with: pip install 'livekit-plugins-nvidia[personaplex]'"
+            ) from e
+
+        return experimental
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+from .stt import STT, SpeechStream  # noqa: E402
+from .tts import TTS, SynthesizeStream  # noqa: E402
+from .version import __version__  # noqa: E402
 
 __all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "experimental", "__version__"]
 
