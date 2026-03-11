@@ -659,12 +659,10 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[
-                        types.Blob(
-                            data=nf.data.tobytes(),
-                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                        )
-                    ]
+                    audio=types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                    )
                 )
                 self._send_client_event(realtime_input)
 
@@ -673,7 +671,7 @@ class RealtimeSession(llm.RealtimeSession):
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
         realtime_input = types.LiveClientRealtimeInput(
-            media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
+            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
         )
         self._send_client_event(realtime_input)
 
@@ -906,9 +904,12 @@ class RealtimeSession(llm.RealtimeSession):
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
-                    if msg.media_chunks:
-                        for media_chunk in msg.media_chunks:
-                            await session.send_realtime_input(media=media_chunk)
+                    if msg.audio:
+                        await session.send_realtime_input(audio=msg.audio)
+                    elif msg.video:
+                        await session.send_realtime_input(video=msg.video)
+                    elif msg.text:
+                        await session.send_realtime_input(text=msg.text)
                     elif msg.activity_start:
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
@@ -924,7 +925,7 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientRealtimeInput,
                     ),
                 ):
-                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (msg.audio or msg.video or msg.text):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
                             extra={"content": msg.model_dump(exclude_defaults=True)},
