@@ -62,9 +62,15 @@ class LLM(openai.responses.LLM):
         super().__init__(
             model=model,
             client=azure_client,
+            use_websocket=False,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning=reasoning,
         )
+        self._azure_client = azure_client
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        await self._azure_client.close()

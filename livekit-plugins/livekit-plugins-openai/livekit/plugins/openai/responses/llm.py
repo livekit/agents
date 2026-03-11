@@ -40,6 +40,7 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
+from ..log import logger
 from ..models import _supports_reasoning_effort
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
@@ -175,6 +176,10 @@ class LLM(llm.LLM):
             else:
                 reasoning = Reasoning(effort="minimal")
 
+        if client is not None and use_websocket:
+            logger.warning("use_websocket is ignored when a custom client is provided, disabling")
+            use_websocket = False
+
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -236,6 +241,16 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        if self._opts.use_websocket and self._ws is not None:
+            from urllib.parse import urlparse
+
+            return urlparse(self._ws._base_url).netloc
+        if self._client is not None:
+            return self._client._base_url.netloc.decode("utf-8")
+        return ""
+
     def chat(
         self,
         *,
@@ -272,7 +287,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: response_create_params.ToolChoice
             if isinstance(tool_choice, dict):
@@ -282,7 +297,7 @@ class LLM(llm.LLM):
                 }
                 extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice  # type: ignore
+                oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx

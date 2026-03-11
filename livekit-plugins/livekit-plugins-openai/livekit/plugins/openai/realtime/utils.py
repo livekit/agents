@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import math
+from collections.abc import Sequence
 from typing import Any
 
 from livekit import rtc
@@ -10,6 +12,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from openai.types import realtime, responses
+from openai.types.beta.realtime.conversation_item_input_audio_transcription_completed_event import (
+    Logprob as BetaLogprob,
+)
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -20,6 +25,7 @@ from openai.types.realtime import (
     NoiseReductionType,
     RealtimeAudioInputTurnDetection,
 )
+from openai.types.realtime.log_prob_properties import LogProbProperties
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 
 from ..log import logger
@@ -291,3 +297,25 @@ def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> realtime.RealtimeT
         )
 
     return DEFAULT_TOOL_CHOICE
+
+
+def calculate_confidence_from_logprobs(
+    logprobs: Sequence[LogProbProperties] | Sequence[BetaLogprob] | None,
+) -> float | None:
+    """Calculate a confidence score from token log probabilities.
+
+    Converts log probabilities to probabilities (using exp) and returns
+    the geometric mean of all token probabilities as the confidence score.
+
+    Args:
+        logprobs: Sequence of objects with a logprob attribute, or None
+
+    Returns:
+        Confidence score between 0.0 and 1.0, or None if logprobs is None/empty
+    """
+    if not logprobs:
+        return None
+
+    total_logprob = sum(lp.logprob for lp in logprobs)
+    geometric_mean = math.exp(total_logprob / len(logprobs))
+    return geometric_mean
