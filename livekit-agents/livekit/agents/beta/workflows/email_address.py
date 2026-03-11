@@ -7,11 +7,13 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
-from ...types import NOT_GIVEN, NotGivenOr
+from ...log import logger
+from ...types import NOT_GIVEN, NotGiven, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
+from .utils import InstructionParts, build_instructions
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -20,19 +22,11 @@ EMAIL_REGEX = (
     r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
 )
 
-_BASE_INSTRUCTIONS = """
-You are only a single step in a broader system, responsible solely for capturing an email address.
-{modality_specific}
-Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
-Don't invent new email addresses, stick strictly to what the user said.
-{confirmation_instructions}
-If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
-Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
-{extra_instructions}
-"""
+# instructions
+ROLE = "You are only a single step in a broader system, responsible solely for capturing an email address."
 
-_AUDIO_SPECIFIC = """
+CONTEXT = Instructions(
+    audio="""\
 Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
 - 'john dot doe at gmail dot com'
 - 'susan underscore smith at yahoo dot co dot uk'
@@ -45,13 +39,26 @@ Normalize common spoken patterns silently:
 - Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
-Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
-"""
-
-_TEXT_SPECIFIC = """
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.""",
+    text="""\
 Handle input as typed text. Expect users to type their email address directly in standard format.
-If the address looks almost correct but has minor typos (e.g. missing '@' or domain), prompt for clarification.
-"""
+If the address looks almost correct but has minor typos (e.g. missing '@' or domain), prompt for clarification.""",
+)
+
+CONSTRAINTS = """\
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."""
+
+# internal directive, coupled to tool names, not user-customizable.
+_DIRECTIVE = """\
+Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+Don't invent new email addresses, stick strictly to what the user said.
+{confirmation}
+If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed."""
+
+_CONFIRMATION_INSTRUCTION = (
+    "Call `confirm_email_address` after the user confirmed the email address is correct."
+)
 
 
 @dataclass
@@ -60,9 +67,12 @@ class GetEmailResult:
 
 
 class GetEmailTask(AgentTask[GetEmailResult]):
+    INSTRUCTION_PARTS = InstructionParts(role=ROLE, context=CONTEXT, constraints=CONSTRAINTS)
+
     def __init__(
         self,
-        extra_instructions: str = "",
+        *,
+        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -72,29 +82,29 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        # deprecated
+        extra_instructions: str = "",
     ) -> None:
-        confirmation_instructions = (
-            "Call `confirm_email_address` after the user confirmed the email address is correct."
-        )
-        extra = extra_instructions if extra_instructions else ""
+        if instructions and extra_instructions:
+            logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
+
+        if isinstance(instructions, InstructionParts | NotGiven):
+            directive = Instructions(
+                audio=_DIRECTIVE.format(
+                    confirmation=_CONFIRMATION_INSTRUCTION
+                    if require_confirmation is not False  # enabled by default
+                    else ""
+                ),
+                text=_DIRECTIVE.format(
+                    confirmation=_CONFIRMATION_INSTRUCTION
+                    if require_confirmation is True  # disabled by default
+                    else ""
+                ),
+            )
+            instructions = build_instructions(instructions, self.INSTRUCTION_PARTS, directive)
 
         super().__init__(
-            instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
-                    modality_specific=_AUDIO_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is not False else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-                text=_BASE_INSTRUCTIONS.format(
-                    modality_specific=_TEXT_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is True else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-            ),
+            instructions=instructions,
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=tools or [],

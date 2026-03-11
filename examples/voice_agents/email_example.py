@@ -40,7 +40,14 @@ class MyAgent(Agent):
     async def register_for_event(self, context: RunContext):
         "Start the registration process for the event."
 
-        email_result = await beta.workflows.GetEmailTask()
+        email_result = await beta.workflows.GetEmailTask(
+            instructions=beta.workflows.InstructionParts(
+                role=(
+                    "You are a single step in a broader system, responsible solely for capturing an email address "
+                    "for the event registration."
+                )
+            )
+        )
         email_address = email_result.email_address
 
         logger.info(f"User's email address: {email_address}")

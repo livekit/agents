@@ -75,6 +75,16 @@ class Instructions(str):
         """
         return self._text_variant if self._text_variant is not None else self._audio_variant
 
+    def format(self, *args: object, **kwargs: object) -> Instructions:
+        """Format the instructions with the given keyword arguments."""
+        return Instructions(
+            audio=self._audio_variant.format(*args, **kwargs),
+            text=self._text_variant.format(*args, **kwargs)
+            if self._text_variant is not None
+            else None,
+            _represent=str(self).format(*args, **kwargs),
+        )
+
     def as_modality(self, modality: Literal["audio", "text"]) -> Instructions:
         """Return a copy whose ``str`` value is the correct variant for *modality*.
 
