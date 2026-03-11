@@ -875,9 +875,7 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
-            timestamp_transport_strategy=cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
-            )
+            timestamp_transport_strategy=timestamp_transport_strategy
             if is_given(timestamp_transport_strategy)
             else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
@@ -972,13 +970,11 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
-            self._opts.timestamp_type = cast(TimestampType, timestamp_type)
+            self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            self._opts.text_normalization = cast(TextNormalization, text_normalization)
+            self._opts.text_normalization = text_normalization
         if is_given(timestamp_transport_strategy):
-            self._opts.timestamp_transport_strategy = cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
-            )
+            self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):

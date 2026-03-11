@@ -287,7 +287,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: response_create_params.ToolChoice
             if isinstance(tool_choice, dict):
@@ -297,7 +297,7 @@ class LLM(llm.LLM):
                 }
                 extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice  # type: ignore
+                oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx

@@ -533,7 +533,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,  # type: ignore
             input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,  # type: ignore
+            turn_detection=turn_detection,
             temperature=temperature,
             speed=speed,
             tracing=tracing,  # type: ignore

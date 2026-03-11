@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
 
@@ -2333,9 +2333,7 @@ class AgentActivity(RecognitionHooks):
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):
-            self._rt_session.update_options(
-                tool_choice=cast(llm.ToolChoice, model_settings.tool_choice)
-            )
+            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
             generation_ev = await self._rt_session.generate_reply(
