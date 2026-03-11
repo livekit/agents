@@ -27,7 +27,7 @@ from livekit import rtc
 from ..log import logger
 from ..utils import images
 from . import _strict
-from .chat_context import ChatContext, ImageContent
+from .chat_context import ChatContext, FileContent, ImageContent, ToolOutput
 from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
@@ -465,9 +465,20 @@ def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str |
 
 
 def _is_valid_function_output(value: Any) -> bool:
-    VALID_TYPES = (str, int, float, bool, complex, type(None))
+    SCALAR_TYPES = (
+        str,
+        int,
+        float,
+        bool,
+        complex,
+        type(None),
+        ImageContent,
+        FileContent,
+        ToolOutput,
+    )
+    DICT_KEY_TYPES = (str, int, float, bool, complex, type(None))
 
-    if isinstance(value, VALID_TYPES):
+    if isinstance(value, SCALAR_TYPES):
         return True
     elif (
         isinstance(value, list)
@@ -478,10 +489,14 @@ def _is_valid_function_output(value: Any) -> bool:
         return all(_is_valid_function_output(item) for item in value)
     elif isinstance(value, dict):
         return all(
-            isinstance(key, VALID_TYPES) and _is_valid_function_output(val)
+            isinstance(key, DICT_KEY_TYPES) and _is_valid_function_output(val)
             for key, val in value.items()
         )
     return False
+
+
+def _to_tool_output(value: Any) -> ToolOutput:
+    return ToolOutput._coerce(value)
 
 
 @dataclass
@@ -557,7 +572,7 @@ def make_function_call_output(
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output=_to_tool_output(output),
             is_error=False,
         ),
         raw_output=output,

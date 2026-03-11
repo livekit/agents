@@ -1329,7 +1329,7 @@ def _print_run_event(
         )
     elif event.type == "function_call_output":
         output = event.item.output
-        display_output = output
+        display_output = str(output)
         is_error = output.lower().startswith("error") or output.lower().startswith("exception")
 
         if not is_error:

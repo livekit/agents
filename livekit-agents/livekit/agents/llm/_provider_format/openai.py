@@ -85,11 +85,14 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         }
 
     elif msg.type == "function_call_output":
-        return {
-            "role": "tool",
-            "tool_call_id": msg.call_id,
-            "content": msg.output,
-        }
+        if msg.output.image_contents:
+            tool_content: list[dict[str, Any]] = []
+            if msg.output.text_contents:
+                tool_content.append({"type": "text", "text": msg.output.text_contents})
+            for img in msg.output.image_contents:
+                tool_content.append(_to_image_content(img))
+            return {"role": "tool", "tool_call_id": msg.call_id, "content": tool_content}
+        return {"role": "tool", "tool_call_id": msg.call_id, "content": msg.output.text_contents}
 
     raise ValueError(f"unsupported message type: {msg.type}")
 
@@ -181,13 +184,35 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         return {"role": msg.role, "content": list_content}
 
     elif msg.type == "function_call_output":
+        if msg.output.image_contents or msg.output.file_contents:
+            output: list[dict[str, Any]] = []
+            if msg.output.text_contents:
+                output.append({"type": "input_text", "text": msg.output.text_contents})
+            for img in msg.output.image_contents:
+                output.append(_to_responses_image_content(img))
+            for f in msg.output.file_contents:
+                output.append(_to_responses_file_content(f))
+            return {"type": "function_call_output", "call_id": msg.call_id, "output": output}
         return {
             "type": "function_call_output",
             "call_id": msg.call_id,
-            "output": msg.output,
+            "output": msg.output.text_contents,
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
+
+
+def _to_responses_file_content(file: llm.FileContent) -> dict[str, Any]:
+    if isinstance(file.data, bytes):
+        file_data = f"data:{file.mime_type};base64,{base64.b64encode(file.data).decode('utf-8')}"
+    else:
+        file_data = file.data
+    return {
+        "type": "input_file",
+        "filename": file.name,
+        "file_data": file_data,
+        "file_content_type": file.mime_type,
+    }
 
 
 def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
