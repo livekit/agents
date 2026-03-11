@@ -925,7 +925,9 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientRealtimeInput,
                     ),
                 ):
-                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (msg.audio or msg.video or msg.text):
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (
+                        msg.audio or msg.video or msg.text
+                    ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
                             extra={"content": msg.model_dump(exclude_defaults=True)},
