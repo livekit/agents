@@ -1,5 +1,5 @@
 .PHONY: help install format format-check lint lint-fix check type-check test test-unit test-docker clean build \
-        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor
+        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor proto
 
 # Colors for output
 CYAN := \033[36m
@@ -81,6 +81,23 @@ check: format-check lint type-check ## Run all checks (format, lint, type-check)
 	@echo "$(BOLD)$(GREEN)✓ All checks passed!$(RESET)"
 
 fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
+
+PROTOCOL_PROTO_DIR := $(MAKEFILE_DIR)/../protocol/protobufs
+TURN_DETECTOR_OUT_DIR := $(AGENTS_PROJECT)/livekit/agents/inference/turn_detector
+TURN_DETECTOR_PROTO_DIR := $(TURN_DETECTOR_OUT_DIR)/proto
+proto: ## Generate protobuf Python code for turn detector
+	@echo "$(BOLD)$(CYAN)Generating protobuf code...$(RESET)"
+	@uv run python -m grpc_tools.protoc \
+		--proto_path=$(PROTOCOL_PROTO_DIR) \
+		--python_out=$(TURN_DETECTOR_OUT_DIR) \
+		--pyi_out=$(TURN_DETECTOR_OUT_DIR) \
+		agent/livekit_agent_turn_detector.proto
+	@mkdir -p $(TURN_DETECTOR_PROTO_DIR)
+	@mv $(TURN_DETECTOR_OUT_DIR)/agent/livekit_agent_turn_detector_pb2.py $(TURN_DETECTOR_PROTO_DIR)/
+	@mv $(TURN_DETECTOR_OUT_DIR)/agent/livekit_agent_turn_detector_pb2.pyi $(TURN_DETECTOR_PROTO_DIR)/
+	@rm -rf $(TURN_DETECTOR_OUT_DIR)/agent
+	@test -f $(TURN_DETECTOR_PROTO_DIR)/__init__.py || touch $(TURN_DETECTOR_PROTO_DIR)/__init__.py
+	@echo "$(BOLD)$(GREEN)✓ Protobuf code generated$(RESET)"
 
 unit-tests:
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"

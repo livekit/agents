@@ -1770,6 +1770,9 @@ class AgentActivity(RecognitionHooks):
                 otel_context=speech_handle._agent_turn_context,
             )
 
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_start_of_speech()
+
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
         if audio_output is not None:
@@ -2070,6 +2073,9 @@ class AgentActivity(RecognitionHooks):
                 start_time=started_speaking_at,
                 otel_context=speech_handle._agent_turn_context,
             )
+
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_start_of_speech()
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2425,6 +2431,9 @@ class AgentActivity(RecognitionHooks):
                 start_time=started_speaking_at,
                 otel_context=speech_handle._agent_turn_context,
             )
+
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_start_of_speech()
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
