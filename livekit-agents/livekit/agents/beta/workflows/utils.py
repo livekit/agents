@@ -69,6 +69,14 @@ class InstructionParts:
     constraints: NotGivenOr[Instructions | str] = NOT_GIVEN
     extra: Instructions | str = ""
 
+    def copy(self) -> InstructionParts:
+        return InstructionParts(
+            role=self.role,
+            context=self.context,
+            constraints=self.constraints,
+            extra=self.extra,
+        )
+
 
 def build_instructions(
     parts: NotGivenOr[InstructionParts],

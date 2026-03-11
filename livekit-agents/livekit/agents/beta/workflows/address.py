@@ -78,7 +78,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     def __init__(
         self,
         *,
-        instructions: NotGivenOr[Instructions | InstructionParts | str] = NOT_GIVEN,
+        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,

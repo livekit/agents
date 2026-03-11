@@ -94,11 +94,15 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
         if isinstance(instructions, InstructionParts | NotGiven):
+            default = self.INSTRUCTION_PARTS.copy()
+            default.context = default.context.format(
+                conversation_history=self._format_conversation_history(chat_ctx)
+            )
             instructions = build_instructions(
                 parts=instructions or InstructionParts(extra=extra_instructions),
-                defaults=self.INSTRUCTION_PARTS,
+                defaults=default,
                 directive=_DIRECTIVE,
-            ).format(conversation_history=self._format_conversation_history(chat_ctx))
+            )
 
         super().__init__(
             instructions=instructions,
