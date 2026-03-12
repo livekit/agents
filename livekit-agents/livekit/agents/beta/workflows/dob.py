@@ -5,7 +5,7 @@ from datetime import date, time
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
-from ...llm import Instructions
+from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given

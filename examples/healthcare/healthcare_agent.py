@@ -22,6 +22,7 @@ from livekit.agents import (
     inference,
     llm,
 )
+from livekit.agents.beta import Instructions
 from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.beta.workflows import (
     GetCreditCardTask,
@@ -31,7 +32,7 @@ from livekit.agents.beta.workflows import (
     TaskGroup,
     WarmTransferTask,
 )
-from livekit.agents.llm import Instructions, ToolError, function_tool
+from livekit.agents.llm import ToolError, function_tool
 from livekit.plugins import openai, silero
 
 logger = logging.getLogger("HealthcareAgent")
