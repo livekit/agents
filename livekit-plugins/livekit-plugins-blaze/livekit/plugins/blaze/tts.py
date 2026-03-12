@@ -93,7 +93,7 @@ class TTS(tts.TTS):
         self._auth_token = auth_token or self._config.auth_token
         self._model = model
         self._sample_rate = sample_rate
-        self._timeout = timeout or self._config.tts_timeout
+        self._timeout = timeout if timeout is not None else self._config.tts_timeout
         self._normalization_rules = normalization_rules
         self._chunk_size = 8192
 
