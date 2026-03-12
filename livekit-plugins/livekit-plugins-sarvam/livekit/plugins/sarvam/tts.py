@@ -667,7 +667,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=request_id or "unknown",
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/mp3",
+                    mime_type="audio/wav",
                 )
                 # handle multiple audio chunks
                 for b64 in audios:
@@ -707,7 +707,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
             num_channels=1,
-            mime_type="audio/mp3",
+            mime_type="audio/wav",
             stream=True,
             frame_size_ms=50,
         )
