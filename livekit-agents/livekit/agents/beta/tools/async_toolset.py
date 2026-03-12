@@ -21,13 +21,15 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
-from pydantic import Field
 from typing_extensions import ParamSpec
 
-from ...llm import Tool, Toolset, function_tool as _function_tool
+from ...llm import FunctionCall, FunctionCallOutput, Tool, Toolset, function_tool as _function_tool
 from ...log import logger
+
+if TYPE_CHECKING:
+    from ...voice.events import RunContext
 
 T = TypeVar("T")
 _P = ParamSpec("_P")
@@ -78,42 +80,42 @@ class AsyncOperation(Generic[T]):
 
 @dataclass
 class _AsyncFunctionInfo:
-    """Information about a registered async function."""
-
     name: str
     description: str
     func: Callable[..., Awaitable[Any]]
 
 
 class AsyncToolset(Toolset):
-    """A toolset for managing async/long-running function calls.
+    """A toolset for running long-running functions in the background.
 
-    AsyncToolset allows you to register functions that run in the background and
-    can be checked/monitored by the LLM. This is useful for long-running operations
-    like API calls, database queries, or any task that shouldn't block the conversation.
+    When the LLM calls a tool registered with ``@toolset.function_tool``, the function
+    runs in the background and the LLM gets an immediate response so it can keep talking.
+    When the background operation completes, the result is **automatically pushed back**
+    into the conversation via ``session.generate_reply`` -- no polling needed.
 
-    The toolset exposes tools to the LLM for each registered function (prefixed with
-    ``start_``), plus management tools to check status, get results, list, and cancel
-    operations.
+    The toolset can be shared across multiple agents. If agent A starts an operation and
+    hands off to agent B, the result is still pushed back to the active session when ready.
 
-    Multiple agents can share the same AsyncToolset instance, allowing "execution
-    ownership" to be shared -- one agent can start an operation, another can check
-    its status or retrieve the result.
+    Example::
 
-    Example:
-        ```python
-        async_tools = AsyncToolset(id="booking_tools")
+        async_tools = AsyncToolset(id="booking")
 
         @async_tools.function_tool
         async def book_flight(origin: str, destination: str) -> dict:
-            '''Book a flight from origin to destination.'''
-            await asyncio.sleep(5)  # Simulate long operation
-            return {"confirmation": "ABC123", "origin": origin, "destination": destination}
+            '''Book a flight (takes ~5s).'''
+            result = await booking_api.book(origin, destination)
+            return {"confirmation": result.id}
 
-        # Multiple agents can share this toolset
-        agent1 = Agent(tools=[async_tools], ...)
-        agent2 = Agent(tools=[async_tools], ...)
-        ```
+        agent = Agent(tools=[async_tools], instructions="...")
+
+    Conversation flow:
+
+    1. User: "Book me a flight to Paris"
+    2. LLM calls ``book_flight(origin="NYC", destination="Paris")``
+    3. Tool returns immediately → LLM says "I'm booking that for you..."
+    4. User can keep talking naturally
+    5. Background task completes → result is pushed back
+    6. LLM says "Your flight is booked! Confirmation: ABC123"
     """
 
     @overload
@@ -123,6 +125,7 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
+        pending_message: str | None = None,
     ) -> Callable[_P, _R]: ...
 
     @overload
@@ -132,6 +135,7 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
+        pending_message: str | None = None,
     ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]: ...
 
     def function_tool(
@@ -140,21 +144,24 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
+        pending_message: str | None = None,
     ) -> Callable[_P, _R] | Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-        """Decorator to register an async function as a background tool.
+        """Register an async function as a background tool.
 
         Can be used with or without arguments::
 
             @toolset.function_tool
             async def my_func(x: int) -> int: ...
 
-            @toolset.function_tool(name="custom_name", description="Custom desc")
+            @toolset.function_tool(name="custom_name", pending_message="Working on it...")
             async def my_func(x: int) -> int: ...
 
         Args:
-            f: The async function to register (when used without parentheses).
-            name: Override the tool name (defaults to the function name).
-            description: Override the tool description (defaults to docstring).
+            f: The async function (when used as bare decorator).
+            name: Override tool name (defaults to function name).
+            description: Override tool description (defaults to docstring).
+            pending_message: Message returned to LLM while the operation runs.
+                Defaults to "{name} is running in the background, let the user know".
         """
 
         def decorator(func: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -172,6 +179,7 @@ class AsyncToolset(Toolset):
                 description=tool_description,
                 func=func,
             )
+            self._pending_messages[tool_name] = pending_message
             self._rebuild_tools()
             logger.debug(f"Registered async function: {tool_name}")
             return func
@@ -184,66 +192,12 @@ class AsyncToolset(Toolset):
         self,
         *,
         id: str = "async_toolset",
-        auto_cleanup_completed: bool = True,
-        cleanup_after_seconds: float = 300.0,
     ) -> None:
-        """Initialize the AsyncToolset.
-
-        Args:
-            id: Unique identifier for this toolset.
-            auto_cleanup_completed: Whether to automatically clean up completed
-                operations after cleanup_after_seconds.
-            cleanup_after_seconds: How long to keep completed operations before
-                cleaning them up (default 5 minutes).
-        """
         super().__init__(id=id)
         self._async_functions: dict[str, _AsyncFunctionInfo] = {}
+        self._pending_messages: dict[str, str | None] = {}
         self._operations: dict[str, AsyncOperation[Any]] = {}
         self._tools: list[Tool] = []
-        self._auto_cleanup = auto_cleanup_completed
-        self._cleanup_after = cleanup_after_seconds
-        self._cleanup_task: asyncio.Task[None] | None = None
-
-        # Build management tools
-        self._check_status_tool = _function_tool(
-            self._check_operation_status,
-            name="check_operation_status",
-            description=(
-                "Check the status of one or more async operations by their IDs. "
-                "Returns the current status (pending, running, completed, failed, cancelled) "
-                "and any available results or error messages."
-            ),
-        )
-
-        self._get_result_tool = _function_tool(
-            self._get_operation_result,
-            name="get_operation_result",
-            description=(
-                "Get the result of a completed async operation. "
-                "Use this after check_operation_status shows the operation is completed. "
-                "Optionally remove the operation from tracking after retrieving the result."
-            ),
-        )
-
-        self._list_operations_tool = _function_tool(
-            self._list_operations,
-            name="list_async_operations",
-            description=(
-                "List all pending or recently completed async operations. "
-                "Useful for getting an overview of all operations in progress."
-            ),
-        )
-
-        self._cancel_operation_tool = _function_tool(
-            self._cancel_operation,
-            name="cancel_async_operation",
-            description=(
-                "Cancel a pending or running async operation. "
-                "Returns whether the cancellation was successful."
-            ),
-        )
-
-        self._rebuild_tools()
 
     def get_operation(self, operation_id: str) -> AsyncOperation[Any] | None:
         """Get an operation by its ID."""
@@ -267,71 +221,63 @@ class AsyncToolset(Toolset):
         ]
 
     def _rebuild_tools(self) -> None:
-        """Rebuild the list of tools after registration changes."""
-        self._tools = []
+        self._tools = [self._create_tool(info) for info in self._async_functions.values()]
 
-        for info in self._async_functions.values():
-            self._tools.append(self._create_start_tool(info))
-
-        self._tools.extend(
-            [
-                self._check_status_tool,
-                self._get_result_tool,
-                self._list_operations_tool,
-                self._cancel_operation_tool,
-            ]
-        )
-
-    def _create_start_tool(self, info: _AsyncFunctionInfo) -> Tool:
-        """Create a start tool for an async function."""
+    def _create_tool(self, info: _AsyncFunctionInfo) -> Tool:
+        """Create the LLM-facing tool that wraps the async function."""
         from typing import get_type_hints
+
+        from ...voice.events import RunContext
 
         func = info.func
         sig = inspect.signature(func)
+        tool_name = info.name
+        pending_msg = self._pending_messages.get(tool_name)
 
         try:
             type_hints = get_type_hints(func)
         except Exception:
             type_hints = {}
 
-        async def start_wrapper(**kwargs: Any) -> str:
-            return await self._start_operation(info.name, kwargs)
+        # The wrapper accepts the original params + RunContext (auto-injected by framework)
+        async def tool_wrapper(ctx: RunContext, **kwargs: Any) -> str:  # type: ignore[type-arg]
+            return await self._dispatch(tool_name, ctx, kwargs, pending_msg)
 
-        # Preserve the signature from the original function for schema generation
-        params = [
+        # Preserve the original signature for LLM schema generation.
+        # RunContext params are auto-excluded by the framework.
+        user_params = [
             p
             for pname, p in sig.parameters.items()
             if pname not in ("self", "ctx") and p.kind != inspect.Parameter.VAR_KEYWORD
         ]
-        start_wrapper.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
-        start_wrapper.__annotations__ = {
-            n: hint for n, hint in type_hints.items() if n not in ("self", "ctx", "return")
+        ctx_param = inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=RunContext)
+        tool_wrapper.__signature__ = sig.replace(parameters=[ctx_param, *user_params])  # type: ignore[attr-defined]
+        tool_wrapper.__annotations__ = {
+            "ctx": RunContext,
+            **{n: h for n, h in type_hints.items() if n not in ("self", "ctx", "return")},
+            "return": str,
         }
-        start_wrapper.__annotations__["return"] = str
-        start_wrapper.__doc__ = (
-            f"{info.description}\n\n"
-            "This starts the operation in the background and returns an operation ID. "
-            "Use check_operation_status to monitor progress and get_operation_result "
-            "to retrieve the final result."
-        )
+        tool_wrapper.__doc__ = info.description
 
         return _function_tool(
-            start_wrapper,
-            name=f"start_{info.name}",
-            description=(
-                f"Start async operation: {info.description} "
-                "Returns an operation ID to track the background task."
-            ),
+            tool_wrapper,
+            name=tool_name,
+            description=info.description,
         )
 
-    async def _start_operation(self, func_name: str, arguments: dict[str, Any]) -> str:
-        """Start an async operation and return its ID."""
+    async def _dispatch(
+        self,
+        func_name: str,
+        ctx: RunContext,  # type: ignore[type-arg]
+        arguments: dict[str, Any],
+        pending_message: str | None,
+    ) -> str:
+        """Start the background operation and return immediately."""
         info = self._async_functions.get(func_name)
         if not info:
             return f"Error: Unknown async function '{func_name}'"
 
         operation_id = str(uuid.uuid4())[:8]
-
         operation: AsyncOperation[Any] = AsyncOperation(
             id=operation_id,
             name=func_name,
@@ -340,24 +286,26 @@ class AsyncToolset(Toolset):
         )
         self._operations[operation_id] = operation
 
-        task = asyncio.create_task(self._run_operation(operation, info.func))
+        task = asyncio.create_task(
+            self._run_and_push(operation, info.func, ctx)
+        )
         operation.task = task
 
         logger.debug(f"Started async operation {operation_id} for {func_name}")
 
-        if self._auto_cleanup and self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-
-        return (
-            f"Operation started with ID: {operation_id}. "
-            f"Use check_operation_status('{operation_id}') to monitor progress."
+        return pending_message or (
+            f"{func_name} is running in the background, let the user know"
         )
 
-    async def _run_operation(
-        self, operation: AsyncOperation[T], func: Callable[..., Awaitable[T]]
-    ) -> T:
-        """Run the async operation."""
+    async def _run_and_push(
+        self,
+        operation: AsyncOperation[T],
+        func: Callable[..., Awaitable[T]],
+        ctx: RunContext,  # type: ignore[type-arg]
+    ) -> None:
+        """Run the operation and push the result back into the conversation."""
         operation.status = OperationStatus.RUNNING
+        session = ctx.session
 
         try:
             result = await func(**operation.arguments)
@@ -365,178 +313,64 @@ class AsyncToolset(Toolset):
             operation.status = OperationStatus.COMPLETED
             operation.completed_at = time.time()
             logger.debug(f"Operation {operation.id} completed successfully")
-            return result
+
+            # Push result back into the conversation
+            self._push_result(session, operation)
+
         except asyncio.CancelledError:
             operation.status = OperationStatus.CANCELLED
             operation.completed_at = time.time()
             logger.debug(f"Operation {operation.id} was cancelled")
-            raise
+
         except Exception as e:
             operation.error = str(e)
             operation.status = OperationStatus.FAILED
             operation.completed_at = time.time()
             logger.warning(f"Operation {operation.id} failed: {e}")
-            raise
 
-    async def _check_operation_status(
+            # Push error back into the conversation
+            self._push_result(session, operation)
+
+    def _push_result(
         self,
-        operation_ids: Annotated[
-            list[str],
-            Field(description="List of operation IDs to check status for"),
-        ],
-    ) -> str:
-        """Check the status of one or more operations."""
-        if not operation_ids:
-            return "No operation IDs provided"
+        session: Any,
+        operation: AsyncOperation[Any],
+    ) -> None:
+        """Inject the result into the chat context and trigger a new LLM turn."""
+        call_id = f"async_{operation.id}"
 
-        results = []
-        for op_id in operation_ids:
-            operation = self._operations.get(op_id)
-            if not operation:
-                results.append(f"Operation {op_id}: Not found")
-                continue
+        # Create function call + output pair in the chat context
+        fnc_call = FunctionCall(
+            call_id=call_id,
+            name=operation.name,
+            arguments=str(operation.arguments),
+        )
 
-            status_info = f"Operation {op_id} ({operation.name}): {operation.status.value}"
-            if operation.status == OperationStatus.COMPLETED:
-                status_info += " - Result available, use get_operation_result to retrieve"
-            elif operation.status == OperationStatus.FAILED:
-                status_info += f" - Error: {operation.error}"
-            elif operation.status == OperationStatus.RUNNING:
-                elapsed = time.time() - operation.created_at
-                status_info += f" - Running for {elapsed:.1f}s"
-
-            results.append(status_info)
-
-        return "\n".join(results)
-
-    async def _get_operation_result(
-        self,
-        operation_id: Annotated[
-            str,
-            Field(description="The ID of the operation to get the result for"),
-        ],
-        remove_after: Annotated[
-            bool,
-            Field(
-                description="Whether to remove the operation from tracking after retrieving. "
-                "Defaults to True.",
-                default=True,
-            ),
-        ] = True,
-    ) -> str:
-        """Get the result of a completed operation."""
-        operation = self._operations.get(operation_id)
-        if not operation:
-            return f"Operation {operation_id} not found"
-
-        if operation.status == OperationStatus.PENDING:
-            return f"Operation {operation_id} is still pending"
-        elif operation.status == OperationStatus.RUNNING:
-            elapsed = time.time() - operation.created_at
-            return f"Operation {operation_id} is still running ({elapsed:.1f}s elapsed)"
-        elif operation.status == OperationStatus.CANCELLED:
-            if remove_after:
-                del self._operations[operation_id]
-            return f"Operation {operation_id} was cancelled"
-        elif operation.status == OperationStatus.FAILED:
-            error_msg = f"Operation {operation_id} failed: {operation.error}"
-            if remove_after:
-                del self._operations[operation_id]
-            return error_msg
-        elif operation.status == OperationStatus.COMPLETED:
-            result = operation.result
-            if remove_after:
-                del self._operations[operation_id]
-            return f"Operation {operation_id} result: {result}"
-
-        return f"Unknown status for operation {operation_id}"
-
-    async def _list_operations(self) -> str:
-        """List all tracked operations."""
-        if not self._operations:
-            return "No async operations are currently tracked"
-
-        lines = ["Current async operations:"]
-        for op in self._operations.values():
-            elapsed = time.time() - op.created_at
-            status_detail = ""
-            if op.status == OperationStatus.COMPLETED:
-                status_detail = " (result available)"
-            elif op.status == OperationStatus.FAILED:
-                status_detail = f" (error: {op.error})"
-            elif op.status == OperationStatus.RUNNING:
-                status_detail = f" (running {elapsed:.1f}s)"
-
-            lines.append(f"- {op.id}: {op.name} - {op.status.value}{status_detail}")
-
-        return "\n".join(lines)
-
-    async def _cancel_operation(
-        self,
-        operation_id: Annotated[
-            str,
-            Field(description="The ID of the operation to cancel"),
-        ],
-    ) -> str:
-        """Cancel a pending or running operation."""
-        operation = self._operations.get(operation_id)
-        if not operation:
-            return f"Operation {operation_id} not found"
-
-        if operation.status not in (OperationStatus.PENDING, OperationStatus.RUNNING):
-            return (
-                f"Operation {operation_id} cannot be cancelled "
-                f"(status: {operation.status.value})"
+        if operation.status == OperationStatus.COMPLETED:
+            fnc_output = FunctionCallOutput(
+                call_id=call_id,
+                name=operation.name,
+                output=str(operation.result),
+                is_error=False,
+            )
+        else:
+            fnc_output = FunctionCallOutput(
+                call_id=call_id,
+                name=operation.name,
+                output=f"Error: {operation.error}",
+                is_error=True,
             )
 
-        if operation.task and not operation.task.done():
-            operation.task.cancel()
-            try:
-                await operation.task
-            except asyncio.CancelledError:
-                pass
+        # Inject into the agent's chat context and trigger a new LLM turn
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.insert(fnc_call)
+        chat_ctx.insert(fnc_output)
 
-        operation.status = OperationStatus.CANCELLED
-        operation.completed_at = time.time()
-
-        return f"Operation {operation_id} has been cancelled"
-
-    async def _cleanup_loop(self) -> None:
-        """Background task to clean up old completed operations."""
-        try:
-            while True:
-                await asyncio.sleep(60)
-                current_time = time.time()
-                to_remove = []
-
-                for op_id, op in self._operations.items():
-                    if op.completed_at is not None:
-                        age = current_time - op.completed_at
-                        if age > self._cleanup_after:
-                            to_remove.append(op_id)
-
-                for op_id in to_remove:
-                    del self._operations[op_id]
-                    logger.debug(f"Cleaned up old operation: {op_id}")
-
-                if not self._operations:
-                    self._cleanup_task = None
-                    break
-
-        except asyncio.CancelledError:
-            pass
+        session.generate_reply(chat_ctx=chat_ctx)
 
     async def shutdown(self) -> None:
-        """Shutdown the toolset and cancel all pending operations."""
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-            self._cleanup_task = None
-
-        for op in self._operations.values():
+        """Cancel all pending operations."""
+        for op in list(self._operations.values()):
             if op.task and not op.task.done():
                 op.task.cancel()
                 try:

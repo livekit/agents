@@ -1,26 +1,10 @@
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 
 from livekit.agents.beta.tools import AsyncToolset, OperationStatus
 from livekit.agents.llm import FunctionTool, ToolContext
-
-# -- helpers used across tests --
-
-toolset = AsyncToolset(id="test_global", auto_cleanup_completed=False)
-
-
-@toolset.function_tool
-async def slow_operation(value: str, delay: float = 0.1) -> dict:
-    """A slow operation that takes some time to complete."""
-    await asyncio.sleep(delay)
-    return {"value": value, "processed": True}
-
-
-@toolset.function_tool
-async def instant_operation(x: int, y: int) -> int:
-    """An operation that completes instantly."""
-    return x + y
 
 
 class TestDecoratorRegistration:
@@ -32,9 +16,9 @@ class TestDecoratorRegistration:
             """Do something."""
             return a
 
-        assert "my_func" in [f.name for f in ts._async_functions.values()]
+        assert "my_func" in ts._async_functions
         tool_names = [t.id for t in ts.tools]
-        assert "start_my_func" in tool_names
+        assert "my_func" in tool_names
 
     def test_decorator_with_args(self):
         ts = AsyncToolset(id="args")
@@ -44,9 +28,9 @@ class TestDecoratorRegistration:
             """Original docstring."""
             return a
 
-        assert "custom_name" in [f.name for f in ts._async_functions.values()]
+        assert "custom_name" in ts._async_functions
         tool_names = [t.id for t in ts.tools]
-        assert "start_custom_name" in tool_names
+        assert "custom_name" in tool_names
 
     def test_decorator_preserves_function(self):
         ts = AsyncToolset(id="preserve")
@@ -56,9 +40,18 @@ class TestDecoratorRegistration:
             """Add two numbers."""
             return x + y
 
-        # The original function should still be callable directly
+        # The original function should still be directly callable
         result = asyncio.get_event_loop().run_until_complete(add(1, 2))
         assert result == 3
+
+    def test_custom_pending_message(self):
+        ts = AsyncToolset(id="pending")
+
+        @ts.function_tool(pending_message="Hold tight, booking your flight...")
+        async def book_flight(dest: str) -> str:
+            return f"booked {dest}"
+
+        assert ts._pending_messages["book_flight"] == "Hold tight, booking your flight..."
 
     def test_sync_function_fails(self):
         ts = AsyncToolset(id="sync_fail")
@@ -84,239 +77,215 @@ class TestDecoratorRegistration:
 
 
 class TestAsyncToolsetTools:
-    def test_tools_property(self):
-        tools = toolset.tools
-        tool_names = [t.id for t in tools]
-
-        assert "start_slow_operation" in tool_names
-        assert "start_instant_operation" in tool_names
-        assert "check_operation_status" in tool_names
-        assert "get_operation_result" in tool_names
-        assert "list_async_operations" in tool_names
-        assert "cancel_async_operation" in tool_names
-
-    def test_tool_context_integration(self):
-        ctx = ToolContext([toolset])
-        assert "start_slow_operation" in ctx.function_tools
-        assert "check_operation_status" in ctx.function_tools
-        assert toolset in ctx.toolsets
-
-    def test_start_tool_is_function_tool(self):
-        start_tool = None
-        for tool in toolset.tools:
-            if tool.id == "start_instant_operation":
-                start_tool = tool
-                break
-
-        assert start_tool is not None
-        assert isinstance(start_tool, FunctionTool)
-
-
-class TestAsyncToolsetOperations:
-    async def test_start_operation(self):
-        ts = AsyncToolset(id="op_start", auto_cleanup_completed=False)
+    def test_tools_use_original_name(self):
+        """Tools should use the function name directly, no start_ prefix."""
+        ts = AsyncToolset(id="names")
 
         @ts.function_tool
-        async def slow(value: str, delay: float = 0.05) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value, "processed": True}
+        async def book_flight(dest: str) -> str:
+            return dest
 
-        result = await ts._start_operation("slow", {"value": "test", "delay": 0.05})
+        @ts.function_tool
+        async def search_hotels(city: str) -> str:
+            return city
 
-        assert "Operation started" in result
+        tool_names = [t.id for t in ts.tools]
+        assert "book_flight" in tool_names
+        assert "search_hotels" in tool_names
+        assert "start_book_flight" not in tool_names
+
+    def test_tool_context_integration(self):
+        ts = AsyncToolset(id="ctx")
+
+        @ts.function_tool
+        async def my_tool(x: int) -> int:
+            return x
+
+        ctx = ToolContext([ts])
+        assert "my_tool" in ctx.function_tools
+        assert ts in ctx.toolsets
+
+    def test_tool_is_function_tool(self):
+        ts = AsyncToolset(id="type")
+
+        @ts.function_tool
+        async def my_tool(x: int) -> int:
+            return x
+
+        tool = ts.tools[0]
+        assert isinstance(tool, FunctionTool)
+
+    def test_no_polling_tools(self):
+        """Push model means no check_status/get_result/list/cancel tools."""
+        ts = AsyncToolset(id="no_poll")
+
+        @ts.function_tool
+        async def my_tool(x: int) -> int:
+            return x
+
+        tool_names = [t.id for t in ts.tools]
+        assert "check_operation_status" not in tool_names
+        assert "get_operation_result" not in tool_names
+        assert "list_async_operations" not in tool_names
+        assert "cancel_async_operation" not in tool_names
+
+
+def _make_mock_ctx():
+    """Create a mock RunContext with a mock session."""
+    session = MagicMock()
+    session.chat_ctx = MagicMock()
+    session.chat_ctx.copy.return_value = MagicMock()
+    session.generate_reply = MagicMock()
+
+    ctx = MagicMock()
+    ctx.session = session
+    return ctx
+
+
+class TestAsyncToolsetDispatch:
+    async def test_dispatch_returns_pending_message(self):
+        ts = AsyncToolset(id="dispatch")
+
+        @ts.function_tool(pending_message="Working on it...")
+        async def slow_task(value: str) -> str:
+            await asyncio.sleep(10)
+            return value
+
+        ctx = _make_mock_ctx()
+        result = await ts._dispatch("slow_task", ctx, {"value": "test"}, "Working on it...")
+
+        assert result == "Working on it..."
         assert len(ts._operations) == 1
 
-        await asyncio.sleep(0.1)
+        await ts.shutdown()
+
+    async def test_dispatch_default_pending_message(self):
+        ts = AsyncToolset(id="default_msg")
+
+        @ts.function_tool
+        async def my_task(x: int) -> int:
+            await asyncio.sleep(10)
+            return x
+
+        ctx = _make_mock_ctx()
+        result = await ts._dispatch("my_task", ctx, {"x": 1}, None)
+
+        assert "my_task" in result
+        assert "background" in result
+
+        await ts.shutdown()
+
+    async def test_dispatch_unknown_function(self):
+        ts = AsyncToolset(id="unknown")
+        ctx = _make_mock_ctx()
+        result = await ts._dispatch("nonexistent", ctx, {}, None)
+        assert "Error" in result
+
+    async def test_operation_completes_and_pushes_result(self):
+        ts = AsyncToolset(id="push")
+
+        @ts.function_tool
+        async def fast_task(value: str) -> dict:
+            return {"result": value}
+
+        ctx = _make_mock_ctx()
+        await ts._dispatch("fast_task", ctx, {"value": "hello"}, None)
+
+        # Wait for background task to complete
+        await asyncio.sleep(0.05)
 
         op = list(ts._operations.values())[0]
         assert op.status == OperationStatus.COMPLETED
-        assert op.result == {"value": "test", "processed": True}
+        assert op.result == {"result": "hello"}
 
-    async def test_start_unknown_function(self):
-        ts = AsyncToolset(id="op_unknown")
-        result = await ts._start_operation("unknown", {})
-        assert "Error: Unknown async function" in result
+        # Should have called generate_reply to push the result back
+        ctx.session.generate_reply.assert_called_once()
 
-    async def test_operation_failure(self):
-        ts = AsyncToolset(id="op_fail", auto_cleanup_completed=False)
+    async def test_operation_failure_pushes_error(self):
+        ts = AsyncToolset(id="fail_push")
 
         @ts.function_tool
-        async def fail_op(error_message: str) -> str:
-            raise ValueError(error_message)
+        async def failing_task(msg: str) -> str:
+            raise ValueError(msg)
 
-        await ts._start_operation("fail_op", {"error_message": "test error"})
+        ctx = _make_mock_ctx()
+        await ts._dispatch("failing_task", ctx, {"msg": "boom"}, None)
+
         await asyncio.sleep(0.05)
 
         op = list(ts._operations.values())[0]
         assert op.status == OperationStatus.FAILED
-        assert "test error" in op.error
+        assert "boom" in op.error
 
-    async def test_check_operation_status(self):
-        ts = AsyncToolset(id="op_check", auto_cleanup_completed=False)
+        # Error should also be pushed back
+        ctx.session.generate_reply.assert_called_once()
 
-        @ts.function_tool
-        async def slow(value: str, delay: float = 0.5) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
-
-        result = await ts._start_operation("slow", {"value": "test", "delay": 0.5})
-        op_id = result.split("ID: ")[1].split(".")[0]
-
-        status = await ts._check_operation_status([op_id])
-        assert "running" in status.lower() or "pending" in status.lower()
-
-        await asyncio.sleep(0.6)
-        status = await ts._check_operation_status([op_id])
-        assert "completed" in status.lower()
-
-    async def test_check_nonexistent_operation(self):
-        ts = AsyncToolset(id="op_noexist")
-        status = await ts._check_operation_status(["nonexistent"])
-        assert "Not found" in status
-
-    async def test_get_operation_result(self):
-        ts = AsyncToolset(id="op_result", auto_cleanup_completed=False)
+    async def test_cancelled_operation_does_not_push(self):
+        ts = AsyncToolset(id="cancel_no_push")
 
         @ts.function_tool
-        async def add(x: int, y: int) -> int:
-            return x + y
+        async def slow_task(value: str) -> str:
+            await asyncio.sleep(10)
+            return value
 
-        result = await ts._start_operation("add", {"x": 5, "y": 3})
-        op_id = result.split("ID: ")[1].split(".")[0]
+        ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
 
-        await asyncio.sleep(0.05)
-
-        result = await ts._get_operation_result(op_id, remove_after=False)
-        assert "8" in result
-        assert op_id in ts._operations
-
-        result = await ts._get_operation_result(op_id, remove_after=True)
-        assert op_id not in ts._operations
-
-    async def test_get_result_while_running(self):
-        ts = AsyncToolset(id="op_running", auto_cleanup_completed=False)
-
-        @ts.function_tool
-        async def slow(value: str, delay: float = 0.5) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
-
-        result = await ts._start_operation("slow", {"value": "test", "delay": 0.5})
-        op_id = result.split("ID: ")[1].split(".")[0]
-
-        result = await ts._get_operation_result(op_id)
-        assert "still running" in result.lower() or "still pending" in result.lower()
-
+        # Cancel immediately
         await ts.shutdown()
 
-    async def test_list_operations(self):
-        ts = AsyncToolset(id="op_list", auto_cleanup_completed=False)
-
-        @ts.function_tool
-        async def slow(value: str, delay: float = 0.5) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
-
-        @ts.function_tool
-        async def add(x: int, y: int) -> int:
-            return x + y
-
-        await ts._start_operation("slow", {"value": "test", "delay": 0.5})
-        await ts._start_operation("add", {"x": 1, "y": 2})
-
-        await asyncio.sleep(0.05)
-
-        result = await ts._list_operations()
-        assert "slow" in result
-        assert "add" in result
-
-        await ts.shutdown()
-
-    async def test_list_empty_operations(self):
-        ts = AsyncToolset(id="op_empty")
-        result = await ts._list_operations()
-        assert "No async operations" in result
-
-    async def test_cancel_operation(self):
-        ts = AsyncToolset(id="op_cancel", auto_cleanup_completed=False)
-
-        @ts.function_tool
-        async def slow(value: str, delay: float = 1.0) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
-
-        result = await ts._start_operation("slow", {"value": "test", "delay": 1.0})
-        op_id = result.split("ID: ")[1].split(".")[0]
-
-        cancel_result = await ts._cancel_operation(op_id)
-        assert "cancelled" in cancel_result.lower()
-
-        op = ts._operations[op_id]
-        assert op.status == OperationStatus.CANCELLED
-
-    async def test_cancel_completed_operation_fails(self):
-        ts = AsyncToolset(id="op_cancel_done", auto_cleanup_completed=False)
-
-        @ts.function_tool
-        async def add(x: int, y: int) -> int:
-            return x + y
-
-        result = await ts._start_operation("add", {"x": 1, "y": 2})
-        op_id = result.split("ID: ")[1].split(".")[0]
-
-        await asyncio.sleep(0.05)
-
-        cancel_result = await ts._cancel_operation(op_id)
-        assert "cannot be cancelled" in cancel_result.lower()
-
-    async def test_cancel_nonexistent_operation(self):
-        ts = AsyncToolset(id="op_cancel_noexist")
-        result = await ts._cancel_operation("nonexistent")
-        assert "not found" in result.lower()
+        # Cancelled operations should NOT push a reply
+        ctx.session.generate_reply.assert_not_called()
 
 
-class TestAsyncToolsetHelpers:
+class TestAsyncToolsetOperationTracking:
     async def test_get_operation(self):
-        ts = AsyncToolset(id="helper_get", auto_cleanup_completed=False)
+        ts = AsyncToolset(id="track_get")
 
         @ts.function_tool
-        async def add(x: int, y: int) -> int:
-            return x + y
+        async def my_task(x: int) -> int:
+            return x
 
-        result = await ts._start_operation("add", {"x": 1, "y": 2})
-        op_id = result.split("ID: ")[1].split(".")[0]
-
-        op = ts.get_operation(op_id)
-        assert op is not None
-        assert op.name == "add"
+        ctx = _make_mock_ctx()
+        await ts._dispatch("my_task", ctx, {"x": 42}, None)
         await asyncio.sleep(0.05)
+
+        ops = list(ts._operations.values())
+        assert len(ops) == 1
+
+        op = ts.get_operation(ops[0].id)
+        assert op is not None
+        assert op.name == "my_task"
+        assert op.status == OperationStatus.COMPLETED
 
     async def test_get_pending_operations(self):
-        ts = AsyncToolset(id="helper_pending", auto_cleanup_completed=False)
+        ts = AsyncToolset(id="track_pending")
 
         @ts.function_tool
-        async def slow(value: str, delay: float = 0.5) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
+        async def slow_task(value: str) -> str:
+            await asyncio.sleep(10)
+            return value
 
-        await ts._start_operation("slow", {"value": "test", "delay": 0.5})
+        ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
 
         pending = ts.get_pending_operations()
         assert len(pending) == 1
 
-        await asyncio.sleep(0.6)
+        await ts.shutdown()
 
         pending = ts.get_pending_operations()
         assert len(pending) == 0
 
     async def test_get_completed_operations(self):
-        ts = AsyncToolset(id="helper_completed", auto_cleanup_completed=False)
+        ts = AsyncToolset(id="track_completed")
 
         @ts.function_tool
-        async def add(x: int, y: int) -> int:
-            return x + y
+        async def fast_task(x: int) -> int:
+            return x
 
-        await ts._start_operation("add", {"x": 1, "y": 2})
+        ctx = _make_mock_ctx()
+        await ts._dispatch("fast_task", ctx, {"x": 1}, None)
         await asyncio.sleep(0.05)
 
         completed = ts.get_completed_operations()
@@ -325,45 +294,55 @@ class TestAsyncToolsetHelpers:
 
 
 class TestAsyncToolsetSharing:
-    async def test_shared_toolset_across_contexts(self):
-        """Multiple ToolContexts can share the same AsyncToolset."""
-        ts = AsyncToolset(id="shared", auto_cleanup_completed=False)
+    async def test_shared_across_contexts(self):
+        """Multiple ToolContexts share the same toolset and operations."""
+        ts = AsyncToolset(id="shared")
 
         @ts.function_tool
-        async def slow(value: str, delay: float = 0.1) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
+        async def shared_task(value: str) -> str:
+            return value
 
         ctx1 = ToolContext([ts])
         ctx2 = ToolContext([ts])
 
         assert ts in ctx1.toolsets
         assert ts in ctx2.toolsets
+        assert ctx1.get_function_tool("shared_task") is not None
+        assert ctx2.get_function_tool("shared_task") is not None
 
-        # Both see the same start tool
-        assert ctx1.get_function_tool("start_slow") is not None
-        assert ctx2.get_function_tool("start_slow") is not None
+    async def test_shared_operation_state(self):
+        """Operations started via one context are visible to another."""
+        ts = AsyncToolset(id="shared_ops")
 
-        result = await ts._start_operation("slow", {"value": "shared", "delay": 0.1})
-        op_id = result.split("ID: ")[1].split(".")[0]
+        @ts.function_tool
+        async def task(value: str) -> str:
+            return value
 
-        await asyncio.sleep(0.15)
-        op = ts.get_operation(op_id)
-        assert op is not None
-        assert op.status == OperationStatus.COMPLETED
+        ctx = _make_mock_ctx()
+        await ts._dispatch("task", ctx, {"value": "shared"}, None)
+        await asyncio.sleep(0.05)
+
+        # Any agent with this toolset sees the operation
+        assert len(ts.get_completed_operations()) == 1
 
 
 class TestAsyncToolsetShutdown:
-    async def test_shutdown(self):
-        ts = AsyncToolset(id="shutdown_test", auto_cleanup_completed=False)
+    async def test_shutdown_cancels_pending(self):
+        ts = AsyncToolset(id="shutdown")
 
         @ts.function_tool
-        async def slow(value: str, delay: float = 10.0) -> dict:
-            await asyncio.sleep(delay)
-            return {"value": value}
+        async def slow_task(value: str) -> str:
+            await asyncio.sleep(10)
+            return value
 
-        await ts._start_operation("slow", {"value": "test", "delay": 10.0})
+        ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
         assert len(ts.get_pending_operations()) == 1
 
         await ts.shutdown()
         assert len(ts._operations) == 0
+
+    async def test_shutdown_is_idempotent(self):
+        ts = AsyncToolset(id="shutdown_idem")
+        await ts.shutdown()
+        await ts.shutdown()
