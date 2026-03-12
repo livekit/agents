@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
 
@@ -798,7 +798,11 @@ class AgentActivity(RecognitionHooks):
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        ) or (self._session.agent_state == "speaking" and self._session._aec_warmup_remaining > 0)
+        ) or (
+            self._session.agent_state == "speaking"
+            and self._session._aec_warmup_remaining > 0
+            and self._session._aec_warmup_timer is not None
+        )
 
         if not should_discard:
             if self._rt_session is not None:
@@ -1032,15 +1036,15 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(
-        self, *, transcript_timeout: float, stt_flush_duration: float
+        self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
     ) -> asyncio.Future[str]:
-        skip_reply: bool = False
         if self._rt_session is not None:
-            # commit audio buffer and trigger response generation
+            # commit audio buffer and conditionally trigger response generation
+            self._rt_session.commit_audio()
+            if not skip_reply:
+                self._session.generate_reply()
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
-            self._rt_session.commit_audio()
-            self._session.generate_reply()
             skip_reply = True
 
         assert self._audio_recognition is not None
@@ -1240,7 +1244,7 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
-        if self._session._aec_warmup_remaining > 0:
+        if self._session._aec_warmup_remaining > 0 and self._session._aec_warmup_timer is not None:
             # disable interruption from audio activity while aec warmup is active
             return
 
@@ -1530,6 +1534,12 @@ class AgentActivity(RecognitionHooks):
                         self._session._conversation_item_added(user_message)
                     return
                 self._rt_session.commit_audio()
+
+        if info.skip_reply:
+            if info.new_transcript != "":
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
+            return
 
         if (current_speech := self._current_speech) is not None:
             if not current_speech.allow_interruptions:
@@ -2323,9 +2333,7 @@ class AgentActivity(RecognitionHooks):
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):
-            self._rt_session.update_options(
-                tool_choice=cast(llm.ToolChoice, model_settings.tool_choice)
-            )
+            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
             generation_ev = await self._rt_session.generate_reply(

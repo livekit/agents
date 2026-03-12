@@ -547,7 +547,28 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
-            self._mark_restart_needed()
+
+            async with self._session_lock:
+                if not self._active_session:
+                    # No active session yet — restart will pick up new instructions via _build_connect_config
+                    self._mark_restart_needed()
+                    return
+
+            # Active session exists — send mid-session system instruction update (no reconnect needed)
+            logger.debug("Updating instructions mid-session")
+            self._send_client_event(
+                types.LiveClientContent(
+                    turns=[
+                        types.Content(
+                            parts=[types.Part(text=instructions)],
+                            # Vertex AI ignores role=None or role="system" and only works with role="model".
+                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
+                            role="model" if self._opts.vertexai else None,
+                        )
+                    ],
+                    turn_complete=False,
+                )
+            )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
@@ -638,12 +659,10 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[
-                        types.Blob(
-                            data=nf.data.tobytes(),
-                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                        )
-                    ]
+                    audio=types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                    )
                 )
                 self._send_client_event(realtime_input)
 
@@ -652,7 +671,7 @@ class RealtimeSession(llm.RealtimeSession):
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
         realtime_input = types.LiveClientRealtimeInput(
-            media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
+            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
         )
         self._send_client_event(realtime_input)
 
@@ -885,9 +904,12 @@ class RealtimeSession(llm.RealtimeSession):
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
-                    if msg.media_chunks:
-                        for media_chunk in msg.media_chunks:
-                            await session.send_realtime_input(media=media_chunk)
+                    if msg.audio:
+                        await session.send_realtime_input(audio=msg.audio)
+                    elif msg.video:
+                        await session.send_realtime_input(video=msg.video)
+                    elif msg.text:
+                        await session.send_realtime_input(text=msg.text)
                     elif msg.activity_start:
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
@@ -903,7 +925,9 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientRealtimeInput,
                     ),
                 ):
-                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (
+                        msg.audio or msg.video or msg.text
+                    ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
                             extra={"content": msg.model_dump(exclude_defaults=True)},

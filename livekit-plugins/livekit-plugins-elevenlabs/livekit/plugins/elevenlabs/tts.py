@@ -560,7 +560,7 @@ class _Connection:
                 preferred_alignment = "original"
             else:
                 preferred_alignment = "normalized"
-        return preferred_alignment  # type: ignore[return-value]
+        return preferred_alignment
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""

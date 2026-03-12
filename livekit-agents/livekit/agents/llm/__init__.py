@@ -11,7 +11,6 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
-    Instructions,
     MetricsReport,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
@@ -72,7 +71,6 @@ __all__ = [
     "AgentConfigUpdate",
     "AgentHandoff",
     "MetricsReport",
-    "Instructions",
     "ChatItem",
     "ChoiceDelta",
     "ChatChunk",
