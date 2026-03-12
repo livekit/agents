@@ -174,9 +174,7 @@ class LLM(llm.LLM):
 
             extra["tools"] = tool_schemas
 
-            tool_choice = (
-                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":

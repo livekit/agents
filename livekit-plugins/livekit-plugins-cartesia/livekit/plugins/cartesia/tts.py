@@ -264,12 +264,12 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = LanguageCode(language) if language else None
         if is_given(voice):
-            self._opts.voice = cast(str | list[float], voice)
+            self._opts.voice = voice
         if is_given(speed):
             self._opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
+            self._opts.emotion = emotion
         if is_given(volume):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
