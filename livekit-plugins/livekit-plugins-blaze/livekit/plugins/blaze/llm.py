@@ -88,7 +88,7 @@ class LLM(llm.LLM):
         self._agentic_search = agentic_search
         self._enable_tools = enable_tools
         self._demographics = demographics
-        self._timeout = timeout or self._config.llm_timeout
+        self._timeout = timeout if timeout is not None else self._config.llm_timeout
 
         # Build chat URL
         self._chat_url = f"{self._api_url}/v1/voicebot-call/{bot_id}/chat-conversion-stream"
@@ -252,7 +252,7 @@ class LLMStream(llm.LLMStream):
             # Build URL with query parameters using httpx for proper encoding
             query_params: Dict[str, str] = {
                 "is_voice_call": "true",
-                "use_tool_based": "true",
+                "use_tool_based": "true" if self._llm._enable_tools else "false",
             }
             if self._llm._deep_search:
                 query_params["deep_search"] = "true"
