@@ -64,6 +64,7 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
+    add_extra_instructions,
     apply_instructions_modality,
     perform_audio_forwarding,
     perform_llm_inference,
@@ -949,11 +950,15 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
+            # generate_reply instructions are "extra" instructions that should be kept
+            # separate from the agent's core instructions. This matches the behavior of
+            # the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
-                instructions = self._agent.instructions + "\n" + instructions
+            #
+            # By adding extra_instructions at the END of the chat context (instead of
+            # modifying the first system message), the model can better distinguish between
+            # "core behavior" and "one-off task instructions" as the context grows.
+            extra_instructions = instructions if instructions else None
 
             task = self._create_speech_task(
                 self._pipeline_reply_task(
@@ -961,7 +966,7 @@ class AgentActivity(RecognitionHooks):
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=tools,
                     new_message=user_message if is_given(user_message) else None,
-                    instructions=instructions or None,
+                    extra_instructions=extra_instructions,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
                         if utils.is_given(tool_choice) or self._tool_choice is None
@@ -1898,7 +1903,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | Instructions | None = None,
+        extra_instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1916,7 +1921,7 @@ class AgentActivity(RecognitionHooks):
                 tools=tools,
                 model_settings=model_settings,
                 new_message=new_message,
-                instructions=instructions,
+                extra_instructions=extra_instructions,
                 _previous_user_metrics=_previous_user_metrics,
                 _previous_tools_messages=_previous_tools_messages,
             )
@@ -1929,7 +1934,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
-        instructions: str | Instructions | None = None,
+        extra_instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -1937,8 +1942,8 @@ class AgentActivity(RecognitionHooks):
 
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
-        if instructions is not None:
-            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
+        if extra_instructions is not None:
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, extra_instructions)
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
@@ -1957,14 +1962,24 @@ class AgentActivity(RecognitionHooks):
         if new_message is not None:
             chat_ctx.insert(new_message)
 
-        if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+        # Always ensure the agent's core instructions are set in the first system message.
+        # This happens regardless of whether extra_instructions are provided.
+        try:
+            update_instructions(
+                chat_ctx, instructions=self._agent.instructions, add_if_missing=True
+            )
+        except ValueError:
+            logger.exception("failed to update the instructions")
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
+
+        # If extra_instructions (from generate_reply) are provided, add them as a
+        # separate system message at the END of the context. This keeps the agent's
+        # core instructions separate from one-off task instructions, preventing the
+        # model from getting confused as the context grows larger.
+        if extra_instructions is not None:
+            add_extra_instructions(chat_ctx, instructions=extra_instructions)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?

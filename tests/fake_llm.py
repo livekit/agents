@@ -115,10 +115,24 @@ class FakeLLMStream(LLMStream):
         )
 
     def _get_index_text(self) -> str:
+        from livekit.agents.voice.generation import EXTRA_INSTRUCTIONS_MESSAGE_ID
+
         assert self.chat_ctx.items
         items = self.chat_ctx.items
 
-        # for generate_reply(instructions=...)
+        # for generate_reply(instructions=...) - check for extra instructions message at end
+        # (new pattern: separate system message with EXTRA_INSTRUCTIONS_MESSAGE_ID)
+        for item in reversed(items):
+            if (
+                item.type == "message"
+                and item.role == "system"
+                and item.id == EXTRA_INSTRUCTIONS_MESSAGE_ID
+            ):
+                # Found the extra instructions message, return the content as-is
+                # (the test passes the full key including "instructions:" prefix)
+                return item.text_content
+
+        # for generate_reply(instructions=...) - legacy pattern: appended to first system message
         for item in items:
             if item.type == "message" and item.role == "system":
                 contents = item.text_content.split("\n")
