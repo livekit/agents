@@ -68,11 +68,11 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self,
         sip_call_to: NotGivenOr[str] = NOT_GIVEN,
         *,
-        hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         sip_trunk_id: NotGivenOr[str | None] = NOT_GIVEN,
         sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -85,6 +85,24 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # deprecated
         target_phone_number: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Initialize a WarmTransferTask to dial a human agent via SIP.
+
+        Args:
+            sip_call_to: The phone number or SIP URI to dial for the human agent
+                (e.g. ``"+15105550123"`` or ``"sip:user@example.com"``).
+            sip_trunk_id: ID of a pre-configured LiveKit SIP outbound trunk used to
+                originate the call. Falls back to the ``LIVEKIT_SIP_OUTBOUND_TRUNK``
+                environment variable when not provided.
+            sip_connection: Low-level SIP connection config (``api.SIPOutboundConfig``)
+                for originating calls from a **custom SIP domain** instead of through a
+                saved trunk. Use this when you need to specify a custom hostname,
+                transport, or authentication credentials directly, bypassing the
+                trunk-based configuration.
+            hold_audio: Audio played to the caller while they are on hold during the
+                    transfer.
+            extra_instructions: Extra instructions to append to the base instructions
+                that are used to summarize the conversation history.
+        """
         super().__init__(
             instructions=self.get_instructions(
                 chat_ctx=chat_ctx, extra_instructions=extra_instructions
