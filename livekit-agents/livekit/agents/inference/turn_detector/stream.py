@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
 # TODO: @chenghao-mou add tests for this function
 def _chat_ctx_to_proto(chat_ctx: ChatContext) -> PbChatContext:
+
     def _merge_trailing_user_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
         while len(messages) > 1 and messages[-2].role == messages[-1].role == "user":
             messages[-2].content.extend(messages.pop().content)
@@ -63,7 +64,9 @@ def _chat_ctx_to_proto(chat_ctx: ChatContext) -> PbChatContext:
     }
     # merge the trailing user messages into one user message to save on tokens
     # truncate to the last agent + user messages
-    ctx_data: list[ChatMessage] = _merge_trailing_user_messages(chat_ctx.messages())[-2:]
+    ctx_data: list[ChatMessage] = _merge_trailing_user_messages(
+        [msg.model_copy() for msg in chat_ctx.messages()]
+    )[-2:]
     messages: list[PbChatMessage] = []
     for item in ctx_data:
         if (pb_role := _ROLE_MAP.get(item.role)) is None:
@@ -292,7 +295,7 @@ class WSStream(MultiModalTurnDetectionStream):
             msg = TurnDetectorClientMessage(inference_stop=InferenceStop())
         task = asyncio.create_task(ws.send_bytes(msg.SerializeToString()))
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.remove)
+        task.add_done_callback(self._tasks.discard)
 
     def end_input(self) -> None:
         self.flush()
@@ -431,6 +434,7 @@ class WSStream(MultiModalTurnDetectionStream):
                 self._event_ch.send_nowait(
                     TurnDetectionEvent(
                         type="eou_prediction",
+                        # TODO: @chenghao-mou use the actual last speaking time from the prediction
                         last_speaking_time=time.time(),
                         end_of_turn_probability=probability,
                     )

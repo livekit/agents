@@ -89,6 +89,7 @@ The mode of turn detection to use.
 - "realtime_llm": use server-side turn detection provided by the realtime LLM
 - "manual": manually manage the turn detection
 - _TurnDetector: use the default mode with the provided turn detector
+- MultiModalTurnDetector: use the inference multi-modal turn detector
 
 (default) If not provided, automatically choose the best mode based on
     available models (realtime_llm -> vad -> stt -> manual)
@@ -834,7 +835,7 @@ class AudioRecognition:
                 return
 
             tasks = [
-                asyncio.create_task(self._silence_guard_event.wait()),
+                (silence_guard_task := asyncio.create_task(self._silence_guard_event.wait())),
                 asyncio.create_task(
                     _bounce_eou_task(
                         last_speaking_time, last_final_transcript_time, speech_start_time
@@ -842,8 +843,8 @@ class AudioRecognition:
                 ),
             ]
             try:
-                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                if self._silence_guard_event.is_set():
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                if silence_guard_task in done:
                     logger.debug(
                         "user spoke during endpointing, cancelling end of turn task",
                         extra={
