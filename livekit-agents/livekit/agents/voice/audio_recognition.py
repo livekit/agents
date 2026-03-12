@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import math
 import time
@@ -14,7 +13,11 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..inference.turn_detector import MultiModalTurnDetector, TurnDetectionEvent
+from ..inference.turn_detector import (
+    MultiModalTurnDetectionStream,
+    MultiModalTurnDetector,
+    TurnDetectionEvent,
+)
 from ..language import LanguageCode
 from ..log import logger
 from ..telemetry import trace_types, tracer
@@ -75,7 +78,9 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | MultiModalTurnDetector
+)
 """
 The mode of turn detection to use.
 
@@ -158,6 +163,7 @@ class AudioRecognition:
         self._mm_detector: MultiModalTurnDetector | None = (
             turn_detection if isinstance(turn_detection, MultiModalTurnDetector) else None
         )
+        self._turn_detector_stream: MultiModalTurnDetectionStream | None = None
         self._mm_ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool] | None = None
         self._mm_atask: asyncio.Task[None] | None = None
         self._silence_guard_event = asyncio.Event()
@@ -226,7 +232,7 @@ class AudioRecognition:
             await aio.cancel_and_wait(self._vad_atask)
 
         if self._end_of_turn_task is not None:
-            await self._end_of_turn_task
+            await aio.cancel_and_wait(self._end_of_turn_task)
 
         if self._mm_atask is not None:
             await aio.cancel_and_wait(self._mm_atask)
@@ -261,10 +267,11 @@ class AudioRecognition:
 
     def update_mm_detector(self, detector: MultiModalTurnDetector | None) -> None:
         self._mm_detector = detector
-        if detector:
+        self._turn_detector_stream = detector.stream() if detector is not None else None
+        if self._turn_detector_stream is not None:
             self._mm_ch = aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool]()
             self._mm_atask = asyncio.create_task(
-                self._mm_task(detector, self._mm_ch, self._mm_atask)
+                self._mm_task(self._turn_detector_stream, self._mm_ch, self._mm_atask)
             )
         elif self._mm_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._mm_atask))
@@ -626,16 +633,12 @@ class AudioRecognition:
         chat_ctx = chat_ctx.copy()
         chat_ctx.add_message(role="user", content=self._audio_transcript)
 
-        if self._mm_ch is not None and not is_given(latest_eou_prediction):
-            self._mm_ch.send_nowait(chat_ctx)
-            if self._mm_detector is not None:
-                if self._mm_detector._latest_eou_probability is not None:
-                    with contextlib.suppress(asyncio.InvalidStateError):
-                        self._mm_detector._latest_eou_probability.set_result(0.0)
-                self._mm_detector._latest_eou_probability = asyncio.Future[float]()
-
         turn_detector = (
-            self._turn_detector
+            (
+                self._turn_detector
+                if not isinstance(self._turn_detector, MultiModalTurnDetector)
+                else self._turn_detector_stream
+            )
             if self._audio_transcript and self._turn_detection_mode != "manual"
             else None  # disable EOU model if manual turn detection enabled
         )
@@ -663,6 +666,7 @@ class AudioRecognition:
                                 (
                                     await turn_detector.predict_end_of_turn(
                                         chat_ctx,
+                                        timeout=endpointing_delay,
                                     )
                                 )
                                 if not is_given(latest_eou_prediction)
@@ -920,15 +924,12 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _mm_task(
         self,
-        detector: MultiModalTurnDetector,
+        stream: MultiModalTurnDetectionStream,
         ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
             await aio.cancel_and_wait(task)
-
-        stream = detector.stream()
-        detector._latest_eou_probability = asyncio.Future[float]()
 
         @utils.log_exceptions(logger=logger)
         async def _forward() -> None:

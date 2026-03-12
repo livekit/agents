@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import aiohttp
 
 from ... import utils
 from ...language import LanguageCode
-from ...log import logger
 from ...types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -90,7 +88,6 @@ class MultiModalTurnDetector:
 
         self._session = http_session
         self._streams: weakref.WeakSet[MultiModalTurnDetectionStream] = weakref.WeakSet()
-        self._latest_eou_probability = asyncio.Future[float]()
 
     @property
     def model(self) -> str:
@@ -136,19 +133,6 @@ class MultiModalTurnDetector:
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return language is not None and language.language in LANGUAGES
-
-    async def predict_end_of_turn(
-        self,
-        chat_ctx: Any,
-        *,
-        timeout: float | None = None,
-    ) -> float:
-        """chat_ctx should have been streamed to the model by now."""
-        try:
-            return await asyncio.wait_for(self._latest_eou_probability, timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning("EOU prediction timed out", extra={"timeout": timeout})
-            return 0.0
 
     async def aclose(self) -> None:
         for stream in list(self._streams):

@@ -56,10 +56,12 @@ class InputAudio(_message.Message):
     def __init__(self, audio: _Optional[bytes] = ...) -> None: ...
 
 class InputChatContext(_message.Message):
-    __slots__ = ("chat_context",)
+    __slots__ = ("chat_context", "request_id")
     CHAT_CONTEXT_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     chat_context: TdChatContext
-    def __init__(self, chat_context: _Optional[_Union[TdChatContext, _Mapping]] = ...) -> None: ...
+    request_id: str
+    def __init__(self, chat_context: _Optional[_Union[TdChatContext, _Mapping]] = ..., request_id: _Optional[str] = ...) -> None: ...
 
 class SessionFlush(_message.Message):
     __slots__ = ()
