@@ -463,7 +463,7 @@ class HTTPStream(MultiModalTurnDetectionStream):
         max_buffer_duration: float = 5.0,
     ) -> None:
         self._audio_buffer = AudioFrameBuffer(max_duration=max_buffer_duration)
-        self._latest_chat_ctx: ChatContext | None = None
+        self._latest_chat_ctx: tuple[ChatContext, str] | None = None
         self._active = asyncio.Event()
         self._closed = False
         self._inference_interval = inference_interval
@@ -481,8 +481,8 @@ class HTTPStream(MultiModalTurnDetectionStream):
         if self._closed:
             fut.set_result(0.0)
             return fut
-        self._latest_chat_ctx = chat_ctx
         request_id = utils.shortuuid("turn_request_")
+        self._latest_chat_ctx = (chat_ctx, request_id)
         self._futures[request_id] = fut
         return fut
 
@@ -516,7 +516,6 @@ class HTTPStream(MultiModalTurnDetectionStream):
             if self._closed:
                 return
             last_speaking_time = time.time()
-            request_id = utils.shortuuid("turn_request_")
             await asyncio.sleep(self._inference_interval)
             if self._closed or not self._active.is_set():
                 continue
@@ -525,14 +524,18 @@ class HTTPStream(MultiModalTurnDetectionStream):
             if snapshot is None:
                 continue
 
+            if self._latest_chat_ctx is None:
+                continue
+
+            chat_ctx, request_id = self._latest_chat_ctx
+
             req = PredictRequest(
                 model=self._detector.model,
                 audio=snapshot.data.tobytes(),
                 settings=SessionSettings(sample_rate=self._opts.sample_rate),
                 request_id=request_id,
             )
-            if self._latest_chat_ctx is not None:
-                req.chat_context.CopyFrom(_chat_ctx_to_proto(self._latest_chat_ctx))
+            req.chat_context.CopyFrom(_chat_ctx_to_proto(chat_ctx))
 
             try:
                 async with self._session.post(

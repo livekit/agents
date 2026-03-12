@@ -182,6 +182,10 @@ class AudioRecognition:
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
+            if isinstance(self._turn_detector, MultiModalTurnDetector):
+                self.update_mm_detector(self._turn_detector)
+            else:
+                self.update_mm_detector(None)
 
             mode = turn_detection if isinstance(turn_detection, str) else None
             if self._turn_detection_mode != mode:
