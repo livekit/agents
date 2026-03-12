@@ -186,8 +186,9 @@ class AudioRecognition:
         """Redirect event callbacks and update stt_node/vad for handoff reuse."""
         self._hooks = hooks
         self._stt = stt_node
-        if vad is not self._vad:
-            self.update_vad(vad)
+
+        # always reset vad
+        self.update_vad(vad)
 
     def start(self) -> None:
         self.update_stt(self._stt)
