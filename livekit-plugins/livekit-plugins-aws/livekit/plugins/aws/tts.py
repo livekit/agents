@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import cast
 
 import aioboto3  # type: ignore
 import botocore  # type: ignore
@@ -134,9 +133,9 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(speech_engine):
-            self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
+            self._opts.speech_engine = speech_engine
         if is_given(text_type):
-            self._opts.text_type = cast(TTSTextType, text_type)
+            self._opts.text_type = text_type
 
 
 class ChunkedStream(tts.ChunkedStream):
