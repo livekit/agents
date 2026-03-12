@@ -29,6 +29,7 @@ from ...llm import FunctionCall, FunctionCallOutput, Tool, Toolset, function_too
 from ...log import logger
 
 if TYPE_CHECKING:
+    from ...voice.agent_session import AgentSession
     from ...voice.events import RunContext
 
 T = TypeVar("T")
@@ -78,6 +79,78 @@ class AsyncOperation(Generic[T]):
     """The asyncio task running the operation (internal)."""
 
 
+class AsyncContext:
+    """Context handle passed to async tool functions for controlling the conversation.
+
+    Provides methods to set the initial pending response and push intermediate
+    progress updates back to the user while the function runs in the background.
+
+    Example::
+
+        @async_tools.function_tool
+        async def book_flight(ctx: AsyncContext, origin: str, destination: str) -> dict:
+            ctx.pending(f"Looking up flights from {origin} to {destination}...")
+
+            flights = await search_flights(origin, destination)
+            ctx.update(f"Found {len(flights)} flights, selecting the best option...")
+
+            booking = await book_best_flight(flights)
+            return {"confirmation": booking.id}
+    """
+
+    def __init__(
+        self,
+        *,
+        session: AgentSession[Any],
+        operation: AsyncOperation[Any],
+    ) -> None:
+        self._session = session
+        self._operation = operation
+        self._pending_message: str | None = None
+        self._pending_event = asyncio.Event()
+
+    @property
+    def session(self) -> AgentSession[Any]:
+        """The agent session this operation is running in."""
+        return self._session
+
+    @property
+    def userdata(self) -> Any:
+        """The session's userdata."""
+        return self._session.userdata
+
+    @property
+    def operation(self) -> AsyncOperation[Any]:
+        """The current async operation."""
+        return self._operation
+
+    def pending(self, message: str) -> None:
+        """Set the message returned to the LLM when the tool is first called.
+
+        This must be called synchronously before the first ``await`` in your
+        function. It controls what the LLM sees as the tool output, which
+        determines what the agent says to the user while the operation runs.
+
+        Args:
+            message: The pending message for the LLM (e.g. "Searching flights...").
+        """
+        self._pending_message = message
+        self._pending_event.set()
+
+    def update(self, message: str) -> None:
+        """Push an intermediate progress update into the conversation.
+
+        Triggers a new LLM turn with the update injected as instructions,
+        so the agent can narrate progress to the user.
+
+        Args:
+            message: Progress update (e.g. "Found 3 flights, selecting best...").
+        """
+        self._session.generate_reply(
+            instructions=f"[Progress update for {self._operation.name}]: {message}"
+        )
+
+
 @dataclass
 class _AsyncFunctionInfo:
     name: str
@@ -89,22 +162,27 @@ class AsyncToolset(Toolset):
     """A toolset for running long-running functions in the background.
 
     When the LLM calls a tool registered with ``@toolset.function_tool``, the function
-    runs in the background and the LLM gets an immediate response so it can keep talking.
-    When the background operation completes, the result is **automatically pushed back**
-    into the conversation via ``session.generate_reply`` -- no polling needed.
+    runs in the background. The function receives an :class:`AsyncContext` that lets it
+    control the initial response (``ctx.pending(...)``) and push progress updates
+    (``ctx.update(...)``). When the function returns, the result is automatically
+    pushed back into the conversation via ``session.generate_reply``.
 
     The toolset can be shared across multiple agents. If agent A starts an operation and
-    hands off to agent B, the result is still pushed back to the active session when ready.
+    hands off to agent B, the result is still pushed back to the active session.
 
     Example::
 
         async_tools = AsyncToolset(id="booking")
 
         @async_tools.function_tool
-        async def book_flight(origin: str, destination: str) -> dict:
-            '''Book a flight (takes ~5s).'''
-            result = await booking_api.book(origin, destination)
-            return {"confirmation": result.id}
+        async def book_flight(ctx: AsyncContext, origin: str, destination: str) -> dict:
+            ctx.pending(f"Looking up flights from {origin} to {destination}...")
+
+            flights = await search_flights(origin, destination)
+            ctx.update(f"Found {len(flights)} flights, picking the best one...")
+
+            booking = await book_best_flight(flights)
+            return {"confirmation": booking.id}
 
         agent = Agent(tools=[async_tools], instructions="...")
 
@@ -112,10 +190,9 @@ class AsyncToolset(Toolset):
 
     1. User: "Book me a flight to Paris"
     2. LLM calls ``book_flight(origin="NYC", destination="Paris")``
-    3. Tool returns immediately → LLM says "I'm booking that for you..."
-    4. User can keep talking naturally
-    5. Background task completes → result is pushed back
-    6. LLM says "Your flight is booked! Confirmation: ABC123"
+    3. ``ctx.pending(...)`` → LLM says "Looking up flights from NYC to Paris..."
+    4. ``ctx.update(...)`` → LLM says "Found 3 flights, picking the best one..."
+    5. Function returns → LLM says "Your flight is booked! Confirmation: ABC123"
     """
 
     @overload
@@ -125,7 +202,6 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
-        pending_message: str | None = None,
     ) -> Callable[_P, _R]: ...
 
     @overload
@@ -135,7 +211,6 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
-        pending_message: str | None = None,
     ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]: ...
 
     def function_tool(
@@ -144,24 +219,20 @@ class AsyncToolset(Toolset):
         *,
         name: str | None = None,
         description: str | None = None,
-        pending_message: str | None = None,
     ) -> Callable[_P, _R] | Callable[[Callable[_P, _R]], Callable[_P, _R]]:
         """Register an async function as a background tool.
+
+        The function receives an :class:`AsyncContext` as its first argument
+        (auto-injected, hidden from the LLM schema). Use it to control the
+        pending message and push progress updates.
 
         Can be used with or without arguments::
 
             @toolset.function_tool
-            async def my_func(x: int) -> int: ...
+            async def my_func(ctx: AsyncContext, x: int) -> int: ...
 
-            @toolset.function_tool(name="custom_name", pending_message="Working on it...")
-            async def my_func(x: int) -> int: ...
-
-        Args:
-            f: The async function (when used as bare decorator).
-            name: Override tool name (defaults to function name).
-            description: Override tool description (defaults to docstring).
-            pending_message: Message returned to LLM while the operation runs.
-                Defaults to "{name} is running in the background, let the user know".
+            @toolset.function_tool(name="custom_name")
+            async def my_func(ctx: AsyncContext, x: int) -> int: ...
         """
 
         def decorator(func: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -179,7 +250,6 @@ class AsyncToolset(Toolset):
                 description=tool_description,
                 func=func,
             )
-            self._pending_messages[tool_name] = pending_message
             self._rebuild_tools()
             logger.debug(f"Registered async function: {tool_name}")
             return func
@@ -195,7 +265,6 @@ class AsyncToolset(Toolset):
     ) -> None:
         super().__init__(id=id)
         self._async_functions: dict[str, _AsyncFunctionInfo] = {}
-        self._pending_messages: dict[str, str | None] = {}
         self._operations: dict[str, AsyncOperation[Any]] = {}
         self._tools: list[Tool] = []
 
@@ -232,29 +301,37 @@ class AsyncToolset(Toolset):
         func = info.func
         sig = inspect.signature(func)
         tool_name = info.name
-        pending_msg = self._pending_messages.get(tool_name)
 
         try:
             type_hints = get_type_hints(func)
         except Exception:
             type_hints = {}
 
-        # The wrapper accepts the original params + RunContext (auto-injected by framework)
         async def tool_wrapper(ctx: RunContext, **kwargs: Any) -> str:  # type: ignore[type-arg]
-            return await self._dispatch(tool_name, ctx, kwargs, pending_msg)
+            return await self._dispatch(tool_name, ctx, kwargs)
 
-        # Preserve the original signature for LLM schema generation.
-        # RunContext params are auto-excluded by the framework.
+        # Build signature: RunContext (auto-injected) + user params (visible to LLM).
+        # Exclude 'self', 'ctx', and AsyncContext params from the LLM schema.
         user_params = [
             p
             for pname, p in sig.parameters.items()
-            if pname not in ("self", "ctx") and p.kind != inspect.Parameter.VAR_KEYWORD
+            if pname not in ("self", "ctx")
+            and p.kind != inspect.Parameter.VAR_KEYWORD
+            and type_hints.get(pname) is not AsyncContext
         ]
-        ctx_param = inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=RunContext)
-        tool_wrapper.__signature__ = sig.replace(parameters=[ctx_param, *user_params])  # type: ignore[attr-defined]
+        ctx_param = inspect.Parameter(
+            "ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=RunContext
+        )
+        tool_wrapper.__signature__ = sig.replace(  # type: ignore[attr-defined]
+            parameters=[ctx_param, *user_params]
+        )
         tool_wrapper.__annotations__ = {
             "ctx": RunContext,
-            **{n: h for n, h in type_hints.items() if n not in ("self", "ctx", "return")},
+            **{
+                n: h
+                for n, h in type_hints.items()
+                if n not in ("self", "ctx", "return") and h is not AsyncContext
+            },
             "return": str,
         }
         tool_wrapper.__doc__ = info.description
@@ -270,9 +347,8 @@ class AsyncToolset(Toolset):
         func_name: str,
         ctx: RunContext,  # type: ignore[type-arg]
         arguments: dict[str, Any],
-        pending_message: str | None,
     ) -> str:
-        """Start the background operation and return immediately."""
+        """Start the background operation and wait for the pending message."""
         info = self._async_functions.get(func_name)
         if not info:
             return f"Error: Unknown async function '{func_name}'"
@@ -286,14 +362,22 @@ class AsyncToolset(Toolset):
         )
         self._operations[operation_id] = operation
 
+        async_ctx = AsyncContext(session=ctx.session, operation=operation)
+
         task = asyncio.create_task(
-            self._run_and_push(operation, info.func, ctx)
+            self._run_and_push(operation, info.func, async_ctx, arguments)
         )
         operation.task = task
 
         logger.debug(f"Started async operation {operation_id} for {func_name}")
 
-        return pending_message or (
+        # Wait for the function to call ctx.pending(), or use a default
+        try:
+            await asyncio.wait_for(async_ctx._pending_event.wait(), timeout=0.1)
+        except asyncio.TimeoutError:
+            pass
+
+        return async_ctx._pending_message or (
             f"{func_name} is running in the background, let the user know"
         )
 
@@ -301,20 +385,36 @@ class AsyncToolset(Toolset):
         self,
         operation: AsyncOperation[T],
         func: Callable[..., Awaitable[T]],
-        ctx: RunContext,  # type: ignore[type-arg]
+        async_ctx: AsyncContext,
+        arguments: dict[str, Any],
     ) -> None:
         """Run the operation and push the result back into the conversation."""
         operation.status = OperationStatus.RUNNING
-        session = ctx.session
+        session = async_ctx.session
 
         try:
-            result = await func(**operation.arguments)
+            # Inject AsyncContext if the function accepts it
+            sig = inspect.signature(func)
+            type_hints = {}
+            try:
+                type_hints = __import__("typing").get_type_hints(func)
+            except Exception:
+                pass
+
+            call_kwargs: dict[str, Any] = dict(arguments)
+            for pname, _param in sig.parameters.items():
+                if type_hints.get(pname) is AsyncContext or pname == "ctx":
+                    hint = type_hints.get(pname)
+                    if hint is AsyncContext:
+                        call_kwargs[pname] = async_ctx
+                        break
+
+            result = await func(**call_kwargs)
             operation.result = result
             operation.status = OperationStatus.COMPLETED
             operation.completed_at = time.time()
             logger.debug(f"Operation {operation.id} completed successfully")
 
-            # Push result back into the conversation
             self._push_result(session, operation)
 
         except asyncio.CancelledError:
@@ -328,18 +428,16 @@ class AsyncToolset(Toolset):
             operation.completed_at = time.time()
             logger.warning(f"Operation {operation.id} failed: {e}")
 
-            # Push error back into the conversation
             self._push_result(session, operation)
 
     def _push_result(
         self,
-        session: Any,
+        session: AgentSession[Any],
         operation: AsyncOperation[Any],
     ) -> None:
         """Inject the result into the chat context and trigger a new LLM turn."""
         call_id = f"async_{operation.id}"
 
-        # Create function call + output pair in the chat context
         fnc_call = FunctionCall(
             call_id=call_id,
             name=operation.name,
@@ -361,7 +459,6 @@ class AsyncToolset(Toolset):
                 is_error=True,
             )
 
-        # Inject into the agent's chat context and trigger a new LLM turn
         chat_ctx = session.chat_ctx.copy()
         chat_ctx.insert(fnc_call)
         chat_ctx.insert(fnc_output)

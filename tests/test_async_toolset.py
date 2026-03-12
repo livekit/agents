@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents.beta.tools import AsyncToolset, OperationStatus
+from livekit.agents.beta.tools import AsyncContext, AsyncToolset, OperationStatus
 from livekit.agents.llm import FunctionTool, ToolContext
 
 
@@ -40,18 +40,8 @@ class TestDecoratorRegistration:
             """Add two numbers."""
             return x + y
 
-        # The original function should still be directly callable
         result = asyncio.get_event_loop().run_until_complete(add(1, 2))
         assert result == 3
-
-    def test_custom_pending_message(self):
-        ts = AsyncToolset(id="pending")
-
-        @ts.function_tool(pending_message="Hold tight, booking your flight...")
-        async def book_flight(dest: str) -> str:
-            return f"booked {dest}"
-
-        assert ts._pending_messages["book_flight"] == "Hold tight, booking your flight..."
 
     def test_sync_function_fails(self):
         ts = AsyncToolset(id="sync_fail")
@@ -78,7 +68,6 @@ class TestDecoratorRegistration:
 
 class TestAsyncToolsetTools:
     def test_tools_use_original_name(self):
-        """Tools should use the function name directly, no start_ prefix."""
         ts = AsyncToolset(id="names")
 
         @ts.function_tool
@@ -116,7 +105,6 @@ class TestAsyncToolsetTools:
         assert isinstance(tool, FunctionTool)
 
     def test_no_polling_tools(self):
-        """Push model means no check_status/get_result/list/cancel tools."""
         ts = AsyncToolset(id="no_poll")
 
         @ts.function_tool
@@ -126,8 +114,26 @@ class TestAsyncToolsetTools:
         tool_names = [t.id for t in ts.tools]
         assert "check_operation_status" not in tool_names
         assert "get_operation_result" not in tool_names
-        assert "list_async_operations" not in tool_names
-        assert "cancel_async_operation" not in tool_names
+
+    def test_async_context_excluded_from_schema(self):
+        """AsyncContext param should not appear in the LLM-facing tool schema."""
+        ts = AsyncToolset(id="schema")
+
+        @ts.function_tool
+        async def my_tool(ctx: AsyncContext, x: int, y: str) -> str:
+            return f"{x}{y}"
+
+        tool = ts.tools[0]
+        assert isinstance(tool, FunctionTool)
+        # The schema should only contain x and y, not ctx
+        from livekit.agents.llm.utils import function_arguments_to_pydantic_model
+
+        model = function_arguments_to_pydantic_model(tool)
+        schema = model.model_json_schema()
+        assert "x" in schema["properties"]
+        assert "y" in schema["properties"]
+        # ctx (AsyncContext) should be excluded
+        assert "ctx" not in schema.get("properties", {})
 
 
 def _make_mock_ctx():
@@ -142,24 +148,60 @@ def _make_mock_ctx():
     return ctx
 
 
+class TestAsyncContext:
+    async def test_pending_sets_message(self):
+        session = MagicMock()
+        op = MagicMock()
+        op.name = "test"
+
+        async_ctx = AsyncContext(session=session, operation=op)
+        async_ctx.pending("Looking up flights...")
+
+        assert async_ctx._pending_message == "Looking up flights..."
+        assert async_ctx._pending_event.is_set()
+
+    async def test_update_calls_generate_reply(self):
+        session = MagicMock()
+        session.generate_reply = MagicMock()
+        op = MagicMock()
+        op.name = "book_flight"
+
+        async_ctx = AsyncContext(session=session, operation=op)
+        async_ctx.update("Found 3 flights")
+
+        session.generate_reply.assert_called_once()
+        call_kwargs = session.generate_reply.call_args
+        assert "Found 3 flights" in call_kwargs.kwargs["instructions"]
+
+    async def test_session_and_userdata_accessible(self):
+        session = MagicMock()
+        session.userdata = {"user_id": "123"}
+        op = MagicMock()
+
+        async_ctx = AsyncContext(session=session, operation=op)
+        assert async_ctx.session is session
+        assert async_ctx.userdata == {"user_id": "123"}
+
+
 class TestAsyncToolsetDispatch:
-    async def test_dispatch_returns_pending_message(self):
+    async def test_dispatch_uses_pending_message(self):
         ts = AsyncToolset(id="dispatch")
 
-        @ts.function_tool(pending_message="Working on it...")
-        async def slow_task(value: str) -> str:
+        @ts.function_tool
+        async def slow_task(ctx: AsyncContext, value: str) -> str:
+            ctx.pending(f"Processing {value}...")
             await asyncio.sleep(10)
             return value
 
-        ctx = _make_mock_ctx()
-        result = await ts._dispatch("slow_task", ctx, {"value": "test"}, "Working on it...")
+        run_ctx = _make_mock_ctx()
+        result = await ts._dispatch("slow_task", run_ctx, {"value": "test"})
 
-        assert result == "Working on it..."
+        assert result == "Processing test..."
         assert len(ts._operations) == 1
 
         await ts.shutdown()
 
-    async def test_dispatch_default_pending_message(self):
+    async def test_dispatch_default_when_no_pending(self):
         ts = AsyncToolset(id="default_msg")
 
         @ts.function_tool
@@ -167,8 +209,8 @@ class TestAsyncToolsetDispatch:
             await asyncio.sleep(10)
             return x
 
-        ctx = _make_mock_ctx()
-        result = await ts._dispatch("my_task", ctx, {"x": 1}, None)
+        run_ctx = _make_mock_ctx()
+        result = await ts._dispatch("my_task", run_ctx, {"x": 1})
 
         assert "my_task" in result
         assert "background" in result
@@ -177,8 +219,8 @@ class TestAsyncToolsetDispatch:
 
     async def test_dispatch_unknown_function(self):
         ts = AsyncToolset(id="unknown")
-        ctx = _make_mock_ctx()
-        result = await ts._dispatch("nonexistent", ctx, {}, None)
+        run_ctx = _make_mock_ctx()
+        result = await ts._dispatch("nonexistent", run_ctx, {})
         assert "Error" in result
 
     async def test_operation_completes_and_pushes_result(self):
@@ -188,18 +230,61 @@ class TestAsyncToolsetDispatch:
         async def fast_task(value: str) -> dict:
             return {"result": value}
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("fast_task", ctx, {"value": "hello"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("fast_task", run_ctx, {"value": "hello"})
 
-        # Wait for background task to complete
         await asyncio.sleep(0.05)
 
         op = list(ts._operations.values())[0]
         assert op.status == OperationStatus.COMPLETED
         assert op.result == {"result": "hello"}
 
-        # Should have called generate_reply to push the result back
-        ctx.session.generate_reply.assert_called_once()
+        run_ctx.session.generate_reply.assert_called_once()
+
+    async def test_operation_with_ctx_completes_and_pushes(self):
+        ts = AsyncToolset(id="push_ctx")
+
+        @ts.function_tool
+        async def task_with_ctx(ctx: AsyncContext, value: str) -> dict:
+            ctx.pending(f"Working on {value}")
+            return {"result": value}
+
+        run_ctx = _make_mock_ctx()
+        result = await ts._dispatch("task_with_ctx", run_ctx, {"value": "hello"})
+
+        assert result == "Working on hello"
+
+        await asyncio.sleep(0.05)
+
+        op = list(ts._operations.values())[0]
+        assert op.status == OperationStatus.COMPLETED
+        # generate_reply called for the final push
+        run_ctx.session.generate_reply.assert_called()
+
+    async def test_operation_with_progress_updates(self):
+        ts = AsyncToolset(id="progress")
+
+        @ts.function_tool
+        async def multi_step(ctx: AsyncContext, value: str) -> str:
+            ctx.pending("Starting...")
+            await asyncio.sleep(0.01)
+            ctx.update("Halfway there...")
+            await asyncio.sleep(0.01)
+            return f"done: {value}"
+
+        run_ctx = _make_mock_ctx()
+        result = await ts._dispatch("multi_step", run_ctx, {"value": "test"})
+
+        assert result == "Starting..."
+
+        await asyncio.sleep(0.1)
+
+        op = list(ts._operations.values())[0]
+        assert op.status == OperationStatus.COMPLETED
+
+        # Should have called generate_reply multiple times:
+        # once for update(), once for final push
+        assert run_ctx.session.generate_reply.call_count >= 2
 
     async def test_operation_failure_pushes_error(self):
         ts = AsyncToolset(id="fail_push")
@@ -208,8 +293,8 @@ class TestAsyncToolsetDispatch:
         async def failing_task(msg: str) -> str:
             raise ValueError(msg)
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("failing_task", ctx, {"msg": "boom"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("failing_task", run_ctx, {"msg": "boom"})
 
         await asyncio.sleep(0.05)
 
@@ -217,8 +302,7 @@ class TestAsyncToolsetDispatch:
         assert op.status == OperationStatus.FAILED
         assert "boom" in op.error
 
-        # Error should also be pushed back
-        ctx.session.generate_reply.assert_called_once()
+        run_ctx.session.generate_reply.assert_called_once()
 
     async def test_cancelled_operation_does_not_push(self):
         ts = AsyncToolset(id="cancel_no_push")
@@ -228,14 +312,12 @@ class TestAsyncToolsetDispatch:
             await asyncio.sleep(10)
             return value
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", run_ctx, {"value": "test"})
 
-        # Cancel immediately
         await ts.shutdown()
 
-        # Cancelled operations should NOT push a reply
-        ctx.session.generate_reply.assert_not_called()
+        run_ctx.session.generate_reply.assert_not_called()
 
 
 class TestAsyncToolsetOperationTracking:
@@ -246,8 +328,8 @@ class TestAsyncToolsetOperationTracking:
         async def my_task(x: int) -> int:
             return x
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("my_task", ctx, {"x": 42}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("my_task", run_ctx, {"x": 42})
         await asyncio.sleep(0.05)
 
         ops = list(ts._operations.values())
@@ -266,8 +348,8 @@ class TestAsyncToolsetOperationTracking:
             await asyncio.sleep(10)
             return value
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", run_ctx, {"value": "test"})
 
         pending = ts.get_pending_operations()
         assert len(pending) == 1
@@ -284,8 +366,8 @@ class TestAsyncToolsetOperationTracking:
         async def fast_task(x: int) -> int:
             return x
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("fast_task", ctx, {"x": 1}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("fast_task", run_ctx, {"x": 1})
         await asyncio.sleep(0.05)
 
         completed = ts.get_completed_operations()
@@ -295,7 +377,6 @@ class TestAsyncToolsetOperationTracking:
 
 class TestAsyncToolsetSharing:
     async def test_shared_across_contexts(self):
-        """Multiple ToolContexts share the same toolset and operations."""
         ts = AsyncToolset(id="shared")
 
         @ts.function_tool
@@ -311,18 +392,16 @@ class TestAsyncToolsetSharing:
         assert ctx2.get_function_tool("shared_task") is not None
 
     async def test_shared_operation_state(self):
-        """Operations started via one context are visible to another."""
         ts = AsyncToolset(id="shared_ops")
 
         @ts.function_tool
         async def task(value: str) -> str:
             return value
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("task", ctx, {"value": "shared"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("task", run_ctx, {"value": "shared"})
         await asyncio.sleep(0.05)
 
-        # Any agent with this toolset sees the operation
         assert len(ts.get_completed_operations()) == 1
 
 
@@ -335,8 +414,8 @@ class TestAsyncToolsetShutdown:
             await asyncio.sleep(10)
             return value
 
-        ctx = _make_mock_ctx()
-        await ts._dispatch("slow_task", ctx, {"value": "test"}, None)
+        run_ctx = _make_mock_ctx()
+        await ts._dispatch("slow_task", run_ctx, {"value": "test"})
         assert len(ts.get_pending_operations()) == 1
 
         await ts.shutdown()
