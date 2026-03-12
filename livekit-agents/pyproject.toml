@@ -26,8 +26,6 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "typer>=0.15.1",
-    "click~=8.1",
     "certifi>=2025.6.15",
     "livekit==1.1.2",
     "livekit-api>=1.0.7,<2",
@@ -36,11 +34,9 @@ dependencies = [
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4",
-    "watchfiles>=1.0",
     "psutil>=7.0",
     "aiohttp~=3.10",
     "typing-extensions>=4.12",
-    "sounddevice>=0.5",
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",

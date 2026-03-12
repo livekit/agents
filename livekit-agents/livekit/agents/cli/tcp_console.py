@@ -14,18 +14,32 @@ from ..voice.remote_session import TcpSessionTransport
 WIRE_SAMPLE_RATE = 48000
 AGENT_SAMPLE_RATE = 24000
 
+_SENTINEL = object()
+
 
 class TcpAudioInput(io.AudioInput):
+    """Audio input backed by a stdlib queue.
+
+    We use a stdlib queue (not an asyncio Chan) because the producer
+    (push_frame, called from the main event loop) and the consumer
+    (__anext__, called from the job-executor thread's event loop) live
+    on *different* asyncio loops when JobExecutorType.THREAD is used.
+    A stdlib queue + run_in_executor is the only safe bridge.
+    """
+
     def __init__(self) -> None:
         super().__init__(label="TCP Console")
-        self._queue: stdlib_queue.Queue[rtc.AudioFrame] = stdlib_queue.Queue()
+        self._queue: stdlib_queue.Queue[rtc.AudioFrame | object] = stdlib_queue.Queue()
         self._resampler = rtc.AudioResampler(
             input_rate=WIRE_SAMPLE_RATE,
             output_rate=AGENT_SAMPLE_RATE,
             num_channels=1,
         )
+        self._closed = False
 
     def push_frame(self, frame: agent_pb.SessionAudioFrame) -> None:
+        if self._closed:
+            return
         audio_frame = rtc.AudioFrame(
             data=frame.data,
             sample_rate=frame.sample_rate,
@@ -36,9 +50,21 @@ class TcpAudioInput(io.AudioInput):
         for rf in resampled:
             self._queue.put_nowait(rf)
 
+    def close(self) -> None:
+        """Unblock any waiting consumer and mark as closed."""
+        self._closed = True
+        self._queue.put_nowait(_SENTINEL)
+
     async def __anext__(self) -> rtc.AudioFrame:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._queue.get)
+        try:
+            item = await loop.run_in_executor(None, self._queue.get)
+        except RuntimeError:
+            # Executor shut down — treat as end of stream.
+            raise StopAsyncIteration
+        if item is _SENTINEL:
+            raise StopAsyncIteration
+        return item
 
 
 class TcpAudioOutput(io.AudioOutput):
