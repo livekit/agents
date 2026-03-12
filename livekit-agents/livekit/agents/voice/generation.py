@@ -855,44 +855,54 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
             break
 
 
-EXTRA_INSTRUCTIONS_MESSAGE_ID = "lk.generate_reply.extra_instructions"
-"""
-The ID of the extra instructions message added at the end of the chat context.
-Used by generate_reply to keep task-specific instructions isolated from core agent instructions.
-"""
+def build_templated_chat_ctx(
+    chat_ctx: ChatContext,
+    *,
+    agent_instructions: str | Instructions,
+    extra_instructions: str | Instructions,
+) -> ChatContext:
+    """Build a new ChatContext that templates the conversation inside the prompt.
 
+    Instead of passing the raw chat_ctx to the LLM (where generate_reply instructions
+    get mixed into the first system message and confused with core behavior as context
+    grows), this builds a fresh context where:
 
-def add_extra_instructions(
-    chat_ctx: ChatContext, *, instructions: str | Instructions
-) -> llm.ChatMessage:
+    1. The agent's core instructions are at the top
+    2. The existing conversation is formatted as text and embedded in the prompt
+    3. The generate_reply task instructions are clearly isolated at the end
+
+    This prevents the model from confusing "core behavior" with "one-off task
+    instructions", especially as the chat context grows larger.
     """
-    Add extra instructions as a new system message at the END of the chat context.
+    formatted_lines: list[str] = []
+    for item in chat_ctx.items:
+        if item.type == "message":
+            if item.role in ("system", "developer"):
+                continue
+            text = item.text_content or ""
+            if item.interrupted:
+                text += " [interrupted]"
+            formatted_lines.append(f"{item.role}: {text}")
+        elif item.type == "function_call":
+            formatted_lines.append(f"assistant: [called tool {item.name}({item.arguments})]")
+        elif item.type == "function_call_output":
+            formatted_lines.append(f"tool: [{item.name} returned: {item.output}]")
 
-    This is used by generate_reply to add task-specific instructions that are kept
-    separate from the agent's core instructions. By placing these at the end of the
-    context (right before the LLM call), the model can better distinguish between
-    "core behavior" (defined at the start) and "one-off task instructions".
+    conversation_text = "\n".join(formatted_lines)
 
-    Returns:
-        The ChatMessage that was added to the context.
-    """
-    # Remove any existing extra instructions first
-    remove_extra_instructions(chat_ctx)
+    prompt_parts = [str(agent_instructions)]
+    if conversation_text:
+        prompt_parts.append(f"--- Conversation so far ---\n{conversation_text}")
+    prompt_parts.append(f"--- Task ---\n{extra_instructions}")
 
-    # Add the new extra instructions at the end
-    msg = llm.ChatMessage(
-        id=EXTRA_INSTRUCTIONS_MESSAGE_ID,
-        role="system",
-        content=[instructions],
+    prompt = "\n\n".join(prompt_parts)
+
+    new_ctx = ChatContext()
+    new_ctx.items.append(
+        llm.ChatMessage(
+            id=INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[prompt],
+        )
     )
-    chat_ctx.items.append(msg)
-    return msg
-
-
-def remove_extra_instructions(chat_ctx: ChatContext) -> None:
-    """Remove the extra instructions message from the chat context."""
-    while True:
-        if msg := chat_ctx.get_by_id(EXTRA_INSTRUCTIONS_MESSAGE_ID):
-            chat_ctx.items.remove(msg)
-        else:
-            break
+    return new_ctx

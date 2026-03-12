@@ -64,8 +64,8 @@ from .generation import (
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
-    add_extra_instructions,
     apply_instructions_modality,
+    build_templated_chat_ctx,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -1962,24 +1962,27 @@ class AgentActivity(RecognitionHooks):
         if new_message is not None:
             chat_ctx.insert(new_message)
 
-        # Always ensure the agent's core instructions are set in the first system message.
-        # This happens regardless of whether extra_instructions are provided.
-        try:
-            update_instructions(
-                chat_ctx, instructions=self._agent.instructions, add_if_missing=True
-            )
-        except ValueError:
-            logger.exception("failed to update the instructions")
-
-        # apply the correct variant of the instructions for the turn's input modality
-        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
-
-        # If extra_instructions (from generate_reply) are provided, add them as a
-        # separate system message at the END of the context. This keeps the agent's
-        # core instructions separate from one-off task instructions, preventing the
-        # model from getting confused as the context grows larger.
         if extra_instructions is not None:
-            add_extra_instructions(chat_ctx, instructions=extra_instructions)
+            # When generate_reply provides extra instructions, build a fresh context
+            # that templates the conversation inside the prompt. This prevents the model
+            # from confusing "core behavior" with "one-off task instructions" as the
+            # context grows larger.
+            chat_ctx = build_templated_chat_ctx(
+                chat_ctx,
+                agent_instructions=self._agent.instructions,
+                extra_instructions=extra_instructions,
+            )
+            apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
+        else:
+            try:
+                update_instructions(
+                    chat_ctx, instructions=self._agent.instructions, add_if_missing=True
+                )
+            except ValueError:
+                logger.exception("failed to update the instructions")
+
+            # apply the correct variant of the instructions for the turn's input modality
+            apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
