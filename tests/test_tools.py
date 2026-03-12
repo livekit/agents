@@ -8,6 +8,8 @@ from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    build_legacy_openai_schema,
+    build_strict_openai_schema,
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
@@ -395,6 +397,24 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestNoParametersSchema:
+    """Test that functions with no parameters generate valid JSON schema."""
+
+    def test_legacy_schema_no_parameters_has_no_required(self):
+        """Legacy schema for no-param function must not include 'required'."""
+        params = build_legacy_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
+
+    def test_strict_schema_no_parameters_has_no_required(self):
+        """Strict schema for no-param function must not include 'required'."""
+        params = build_strict_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
 
 
 class _NullableEnumModel(BaseModel):
