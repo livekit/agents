@@ -77,7 +77,10 @@ class RoomSessionTransport(SessionTransport):
 
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
-            data = await reader.read_all()
+            chunks: list[bytes] = []
+            async for chunk in reader:
+                chunks.append(chunk)
+            data = b"".join(chunks)
             msg = agent_pb.AgentSessionMessage()
             msg.ParseFromString(data)
             self._recv_ch.send_nowait(msg)
@@ -91,7 +94,10 @@ class RoomSessionTransport(SessionTransport):
             return
         try:
             data = msg.SerializeToString()
-            kwargs: dict[str, str | list[str]] = {"topic": TOPIC_SESSION_MESSAGES}
+            kwargs: dict[str, str | list[str]] = {
+                "topic": TOPIC_SESSION_MESSAGES,
+                "name": TOPIC_SESSION_MESSAGES,
+            }
             if self._remote_identity:
                 kwargs["destination_identities"] = [self._remote_identity]
             writer = await self._room.local_participant.stream_bytes(**kwargs)
@@ -525,6 +531,18 @@ class _SessionHost:
             error: str | None = None
             text = req.send_message.text
             if text:
+                # Disable audio/transcription so TTS is skipped and the run
+                # completes after text generation without waiting for playout.
+                self._session.output.audio = None
+                self._session.output.transcription = None
+
+                # Interrupt any in-progress speech (e.g. the greeting) that may
+                # be blocking the speech queue waiting for audio playout.
+                try:
+                    await self._session.interrupt(force=True)
+                except RuntimeError:
+                    pass  # session not running yet
+
                 result = self._session.run(user_input=text)
                 try:
                     await result
@@ -625,12 +643,24 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             self._pending_requests.pop(request.request_id, None)
             raise
 
-    async def wait_for_ready(self, timeout: float = 5.0) -> None:
-        req = agent_pb.SessionRequest(
-            request_id=utils.shortuuid("req_"),
-            ping=agent_pb.SessionRequest.Ping(),
-        )
-        await self._send_request(req, timeout=timeout)
+    async def wait_for_ready(
+        self, timeout: float = 5.0, retry_interval: float = 0.5
+    ) -> None:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("wait_for_ready timed out")
+            req = agent_pb.SessionRequest(
+                request_id=utils.shortuuid("req_"),
+                ping=agent_pb.SessionRequest.Ping(),
+            )
+            try:
+                await self._send_request(req, timeout=min(retry_interval, remaining))
+                return
+            except (TimeoutError, asyncio.TimeoutError):
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise TimeoutError("wait_for_ready timed out")
 
     async def fetch_chat_history(self) -> agent_pb.SessionRequest.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(

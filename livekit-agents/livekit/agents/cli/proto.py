@@ -1,106 +1,45 @@
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
-import io
-import socket
-from dataclasses import dataclass, field
-from typing import ClassVar
+from dataclasses import dataclass
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_dev
 
-from ..ipc import channel
 from ..job import JobAcceptArguments, RunningJobInfo
 
 
 @dataclass
 class CliArgs:
     log_level: str
-
-    # TODO(long): these are not actually used?
-    url: str | None
-    api_key: str | None
-    api_secret: str | None
-
-    devmode: bool = False
-    reload: bool = False
-
-    # simulate_job: str | None = None
-
-    # internal states
-    # amount of time this worker has been reloaded
-    reload_count: int = 0
-
-    # pipe used for the communication between the watch server and the watch client
-    # when reload/dev mode is enabled
-    mp_cch: socket.socket | None = None
+    url: str | None = None
+    api_key: str | None = None
+    api_secret: str | None = None
+    reload_addr: str | None = None
 
 
-@dataclass
-class ActiveJobsRequest:
-    MSG_ID: ClassVar[int] = 1
+def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningJobInfo:
+    return agent_dev.RunningJobInfo(
+        job=info.job,
+        accept_name=info.accept_arguments.name,
+        accept_identity=info.accept_arguments.identity,
+        accept_metadata=info.accept_arguments.metadata,
+        url=info.url,
+        token=info.token,
+        worker_id=info.worker_id,
+        fake_job=info.fake_job,
+    )
 
 
-@dataclass
-class ActiveJobsResponse:
-    MSG_ID: ClassVar[int] = 2
-    jobs: list[RunningJobInfo] = field(default_factory=list)
-    reload_count: int = 0
-
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_int(b, len(self.jobs))
-        for running_job in self.jobs:
-            accept_args = running_job.accept_arguments
-            channel.write_bytes(b, running_job.job.SerializeToString())
-            channel.write_string(b, accept_args.name)
-            channel.write_string(b, accept_args.identity)
-            channel.write_string(b, accept_args.metadata)
-            channel.write_string(b, running_job.url)
-            channel.write_string(b, running_job.token)
-            channel.write_string(b, running_job.worker_id)
-            channel.write_bool(b, running_job.fake_job)
-
-        channel.write_int(b, self.reload_count)
-
-    def read(self, b: io.BytesIO) -> None:
-        for _ in range(channel.read_int(b)):
-            job = agent.Job()
-            job.ParseFromString(channel.read_bytes(b))
-            self.jobs.append(
-                RunningJobInfo(
-                    accept_arguments=JobAcceptArguments(
-                        name=channel.read_string(b),
-                        identity=channel.read_string(b),
-                        metadata=channel.read_string(b),
-                    ),
-                    job=job,
-                    url=channel.read_string(b),
-                    token=channel.read_string(b),
-                    worker_id=channel.read_string(b),
-                    fake_job=channel.read_bool(b),
-                )
-            )
-
-        self.reload_count = channel.read_int(b)
-
-
-@dataclass
-class ReloadJobsRequest:
-    MSG_ID: ClassVar[int] = 3
-
-
-@dataclass
-class ReloadJobsResponse(ActiveJobsResponse):
-    MSG_ID: ClassVar[int] = 4
-
-
-@dataclass
-class Reloaded:
-    MSG_ID: ClassVar[int] = 5
-
-
-IPC_MESSAGES = {
-    ActiveJobsRequest.MSG_ID: ActiveJobsRequest,
-    ActiveJobsResponse.MSG_ID: ActiveJobsResponse,
-    ReloadJobsRequest.MSG_ID: ReloadJobsRequest,
-    ReloadJobsResponse.MSG_ID: ReloadJobsResponse,
-    Reloaded.MSG_ID: Reloaded,
-}
+def running_job_from_proto(pb: agent_dev.RunningJobInfo) -> RunningJobInfo:
+    return RunningJobInfo(
+        accept_arguments=JobAcceptArguments(
+            name=pb.accept_name,
+            identity=pb.accept_identity,
+            metadata=pb.accept_metadata,
+        ),
+        job=pb.job,
+        url=pb.url,
+        token=pb.token,
+        worker_id=pb.worker_id,
+        fake_job=pb.fake_job,
+    )

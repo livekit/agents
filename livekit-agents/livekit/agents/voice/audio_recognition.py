@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import time
@@ -196,7 +197,10 @@ class AudioRecognition:
         self._closing.set()
 
         if self._commit_user_turn_atask is not None:
-            await self._commit_user_turn_atask
+            # cancel instead of awaiting — we don't need the final transcript during shutdown
+            self._commit_user_turn_atask.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._commit_user_turn_atask
 
         await aio.cancel_and_wait(*self._tasks)
 

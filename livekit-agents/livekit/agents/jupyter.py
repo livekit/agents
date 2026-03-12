@@ -128,6 +128,6 @@ def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = No
         asyncio.run_coroutine_threadsafe(simulate_job(), asyncio.get_event_loop())
 
     args = proto.CliArgs(
-        log_level="DEBUG", devmode=True, url=ws_url, api_key=api_key, api_secret=api_secret
+        log_level="DEBUG", url=ws_url, api_key=api_key, api_secret=api_secret
     )
-    cli._run_worker(server, args, jupyter=True)
+    cli._run_worker(server, args)
