@@ -255,6 +255,9 @@ class AudioRecognition:
 
         Used during agent handoff when reusing the AudioRecognition instance.
         """
+        if self._end_of_turn_task is not None:
+            self._end_of_turn_task.cancel()
+            self._end_of_turn_task = None
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""

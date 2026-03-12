@@ -1190,6 +1190,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.warning(
                     f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
                 )
+                if _reuse_ar is not None:
+                    await _reuse_ar.aclose()
                 self._next_activity = None
                 self._activity = None
                 return
