@@ -968,13 +968,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     await self._close_future
                 return
 
-            logger.info("shutting down worker", extra={"id": self.id})
-
-            assert self._close_future is not None
-            assert self._http_session is not None
-            assert self._http_server is not None
-
             self._closed = True
+
+            # Worker never fully started (e.g. interrupted during init)
+            if self._close_future is None:
+                return
+
+            logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
@@ -991,8 +991,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._inference_executor is not None:
                 await self._inference_executor.aclose()
 
-            await self._http_session.close()
-            await self._http_server.aclose()
+            if self._http_session is not None:
+                await self._http_session.close()
+
+            if self._http_server is not None:
+                await self._http_server.aclose()
 
             if self._prometheus_server:
                 await self._prometheus_server.aclose()
@@ -1000,7 +1003,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._api is not None:
                 await self._api.aclose()  # type: ignore
 
-            # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
             if not self._close_future.done():
