@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import inspect
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Generic, TypeVar, overload
 
 from pydantic import Field
+from typing_extensions import ParamSpec
 
-from ...llm import Tool, Toolset, function_tool
+from ...llm import Tool, Toolset, function_tool as _function_tool
 from ...log import logger
 
 T = TypeVar("T")
+_P = ParamSpec("_P")
+_R = TypeVar("_R", bound=Awaitable[Any])
 
 
 class OperationStatus(str, enum.Enum):
@@ -73,7 +77,7 @@ class AsyncOperation(Generic[T]):
 
 
 @dataclass
-class AsyncFunctionInfo:
+class _AsyncFunctionInfo:
     """Information about a registered async function."""
 
     name: str
@@ -88,30 +92,93 @@ class AsyncToolset(Toolset):
     can be checked/monitored by the LLM. This is useful for long-running operations
     like API calls, database queries, or any task that shouldn't block the conversation.
 
-    The toolset provides three tools to the LLM:
-    - start_<name>: Start an async operation
-    - check_operation_status: Check the status of pending operations
-    - get_operation_result: Get the result of a completed operation
+    The toolset exposes tools to the LLM for each registered function (prefixed with
+    ``start_``), plus management tools to check status, get results, list, and cancel
+    operations.
 
     Multiple agents can share the same AsyncToolset instance, allowing "execution
-    ownership" to be shared - one agent can start an operation, another can check
+    ownership" to be shared -- one agent can start an operation, another can check
     its status or retrieve the result.
 
     Example:
         ```python
+        async_tools = AsyncToolset(id="booking_tools")
+
+        @async_tools.function_tool
         async def book_flight(origin: str, destination: str) -> dict:
             '''Book a flight from origin to destination.'''
             await asyncio.sleep(5)  # Simulate long operation
             return {"confirmation": "ABC123", "origin": origin, "destination": destination}
-
-        async_tools = AsyncToolset(id="booking_tools")
-        async_tools.register(book_flight, name="book_flight", description="Book a flight")
 
         # Multiple agents can share this toolset
         agent1 = Agent(tools=[async_tools], ...)
         agent2 = Agent(tools=[async_tools], ...)
         ```
     """
+
+    @overload
+    def function_tool(
+        self,
+        f: Callable[_P, _R],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Callable[_P, _R]: ...
+
+    @overload
+    def function_tool(
+        self,
+        f: None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]: ...
+
+    def function_tool(
+        self,
+        f: Callable[_P, _R] | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Callable[_P, _R] | Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+        """Decorator to register an async function as a background tool.
+
+        Can be used with or without arguments::
+
+            @toolset.function_tool
+            async def my_func(x: int) -> int: ...
+
+            @toolset.function_tool(name="custom_name", description="Custom desc")
+            async def my_func(x: int) -> int: ...
+
+        Args:
+            f: The async function to register (when used without parentheses).
+            name: Override the tool name (defaults to the function name).
+            description: Override the tool description (defaults to docstring).
+        """
+
+        def decorator(func: Callable[_P, _R]) -> Callable[_P, _R]:
+            if not asyncio.iscoroutinefunction(func):
+                raise ValueError(f"Function {func.__name__} must be an async function")
+
+            tool_name = name or func.__name__
+            tool_description = description or func.__doc__ or f"Run {tool_name} asynchronously"
+
+            if tool_name in self._async_functions:
+                raise ValueError(f"Async function '{tool_name}' is already registered")
+
+            self._async_functions[tool_name] = _AsyncFunctionInfo(
+                name=tool_name,
+                description=tool_description,
+                func=func,
+            )
+            self._rebuild_tools()
+            logger.debug(f"Registered async function: {tool_name}")
+            return func
+
+        if f is not None:
+            return decorator(f)
+        return decorator
 
     def __init__(
         self,
@@ -130,7 +197,7 @@ class AsyncToolset(Toolset):
                 cleaning them up (default 5 minutes).
         """
         super().__init__(id=id)
-        self._async_functions: dict[str, AsyncFunctionInfo] = {}
+        self._async_functions: dict[str, _AsyncFunctionInfo] = {}
         self._operations: dict[str, AsyncOperation[Any]] = {}
         self._tools: list[Tool] = []
         self._auto_cleanup = auto_cleanup_completed
@@ -138,7 +205,7 @@ class AsyncToolset(Toolset):
         self._cleanup_task: asyncio.Task[None] | None = None
 
         # Build management tools
-        self._check_status_tool = function_tool(
+        self._check_status_tool = _function_tool(
             self._check_operation_status,
             name="check_operation_status",
             description=(
@@ -148,7 +215,7 @@ class AsyncToolset(Toolset):
             ),
         )
 
-        self._get_result_tool = function_tool(
+        self._get_result_tool = _function_tool(
             self._get_operation_result,
             name="get_operation_result",
             description=(
@@ -158,7 +225,7 @@ class AsyncToolset(Toolset):
             ),
         )
 
-        self._list_operations_tool = function_tool(
+        self._list_operations_tool = _function_tool(
             self._list_operations,
             name="list_async_operations",
             description=(
@@ -167,7 +234,7 @@ class AsyncToolset(Toolset):
             ),
         )
 
-        self._cancel_operation_tool = function_tool(
+        self._cancel_operation_tool = _function_tool(
             self._cancel_operation,
             name="cancel_async_operation",
             description=(
@@ -178,67 +245,12 @@ class AsyncToolset(Toolset):
 
         self._rebuild_tools()
 
-    def register(
-        self,
-        func: Callable[..., Awaitable[Any]],
-        *,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None:
-        """Register an async function as an async tool.
-
-        Args:
-            func: The async function to register. Must be a coroutine function.
-            name: Name of the tool (defaults to function name).
-            description: Description for the LLM (defaults to function docstring).
-        """
-        if not asyncio.iscoroutinefunction(func):
-            raise ValueError(f"Function {func.__name__} must be an async function")
-
-        tool_name = name or func.__name__
-        tool_description = description or func.__doc__ or f"Run {tool_name} asynchronously"
-
-        if tool_name in self._async_functions:
-            raise ValueError(f"Async function '{tool_name}' is already registered")
-
-        self._async_functions[tool_name] = AsyncFunctionInfo(
-            name=tool_name,
-            description=tool_description,
-            func=func,
-        )
-        self._rebuild_tools()
-        logger.debug(f"Registered async function: {tool_name}")
-
-    def unregister(self, name: str) -> None:
-        """Unregister an async function.
-
-        Args:
-            name: Name of the async function to unregister.
-        """
-        if name not in self._async_functions:
-            raise ValueError(f"Async function '{name}' is not registered")
-
-        del self._async_functions[name]
-        self._rebuild_tools()
-        logger.debug(f"Unregistered async function: {name}")
-
     def get_operation(self, operation_id: str) -> AsyncOperation[Any] | None:
-        """Get an operation by its ID.
-
-        Args:
-            operation_id: The unique ID of the operation.
-
-        Returns:
-            The AsyncOperation if found, None otherwise.
-        """
+        """Get an operation by its ID."""
         return self._operations.get(operation_id)
 
     def get_pending_operations(self) -> list[AsyncOperation[Any]]:
-        """Get all pending or running operations.
-
-        Returns:
-            List of operations that are still in progress.
-        """
+        """Get all pending or running operations."""
         return [
             op
             for op in self._operations.values()
@@ -246,11 +258,7 @@ class AsyncToolset(Toolset):
         ]
 
     def get_completed_operations(self) -> list[AsyncOperation[Any]]:
-        """Get all completed operations (success or failure).
-
-        Returns:
-            List of operations that have finished.
-        """
+        """Get all completed operations (success or failure)."""
         return [
             op
             for op in self._operations.values()
@@ -262,12 +270,9 @@ class AsyncToolset(Toolset):
         """Rebuild the list of tools after registration changes."""
         self._tools = []
 
-        # Add start tools for each registered async function
         for info in self._async_functions.values():
-            start_tool = self._create_start_tool(info)
-            self._tools.append(start_tool)
+            self._tools.append(self._create_start_tool(info))
 
-        # Add management tools
         self._tools.extend(
             [
                 self._check_status_tool,
@@ -277,33 +282,30 @@ class AsyncToolset(Toolset):
             ]
         )
 
-    def _create_start_tool(self, info: AsyncFunctionInfo) -> Tool:
+    def _create_start_tool(self, info: _AsyncFunctionInfo) -> Tool:
         """Create a start tool for an async function."""
-        import inspect
         from typing import get_type_hints
 
         func = info.func
         sig = inspect.signature(func)
 
-        # Get type hints
         try:
             type_hints = get_type_hints(func)
         except Exception:
             type_hints = {}
 
-        # Build a wrapper function that starts the async operation
         async def start_wrapper(**kwargs: Any) -> str:
             return await self._start_operation(info.name, kwargs)
 
         # Preserve the signature from the original function for schema generation
         params = [
             p
-            for name, p in sig.parameters.items()
-            if name not in ("self", "ctx") and p.kind != inspect.Parameter.VAR_KEYWORD
+            for pname, p in sig.parameters.items()
+            if pname not in ("self", "ctx") and p.kind != inspect.Parameter.VAR_KEYWORD
         ]
         start_wrapper.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
         start_wrapper.__annotations__ = {
-            name: hint for name, hint in type_hints.items() if name not in ("self", "ctx", "return")
+            n: hint for n, hint in type_hints.items() if n not in ("self", "ctx", "return")
         }
         start_wrapper.__annotations__["return"] = str
         start_wrapper.__doc__ = (
@@ -313,7 +315,7 @@ class AsyncToolset(Toolset):
             "to retrieve the final result."
         )
 
-        return function_tool(
+        return _function_tool(
             start_wrapper,
             name=f"start_{info.name}",
             description=(
@@ -322,9 +324,7 @@ class AsyncToolset(Toolset):
             ),
         )
 
-    async def _start_operation(
-        self, func_name: str, arguments: dict[str, Any]
-    ) -> str:
+    async def _start_operation(self, func_name: str, arguments: dict[str, Any]) -> str:
         """Start an async operation and return its ID."""
         info = self._async_functions.get(func_name)
         if not info:
@@ -340,13 +340,11 @@ class AsyncToolset(Toolset):
         )
         self._operations[operation_id] = operation
 
-        # Start the background task
         task = asyncio.create_task(self._run_operation(operation, info.func))
         operation.task = task
 
         logger.debug(f"Started async operation {operation_id} for {func_name}")
 
-        # Start cleanup task if needed
         if self._auto_cleanup and self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
 
@@ -486,7 +484,10 @@ class AsyncToolset(Toolset):
             return f"Operation {operation_id} not found"
 
         if operation.status not in (OperationStatus.PENDING, OperationStatus.RUNNING):
-            return f"Operation {operation_id} cannot be cancelled (status: {operation.status.value})"
+            return (
+                f"Operation {operation_id} cannot be cancelled "
+                f"(status: {operation.status.value})"
+            )
 
         if operation.task and not operation.task.done():
             operation.task.cancel()
@@ -504,7 +505,7 @@ class AsyncToolset(Toolset):
         """Background task to clean up old completed operations."""
         try:
             while True:
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)
                 current_time = time.time()
                 to_remove = []
 
@@ -518,7 +519,6 @@ class AsyncToolset(Toolset):
                     del self._operations[op_id]
                     logger.debug(f"Cleaned up old operation: {op_id}")
 
-                # Stop cleanup task if no operations
                 if not self._operations:
                     self._cleanup_task = None
                     break
@@ -528,7 +528,6 @@ class AsyncToolset(Toolset):
 
     async def shutdown(self) -> None:
         """Shutdown the toolset and cancel all pending operations."""
-        # Cancel cleanup task
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -537,7 +536,6 @@ class AsyncToolset(Toolset):
                 pass
             self._cleanup_task = None
 
-        # Cancel all pending operations
         for op in self._operations.values():
             if op.task and not op.task.done():
                 op.task.cancel()
