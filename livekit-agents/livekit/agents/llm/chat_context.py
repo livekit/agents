@@ -760,7 +760,7 @@ class ChatContext:
         # Render items to XML format and collect the contents.
         contents: list[str] = []
         for m in to_summarize:
-            if isinstance(m, FunctionCall, FunctionCallOutput):
+            if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(m.to_message().text_content or "")
             else:
                 contents.append(to_xml(m.role, (m.text_content or "").strip()))
