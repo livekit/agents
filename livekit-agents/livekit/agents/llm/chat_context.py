@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import textwrap
 import time
-from abc import ABC, abstractmethod
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
@@ -293,15 +292,7 @@ class ChatMessage(BaseModel):
 ChatContent: TypeAlias = ImageContent | AudioContent | Instructions | str
 
 
-class MessageRenderable(BaseModel, ABC):
-    """Base class for chat context items that can be converted into a `ChatMessage`."""
-
-    @abstractmethod
-    def to_message(self) -> ChatMessage:
-        pass
-
-
-class FunctionCall(MessageRenderable):
+class FunctionCall(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call"] = "function_call"
     call_id: str
@@ -334,7 +325,7 @@ class FunctionCall(MessageRenderable):
         )
 
 
-class FunctionCallOutput(MessageRenderable):
+class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
@@ -726,7 +717,7 @@ class ChatContext:
         # user/assistant ChatMessages toward the keep_last_turns budget (each
         # turn = one user + one assistant message, so budget = keep_last_turns * 2).
         # Everything from the split point onward — including any interleaved
-        # MessageRenderable items — is preserved as-is in the tail.
+        # FunctionCall/FunctionCallOutput items — is preserved as-is in the tail.
         msg_budget = keep_last_turns * 2
         split_idx = len(self.items)
 
@@ -749,7 +740,7 @@ class ChatContext:
         head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
 
         # Build summarization input from head_items only.
-        to_summarize: list[ChatMessage | MessageRenderable] = []
+        to_summarize: list[ChatMessage | FunctionCall | FunctionCallOutput] = []
         for item in head_items:
             if isinstance(item, ChatMessage):
                 if item.role not in ("user", "assistant"):
@@ -760,7 +751,7 @@ class ChatContext:
                 text = (item.text_content or "").strip()
                 if text:
                     to_summarize.append(item)
-            elif isinstance(item, MessageRenderable):
+            elif isinstance(item, FunctionCall, FunctionCallOutput):
                 to_summarize.append(item)
 
         if not to_summarize:
@@ -769,7 +760,7 @@ class ChatContext:
         # Render items to XML format and collect the contents.
         contents: list[str] = []
         for m in to_summarize:
-            if isinstance(m, MessageRenderable):
+            if isinstance(m, FunctionCall, FunctionCallOutput):
                 contents.append(m.to_message().text_content or "")
             else:
                 contents.append(to_xml(m.role, (m.text_content or "").strip()))
@@ -823,7 +814,7 @@ class ChatContext:
         for it in head_items:
             if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-            if isinstance(it, MessageRenderable):
+            if isinstance(it, FunctionCall, FunctionCallOutput):
                 continue
             preserved.append(it)
 
