@@ -618,9 +618,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             )
         )
 
+        pending_fut = self._pending_generation_fut
         user_initiated = (
-            self._pending_generation_fut is not None
-            and not self._pending_generation_fut.done()
+            pending_fut is not None
+            and not pending_fut.done()
         )
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
@@ -630,9 +631,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         )
         self.emit("generation_created", generation_ev)
 
-        if user_initiated:
-            self._pending_generation_fut.set_result(generation_ev)
-            self._pending_generation_fut = None
+        if user_initiated and not pending_fut.done():
+            pending_fut.set_result(generation_ev)
+            if self._pending_generation_fut is pending_fut:
+                self._pending_generation_fut = None
 
         logger.debug(f"Started generation {response_id}")
 

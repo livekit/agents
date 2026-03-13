@@ -2569,18 +2569,20 @@ requires-dist = [
 name = "livekit-plugins-nvidia"
 source = { editable = "livekit-plugins/livekit-plugins-nvidia" }
 dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "livekit-agents" },
     { name = "nvidia-riva-client" },
 ]
 
 [package.optional-dependencies]
 personaplex = [
+    { name = "livekit-agents", extra = ["codecs"] },
     { name = "sphn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["codecs"], marker = "extra == 'personaplex'", editable = "livekit-agents" },
     { name = "nvidia-riva-client" },
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
