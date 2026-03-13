@@ -608,3 +608,28 @@ async def execute_function_call(
             extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
         )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+
+def _to_attrs_str(attrs: dict[str, Any] | None = None) -> str | None:
+    if attrs:
+        return " ".join([f'{k}="{v}"' for k, v in attrs.items()])
+    return None
+
+
+def to_xml(
+    tag_name: str,
+    content: str | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> str:
+    attrs_str = _to_attrs_str(attrs)
+
+    if content:
+        return "\n".join(
+            [
+                f"<{tag_name} {attrs_str}>" if attrs_str else f"<{tag_name}>",
+                content,
+                f"</{tag_name}>",
+            ]
+        )
+    else:
+        return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"

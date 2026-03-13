@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import textwrap
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.agents.llm.utils import to_xml
 
 from .. import utils
 from ..log import logger
@@ -291,7 +294,15 @@ class ChatMessage(BaseModel):
 ChatContent: TypeAlias = ImageContent | AudioContent | Instructions | str
 
 
-class FunctionCall(BaseModel):
+class MessageRenderable(BaseModel, ABC):
+    """Base class for chat context items that can be converted into a `ChatMessage`."""
+
+    @abstractmethod
+    def to_message(self) -> ChatMessage:
+        pass
+
+
+class FunctionCall(MessageRenderable):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call"] = "function_call"
     call_id: str
@@ -306,8 +317,25 @@ class FunctionCall(BaseModel):
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
 
+    def to_message(self) -> ChatMessage:
+        return ChatMessage(
+            role="user",
+            content=[
+                to_xml(
+                    "function_call",
+                    self.arguments,
+                    attrs={
+                        "name": self.name,
+                        "call_id": self.call_id,
+                    },
+                )
+            ],
+            created_at=self.created_at,
+            extra={"is_function_call": True},
+        )
 
-class FunctionCallOutput(BaseModel):
+
+class FunctionCallOutput(MessageRenderable):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
@@ -315,6 +343,23 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+
+    def to_message(self) -> ChatMessage:
+        return ChatMessage(
+            role="assistant",
+            content=[
+                to_xml(
+                    "function_call_output",
+                    self.output if not self.is_error else to_xml("error", self.output),
+                    attrs={
+                        "call_id": self.call_id,
+                        "name": self.name,
+                    },
+                )
+            ],
+            created_at=self.created_at,
+            extra={"is_function_call_output": True},
+        )
 
 
 class AgentHandoff(BaseModel):
@@ -678,40 +723,79 @@ class ChatContext:
         *,
         keep_last_turns: int = 2,
     ) -> ChatContext:
-        to_summarize: list[ChatMessage] = []
-        for msg in self.messages():
-            if msg.role not in ("user", "assistant"):
-                continue
-            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
-                continue
+        # Split self.items into head/tail. Walk backward, counting only
+        # user/assistant ChatMessages toward the keep_last_turns budget (each
+        # turn = one user + one assistant message, so budget = keep_last_turns * 2).
+        # Everything from the split point onward — including any interleaved
+        # MessageRenderable items — is preserved as-is in the tail.
+        msg_budget = keep_last_turns * 2
+        msg_count = 0
+        split_idx: int | None = None
+        for i in range(len(self.items) - 1, -1, -1):
+            item = self.items[i]
+            if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
+                msg_count += 1
+                if msg_count >= msg_budget:
+                    split_idx = i
+                    break
 
-            text = (msg.text_content or "").strip()
-            if text:
-                to_summarize.append(msg)
+        if split_idx is None or split_idx == 0:
+            # no items to summarize, return early
+            return self
+
+        head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
+
+        # Build summarization input from head_items only.
+        to_summarize: list[ChatMessage | MessageRenderable] = []
+        for item in head_items:
+            if isinstance(item, ChatMessage):
+                if item.role not in ("user", "assistant"):
+                    continue
+                if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+                    continue
+
+                text = (item.text_content or "").strip()
+                if text:
+                    to_summarize.append(item)
+            elif isinstance(item, MessageRenderable):
+                to_summarize.append(item)
+
         if not to_summarize:
             return self
 
-        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
-        if tail_n == 0:
-            head, tail = to_summarize, []
-        else:
-            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+        # Render items to XML format and collect the contents.
+        contents: list[str] = []
+        for m in to_summarize:
+            if isinstance(m, MessageRenderable):
+                contents.append(m.to_message().text_content)
+            else:
+                contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
-        if not head:
-            return self
+        source_text = "\n".join(contents).strip()
 
-        source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
         if not source_text:
             return self
 
         chat_ctx = ChatContext()
         chat_ctx.add_message(
             role="system",
-            content=(
-                "Compress older chat history into a short, faithful summary.\n"
-                "Focus on user goals, constraints, decisions, key facts/preferences/entities, and pending tasks.\n"
-                "Exclude chit-chat and greetings. Be concise."
-            ),
+            content=textwrap.dedent("""\
+                Compress older conversation history into a short, faithful summary.
+
+                The conversation is formatted as XML. Here is how to read it:
+                - <user>…</user>  — something the user said.
+                - <assistant>…</assistant>  — something the assistant said.
+                - <function_call name="…">…</function_call>  — the assistant invoked an action.
+                - <function_call_output name="…">…</function_call_output>  — the result of that \
+                action. May contain <error>…</error> if it failed.
+
+                Guidelines:
+                - Distill the *information learned* from function call outputs into the summary. \
+                Do not mention that a tool/function was called — just preserve the knowledge gained.
+                - Focus on: user goals, constraints, decisions, key facts, preferences, entities, \
+                and any pending or unresolved tasks.
+                - Omit greetings, filler, and chit-chat.
+                - Be concise."""),
         )
         chat_ctx.add_message(
             role="user",
@@ -728,33 +812,33 @@ class ChatContext:
         if not summary:
             return self
 
-        tail_start_ts = tail[0].created_at if tail else float("inf")
-
+        # Rebuild self._items. From head_items, keep only structural
+        # items (system messages, agent handoffs, config updates, prior
+        # summaries) — everything summarizable is replaced by the summary.
+        # Tail items are appended as-is.
         preserved: list[ChatItem] = []
-        for it in self.items:
-            if (
-                it.type in ("function_call", "function_call_output")
-                and it.created_at < tail_start_ts
-            ):
+        for it in head_items:
+            if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-
-            if it.type == "message" and it.role in ("user", "assistant"):
+            if isinstance(it, MessageRenderable):
                 continue
-
             preserved.append(it)
 
         self._items = preserved
 
-        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
+        created_at_hint = (
+            (tail_items[0].created_at - 1e-6)
+            if tail_items
+            else (to_summarize[-1].created_at + 1e-6)
+        )
         self.add_message(
             role="assistant",
-            content=f"[history summary]\n{summary}",
+            content=to_xml("chat_history_summary", summary),
             created_at=created_at_hint,
             extra={"is_summary": True},
         )
 
-        for msg in tail:
-            self._items.append(msg)
+        self._items.extend(tail_items)
 
         return self
 
