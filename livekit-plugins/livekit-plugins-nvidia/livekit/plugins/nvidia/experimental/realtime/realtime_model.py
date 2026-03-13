@@ -448,9 +448,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
             try:
                 await ws_conn.send_bytes(msg)
-            except Exception as e:
-                logger.error(f"Error sending message: {e}", exc_info=True)
-                break
+            except Exception:
+                raise
 
         self._closing = True
 
