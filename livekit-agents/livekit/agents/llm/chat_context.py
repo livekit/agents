@@ -814,7 +814,7 @@ class ChatContext:
         for it in head_items:
             if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-            if isinstance(it, FunctionCall, FunctionCallOutput):
+            if isinstance(it, (FunctionCall, FunctionCallOutput)):
                 continue
             preserved.append(it)
 
