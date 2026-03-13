@@ -751,7 +751,7 @@ class ChatContext:
                 text = (item.text_content or "").strip()
                 if text:
                     to_summarize.append(item)
-            elif isinstance(item, FunctionCall, FunctionCallOutput):
+            elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
 
         if not to_summarize:
