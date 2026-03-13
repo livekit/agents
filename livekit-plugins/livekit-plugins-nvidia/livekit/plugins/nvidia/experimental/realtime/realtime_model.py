@@ -416,9 +416,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
                 is_recoverable = isinstance(
                     e,
-                    aiohttp.ClientConnectionError
-                    | asyncio.TimeoutError
-                    | APIConnectionError,
+                    aiohttp.ClientConnectionError | asyncio.TimeoutError | APIConnectionError,
                 )
 
                 if isinstance(e, APIConnectionError):
@@ -621,10 +619,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         )
 
         pending_fut = self._pending_generation_fut
-        user_initiated = (
-            pending_fut is not None
-            and not pending_fut.done()
-        )
+        user_initiated = pending_fut is not None and not pending_fut.done()
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
