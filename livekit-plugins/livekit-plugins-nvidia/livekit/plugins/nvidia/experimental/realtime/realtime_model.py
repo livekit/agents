@@ -184,7 +184,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE,
             NUM_CHANNELS,
-            samples_per_channel=SAMPLE_RATE // 10,  # 100ms frames
+            samples_per_channel=1920,  # 80ms — valid Opus frame size
         )
 
         self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
@@ -360,7 +360,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             self._bstream = utils.audio.AudioByteStream(
                 SAMPLE_RATE,
                 NUM_CHANNELS,
-                samples_per_channel=SAMPLE_RATE // 10,
+                samples_per_channel=1920,  # 80ms — valid Opus frame size
             )
 
             try:
@@ -394,6 +394,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
                 if restart_wait_task not in done and self._closed:
                     break
+
+                old_ch = self._msg_ch
+                old_ch.close()
+                self._msg_ch = utils.aio.Chan[bytes]()
 
                 if restart_wait_task in done:
                     self.emit(
@@ -443,6 +447,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     @utils.log_exceptions(logger=logger)
     async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+        # The server's is_alive() check consumes WS messages during system
+        # prompt processing without feeding them to the opus decoder.  Wait
+        # for the handshake before sending audio so nothing gets dropped.
+        # Queued frames are sent immediately — they're the first audio the
+        # server's recv_loop will see.
+        await self._handshake_event.wait()
+
         async for msg in self._msg_ch:
             if self._session_should_close.is_set():
                 break
@@ -493,6 +504,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             ):
                 if self._closing:
                     return
+
+                # Code 1000 (normal close) — finalize gracefully and reconnect
+                # rather than treating it as a retriable error.
+                if ws_conn.close_code in (1000, None):
+                    logger.debug("PersonaPlex server closed connection normally")
+                    if self._current_generation and not self._current_generation._done:
+                        self._finalize_generation(interrupted=False)
+                    return
+
                 raise APIConnectionError(message="PersonaPlex connection closed unexpectedly")
 
             elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -507,62 +527,49 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         if not audio_frame.data or len(audio_frame.data) == 0:
             return
 
-        try:
-            # Convert int16 PCM to float32 for sphn
-            pcm_int16 = np.frombuffer(audio_frame.data, dtype=np.int16)
-            if pcm_int16.size == 0:
-                return
+        pcm_int16 = np.frombuffer(audio_frame.data, dtype=np.int16)
+        if pcm_int16.size == 0:
+            return
 
-            pcm_float = pcm_int16.astype(np.float32) / 32768.0
+        pcm_float = pcm_int16.astype(np.float32) / 32768.0
+        self._opus_writer.append_pcm(pcm_float)
+        opus_bytes = self._opus_writer.read_bytes()
 
-            # sphn >=0.2: append_pcm returns opus bytes directly
-            opus_bytes = self._opus_writer.append_pcm(pcm_float)
-
-            if opus_bytes:
-                # Prepend audio message type
-                message = bytes([MSG_AUDIO]) + opus_bytes
-                with contextlib.suppress(utils.aio.channel.ChanClosed):
-                    self._msg_ch.send_nowait(message)
-        except (TypeError, ValueError) as e:
-            logger.warning(f"Skipping invalid audio frame in _encode_and_send: {e}")
+        if len(opus_bytes) > 0:
+            message = bytes([MSG_AUDIO]) + opus_bytes
+            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                self._msg_ch.send_nowait(message)
 
     def _handle_audio_data(self, opus_payload: bytes) -> None:
         """Decode Opus audio from server and push to generation."""
-        try:
-            # sphn >=0.2: append_bytes returns pcm directly
-            pcm_float = self._opus_reader.append_bytes(opus_payload)
+        self._opus_reader.append_bytes(opus_payload)
+        pcm_float = self._opus_reader.read_pcm()
 
-            if pcm_float is None or len(pcm_float) == 0:
-                return
+        if pcm_float is None or pcm_float.shape[-1] == 0:
+            return
 
-            # Convert float32 to int16 PCM
-            pcm_int16 = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
-            pcm_bytes = pcm_int16.tobytes()
+        pcm_int16 = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
+        pcm_bytes = pcm_int16.tobytes()
 
-            # Ensure generation exists
-            if not self._current_generation or self._current_generation._done:
-                self._start_new_generation()
+        if not self._current_generation or self._current_generation._done:
+            self._start_new_generation()
 
-            gen = self._current_generation
-            assert gen is not None
+        gen = self._current_generation
+        assert gen is not None
 
-            if gen._first_token_timestamp is None and len(pcm_bytes) > 0:
-                gen._first_token_timestamp = time.time()
+        if gen._first_token_timestamp is None and len(pcm_bytes) > 0:
+            gen._first_token_timestamp = time.time()
 
-            frame = rtc.AudioFrame(
-                data=pcm_bytes,
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=len(pcm_int16),
-            )
-            with contextlib.suppress(utils.aio.channel.ChanClosed):
-                gen.audio_ch.send_nowait(frame)
+        frame = rtc.AudioFrame(
+            data=pcm_bytes,
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            samples_per_channel=len(pcm_int16),
+        )
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            gen.audio_ch.send_nowait(frame)
 
-            # Reset silence timer on every audio frame
-            self._reset_silence_timer()
-
-        except Exception as e:
-            logger.error(f"Error processing audio data: {e}")
+        self._reset_silence_timer()
 
     def _handle_text_token(self, payload: bytes) -> None:
         """Handle text token from server."""
