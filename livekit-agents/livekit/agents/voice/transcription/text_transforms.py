@@ -55,7 +55,7 @@ def replace(
             if len(buffer) <= tail_len:
                 continue
             for old, new in replacements.items():
-                buffer = re.sub(re.escape(old), new, buffer, flags=flags)
+                buffer = re.sub(re.escape(old), lambda _, r=new: r, buffer, flags=flags)
 
             flush_to = len(buffer) - tail_len
             yield buffer[:flush_to]
@@ -63,7 +63,7 @@ def replace(
 
         if buffer:
             for old, new in replacements.items():
-                buffer = re.sub(re.escape(old), new, buffer, flags=flags)
+                buffer = re.sub(re.escape(old), lambda _, r=new: r, buffer, flags=flags)
             yield buffer
 
     return _transform
