@@ -10,18 +10,26 @@ Output: SSE streaming with data: { "content": str } format
 
 from __future__ import annotations
 
-import asyncio
 import json
-import random
 import time
 import uuid
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 import httpx
-from livekit.agents import llm, APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
-from .log import logger
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    NotGivenOr,
+    llm,
+)
+
 from ._config import BlazeConfig
+from .log import logger
 
 
 class LLM(llm.LLM):
@@ -66,14 +74,14 @@ class LLM(llm.LLM):
         self,
         *,
         bot_id: str,
-        api_url: Optional[str] = None,
-        auth_token: Optional[str] = None,
+        api_url: str | None = None,
+        auth_token: str | None = None,
         deep_search: bool = False,
         agentic_search: bool = False,
         enable_tools: bool = False,
-        demographics: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-        config: Optional[BlazeConfig] = None,
+        demographics: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        config: BlazeConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -94,9 +102,7 @@ class LLM(llm.LLM):
         self._chat_url = f"{self._api_url}/v1/voicebot-call/{bot_id}/chat-conversion-stream"
 
         # Shared HTTP client for connection pooling
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self._timeout, connect=5.0)
-        )
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
         logger.info(f"BlazeLLM initialized: url={self._api_url}, bot_id={bot_id}")
 
@@ -118,11 +124,11 @@ class LLM(llm.LLM):
     def update_options(
         self,
         *,
-        deep_search: Optional[bool] = None,
-        agentic_search: Optional[bool] = None,
-        enable_tools: Optional[bool] = None,
-        demographics: Optional[Dict[str, Any]] = None,
-        auth_token: Optional[str] = None,
+        deep_search: bool | None = None,
+        agentic_search: bool | None = None,
+        enable_tools: bool | None = None,
+        demographics: dict[str, Any] | None = None,
+        auth_token: str | None = None,
     ) -> None:
         """
         Update LLM options at runtime.
@@ -149,14 +155,13 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: Optional[List[llm.Tool]] = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls: Optional[bool] = None,
-        tool_choice: Optional[llm.ToolChoice] = None,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> "LLMStream":
-        """
-        Start a streaming chat completion.
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        """Start a streaming chat completion.
 
         Args:
             chat_ctx: Chat context containing message history
@@ -174,7 +179,7 @@ class LLM(llm.LLM):
                 "Blaze LLM does not support function calling. "
                 "%d tool(s) provided will be ignored: %s",
                 len(tools),
-                ", ".join(t.name for t in tools),
+                ", ".join(t.id for t in tools),
             )
 
         return LLMStream(
@@ -193,7 +198,7 @@ class LLMStream(llm.LLMStream):
         llm_instance: LLM,
         *,
         chat_ctx: llm.ChatContext,
-        tools: List[llm.Tool],
+        tools: list[llm.Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(
@@ -202,10 +207,9 @@ class LLMStream(llm.LLMStream):
             tools=tools,
             conn_options=conn_options,
         )
-        self._llm = llm_instance
-        self._chat_ctx = chat_ctx
+        self._blaze_llm = llm_instance
 
-    def _convert_messages(self) -> List[Dict[str, str]]:
+    def _convert_messages(self) -> list[dict[str, str]]:
         """Convert chat context messages to Blaze format.
 
         ChatRole is Literal['system', 'user', 'assistant'] — string comparisons.
@@ -214,10 +218,10 @@ class LLMStream(llm.LLMStream):
         System messages are collected and merged into a single context
         message prepended to the conversation, preserving their original order.
         """
-        messages: List[Dict[str, str]] = []
-        system_parts: List[str] = []
+        messages: list[dict[str, str]] = []
+        system_parts: list[str] = []
 
-        for msg in self._chat_ctx.messages:
+        for msg in self._chat_ctx.messages():
             text = msg.text_content
             if not text:
                 continue
@@ -231,209 +235,168 @@ class LLMStream(llm.LLMStream):
         # Merge all system messages and prepend as unified context
         if system_parts:
             system_text = "\n\n".join(system_parts)
-            messages.insert(
-                0, {"role": "user", "content": f"[System Instructions]\n{system_text}"}
-            )
+            messages.insert(0, {"role": "user", "content": f"[System Instructions]\n{system_text}"})
 
         return messages
 
     async def _run(self) -> None:
-        """Execute the chat completion and yield response chunks."""
+        """Execute the chat completion and yield response chunks.
+
+        This method makes a single streaming HTTP request. Retry logic is
+        handled by the base class ``_main_task()``, which catches ``APIError``
+        subclasses and retries according to ``conn_options``.
+
+        Raises:
+            APIStatusError: On non-200 HTTP responses.
+            APITimeoutError: On request timeouts.
+            APIConnectionError: On network errors.
+        """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
+        messages = self._convert_messages()
+
+        if not messages:
+            logger.warning("[%s] No messages to send to chatbot", request_id)
+            return
+
+        # Build URL with query parameters using httpx for proper encoding
+        blaze = self._blaze_llm
+        query_params: dict[str, str] = {
+            "is_voice_call": "true",
+            "use_tool_based": "true" if blaze._enable_tools else "false",
+        }
+        if blaze._deep_search:
+            query_params["deep_search"] = "true"
+        if blaze._agentic_search:
+            query_params["agentic_search"] = "true"
+
+        # Add demographics if available
+        if blaze._demographics:
+            gender = blaze._demographics.get("gender")
+            if gender and gender != "unknown":
+                query_params["gender"] = str(gender)
+            age = blaze._demographics.get("age")
+            if age is not None:  # Allow age=0
+                query_params["age"] = str(age)
+
+        url = str(httpx.URL(blaze._chat_url, params=query_params))
+
+        # Prepare headers
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if blaze._auth_token:
+            headers["Authorization"] = f"Bearer {blaze._auth_token}"
+
+        logger.info(
+            "[%s] LLM chat request: %d messages, bot=%s",
+            request_id,
+            len(messages),
+            blaze._bot_id,
+        )
+
+        full_response = ""
         try:
-            messages = self._convert_messages()
+            async with blaze._client.stream(
+                "POST",
+                url,
+                json=messages,
+                headers=headers,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = (await response.aread()).decode(errors="replace")
+                    raise APIStatusError(
+                        f"Chatbot service error {response.status_code}: {error_text}",
+                        status_code=response.status_code,
+                        request_id=request_id,
+                        body=error_text,
+                    )
 
-            if not messages:
-                logger.warning("[%s] No messages to send to chatbot", request_id)
-                return
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
 
-            # Build URL with query parameters using httpx for proper encoding
-            query_params: Dict[str, str] = {
-                "is_voice_call": "true",
-                "use_tool_based": "true" if self._llm._enable_tools else "false",
-            }
-            if self._llm._deep_search:
-                query_params["deep_search"] = "true"
-            if self._llm._agentic_search:
-                query_params["agentic_search"] = "true"
+                    # Handle SSE format
+                    if line.startswith("data: "):
+                        data_str = line[6:]
 
-            # Add demographics if available
-            if self._llm._demographics:
-                gender = self._llm._demographics.get("gender")
-                if gender and gender != "unknown":
-                    query_params["gender"] = str(gender)
-                age = self._llm._demographics.get("age")
-                if age is not None:  # Allow age=0
-                    query_params["age"] = str(age)
+                        if data_str.strip() == "[DONE]":
+                            logger.debug(
+                                "[%s] Stream completed with [DONE]",
+                                request_id,
+                            )
+                            break
 
-            url = str(httpx.URL(self._llm._chat_url, params=query_params))
-
-            # Prepare headers
-            headers: Dict[str, str] = {"Content-Type": "application/json"}
-            if self._llm._auth_token:
-                headers["Authorization"] = f"Bearer {self._llm._auth_token}"
-
-            logger.info(
-                "[%s] LLM chat request: %d messages, bot=%s",
-                request_id, len(messages), self._llm._bot_id,
-            )
-
-            # Make streaming request with retry on transient failures
-            # Use shared client from LLM instance (connection pooling)
-            conn_options = self._conn_options
-
-            full_response = ""
-            for attempt in range(conn_options.max_retry + 1):
-                full_response = ""  # Reset on each attempt
-                try:
-                    async with self._llm._client.stream(
-                        "POST",
-                        url,
-                        json=messages,
-                        headers=headers,
-                    ) as response:
-                        if response.status_code >= 500:
-                            error_text = (await response.aread()).decode(errors="replace")
-                            if attempt < conn_options.max_retry:
-                                delay = conn_options.retry_interval * (2 ** attempt)
-                                jitter = delay * 0.1 * random.random()
-                                logger.warning(
-                                    "[%s] LLM attempt %d/%d failed (%d). "
-                                    "Retrying in %.1fs…",
-                                    request_id, attempt + 1,
-                                    conn_options.max_retry + 1,
-                                    response.status_code, delay,
+                        try:
+                            data = json.loads(data_str)
+                            content = self._extract_content(data)
+                            if content:
+                                full_response += content
+                                chunk = llm.ChatChunk(
+                                    id=request_id,
+                                    delta=llm.ChoiceDelta(
+                                        role="assistant",
+                                        content=content,
+                                    ),
                                 )
-                                await asyncio.sleep(delay + jitter)
-                                continue
-                            raise LLMError(
-                                f"Chatbot service error: {response.status_code}",
-                                status_code=response.status_code,
+                                self._event_ch.send_nowait(chunk)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "[%s] Failed to parse SSE data: %s",
+                                request_id,
+                                data_str[:100],
                             )
+                            continue
 
-                        if response.status_code != 200:
-                            error_text = (await response.aread()).decode(errors="replace")
-                            logger.error(
-                                "[%s] LLM error %d: %s",
-                                request_id, response.status_code, error_text,
-                            )
-                            raise LLMError(
-                                f"Chatbot service error: {response.status_code}",
-                                status_code=response.status_code,
-                            )
-
-                        async for line in response.aiter_lines():
-                            if not line.strip():
-                                continue
-
-                            # Handle SSE format
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-
-                                if data_str.strip() == "[DONE]":
-                                    logger.debug(
-                                        "[%s] Stream completed with [DONE]",
-                                        request_id,
-                                    )
-                                    break
-
-                                try:
-                                    data = json.loads(data_str)
-                                    content = self._extract_content(data)
-                                    if content:
-                                        full_response += content
-                                        chunk = llm.ChatChunk(
-                                            id=request_id,
-                                            delta=llm.ChoiceDelta(
-                                                role="assistant",
-                                                content=content,
-                                            ),
-                                        )
-                                        self._event_ch.send_nowait(chunk)
-                                except json.JSONDecodeError:
-                                    logger.warning(
-                                        "[%s] Failed to parse SSE data: %s",
-                                        request_id, data_str[:100],
-                                    )
-                                    continue
-
-                            # Handle raw JSON lines format
-                            else:
-                                try:
-                                    data = json.loads(line)
-                                    content = self._extract_content(data)
-                                    if content:
-                                        full_response += content
-                                        chunk = llm.ChatChunk(
-                                            id=request_id,
-                                            delta=llm.ChoiceDelta(
-                                                role="assistant",
-                                                content=content,
-                                            ),
-                                        )
-                                        self._event_ch.send_nowait(chunk)
-                                except json.JSONDecodeError:
-                                    logger.warning(
-                                        "[%s] Failed to parse JSON line: %s",
-                                        request_id, line[:100],
-                                    )
-                                    continue
-
-                    break  # Success — exit retry loop
-
-                except (httpx.TimeoutException, httpx.NetworkError) as e:
-                    if attempt < conn_options.max_retry:
-                        delay = conn_options.retry_interval * (2 ** attempt)
-                        jitter = delay * 0.1 * random.random()
-                        logger.warning(
-                            "[%s] LLM network error (attempt %d/%d): %s. "
-                            "Retrying in %.1fs…",
-                            request_id, attempt + 1,
-                            conn_options.max_retry + 1, e, delay,
-                        )
-                        await asyncio.sleep(delay + jitter)
+                    # Handle raw JSON lines format
                     else:
-                        raise LLMError(f"LLM network error: {e}") from e
+                        try:
+                            data = json.loads(line)
+                            content = self._extract_content(data)
+                            if content:
+                                full_response += content
+                                chunk = llm.ChatChunk(
+                                    id=request_id,
+                                    delta=llm.ChoiceDelta(
+                                        role="assistant",
+                                        content=content,
+                                    ),
+                                )
+                                self._event_ch.send_nowait(chunk)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "[%s] Failed to parse JSON line: %s",
+                                request_id,
+                                line[:100],
+                            )
+                            continue
 
-            latency = time.monotonic() - start_time
-            logger.info(
-                "[%s] LLM chat completed: %d chars, latency=%.3fs",
-                request_id, len(full_response), latency,
-            )
+        except httpx.TimeoutException as e:
+            raise APITimeoutError(f"LLM request timed out: {e}") from e
+        except httpx.NetworkError as e:
+            raise APIConnectionError(f"LLM network error: {e}") from e
 
-        except LLMError:
-            raise
-        except Exception as e:
-            latency = time.monotonic() - start_time
-            logger.error(
-                "[%s] LLM chat failed after %.3fs: %s", request_id, latency, e
-            )
-            raise LLMError(f"LLM chat failed: {str(e)}") from e
+        latency = time.monotonic() - start_time
+        logger.info(
+            "[%s] LLM chat completed: %d chars, latency=%.3fs",
+            request_id,
+            len(full_response),
+            latency,
+        )
 
-    def _extract_content(self, data: Dict[str, Any]) -> Optional[str]:
+    def _extract_content(self, data: dict[str, Any]) -> str | None:
         """Extract text content from various response formats."""
         # Format: {"content": "..."}
         if "content" in data:
-            return data.get("content", "")
+            return str(data["content"])
 
         # Format: {"text": "..."}
         if "text" in data:
-            return data.get("text", "")
+            return str(data["text"])
 
         # Format: {"delta": {"text": "..."}}
         if "delta" in data:
             delta = data.get("delta", {})
             if isinstance(delta, dict) and "text" in delta:
-                return delta.get("text", "")
+                return str(delta["text"])
 
         return None
-
-
-class LLMError(Exception):
-    """Exception raised when LLM service encounters an error."""
-
-    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code

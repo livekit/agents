@@ -28,15 +28,14 @@ Environment Variables:
     BLAZE_API_TOKEN: Bearer token for API authentication
 """
 
-from .version import __version__
-from ._config import BlazeConfig
-from .stt import STT, STTError
-from .tts import TTS, TTSError
-from .llm import LLM, LLMStream, LLMError
-
 from livekit.agents import Plugin
 
+from ._config import BlazeConfig
+from .llm import LLM, LLMStream
 from .log import logger
+from .stt import STT
+from .tts import TTS
+from .version import __version__
 
 __all__ = [
     # Version
@@ -48,10 +47,6 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
-    # Exceptions
-    "STTError",
-    "TTSError",
-    "LLMError",
 ]
 
 
