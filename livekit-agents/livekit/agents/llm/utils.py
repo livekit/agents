@@ -608,4 +608,3 @@ async def execute_function_call(
             extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
         )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
-
