@@ -26,8 +26,8 @@ from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ..log import logger
-from ..models import PersonaplexVoice
+from .log import logger
+from .models import PersonaplexVoice
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1

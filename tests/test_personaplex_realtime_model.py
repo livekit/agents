@@ -1,12 +1,12 @@
-"""Tests for PersonaPlex realtime model plugin (nvidia.experimental.personaplex)."""
+"""Tests for PersonaPlex realtime model plugin (nvidia.experimental.realtime)."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from livekit.plugins.nvidia.experimental.personaplex import RealtimeModel
-from livekit.plugins.nvidia.experimental.personaplex.realtime.realtime_model import (
+from livekit.plugins.nvidia.experimental.realtime import RealtimeModel
+from livekit.plugins.nvidia.experimental.realtime.realtime_model import (
     _SPECIAL_TOKENS,
     INITIAL_RETRY_DELAY,
     MAX_RETRY_DELAY,
@@ -185,15 +185,9 @@ class TestAudioConstants:
 class TestAudioConversion:
     def test_int16_to_float32_roundtrip(self) -> None:
         """Verify PCM int16 -> float32 -> int16 roundtrip preserves data."""
-        # Simulate what _encode_and_send and _handle_audio_data do
         original = np.array([0, 1000, -1000, 32767, -32768], dtype=np.int16)
-
-        # Forward: int16 -> float32 (as in _encode_and_send)
         pcm_float = original.astype(np.float32) / 32768.0
-
-        # Reverse: float32 -> int16 (as in _handle_audio_data)
         recovered = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
-
         np.testing.assert_array_equal(original, recovered)
 
     def test_float32_clipping(self) -> None:

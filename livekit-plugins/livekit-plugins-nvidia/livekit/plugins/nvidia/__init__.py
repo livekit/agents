@@ -15,21 +15,22 @@
 
 import typing  # noqa: I001
 
+
 if typing.TYPE_CHECKING:
-    from . import experimental
+    from .experimental import realtime
 
 
 def __getattr__(name: str) -> typing.Any:
-    if name == "experimental":
+    if name == "realtime":
         try:
-            from . import experimental
+            from .experimental import realtime
         except ImportError as e:
             raise ImportError(
-                "The 'experimental' module requires optional dependencies. "
+                "The 'realtime' module requires optional dependencies. "
                 "Please install them with: pip install 'livekit-plugins-nvidia[personaplex]'"
             ) from e
 
-        return experimental
+        return realtime
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -38,7 +39,7 @@ from .stt import STT, SpeechStream  # noqa: E402
 from .tts import TTS, SynthesizeStream  # noqa: E402
 from .version import __version__  # noqa: E402
 
-__all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "experimental", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "realtime", "__version__"]
 
 
 from livekit.agents import Plugin
