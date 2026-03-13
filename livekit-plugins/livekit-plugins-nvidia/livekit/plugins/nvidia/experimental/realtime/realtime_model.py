@@ -415,7 +415,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 self._msg_ch = utils.aio.Chan[bytes]()
 
                 is_recoverable = isinstance(
-                    e, (aiohttp.ClientConnectionError, asyncio.TimeoutError, APIConnectionError)
+                    e,
+                    aiohttp.ClientConnectionError
+                    | asyncio.TimeoutError
+                    | APIConnectionError,
                 )
 
                 if isinstance(e, APIConnectionError):
