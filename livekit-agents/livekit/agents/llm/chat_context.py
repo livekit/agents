@@ -770,7 +770,7 @@ class ChatContext:
         contents: list[str] = []
         for m in to_summarize:
             if isinstance(m, MessageRenderable):
-                contents.append(m.to_message().text_content)
+                contents.append(m.to_message().text_content or "")
             else:
                 contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
@@ -830,9 +830,7 @@ class ChatContext:
         self._items = preserved
 
         created_at_hint = (
-            (tail_items[0].created_at - 1e-6)
-            if tail_items
-            else (to_summarize[-1].created_at + 1e-6)
+            (tail_items[0].created_at - 1e-6) if tail_items else (head_items[-1].created_at + 1e-6)
         )
         self.add_message(
             role="assistant",
