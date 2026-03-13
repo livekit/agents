@@ -42,9 +42,9 @@ from .version import __version__  # noqa: E402
 __all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "realtime", "__version__"]
 
 
-from livekit.agents import Plugin
+from livekit.agents import Plugin  # noqa: E402
 
-from .log import logger
+from .log import logger  # noqa: E402
 
 
 class NVIDIAPlugin(Plugin):
