@@ -742,9 +742,6 @@ class ChatContext:
             else:
                 # Not enough messages to fill the budget — nothing to summarize
                 return self
-            else:
-                # Not enough messages to fill the budget — nothing to summarize
-                return self
 
         if split_idx == 0:
             return self
