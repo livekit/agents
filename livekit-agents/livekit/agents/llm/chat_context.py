@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
-from livekit.agents.llm.utils import to_xml
 
 from .. import utils
 from ..log import logger
@@ -729,18 +728,19 @@ class ChatContext:
         # Everything from the split point onward — including any interleaved
         # MessageRenderable items — is preserved as-is in the tail.
         msg_budget = keep_last_turns * 2
-        msg_count = 0
-        split_idx: int | None = None
-        for i in range(len(self.items) - 1, -1, -1):
-            item = self.items[i]
-            if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
-                msg_count += 1
-                if msg_count >= msg_budget:
-                    split_idx = i
-                    break
+        split_idx = len(self.items)
 
-        if split_idx is None or split_idx == 0:
-            # no items to summarize, return early
+        if msg_budget > 0:
+            msg_count = 0
+            for i in range(len(self.items) - 1, -1, -1):
+                item = self.items[i]
+                if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
+                    msg_count += 1
+                    if msg_count >= msg_budget:
+                        split_idx = i
+                        break
+
+        if split_idx == 0:
             return self
 
         head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
@@ -785,8 +785,8 @@ class ChatContext:
                 The conversation is formatted as XML. Here is how to read it:
                 - <user>…</user>  — something the user said.
                 - <assistant>…</assistant>  — something the assistant said.
-                - <function_call name="…">…</function_call>  — the assistant invoked an action.
-                - <function_call_output name="…">…</function_call_output>  — the result of that \
+                - <function_call name="…" call_id="…">…</function_call>  — the assistant invoked an action.
+                - <function_call_output name="…" call_id="…">…</function_call_output>  — the result of that \
                 action. May contain <error>…</error> if it failed.
 
                 Guidelines:
@@ -920,3 +920,28 @@ class _ReadOnlyChatContext(ChatContext):
     @property
     def readonly(self) -> bool:
         return True
+
+
+def _to_attrs_str(attrs: dict[str, Any] | None = None) -> str | None:
+    if attrs:
+        return " ".join([f'{k}="{v}"' for k, v in attrs.items()])
+    return None
+
+
+def to_xml(
+    tag_name: str,
+    content: str | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> str:
+    attrs_str = _to_attrs_str(attrs)
+
+    if content:
+        return "\n".join(
+            [
+                f"<{tag_name} {attrs_str}>" if attrs_str else f"<{tag_name}>",
+                content,
+                f"</{tag_name}>",
+            ]
+        )
+    else:
+        return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"
