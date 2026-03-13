@@ -10,18 +10,23 @@ Output: Streaming PCM audio chunks
 
 from __future__ import annotations
 
-import asyncio
-import random
 import time
 import uuid
-from typing import Optional, Dict
 
 import httpx
-from livekit.agents import tts, APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
-from .log import logger
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+)
+
 from ._config import BlazeConfig
 from ._utils import apply_normalization_rules
+from .log import logger
 
 
 class TTS(tts.TTS):
@@ -65,15 +70,15 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_url: Optional[str] = None,
+        api_url: str | None = None,
         language: str = "vi",
         speaker_id: str = "default",
-        auth_token: Optional[str] = None,
+        auth_token: str | None = None,
         model: str = "v1_5_pro",
         sample_rate: int = 24000,
-        normalization_rules: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        config: Optional[BlazeConfig] = None,
+        normalization_rules: dict[str, str] | None = None,
+        timeout: float | None = None,
+        config: BlazeConfig | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -101,9 +106,7 @@ class TTS(tts.TTS):
         self._tts_url = f"{self._api_url}/v1/tts/realtime"
 
         # Shared HTTP client for connection pooling
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self._timeout, connect=5.0)
-        )
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
         logger.info(
             f"BlazeTTS initialized: url={self._api_url}, "
@@ -128,11 +131,11 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        speaker_id: Optional[str] = None,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
-        auth_token: Optional[str] = None,
-        normalization_rules: Optional[Dict[str, str]] = None,
+        speaker_id: str | None = None,
+        model: str | None = None,
+        language: str | None = None,
+        auth_token: str | None = None,
+        normalization_rules: dict[str, str] | None = None,
     ) -> None:
         """
         Update TTS options at runtime.
@@ -160,7 +163,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "tts.ChunkedStream":
+    ) -> tts.ChunkedStream:
         """
         Synthesize speech from text.
 
@@ -185,140 +188,94 @@ class _TTSStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts_instance, input_text=text, conn_options=conn_options)
-        self._tts = tts_instance
+        self._blaze_tts = tts_instance
         self._text = text
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Execute the TTS synthesis and emit audio chunks."""
+        """Execute TTS synthesis and emit audio chunks.
+
+        This method makes a single HTTP request. Retry logic is handled by the
+        base class ``_main_task()``, which creates a fresh ``AudioEmitter`` for
+        each attempt — preventing duplicate/garbled audio on mid-stream errors.
+
+        Raises:
+            APIStatusError: On non-200 HTTP responses.
+            APITimeoutError: On request timeouts.
+            APIConnectionError: On network errors.
+        """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
+        # Apply normalization to input text
+        normalized_text = apply_normalization_rules(
+            self._text, self._blaze_tts._normalization_rules
+        )
+
+        if not normalized_text.strip():
+            logger.warning("[%s] Empty text after normalization, skipping TTS", request_id)
+            return
+
+        preview = normalized_text[:50] + ("..." if len(normalized_text) > 50 else "")
+        logger.info(
+            "[%s] TTS request: speaker=%s, text='%s'",
+            request_id,
+            self._blaze_tts._speaker_id,
+            preview,
+        )
+
+        # Initialize the audio emitter (stream=False → single segment)
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._blaze_tts._sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
+
+        # Prepare multipart form data (httpx: (None, value) = non-file field)
+        form_data = {
+            "query": (None, normalized_text),
+            "language": (None, self._blaze_tts._language),
+            "audio_format": (None, "pcm"),
+            "speaker_id": (None, self._blaze_tts._speaker_id),
+            "normalization": (None, "no"),
+            "model": (None, self._blaze_tts._model),
+        }
+
+        # Prepare headers
+        headers: dict[str, str] = {}
+        if self._blaze_tts._auth_token:
+            headers["Authorization"] = f"Bearer {self._blaze_tts._auth_token}"
+
         try:
-            # Apply normalization to input text
-            normalized_text = apply_normalization_rules(
-                self._text, self._tts._normalization_rules
-            )
+            async with self._blaze_tts._client.stream(
+                "POST",
+                self._blaze_tts._tts_url,
+                files=form_data,
+                headers=headers,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = (await response.aread()).decode(errors="replace")
+                    raise APIStatusError(
+                        f"TTS service error {response.status_code}: {error_text}",
+                        status_code=response.status_code,
+                        request_id=request_id,
+                        body=error_text,
+                    )
 
-            if not normalized_text.strip():
-                logger.warning("[%s] Empty text after normalization, skipping TTS", request_id)
-                return
+                # Stream audio chunks
+                async for chunk in response.aiter_bytes(chunk_size=self._blaze_tts._chunk_size):
+                    if chunk:
+                        output_emitter.push(chunk)
 
-            preview = normalized_text[:50] + ("..." if len(normalized_text) > 50 else "")
-            logger.info(
-                "[%s] TTS request: speaker=%s, text='%s'",
-                request_id, self._tts._speaker_id, preview,
-            )
+        except httpx.TimeoutException as e:
+            raise APITimeoutError(f"TTS request timed out: {e}") from e
+        except httpx.NetworkError as e:
+            raise APIConnectionError(f"TTS network error: {e}") from e
 
-            # Initialize the audio emitter (stream=False → single segment, no start_segment needed)
-            output_emitter.initialize(
-                request_id=request_id,
-                sample_rate=self._tts._sample_rate,
-                num_channels=1,
-                mime_type="audio/pcm",
-            )
-
-            # Prepare multipart form data (httpx: (None, value) = non-file field)
-            form_data = {
-                "query": (None, normalized_text),
-                "language": (None, self._tts._language),
-                "audio_format": (None, "pcm"),
-                "speaker_id": (None, self._tts._speaker_id),
-                "normalization": (None, "no"),
-                "model": (None, self._tts._model),
-            }
-
-            # Prepare headers
-            headers: Dict[str, str] = {}
-            if self._tts._auth_token:
-                headers["Authorization"] = f"Bearer {self._tts._auth_token}"
-
-            # Stream audio via httpx with retry on transient failures
-            # Use shared client from TTS instance (connection pooling)
-            conn_options = self._conn_options
-
-            for attempt in range(conn_options.max_retry + 1):
-                try:
-                    async with self._tts._client.stream(
-                        "POST",
-                        self._tts._tts_url,
-                        files=form_data,
-                        headers=headers,
-                    ) as response:
-                        if response.status_code >= 500:
-                            error_text = (await response.aread()).decode(errors="replace")
-                            if attempt < conn_options.max_retry:
-                                delay = conn_options.retry_interval * (2 ** attempt)
-                                jitter = delay * 0.1 * random.random()
-                                logger.warning(
-                                    "[%s] TTS attempt %d/%d failed (%d). "
-                                    "Retrying in %.1fs…",
-                                    request_id, attempt + 1,
-                                    conn_options.max_retry + 1,
-                                    response.status_code, delay,
-                                )
-                                await asyncio.sleep(delay + jitter)
-                                continue
-                            raise TTSError(
-                                f"TTS service error: {response.status_code}",
-                                status_code=response.status_code,
-                            )
-
-                        if response.status_code != 200:
-                            error_text = (await response.aread()).decode(errors="replace")
-                            logger.error(
-                                "[%s] TTS error %d: %s",
-                                request_id, response.status_code, error_text,
-                            )
-                            raise TTSError(
-                                f"TTS service error: {response.status_code}",
-                                status_code=response.status_code,
-                            )
-
-                        # Stream audio chunks
-                        async for chunk in response.aiter_bytes(
-                            chunk_size=self._tts._chunk_size
-                        ):
-                            if chunk:
-                                output_emitter.push(chunk)
-
-                    break  # Success — exit retry loop
-
-                except (httpx.TimeoutException, httpx.NetworkError) as e:
-                    if attempt < conn_options.max_retry:
-                        delay = conn_options.retry_interval * (2 ** attempt)
-                        jitter = delay * 0.1 * random.random()
-                        logger.warning(
-                            "[%s] TTS network error (attempt %d/%d): %s. "
-                            "Retrying in %.1fs…",
-                            request_id, attempt + 1,
-                            conn_options.max_retry + 1, e, delay,
-                        )
-                        await asyncio.sleep(delay + jitter)
-                    else:
-                        raise TTSError(f"TTS network error: {e}") from e
-
-            # Signal end of audio input
-            output_emitter.end_input()
-
-            latency = time.monotonic() - start_time
-            logger.info(
-                "[%s] TTS completed: text='%s', latency=%.3fs",
-                request_id, preview, latency,
-            )
-
-        except TTSError:
-            raise
-        except Exception as e:
-            latency = time.monotonic() - start_time
-            logger.error(
-                "[%s] TTS synthesis failed after %.3fs: %s", request_id, latency, e
-            )
-            raise TTSError(f"TTS synthesis failed: {str(e)}") from e
-
-
-class TTSError(Exception):
-    """Exception raised when TTS service encounters an error."""
-
-    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+        latency = time.monotonic() - start_time
+        logger.info(
+            "[%s] TTS completed: text='%s', latency=%.3fs",
+            request_id,
+            preview,
+            latency,
+        )

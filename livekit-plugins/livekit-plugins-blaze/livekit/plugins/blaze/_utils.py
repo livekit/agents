@@ -6,7 +6,6 @@ This module contains helper functions used by the plugin implementations.
 
 import io
 import struct
-from typing import Dict, Optional
 
 
 def convert_pcm_to_wav(
@@ -62,7 +61,7 @@ def convert_pcm_to_wav(
 
 def apply_normalization_rules(
     text: str,
-    rules: Optional[Dict[str, str]],
+    rules: dict[str, str] | None,
 ) -> str:
     """
     Apply text normalization rules.
