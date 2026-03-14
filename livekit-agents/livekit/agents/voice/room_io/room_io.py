@@ -120,6 +120,7 @@ class RoomIO:
                     if utils.is_given(output_audio_options.track_name)
                     else "roomio_audio"
                 ),
+                max_volume=output_audio_options.max_volume,
             )
 
         output_text_options = self._options.get_text_output_options()

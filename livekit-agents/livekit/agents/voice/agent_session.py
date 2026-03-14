@@ -26,6 +26,7 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
+from ..language import LanguageCode
 from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
@@ -125,6 +126,7 @@ class AgentSessionOptions:
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
     min_interruption_words: int
+    interrupt_backoff: float
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
@@ -137,6 +139,8 @@ class AgentSessionOptions:
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
     aec_warmup_duration: float | None
+    backchannel_words: set[str] | None
+    commit_words: set[str] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -195,6 +199,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
+        interrupt_backoff: float = 3.0,
+        backchannel_words: NotGivenOr[set[str]] = NOT_GIVEN,
+        commit_words: NotGivenOr[set[str]] = NOT_GIVEN,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
@@ -327,6 +334,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
             min_interruption_words=min_interruption_words,
+            interrupt_backoff=interrupt_backoff,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
@@ -345,6 +353,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(use_tts_aligned_transcript)
             else None,
             aec_warmup_duration=aec_warmup_duration,
+            backchannel_words=backchannel_words if is_given(backchannel_words) else None,
+            commit_words=commit_words if is_given(commit_words) else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -488,6 +498,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
+
+    @property
+    def last_user_language(self) -> LanguageCode | None:
+        if self._activity is None:
+            return None
+        return self._activity.last_user_language
 
     def run(
         self,

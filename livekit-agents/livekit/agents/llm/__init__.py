@@ -24,6 +24,7 @@ from .llm import (
     LLMError,
     LLMStream,
 )
+from .parallel_adapter import ParallelAdapter
 from .realtime import (
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
@@ -76,6 +77,7 @@ __all__ = [
     "ChatChunk",
     "CompletionUsage",
     "FallbackAdapter",
+    "ParallelAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
     "Tool",

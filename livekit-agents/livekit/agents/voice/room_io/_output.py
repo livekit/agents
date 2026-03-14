@@ -27,6 +27,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
         track_name: str = "roomio_audio",
+        max_volume: float = 1.0,
     ) -> None:
         super().__init__(
             label="RoomIO",
@@ -54,6 +55,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._forwarding_task: asyncio.Task[None] | None = None
 
         self._pushed_duration: float = 0.0
+
+        self._max_volume = max_volume
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
@@ -173,6 +176,21 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._first_frame_event.clear()
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
+    def _scale_volume(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        if self._max_volume >= 1.0:
+            return frame
+        import numpy as np
+
+        data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+        data *= self._max_volume
+        data = np.clip(data, -32768, 32767).astype(np.int16)
+        return rtc.AudioFrame(
+            data=data.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
+
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
             if not self._playback_enabled.is_set():
@@ -191,6 +209,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             if not self._first_frame_event.is_set():
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
+            frame = self._scale_volume(frame)
             await self._audio_source.capture_frame(frame)
 
     def _on_reconnected(self) -> None:

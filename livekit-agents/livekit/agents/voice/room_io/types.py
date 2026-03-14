@@ -92,6 +92,8 @@ class AudioOutputOptions:
     )
     track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
+    max_volume: float = 1.0
+    """Maximum volume for audio output (0.0-1.0). Default 1.0 (no attenuation)."""
 
 
 @dataclass
@@ -220,6 +222,7 @@ class RoomOptions:
                     num_channels=output_options.audio_num_channels,
                     track_publish_options=output_options.audio_publish_options,
                     track_name=output_options.audio_track_name,
+                    max_volume=output_options.max_volume,
                 )
                 if output_options.audio_enabled is not False
                 else False
@@ -290,6 +293,8 @@ class RoomOutputOptions:
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
+    max_volume: float = 1.0
+    """Maximum volume for audio output (0.0-1.0). Default 1.0 (no attenuation)."""
 
 
 # DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()

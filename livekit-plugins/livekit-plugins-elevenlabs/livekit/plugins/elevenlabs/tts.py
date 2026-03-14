@@ -330,6 +330,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
+                    "previous_text": "And she softly spoke : ",
                 },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
@@ -624,6 +625,7 @@ class _Connection:
                             "text": " ",
                             "voice_settings": voice_settings,
                             "context_id": msg.context_id,
+                            "previous_text": "And she softly spoke : ",
                         }
                         if is_given(self._opts.pronunciation_dictionary_locators):
                             init_pkt["pronunciation_dictionary_locators"] = [
