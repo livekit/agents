@@ -48,7 +48,12 @@ from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
-from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
+from .log import (
+    JsonFormatter,
+    _has_user_configured_handlers,
+    _merge_record_extra,
+    _silence_noisy_loggers,
+)
 
 # from .discover import get_import_data
 from .readchar import key, readkey
@@ -975,15 +980,13 @@ class RichLoggingHandler(logging.Handler):
 def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
-    root = logging.getLogger()
-    if c:
-        root.addHandler(c._log_handler)
-    else:
-        handler = logging.StreamHandler(sys.stdout)
-        root.addHandler(handler)
-        handler.setFormatter(JsonFormatter())
+    if not _has_user_configured_handlers():
+        from ..log import _LOG_JSON_ENV, configure_logging
 
-    root.setLevel(log_level)
+        if c and not os.environ.get(_LOG_JSON_ENV):
+            configure_logging(handler=c._log_handler, level=log_level)
+        else:
+            configure_logging(json=True, level=log_level)
 
     _silence_noisy_loggers()
 
