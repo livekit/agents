@@ -95,7 +95,7 @@ class TTS(tts.TTS):
         self._api_url = api_url or self._config.api_url
         self._language = language
         self._speaker_id = speaker_id
-        self._auth_token = auth_token or self._config.auth_token
+        self._auth_token = auth_token or self._config.api_token
         self._model = model
         self._sample_rate = sample_rate
         self._timeout = timeout if timeout is not None else self._config.tts_timeout
