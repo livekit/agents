@@ -26,6 +26,12 @@ dependencies = [
     "nvidia-riva-client",
 ]
 
+[project.optional-dependencies]
+personaplex = [
+    "livekit-agents[codecs]>=1.4.5",
+    "sphn>=0.1.4,<0.2",
+]
+
 [project.urls]
 Documentation = "https://docs.livekit.io"
 Website = "https://livekit.io/"
