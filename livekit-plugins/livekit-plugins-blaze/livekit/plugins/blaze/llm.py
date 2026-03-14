@@ -386,17 +386,17 @@ class LLMStream(llm.LLMStream):
     def _extract_content(self, data: dict[str, Any]) -> str | None:
         """Extract text content from various response formats."""
         # Format: {"content": "..."}
-        if "content" in data:
+        if "content" in data and data["content"] is not None:
             return str(data["content"])
 
         # Format: {"text": "..."}
-        if "text" in data:
+        if "text" in data and data["text"] is not None:
             return str(data["text"])
 
         # Format: {"delta": {"text": "..."}}
         if "delta" in data:
             delta = data.get("delta", {})
-            if isinstance(delta, dict) and "text" in delta:
+            if isinstance(delta, dict) and delta.get("text") is not None:
                 return str(delta["text"])
 
         return None
