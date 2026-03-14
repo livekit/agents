@@ -212,7 +212,7 @@ class LLMStream(llm.LLMStream):
     def _convert_messages(self) -> list[dict[str, str]]:
         """Convert chat context messages to Blaze format.
 
-        ChatRole is Literal['system', 'user', 'assistant'] — string comparisons.
+        ChatRole is Literal['developer', 'system', 'user', 'assistant'] — string comparisons.
         ChatMessage.content is list[ChatContent]; use text_content to get the string form.
 
         System messages are collected and merged into a single context
@@ -225,7 +225,7 @@ class LLMStream(llm.LLMStream):
             text = msg.text_content
             if not text:
                 continue
-            if msg.role == "system":
+            if msg.role in ("system", "developer"):
                 system_parts.append(text)
             elif msg.role == "user":
                 messages.append({"role": "user", "content": text})
