@@ -76,10 +76,12 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             },
         )
     elif isinstance(metrics, STTMetrics):
+        extra: dict[str, str | float] = {
+            "audio_duration": round(metrics.audio_duration, 2),
+        }
+        if metrics.utterance_end_latency is not None:
+            extra["utterance_end_latency"] = round(metrics.utterance_end_latency, 3)
         logger.info(
             "STT metrics",
-            extra=metadata
-            | {
-                "audio_duration": round(metrics.audio_duration, 2),
-            },
+            extra=metadata | extra,
         )
