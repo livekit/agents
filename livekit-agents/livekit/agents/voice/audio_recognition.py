@@ -488,6 +488,10 @@ class AudioRecognition:
             if not self._vad or self._last_speaking_time is None:
                 self._last_speaking_time = time.time()
 
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            if self._vad:
+                self.update_vad(self._vad)
+
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
 
