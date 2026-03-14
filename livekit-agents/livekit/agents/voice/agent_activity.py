@@ -2272,6 +2272,15 @@ class AgentActivity(RecognitionHooks):
             if fnc_executed_ev._reply_required:
                 chat_ctx.items.extend(tool_messages)
 
+                # refresh instructions in chat_ctx so that any update_instructions()
+                # calls made inside tool functions are reflected in the tool response
+                # generation (fixes #4242)
+                update_instructions(
+                    chat_ctx,
+                    instructions=self._agent._instructions,
+                    add_if_missing=False,
+                )
+
                 tool_response_task = self._create_speech_task(
                     self._pipeline_reply_task(
                         speech_handle=speech_handle,
