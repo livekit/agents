@@ -91,7 +91,7 @@ class LLM(llm.LLM):
         # Resolve settings
         self._api_url = api_url or self._config.api_url
         self._bot_id = bot_id
-        self._auth_token = auth_token or self._config.auth_token
+        self._auth_token = auth_token or self._config.api_token
         self._deep_search = deep_search
         self._agentic_search = agentic_search
         self._enable_tools = enable_tools

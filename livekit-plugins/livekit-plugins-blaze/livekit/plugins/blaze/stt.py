@@ -100,7 +100,7 @@ class STT(stt.STT):
         # Resolve settings with priority: explicit args > config > defaults
         self._api_url = api_url or self._config.api_url
         self._language = language
-        self._auth_token = auth_token or self._config.auth_token
+        self._auth_token = auth_token or self._config.api_token
         self._sample_rate = sample_rate
         self._timeout = timeout if timeout is not None else self._config.stt_timeout
         self._normalization_rules = normalization_rules

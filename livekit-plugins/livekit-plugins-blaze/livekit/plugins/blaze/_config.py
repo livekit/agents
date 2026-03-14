@@ -33,7 +33,7 @@ class BlazeConfig(BaseSettings):
         >>> # Or provide explicit values
         >>> config = BlazeConfig(
         ...     api_url="https://api.blaze.vn",
-        ...     auth_token="my-token",
+        ...     api_token="my-token",
         ... )
     """
 
@@ -44,7 +44,7 @@ class BlazeConfig(BaseSettings):
     )
 
     # Authentication
-    auth_token: str = Field(
+    api_token: str = Field(
         default="",
         description="Bearer token for API authentication",
     )
