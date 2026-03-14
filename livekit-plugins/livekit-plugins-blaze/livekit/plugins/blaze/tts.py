@@ -267,6 +267,9 @@ class _TTSStream(tts.ChunkedStream):
                     if chunk:
                         output_emitter.push(chunk)
 
+                # Flush buffered audio so finalization follows framework pattern.
+                output_emitter.flush()
+
         except httpx.TimeoutException as e:
             raise APITimeoutError(f"TTS request timed out: {e}") from e
         except httpx.NetworkError as e:
