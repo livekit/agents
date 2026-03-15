@@ -4,6 +4,8 @@ Internal utilities for livekit-plugins-blaze.
 This module contains helper functions used by the plugin implementations.
 """
 
+from __future__ import annotations
+
 import io
 import struct
 
