@@ -81,6 +81,23 @@ class RunContext(Generic[Userdata_T]):
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "function_call": self.function_call,
+            "initial_step_idx": self._initial_step_idx,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        from .agent_activity import _SpeechHandleContextVar
+        from .agent_session import _AgentSessionContextVar
+
+        self._session = _AgentSessionContextVar.get()
+        self._speech_handle = _SpeechHandleContextVar.get()
+        self._function_call = state["function_call"]
+        self._initial_step_idx = state["initial_step_idx"]
+
+        assert self._initial_step_idx == self._speech_handle.num_steps - 1
+
 
 EventTypes = Literal[
     "user_state_changed",

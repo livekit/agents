@@ -34,7 +34,9 @@ import aiohttp
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
+from livekit.protocol.agent_pb import agent_text
 
+from ._exceptions import TextMessageError
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report
@@ -48,8 +50,10 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
-    from .voice.agent_session import AgentSession, RecordingOptions
+    from .ipc.proc_client import JobProcClient
+    from .voice.agent_session import AgentSession, RecordingOptions, _AgentSessionState
     from .voice.report import SessionReport
+    from .voice.run_result import RunEvent
 
 
 def get_job_context() -> JobContext:
@@ -94,6 +98,8 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    text_endpoint: str = ""
+    text_request: agent_text.TextMessageRequest | None = None
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -128,6 +134,116 @@ class _ContextLogFieldsFilter(logging.Filter):
         return True
 
 
+class TextMessageContext:
+    def __init__(
+        self, *, job_ctx: JobContext, endpoint: str, text_request: agent_text.TextMessageRequest
+    ) -> None:
+        self._job_ctx = job_ctx
+        self._text_request = text_request
+        self._endpoint = endpoint
+
+        # read session snapshot
+        if text_request.HasField("session_state"):
+            assert text_request.session_state.WhichOneof("data") == "snapshot", (
+                "session state should be resolved before starting the job"
+            )
+            self._session_snapshot: bytes | None = text_request.session_state.snapshot
+        else:
+            self._session_snapshot = None
+        self._session_state: _AgentSessionState | None = None
+
+    async def send_response(self, ev: RunEvent) -> None:
+        from . import llm
+        from .ipc import proto
+
+        if ev.item.type not in [
+            "message",
+            "function_call",
+            "function_call_output",
+            "agent_handoff",
+        ]:
+            return
+
+        msg = proto.TextResponse(session_id=self.session_id)
+        item_pb = llm.chat_context.chat_item_to_proto(ev.item)
+        msg.event = agent_text.TextMessageResponse(
+            session_id=self.session_id,
+            message_id=self._text_request.message_id,
+            **{str(ev.item.type): getattr(item_pb, ev.item.type)},
+        )
+        await self._job_ctx._ipc_client.send(msg)
+
+    @property
+    def session_id(self) -> str:
+        return self._text_request.session_id
+
+    @property
+    def session_state(self) -> _AgentSessionState | None:
+        from .utils.session_store import SessionStore
+
+        try:
+            if self._session_state is None and self._session_snapshot:
+                with SessionStore(self._session_snapshot) as store:
+                    self._session_state = store.export_state()
+        except Exception as e:
+            logger.exception(
+                "failed to export session state from snapshot",
+                extra={"session_id": self.session_id},
+            )
+            raise TextMessageError(
+                f"failed to export session state from snapshot with error: {str(e)}",
+                code=agent_text.INTERNAL_ERROR,
+            ) from e
+
+        return self._session_state
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
+
+    @property
+    def text(self) -> str:
+        return self._text_request.text
+
+    async def _complete(self, exc: TextMessageError | None = None) -> None:
+        from .ipc import proto
+        from .utils.session_store import SessionStore
+
+        msg = proto.TextResponse(session_id=self.session_id)
+        msg.event = agent_text.TextMessageResponse(
+            session_id=self.session_id,
+            message_id=self._text_request.message_id,
+            complete=agent_text.TextMessageComplete(),
+        )
+        if exc:
+            msg.event.complete.error.CopyFrom(exc.to_proto())
+            await self._job_ctx._ipc_client.send(msg)
+            return
+
+        session = self._job_ctx._primary_agent_session
+        if not session:
+            logger.error(
+                "no primary agent session found", extra={"text_session_id": self.session_id}
+            )
+            msg.event.complete.error.CopyFrom(
+                TextMessageError("no primary agent session found").to_proto()
+            )
+            await self._job_ctx._ipc_client.send(msg)
+            return
+
+        with SessionStore(self._session_snapshot) as old_store:
+            new_version = old_store.version + 1
+            session_state = msg.event.complete.session_state
+            session_state.version = new_version
+            with SessionStore.from_state(session.get_state(), version=new_version) as new_store:
+                if not self._session_snapshot:
+                    session_state.snapshot = new_store.export_snapshot()
+                else:
+                    session_state.delta = old_store.compute_delta(new_store)
+
+        await self._job_ctx._ipc_client.send(msg)
+
+
 class JobContext:
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
@@ -143,6 +259,7 @@ class JobContext:
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
         inference_executor: InferenceExecutor,
+        ipc_client: JobProcClient,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -162,6 +279,18 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+        self._ipc_client = ipc_client
+
+        logger.info(f"text endpoint: {self._info.text_endpoint}")
+        self._text_message_context = (
+            TextMessageContext(
+                job_ctx=self,
+                endpoint=self._info.text_endpoint,
+                text_request=self._info.text_request,
+            )
+            if self._info.text_request
+            else None
+        )
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -305,6 +434,12 @@ class JobContext:
         return self._inf_executor
 
     @property
+    def primary_agent_session(self) -> AgentSession:
+        if self._primary_agent_session is None:
+            raise RuntimeError("No primary agent session found")
+        return self._primary_agent_session
+
+    @property
     def tagger(self) -> Tagger:
         """Returns the Tagger for adding tags and outcomes to the session.
 
@@ -408,6 +543,10 @@ class JobContext:
             return identity
 
         return self._room.local_participant.identity
+
+    @property
+    def text_message_context(self) -> TextMessageContext | None:
+        return self._text_message_context
 
     @property
     def log_context_fields(self) -> dict[str, Any]:

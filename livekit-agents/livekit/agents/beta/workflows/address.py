@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ... import llm, stt, tts, vad
 from ...llm.chat_context import Instructions
@@ -12,6 +13,7 @@ from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 
 if TYPE_CHECKING:
+    from ...voice.agent import Agent, _AgentState
     from ...voice.audio_recognition import TurnDetectionMode
 
 
@@ -74,7 +76,14 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        *,
+        setup_fnc: Callable[[Agent], None] | None = None,
     ) -> None:
+        self._init_kwargs = {
+            "extra_instructions": extra_instructions,
+            "allow_interruptions": allow_interruptions,
+            "require_confirmation": require_confirmation,
+        }
         confirmation_instructions = (
             "Call `confirm_address` after the user confirmed the address is correct."
         )
@@ -105,10 +114,23 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             llm=llm,
             tts=tts,
             allow_interruptions=allow_interruptions,
+            setup_fnc=setup_fnc,
         )
 
         self._current_address = ""
         self._require_confirmation = require_confirmation
+
+    def export_init_kwargs(self) -> dict[str, Any]:
+        return self._init_kwargs
+
+    def _snapshot(self) -> _AgentState:
+        state = super()._snapshot()
+        state.extra_state["current_address"] = self._current_address
+        return state
+
+    def _restore(self, state: _AgentState) -> None:
+        super()._restore(state)
+        self._current_address = state.extra_state["current_address"]
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their address.")

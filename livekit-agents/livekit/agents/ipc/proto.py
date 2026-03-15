@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from livekit.protocol import agent
+from livekit.protocol.agent_pb import agent_text
 
 from ..job import JobAcceptArguments, RunningJobInfo
 from . import channel
@@ -101,6 +102,10 @@ class StartJobRequest:
         channel.write_string(b, self.running_job.token)
         channel.write_string(b, self.running_job.worker_id)
         channel.write_bool(b, self.running_job.fake_job)
+        channel.write_string(b, self.running_job.text_endpoint)
+        channel.write_bool(b, self.running_job.text_request is not None)
+        if self.running_job.text_request is not None:
+            channel.write_bytes(b, self.running_job.text_request.SerializeToString())
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -116,7 +121,14 @@ class StartJobRequest:
             token=channel.read_string(b),
             worker_id=channel.read_string(b),
             fake_job=channel.read_bool(b),
+            text_endpoint=channel.read_string(b),
+            text_request=None,
         )
+        has_text_request = channel.read_bool(b)
+        if has_text_request:
+            text_request = agent_text.TextMessageRequest()
+            text_request.ParseFromString(channel.read_bytes(b))
+            self.running_job.text_request = text_request
 
 
 @dataclass
@@ -205,6 +217,24 @@ class DumpStackTraceRequest:
         pass
 
 
+@dataclass
+class TextResponse:
+    """sent by the subprocess to the main process to send a text response"""
+
+    MSG_ID: ClassVar[int] = 10
+    session_id: str = ""
+    event: agent_text.TextMessageResponse = field(init=False)
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.session_id)
+        channel.write_bytes(b, self.event.SerializeToString())
+
+    def read(self, b: io.BytesIO) -> None:
+        self.session_id = channel.read_string(b)
+        self.event = agent_text.TextMessageResponse()
+        self.event.ParseFromString(channel.read_bytes(b))
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -216,4 +246,5 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
+    TextResponse.MSG_ID: TextResponse,
 }
