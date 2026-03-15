@@ -99,26 +99,24 @@ def test_imports_and_alias(pocket_plugin: Any) -> None:
 def test_fallback_voice_and_missing_voice_error(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
 
-    tts_fallback = module.TTS(voice="bad-voice")
+    tts_fallback = module.PocketTTS(voice="bad-voice")
     assert tts_fallback._voice == "alba"
 
     with pytest.raises(ValueError, match="Failed to load voice"):
-        module.TTS(voice="missing")
+        module.PocketTTS(voice="missing")
 
 
-def test_sample_rate_forced_to_native(pocket_plugin: Any, caplog: pytest.LogCaptureFixture) -> None:
+def test_sample_rate_forced_to_native(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
-    caplog.set_level("WARNING")
 
-    tts_native = module.TTS(sample_rate=48000)
-    assert tts_native.sample_rate == 24000
-    assert "Ignoring sample_rate=48000" in caplog.text
+    with pytest.raises(ValueError, match="only supports native sample rate"):
+        module.PocketTTS(sample_rate=48000)
 
 
 @pytest.mark.asyncio
 async def test_stream_emits_audio(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
-    tts_v = module.TTS(voice="alba")
+    tts_v = module.PocketTTS(voice="alba")
 
     async with tts_v.stream() as synth_stream:
         synth_stream.push_text("hola")
@@ -148,7 +146,7 @@ async def test_stream_emits_before_generation_completes(pocket_plugin: Any) -> N
     pocket_plugin["num_chunks"] = 2
     pocket_plugin["chunk_samples"] = 9600
 
-    tts_v = module.TTS(voice="alba")
+    tts_v = module.PocketTTS(voice="alba")
     async with tts_v.stream() as synth_stream:
         synth_stream.push_text("hola")
         synth_stream.end_input()
@@ -169,7 +167,7 @@ async def test_chunked_generation_does_not_block_event_loop(pocket_plugin: Any) 
     pocket_plugin["per_chunk_sleep"] = 0.05
     pocket_plugin["num_chunks"] = 6
 
-    tts_v = module.TTS(voice="alba")
+    tts_v = module.PocketTTS(voice="alba")
     heartbeat = 0
     done = asyncio.Event()
 
@@ -198,7 +196,7 @@ async def test_serializes_concurrent_generation(pocket_plugin: Any) -> None:
     pocket_plugin["per_chunk_sleep"] = 0.03
     pocket_plugin["num_chunks"] = 3
 
-    tts_v = module.TTS(voice="alba")
+    tts_v = module.PocketTTS(voice="alba")
     await asyncio.gather(
         _collect_events(tts_v.synthesize("uno")),
         _collect_events(tts_v.synthesize("dos")),
@@ -207,11 +205,25 @@ async def test_serializes_concurrent_generation(pocket_plugin: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_max_concurrent_generations(pocket_plugin: Any) -> None:
+    module = pocket_plugin["module"]
+    pocket_plugin["per_chunk_sleep"] = 0.03
+    pocket_plugin["num_chunks"] = 3
+
+    tts_v = module.PocketTTS(voice="alba", max_concurrent_generations=2)
+    await asyncio.gather(
+        _collect_events(tts_v.synthesize("uno")),
+        _collect_events(tts_v.synthesize("dos")),
+    )
+    assert pocket_plugin["max_active_generations"] <= 2
+
+
+@pytest.mark.asyncio
 async def test_generation_errors_are_mapped_to_api_errors(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
     pocket_plugin["raise_on_generate"] = RuntimeError("boom")
 
-    tts_v = module.TTS(voice="alba")
+    tts_v = module.PocketTTS(voice="alba")
     with pytest.raises(APIConnectionError):
         await _collect_events(tts_v.synthesize("hola"))
 
@@ -219,20 +231,17 @@ async def test_generation_errors_are_mapped_to_api_errors(pocket_plugin: Any) ->
 def test_tensor_to_pcm_bytes_handles_channel_first_and_last(pocket_plugin: Any) -> None:
     module = importlib.import_module("livekit.plugins.pocket.tts")
 
-    channel_first = np.array(
-        [[1.0, -1.0, 0.5, -0.5], [-1.0, 1.0, -0.5, 0.5]],
-        dtype=np.float32,
-    )
-    channel_last = np.array(
-        [[1.0, -1.0], [-1.0, 1.0], [0.5, -0.5], [-0.5, 0.5]],
-        dtype=np.float32,
-    )
+    # [2 channels, 100 samples] — dim0=2 (<=8, looks like channels), dim1=100 (samples)
+    channel_first = np.random.uniform(-0.5, 0.5, (2, 100)).astype(np.float32)
+    # [100 samples, 2 channels] — dim0=100 (samples), dim1=2 (<=8, looks like channels)
+    channel_last = np.random.uniform(-0.5, 0.5, (100, 2)).astype(np.float32)
 
-    pcm_first = module._tensor_to_pcm_bytes(channel_first)
-    pcm_last = module._tensor_to_pcm_bytes(channel_last)
+    pcm_first = module._tensor_to_pcm_bytes(audio_chunk=channel_first)
+    pcm_last = module._tensor_to_pcm_bytes(audio_chunk=channel_last)
 
-    assert len(pcm_first) == 8
-    assert len(pcm_last) == 8
+    # Both should produce 100 mono samples = 200 bytes (int16)
+    assert len(pcm_first) == 200
+    assert len(pcm_last) == 200
 
 
 def test_tensor_to_pcm_bytes_rejects_unsupported_shape(pocket_plugin: Any) -> None:
@@ -240,7 +249,45 @@ def test_tensor_to_pcm_bytes_rejects_unsupported_shape(pocket_plugin: Any) -> No
     invalid = np.zeros((2, 3, 4), dtype=np.float32)
 
     with pytest.raises(ValueError, match="unsupported audio tensor shape"):
-        module._tensor_to_pcm_bytes(invalid)
+        module._tensor_to_pcm_bytes(audio_chunk=invalid)
+
+
+def test_sanitize_tts_text(pocket_plugin: Any) -> None:
+    module = importlib.import_module("livekit.plugins.pocket.tts")
+
+    assert module._sanitize_tts_text("") == ""
+    assert module._sanitize_tts_text("Hello world") == "Hello world"
+    assert module._sanitize_tts_text("**bold** and __underline__") == "bold and underline"
+    assert module._sanitize_tts_text("- bullet point") == "bullet point"
+    assert module._sanitize_tts_text("[link text](http://example.com)") == "link text"
+    assert module._sanitize_tts_text("# Heading") == "Heading"
+    assert module._sanitize_tts_text("`code`") == "code"
+    assert module._sanitize_tts_text("col1 | col2") == "col1 col2"
+    assert module._sanitize_tts_text("line1\r\nline2") == "line1 line2"
+    assert module._sanitize_tts_text("  extra   spaces  ") == "extra spaces"
+
+
+def test_chunk_tts_text(pocket_plugin: Any) -> None:
+    module = importlib.import_module("livekit.plugins.pocket.tts")
+
+    assert module._chunk_tts_text("", max_chars=220) == []
+    assert module._chunk_tts_text("   ", max_chars=220) == []
+    assert module._chunk_tts_text("Short text.", max_chars=220) == ["Short text."]
+
+    long_text = "First sentence. " + " ".join(["word"] * 60) + ". Last sentence."
+    chunks = module._chunk_tts_text(long_text, max_chars=220)
+    assert len(chunks) > 1
+    assert all(len(c) <= 220 for c in chunks)
+
+    two_sentences = "Hello world. Goodbye world."
+    result = module._chunk_tts_text(two_sentences, max_chars=220)
+    assert result == ["Hello world. Goodbye world."]
+
+    # Split when combined exceeds max
+    s1 = " ".join(["alpha"] * 20) + "."
+    s2 = " ".join(["bravo"] * 20) + "."
+    result = module._chunk_tts_text(f"{s1} {s2}", max_chars=220)
+    assert len(result) == 2
 
 
 async def _collect_events(stream: Any) -> list[Any]:
