@@ -213,6 +213,15 @@ class _TTSStream(tts.ChunkedStream):
 
         if not normalized_text.strip():
             logger.warning("[%s] Empty text after normalization, skipping TTS", request_id)
+
+            # Base class always calls output_emitter.end_input(); initialize first
+            # so empty-input flows complete gracefully without runtime errors.
+            output_emitter.initialize(
+                request_id=request_id,
+                sample_rate=self._blaze_tts._sample_rate,
+                num_channels=1,
+                mime_type="audio/pcm",
+            )
             return
 
         preview = normalized_text[:50] + ("..." if len(normalized_text) > 50 else "")
