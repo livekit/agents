@@ -374,6 +374,10 @@ class LLMStream(llm.LLMStream):
             raise APITimeoutError(f"LLM request timed out: {e}") from e
         except httpx.NetworkError as e:
             raise APIConnectionError(f"LLM network error: {e}") from e
+        except APIStatusError:
+            raise
+        except Exception as e:
+            raise APIConnectionError(f"LLM connection error: {e}") from e
 
         latency = time.monotonic() - start_time
         logger.info(
