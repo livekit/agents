@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
+    response_format: NotGivenOr[Any] = NOT_GIVEN
+    """The response format to use when calling the LLM."""
 
 
 class Agent:
@@ -415,11 +417,16 @@ class Agent:
             )
 
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
+            response_format = model_settings.response_format if model_settings else NOT_GIVEN
             activity_llm = activity.llm
 
             conn_options = activity.session.conn_options.llm_conn_options
             async with activity_llm.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
+                chat_ctx=chat_ctx,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                conn_options=conn_options,
             ) as stream:
                 async for chunk in stream:
                     yield chunk
