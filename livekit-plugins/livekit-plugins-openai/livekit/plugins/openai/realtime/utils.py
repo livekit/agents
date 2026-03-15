@@ -243,6 +243,7 @@ def openai_item_to_livekit_item(item: realtime.ConversationItem) -> llm.ChatItem
             call_id=item.call_id,
             name=item.name,
             arguments=item.arguments,
+            extra={"dispatched": False},  # protect function calls from premature diff deletion
         )
 
     if item.type == "function_call_output":

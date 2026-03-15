@@ -1180,11 +1180,24 @@ class RealtimeSession(
                 return True
             return False
 
+        def _is_pending_function_call(msg_id: str) -> bool:
+            remote_item = remote_ctx.get_by_id(msg_id)
+            return (
+                remote_item is not None
+                and remote_item.type == "function_call"
+                and not remote_item.extra.get("dispatched", True)
+            )
+
         for msg_id in diff_ops.to_remove:
             # we don't have content synced down for some types of content (audio/images)
             # these won't be present in the Agent's view of the context
             # so in those cases, we do not want to remove them from the server context
             if _is_content_empty(msg_id):
+                continue
+            # function_calls arrive in _remote_chat_ctx before _agent._chat_ctx;
+            # deleting them during this window causes cascading insert failures.
+            # we protect these function calls until they arrive in local context.
+            if _is_pending_function_call(msg_id):
                 continue
             _delete_item(msg_id)
 
@@ -1196,6 +1209,9 @@ class RealtimeSession(
             # likewise, empty content almost always means the content is not synced down
             # we don't want to recreate these items there
             if _is_content_empty(msg_id):
+                continue
+            # same guard as above: don't recreate pending function_calls
+            if _is_pending_function_call(msg_id):
                 continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
@@ -1620,14 +1636,18 @@ class RealtimeSession(
         assert item.name is not None, "name is None"
         assert item.arguments is not None, "arguments is None"
 
-        self._current_generation.function_ch.send_nowait(
-            llm.FunctionCall(
+        remote = self._remote_chat_ctx.get(item.id)
+        if remote is not None and isinstance(remote.item, llm.FunctionCall):
+            fc = remote.item
+        else:
+            fc = llm.FunctionCall(
                 id=item.id,
                 call_id=item.call_id,
                 name=item.name,
                 arguments=item.arguments,
             )
-        )
+
+        self._current_generation.function_ch.send_nowait(fc)
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:

@@ -996,7 +996,8 @@ class RealtimeSessionBeta(
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
-        diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
+        remote_ctx = self._remote_chat_ctx.to_chat_ctx()
+        diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
             events.append(
@@ -1019,7 +1020,19 @@ class RealtimeSessionBeta(
                 )
             )
 
+        def _is_pending_function_call(msg_id: str) -> bool:
+            remote_item = remote_ctx.get_by_id(msg_id)
+            return (
+                remote_item is not None
+                and remote_item.type == "function_call"
+                and not remote_item.extra.get("dispatched", True)
+            )
+
         for msg_id in diff_ops.to_remove:
+            # function_calls arrive in _remote_chat_ctx before _agent._chat_ctx;
+            # deleting them during this window causes cascading insert failures
+            if _is_pending_function_call(msg_id):
+                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1027,6 +1040,9 @@ class RealtimeSessionBeta(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
+            # same guard as above: don't recreate pending function_calls
+            if _is_pending_function_call(msg_id):
+                continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
 
@@ -1421,14 +1437,18 @@ class RealtimeSessionBeta(
             assert item.name is not None, "name is None"
             assert item.arguments is not None, "arguments is None"
 
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
+            remote = self._remote_chat_ctx.get(item_id)
+            if remote is not None and isinstance(remote.item, llm.FunctionCall):
+                fc = remote.item
+            else:
+                fc = llm.FunctionCall(
                     id=item_id,
                     call_id=item.call_id,
                     name=item.name,
                     arguments=item.arguments,
                 )
-            )
+
+            self._current_generation.function_ch.send_nowait(fc)
         elif item_type == "message":
             item_generation = self._current_generation.messages[item_id]
             item_generation.text_ch.close()
@@ -1651,6 +1671,7 @@ def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
             call_id=item.call_id,
             name=item.name,
             arguments=item.arguments,
+            extra={"dispatched": False},
         )
 
     if item.type == "function_call_output":
