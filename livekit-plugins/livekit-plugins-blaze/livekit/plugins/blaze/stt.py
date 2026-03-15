@@ -238,6 +238,8 @@ class STT(stt.STT):
             raise APITimeoutError(f"STT request timed out: {e}") from e
         except httpx.NetworkError as e:
             raise APIConnectionError(f"STT network error: {e}") from e
+        except Exception as e:
+            raise APIConnectionError(f"STT connection error: {e}") from e
 
         if response.status_code != 200:
             error_text = response.text

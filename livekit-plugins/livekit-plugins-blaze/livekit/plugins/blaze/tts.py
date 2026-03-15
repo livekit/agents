@@ -283,6 +283,10 @@ class _TTSStream(tts.ChunkedStream):
             raise APITimeoutError(f"TTS request timed out: {e}") from e
         except httpx.NetworkError as e:
             raise APIConnectionError(f"TTS network error: {e}") from e
+        except APIStatusError:
+            raise
+        except Exception as e:
+            raise APIConnectionError(f"TTS connection error: {e}") from e
 
         latency = time.monotonic() - start_time
         logger.info(
