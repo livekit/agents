@@ -14,10 +14,10 @@
 
 """Pocket TTS plugin for LiveKit Agents."""
 
-from .tts import DEFAULT_VOICE, TTS, PocketTTS
+from .tts import DEFAULT_VOICE, TTS, PocketTTS as PocketTTS
 from .version import __version__
 
-__all__ = ["TTS", "PocketTTS", "DEFAULT_VOICE", "__version__"]
+__all__ = ["TTS", "DEFAULT_VOICE", "__version__"]
 
 from livekit.agents import Plugin
 

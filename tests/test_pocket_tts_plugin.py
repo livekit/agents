@@ -99,24 +99,24 @@ def test_imports_and_alias(pocket_plugin: Any) -> None:
 def test_fallback_voice_and_missing_voice_error(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
 
-    tts_fallback = module.PocketTTS(voice="bad-voice")
+    tts_fallback = module.TTS(voice="bad-voice")
     assert tts_fallback._voice == "alba"
 
     with pytest.raises(ValueError, match="Failed to load voice"):
-        module.PocketTTS(voice="missing")
+        module.TTS(voice="missing")
 
 
 def test_sample_rate_forced_to_native(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
 
     with pytest.raises(ValueError, match="only supports native sample rate"):
-        module.PocketTTS(sample_rate=48000)
+        module.TTS(sample_rate=48000)
 
 
 @pytest.mark.asyncio
 async def test_stream_emits_audio(pocket_plugin: Any) -> None:
     module = pocket_plugin["module"]
-    tts_v = module.PocketTTS(voice="alba")
+    tts_v = module.TTS(voice="alba")
 
     async with tts_v.stream() as synth_stream:
         synth_stream.push_text("hola")
@@ -146,7 +146,7 @@ async def test_stream_emits_before_generation_completes(pocket_plugin: Any) -> N
     pocket_plugin["num_chunks"] = 2
     pocket_plugin["chunk_samples"] = 9600
 
-    tts_v = module.PocketTTS(voice="alba")
+    tts_v = module.TTS(voice="alba")
     async with tts_v.stream() as synth_stream:
         synth_stream.push_text("hola")
         synth_stream.end_input()
@@ -167,7 +167,7 @@ async def test_chunked_generation_does_not_block_event_loop(pocket_plugin: Any) 
     pocket_plugin["per_chunk_sleep"] = 0.05
     pocket_plugin["num_chunks"] = 6
 
-    tts_v = module.PocketTTS(voice="alba")
+    tts_v = module.TTS(voice="alba")
     heartbeat = 0
     done = asyncio.Event()
 
@@ -196,7 +196,7 @@ async def test_serializes_concurrent_generation(pocket_plugin: Any) -> None:
     pocket_plugin["per_chunk_sleep"] = 0.03
     pocket_plugin["num_chunks"] = 3
 
-    tts_v = module.PocketTTS(voice="alba")
+    tts_v = module.TTS(voice="alba")
     await asyncio.gather(
         _collect_events(tts_v.synthesize("uno")),
         _collect_events(tts_v.synthesize("dos")),
@@ -210,7 +210,7 @@ async def test_max_concurrent_generations(pocket_plugin: Any) -> None:
     pocket_plugin["per_chunk_sleep"] = 0.03
     pocket_plugin["num_chunks"] = 3
 
-    tts_v = module.PocketTTS(voice="alba", max_concurrent_generations=2)
+    tts_v = module.TTS(voice="alba", max_concurrent_generations=2)
     await asyncio.gather(
         _collect_events(tts_v.synthesize("uno")),
         _collect_events(tts_v.synthesize("dos")),
@@ -223,7 +223,7 @@ async def test_generation_errors_are_mapped_to_api_errors(pocket_plugin: Any) ->
     module = pocket_plugin["module"]
     pocket_plugin["raise_on_generate"] = RuntimeError("boom")
 
-    tts_v = module.PocketTTS(voice="alba")
+    tts_v = module.TTS(voice="alba")
     with pytest.raises(APIConnectionError):
         await _collect_events(tts_v.synthesize("hola"))
 

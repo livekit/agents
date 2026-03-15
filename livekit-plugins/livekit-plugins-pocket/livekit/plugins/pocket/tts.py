@@ -61,7 +61,7 @@ class _GenerationDone:
     pass
 
 
-class PocketTTS(tts.TTS):
+class TTS(tts.TTS):
     def __init__(
         self,
         *,
@@ -79,7 +79,7 @@ class PocketTTS(tts.TTS):
             lsd_decode_steps: Number of LSD decode steps.
             sample_rate: Output sample rate. Only native 24kHz is supported.
             max_concurrent_generations: Maximum number of concurrent synthesis tasks
-                for this PocketTTS instance.
+                for this TTS instance.
         """
         if max_concurrent_generations < 1:
             raise ValueError(
@@ -87,7 +87,7 @@ class PocketTTS(tts.TTS):
             )
         if sample_rate != NATIVE_SAMPLE_RATE:
             raise ValueError(
-                "PocketTTS only supports native sample rate "
+                "Pocket TTS only supports native sample rate "
                 f"{NATIVE_SAMPLE_RATE}Hz; received {sample_rate}Hz"
             )
 
@@ -106,7 +106,7 @@ class PocketTTS(tts.TTS):
         self._generation_semaphore = asyncio.Semaphore(max_concurrent_generations)
 
         logger.info(
-            "PocketTTS configured: sample_rate=%sHz max_concurrent_generations=%s",
+            "Pocket TTS configured: sample_rate=%sHz max_concurrent_generations=%s",
             self.sample_rate,
             self._max_concurrent_generations,
         )
@@ -125,14 +125,14 @@ class PocketTTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
-        return PocketChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.SynthesizeStream:
-        return PocketSynthesizeStream(tts=self, conn_options=conn_options)
+        return SynthesizeStream(tts=self, conn_options=conn_options)
 
     def _load_voice_state(self, voice: str) -> Any:
         try:
@@ -198,7 +198,7 @@ class PocketTTS(tts.TTS):
 
         producer_task = asyncio.create_task(
             asyncio.to_thread(_producer),
-            name="PocketTTS._producer",
+            name="pocket_tts._producer",
         )
 
         timeout = _timeout_value(conn_options.timeout)
@@ -290,11 +290,11 @@ class PocketTTS(tts.TTS):
         return _chunk_tts_text(cleaned, max_chars=MAX_TTS_SEGMENT_CHARS)
 
 
-class PocketChunkedStream(tts.ChunkedStream):
+class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        tts: PocketTTS,
+        tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -302,7 +302,7 @@ class PocketChunkedStream(tts.ChunkedStream):
         self._tts = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        pocket_tts = cast(PocketTTS, self._tts)
+        pocket_tts = cast(TTS, self._tts)
         output_emitter.initialize(
             request_id=shortuuid("TTS_"),
             sample_rate=pocket_tts.sample_rate,
@@ -337,8 +337,8 @@ class PocketChunkedStream(tts.ChunkedStream):
         output_emitter.flush()
 
 
-class PocketSynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: PocketTTS, conn_options: APIConnectOptions) -> None:
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts = tts
 
@@ -367,7 +367,7 @@ class PocketSynthesizeStream(tts.SynthesizeStream):
     async def _flush_text_buffer(
         self, *, text_buffer: str, output_emitter: tts.AudioEmitter
     ) -> None:
-        pocket_tts = cast(PocketTTS, self._tts)
+        pocket_tts = cast(TTS, self._tts)
         text_segments = pocket_tts._prepare_text_segments(text_buffer)
         if not text_segments:
             return
@@ -384,7 +384,7 @@ class PocketSynthesizeStream(tts.SynthesizeStream):
         self, text: str, output_emitter: tts.AudioEmitter
     ) -> tuple[float, float, float]:
         self._mark_started()
-        pocket_tts = cast(PocketTTS, self._tts)
+        pocket_tts = cast(TTS, self._tts)
         return await pocket_tts._push_generated_audio(
             text=text,
             conn_options=self._conn_options,
@@ -530,4 +530,4 @@ def _timeout_value(timeout: float) -> float | None:
     return timeout
 
 
-TTS = PocketTTS
+PocketTTS = TTS
