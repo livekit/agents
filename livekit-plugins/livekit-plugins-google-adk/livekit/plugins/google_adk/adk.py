@@ -157,7 +157,12 @@ class ADKStream(llm.LLMStream):
 
 
 def _extract_latest_user_content(chat_ctx: ChatContext) -> types.Content | None:
-    """Extract the most recent user message from a ChatContext as ADK Content."""
+    """Extract the most recent user message from a ChatContext as ADK Content.
+
+    If no user message is found, falls back to the system/developer instructions
+    so that the ADK runner can still produce a response (e.g. an initial greeting
+    triggered by ``generate_reply`` with only instructions and no user input).
+    """
     for msg in reversed(chat_ctx.messages()):
         if msg.role == "user":
             text = msg.text_content
@@ -166,4 +171,15 @@ def _extract_latest_user_content(chat_ctx: ChatContext) -> types.Content | None:
                     role="user",
                     parts=[types.Part(text=text)],
                 )
+
+    # fall back to system/developer instructions when there is no user message
+    for msg in chat_ctx.messages():
+        if msg.role in ("system", "developer"):
+            text = msg.text_content
+            if text:
+                return types.Content(
+                    role="user",
+                    parts=[types.Part(text=text)],
+                )
+
     return None
