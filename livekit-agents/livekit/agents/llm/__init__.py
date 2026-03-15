@@ -25,6 +25,7 @@ from .llm import (
     LLMStream,
 )
 from .realtime import (
+    DualChatContextSyncSession,
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
@@ -98,6 +99,7 @@ __all__ = [
     "RealtimeModelError",
     "RealtimeCapabilities",
     "RealtimeSession",
+    "DualChatContextSyncSession",
     "InputTranscriptionCompleted",
     "InputSpeechStartedEvent",
     "InputSpeechStoppedEvent",
