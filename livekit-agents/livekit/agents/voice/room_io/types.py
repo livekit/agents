@@ -72,6 +72,10 @@ class AudioInputOptions:
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None
     ) = None
+    audio_post_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
+    """Optional Python-level processor applied to every audio frame after the noise
+    cancellation stage (including after native FFI-based filters such as Krisp BVC/BVCTelephony).
+    Receives the already-filtered frame and must return a new ``rtc.AudioFrame``."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
