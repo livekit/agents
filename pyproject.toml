@@ -174,5 +174,13 @@ module = "pocket_tts"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "mistralai"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mistralai.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "livekit.plugins"
 follow_untyped_imports = true
