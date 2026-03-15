@@ -308,6 +308,13 @@ SambaNovaChatModels = Literal[
     "E5-Mistral-7B-Instruct",
 ]
 
+SarvamChatModels = Literal[
+    "sarvam-30b",
+    "sarvam-30b-16k",
+    "sarvam-105b",
+    "sarvam-105b-32k",
+]
+
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [

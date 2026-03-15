@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import platform
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -22,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 import openai
-from livekit.agents import llm
+from livekit.agents import __version__ as livekit_version, llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
@@ -50,6 +51,7 @@ from .models import (
     OpenRouterWebPlugin,
     PerplexityChatModels,
     SambaNovaChatModels,
+    SarvamChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
@@ -934,6 +936,67 @@ class LLM(llm.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
+        )
+
+    @staticmethod
+    def with_sarvam(
+        *,
+        model: str | SarvamChatModels = "sarvam-30b",
+        api_key: str | None = None,
+        base_url: str = "https://api.sarvam.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        wiki_grounding: NotGivenOr[bool] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of Sarvam LLM.
+
+        ``api_key`` must be set to your Sarvam API key, either using the argument or by setting
+        the ``SARVAM_API_KEY`` environment variable.
+        """
+        api_key = api_key or os.environ.get("SARVAM_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Sarvam API key is required, either as argument or set SARVAM_API_KEY environment variable"
+            )
+
+        user_agent = f"Livekit/{livekit_version} Python/{platform.python_version()}"
+        headers = {
+            "api-subscription-key": api_key,
+            "User-Agent": user_agent,
+        }
+
+        extra_body: dict[str, Any] = {}
+        if is_given(max_tokens):
+            extra_body["max_tokens"] = max_tokens
+        if is_given(wiki_grounding):
+            extra_body["wiki_grounding"] = wiki_grounding
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_headers=headers,
+            extra_body=extra_body if extra_body else NOT_GIVEN,
+            timeout=timeout,
         )
 
     def chat(
