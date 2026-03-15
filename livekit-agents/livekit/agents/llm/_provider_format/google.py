@@ -68,7 +68,11 @@ def to_chat_ctx(
                 fc_part["thought_signature"] = sig
             parts.append(fc_part)
         elif msg.type == "function_call_output":
-            response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
+            response = (
+                {"output": msg.output.text_contents}
+                if not msg.is_error
+                else {"error": msg.output.text_contents}
+            )
             parts.append(
                 {
                     "function_response": {

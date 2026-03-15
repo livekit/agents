@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, Field, GetCoreSchemaHandler, PrivateAttr, TypeAdapter
+from pydantic_core import CoreSchema, core_schema
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -217,6 +219,153 @@ class AudioContent(BaseModel):
     transcript: str | None = None
 
 
+class FileContent(BaseModel):
+    """File/document content for use in tool outputs."""
+
+    type: Literal["file_content"] = Field(default="file_content")
+    name: str
+    """Display name of the file."""
+    data: str | bytes
+    """File data — str for text, bytes for binary (e.g. PDF). Bytes are base64-encoded in JSON."""
+    mime_type: str
+    """MIME type, e.g. 'text/plain', 'application/pdf'."""
+
+
+class ToolOutput(str):
+    """
+    Structured output of a function tool call.
+
+    Inherits from ``str`` for full backward compatibility — existing code that
+    treats ``FunctionCallOutput.output`` as a string continues to work with no
+    changes. Rich content (images, files) is accessible via ``.content``,
+    ``.image_contents``, and ``.file_contents``.
+
+    Function tools can return any of the following, all automatically converted:
+
+    - A plain string: ``return "Order found: #12345"``
+    - An image: ``return ImageContent(image="https://...")``
+    - A file: ``return FileContent(name="report.pdf", data=b"...", mime_type="application/pdf")``
+    - A tuple mixing content: ``return "Here is the image:", ImageContent(image="https://...")``
+    - A ``ToolOutput`` directly for full control.
+    """
+
+    _content: list[ImageContent | FileContent | str]
+
+    def __new__(cls, content: list[ImageContent | FileContent | str]) -> ToolOutput:
+        text = "\n".join(c for c in content if isinstance(c, str))
+        return super().__new__(cls, text)
+
+    def __init__(self, content: list[ImageContent | FileContent | str]) -> None:
+        self._content = content
+        super().__init__()
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_plain_validator_function(
+            cls._coerce,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda v: v._serialize(),
+            ),
+        )
+
+    @classmethod
+    def _coerce(cls, v: Any) -> ToolOutput:
+        if isinstance(v, cls):
+            return v
+        if isinstance(v, str):
+            return cls([v])
+        if isinstance(v, (ImageContent, FileContent)):
+            return cls([v])
+        if isinstance(v, tuple):
+            content: list[ImageContent | FileContent | str] = []
+            for item in v:
+                if isinstance(item, (ImageContent, FileContent)):
+                    content.append(item)
+                else:
+                    content.append(str(item) if item is not None else "")
+            return cls(content)
+        if isinstance(v, list):
+            items: list[ImageContent | FileContent | str] = []
+            for item in v:
+                if isinstance(item, (ImageContent, FileContent)):
+                    items.append(item)
+                elif isinstance(item, dict):
+                    t = item.get("type")
+                    if t == "image_content":
+                        items.append(ImageContent.model_validate(item))
+                    elif t == "file_content":
+                        items.append(FileContent.model_validate(item))
+                    else:
+                        items.append(str(item))
+                elif isinstance(item, str):
+                    items.append(item)
+                else:
+                    items.append(str(item) if item is not None else "")
+            return cls(items)
+        return cls([str(v) if v is not None else ""])
+
+    def _serialize(self) -> str | list[Any]:
+        if not self.image_contents and not self.file_contents:
+            return self.text_contents
+
+        result: list[Any] = []
+        for item in self._content:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, ImageContent):
+                d = item.model_dump(mode="json")
+                if isinstance(item.image, rtc.VideoFrame):
+                    from . import utils as llm_utils  # lazy import to avoid circular
+
+                    img = llm_utils.serialize_image(item)
+                    if img.data_bytes:
+                        mime = img.mime_type or "image/jpeg"
+                        d["image"] = (
+                            f"data:{mime};base64,{base64.b64encode(img.data_bytes).decode('utf-8')}"
+                        )
+                    elif img.external_url:
+                        d["image"] = img.external_url
+                result.append(d)
+            elif isinstance(item, FileContent):
+                result.append(item.model_dump(mode="json"))
+        return result
+
+    @property
+    def content(self) -> list[ImageContent | FileContent | str]:
+        """All content items."""
+        return self._content
+
+    @property
+    def text_contents(self) -> str:
+        """All text items joined by newlines."""
+        return "\n".join(c for c in self._content if isinstance(c, str))
+
+    @property
+    def image_contents(self) -> list[ImageContent]:
+        """All image content items."""
+        return [c for c in self._content if isinstance(c, ImageContent)]
+
+    @property
+    def file_contents(self) -> list[FileContent]:
+        """All file content items."""
+        return [c for c in self._content if isinstance(c, FileContent)]
+
+    def __str__(self) -> str:
+        parts: list[str] = []
+        if self.text_contents:
+            parts.append(self.text_contents)
+        for img in self.image_contents:
+            parts.append(f"[image: {img.mime_type}]" if img.mime_type else "[image]")
+        for f in self.file_contents:
+            parts.append(f"[file: {f.name}]")
+        return " ".join(parts)
+
+    def __repr__(self) -> str:
+        return str(self._content)
+
+
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
@@ -312,7 +461,7 @@ class FunctionCallOutput(BaseModel):
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
     call_id: str
-    output: str
+    output: ToolOutput
     is_error: bool
     created_at: float = Field(default_factory=time.time)
 
