@@ -9,6 +9,8 @@ from typing import Any, Literal, TypeAlias, get_args
 
 from ...llm.chat_context import ChatContext, ChatMessage
 from ...llm.llm import LLM
+from ...llm.tool_context import ToolContext, function_tool
+from ...llm.utils import execute_function_call
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given, log_exceptions
@@ -220,21 +222,15 @@ class AMD(EventEmitter[Literal["amd_result"]]):
         transcript = ""
         run_atask = None
 
-        async def _run(transcript: str) -> None:
-            stream = self._llm.chat(
-                chat_ctx=ChatContext(
-                    items=[
-                        ChatMessage(role="system", content=[AMD_PROMPT]),
-                        ChatMessage(role="user", content=[transcript]),
-                    ]
-                )
-            )
-            response = (await stream.collect()).text.strip().lower()
-            if response in set(get_args(AMDCategory)) and response != "uncertain":
+        async def save_prediction(
+            label: AMDCategory,
+        ) -> None:
+            """Save the prediction to the verdict."""
+            if label in set(get_args(AMDCategory)) and label != "uncertain":
                 with contextlib.suppress(asyncio.InvalidStateError):
                     result = AMDResult(
                         speech_duration=self.speech_duration,
-                        category=response,  # type: ignore[arg-type]
+                        category=label,
                         reason="llm",
                         transcript=transcript,
                         delay=time.time() - (self._speech_ended_at or time.time()),
@@ -247,6 +243,21 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                             self._amd_timeout_timer.cancel()
                             self._amd_timeout_timer = None
                         self.emit("amd_result", result)
+
+        async def _run(transcript: str) -> None:
+            stream = self._llm.chat(
+                chat_ctx=ChatContext(
+                    items=[
+                        ChatMessage(role="system", content=[AMD_PROMPT]),
+                        ChatMessage(role="user", content=[transcript]),
+                    ]
+                ),
+                tools=[function_tool(save_prediction)],
+                tool_choice="required",
+            )
+            response = await stream.collect()
+            for tool_call in response.tool_calls:
+                await execute_function_call(tool_call, ToolContext(stream.tools))
 
         try:
             async for text in self._input_ch:
