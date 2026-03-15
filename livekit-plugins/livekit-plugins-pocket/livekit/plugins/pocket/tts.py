@@ -83,8 +83,7 @@ class PocketTTS(tts.TTS):
         """
         if max_concurrent_generations < 1:
             raise ValueError(
-                "max_concurrent_generations must be >= 1: "
-                f"{max_concurrent_generations}"
+                f"max_concurrent_generations must be >= 1: {max_concurrent_generations}"
             )
         if sample_rate != NATIVE_SAMPLE_RATE:
             raise ValueError(
@@ -142,9 +141,7 @@ class PocketTTS(tts.TTS):
             raise ValueError(f"Failed to load voice '{voice}': {e}") from e
         except Exception as e:
             if voice == DEFAULT_VOICE:
-                raise ValueError(
-                    f"Failed to initialize Pocket TTS voice '{voice}': {e}"
-                ) from e
+                raise ValueError(f"Failed to initialize Pocket TTS voice '{voice}': {e}") from e
 
             logger.warning(
                 "Failed to load voice '%s' (%s). Falling back to '%s'.",
@@ -252,9 +249,7 @@ class PocketTTS(tts.TTS):
         total_bytes = 0
 
         async with self._generation_semaphore:
-            async for chunk in self._generate_audio_stream(
-                text=text, conn_options=conn_options
-            ):
+            async for chunk in self._generate_audio_stream(text=text, conn_options=conn_options):
                 if first_chunk_ttfb < 0:
                     first_chunk_ttfb = time.perf_counter() - start_time
                 chunk_count += 1
@@ -264,9 +259,7 @@ class PocketTTS(tts.TTS):
         # Wall-clock synth duration (queueing + model generation + conversion + emit).
         synth_wall_time = time.perf_counter() - start_time
         audio_duration = _bytes_to_duration(total_bytes=total_bytes, sample_rate=self.sample_rate)
-        wall_to_audio_ratio = (
-            synth_wall_time / audio_duration if audio_duration > 0 else 0.0
-        )
+        wall_to_audio_ratio = synth_wall_time / audio_duration if audio_duration > 0 else 0.0
 
         logger.debug(
             "TTS segment telemetry: chars=%s chunks=%s bytes=%s sample_rate=%sHz "
@@ -282,8 +275,7 @@ class PocketTTS(tts.TTS):
         )
         if audio_duration > 0 and wall_to_audio_ratio > 2.0:
             logger.warning(
-                "TTS generation slower than realtime: wall_to_audio_ratio=%.3f "
-                "(sample_rate=%sHz)",
+                "TTS generation slower than realtime: wall_to_audio_ratio=%.3f (sample_rate=%sHz)",
                 wall_to_audio_ratio,
                 self.sample_rate,
             )
