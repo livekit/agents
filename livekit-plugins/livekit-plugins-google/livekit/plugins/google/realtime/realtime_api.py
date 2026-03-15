@@ -35,6 +35,7 @@ INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 OUTPUT_AUDIO_CHANNELS = 1
+TURN_COMPLETE_FALLBACK_SECONDS = 1.0
 
 DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     format="JPEG",
@@ -473,6 +474,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        self._turn_complete_fallback_task: asyncio.Task[None] | None = None
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -757,6 +759,7 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     async def aclose(self) -> None:
+        self._cancel_turn_complete_fallback()
         self._msg_ch.close()
         self._session_should_close.set()
 
@@ -1071,6 +1074,8 @@ class RealtimeSession(llm.RealtimeSession):
         return conf
 
     def _start_new_generation(self) -> None:
+        self._cancel_turn_complete_fallback()
+
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1174,6 +1179,9 @@ class RealtimeSession(llm.RealtimeSession):
         if server_content.generation_complete or server_content.turn_complete:
             current_gen._completed_timestamp = time.time()
 
+        if server_content.generation_complete and not server_content.turn_complete:
+            self._schedule_turn_complete_fallback(current_gen.response_id)
+
         if server_content.interrupted and not self._pending_generation_fut:
             # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()
@@ -1181,7 +1189,40 @@ class RealtimeSession(llm.RealtimeSession):
         if server_content.turn_complete:
             self._mark_current_generation_done()
 
+    def _cancel_turn_complete_fallback(self) -> None:
+        if self._turn_complete_fallback_task and not self._turn_complete_fallback_task.done():
+            self._turn_complete_fallback_task.cancel()
+        self._turn_complete_fallback_task = None
+
+    def _schedule_turn_complete_fallback(self, response_id: str) -> None:
+        self._cancel_turn_complete_fallback()
+        self._turn_complete_fallback_task = asyncio.create_task(
+            self._wait_for_turn_complete_fallback(
+                response_id=response_id,
+                timeout=TURN_COMPLETE_FALLBACK_SECONDS,
+            ),
+            name=f"gemini_turn_complete_fallback_{response_id}",
+        )
+
+    async def _wait_for_turn_complete_fallback(self, *, response_id: str, timeout: float) -> None:
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+
+        current_gen = self._current_generation
+        if not current_gen or current_gen._done or current_gen.response_id != response_id:
+            return
+
+        logger.warning(
+            "Gemini Realtime did not emit turn_complete after generation_complete; "
+            f"finalizing generation (response_id={response_id}, timeout={timeout:.2f}s)"
+        )
+        self._mark_current_generation_done()
+
     def _mark_current_generation_done(self) -> None:
+        self._cancel_turn_complete_fallback()
+
         if not self._current_generation or self._current_generation._done:
             return
 
