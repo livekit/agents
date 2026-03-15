@@ -127,6 +127,8 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+    confidence: float | None = None
+    """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
 
 
 @dataclass

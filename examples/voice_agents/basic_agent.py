@@ -40,8 +40,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
-        self.session.generate_reply(allow_interruptions=False)
+        self.session.generate_reply()
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -102,6 +101,8 @@ async def entrypoint(ctx: JobContext):
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
+        # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
+        aec_warmup_duration=3.0,
     )
 
     # log metrics as they are emitted, and total usage after session is over

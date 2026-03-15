@@ -346,15 +346,15 @@ async def test_upload_evaluations_emitted_without_logs() -> None:
 
 
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
-    """LoggerProvider should be set up even when enable_logs=False (needed for evals)."""
+    """LoggerProvider should be set up even when enable_logs=False."""
     from livekit.agents.telemetry.traces import _setup_cloud_tracer
 
     with (
         patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
         patch(f"{_TRACES_MOD}.get_logger_provider") as mock_glp,
         patch(f"{_TRACES_MOD}.set_logger_provider") as mock_slp,
-        patch(f"{_TRACES_MOD}.OTLPLogExporter"),
-        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor"),
+        patch(f"{_TRACES_MOD}.OTLPLogExporter") as mock_exporter,
+        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor") as mock_blrp,
         patch(f"{_TRACES_MOD}.logging"),
     ):
         mock_token = MagicMock()
@@ -374,6 +374,9 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
         )
 
     mock_slp.assert_called_once()
+    # OTLP exporter should NOT be created when enable_logs=False
+    mock_exporter.assert_not_called()
+    mock_blrp.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

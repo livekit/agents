@@ -74,23 +74,23 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "asyncflow_multilingual_v1.0",
+        model: TTSModels | str = "async_flash_v1.0",
         language: str | None = None,
         encoding: TTSEncoding = "pcm_s16le",
         voice: str = TTSDefaultVoiceId,
         sample_rate: int = 32000,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        base_url: str = "https://api.async.ai",
+        base_url: str = "https://api.async.com",
     ) -> None:
         """
         Create a new instance of Async TTS.
 
-        See https://docs.async.ai/text-to-speech-websocket-3477526w0 for more details
+        See https://docs.async.com/text-to-speech-websocket-3477526w0 for more details
             on the the Async API.
 
         Args:
-            model (TTSModels, optional): The Async TTS model to use. Defaults to "asyncflow_multilingual_v1.0".
+            model (TTSModels, optional): The Async TTS model to use. Defaults to "async_flash_v1.0".
             language (str, optional): The language code for synthesis.
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str, optional): The voice ID.
@@ -100,7 +100,7 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp
                 ClientSession to use. If not provided, a new session will be created.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
-            base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.ai".
+            base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.com".
         """
 
         super().__init__(
@@ -192,7 +192,7 @@ class TTS(tts.TTS):
         If any parameter is not provided, the existing value will be retained.
 
         Args:
-            model (TTSModels, optional): The Async TTS model to use. Defaults to "asyncflow_multilingual_v1.0".
+            model (TTSModels, optional): The Async TTS model to use. Defaults to "async_flash_v1.0".
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str, optional): The voice ID.
         """

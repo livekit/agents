@@ -135,6 +135,9 @@ class RunResult(Generic[Run_T]):
     def _agent_handoff(
         self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
     ) -> None:
+        if self._done_fut.done():
+            return
+
         event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
         index = self._find_insertion_index(created_at=event.item.created_at)
         self._recorded_items.insert(index, event)
@@ -156,6 +159,9 @@ class RunResult(Generic[Run_T]):
             self._recorded_items.insert(index, event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+        if self._done_fut.done():
+            return
+
         self._handles.add(handle)
 
         if isinstance(handle, SpeechHandle):
@@ -189,7 +195,7 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_exception(
                         RuntimeError(
                             f"Expected output of type {self._output_type.__name__}, "
-                            f"got {type(self._final_output).__name__}"
+                            f"got {type(final_output).__name__}"
                         )
                     )
                 else:

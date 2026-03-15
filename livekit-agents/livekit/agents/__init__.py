@@ -37,6 +37,7 @@ from .job import (
     JobRequest,
     get_job_context,
 )
+from .language import LanguageCode
 from .llm.chat_context import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -190,6 +191,7 @@ __all__ = [
     "AudioConfig",
     "PlayHandle",
     "FlushSentinel",
+    "LanguageCode",
     "io",
     "avatar",
     "cli",
