@@ -313,6 +313,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         text_segments = pocket_tts._prepare_text_segments(self._input_text)
         if not text_segments:
+            self._input_text = ""  # no speakable content after sanitization
             output_emitter.flush()
             return
 
@@ -411,7 +412,9 @@ def _sanitize_tts_text(text: str) -> str:
         line = line.replace("`", "")
         line = line.replace("*", "")
         line = line.replace("|", " ")
-        cleaned_lines.append(line)
+        line = line.strip()
+        if line:
+            cleaned_lines.append(line)
 
     cleaned = " ".join(cleaned_lines)
     cleaned = _WHITESPACE_RE.sub(" ", cleaned).strip()
