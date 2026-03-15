@@ -147,7 +147,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
             logger.warning("on_user_speech_ended called before on_user_speech_started")
             return
 
-        self._speech_ended_at = time.time()
+        self._speech_ended_at = time.time() - silence_duration
         speech_duration = self._speech_ended_at - self._speech_started_at
         if speech_duration <= self._human_speech_threshold:
             if self._silence_timer is not None:
