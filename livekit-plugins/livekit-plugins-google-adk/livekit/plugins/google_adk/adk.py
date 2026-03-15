@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from google.adk.runners import Runner
@@ -59,6 +60,7 @@ class LLMAdapter(llm.LLM):
         self._runner = runner
         self._user_id = user_id
         self._session_id: str | None = None
+        self._session_lock = asyncio.Lock()
 
     @property
     def model(self) -> str:
@@ -117,12 +119,13 @@ class ADKStream(llm.LLMStream):
 
     async def _run(self) -> None:
         # lazily create an ADK session on the first call
-        if self._adapter._session_id is None:
-            session = await self._runner.session_service.create_session(
-                app_name=self._runner.app_name,
-                user_id=self._user_id,
-            )
-            self._adapter._session_id = session.id
+        async with self._adapter._session_lock:
+            if self._adapter._session_id is None:
+                session = await self._runner.session_service.create_session(
+                    app_name=self._runner.app_name,
+                    user_id=self._user_id,
+                )
+                self._adapter._session_id = session.id
 
         content = _extract_latest_user_content(self._chat_ctx)
         if content is None:
