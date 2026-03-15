@@ -459,7 +459,7 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self) -> None:
+    async def start(self, *, reuse_audio_recognition: AudioRecognition | None = None) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -484,7 +484,7 @@ class AgentActivity(RecognitionHooks):
                         self.tts.prewarm()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
-                await self._start_session()
+                await self._start_session(reuse_audio_recognition=reuse_audio_recognition)
                 self._started = True
 
                 @tracer.start_as_current_span(
@@ -508,7 +508,23 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _start_session(self) -> None:
+    def _audio_recognition_reusable(self, new_activity: AgentActivity) -> bool:
+        """Return True if new_activity can reuse this activity's AudioRecognition.
+
+        Requires the same STT instance and the same stt_node implementation
+        """
+        if self._audio_recognition is None:
+            return False
+        if self.stt is None or new_activity.stt is None:
+            return False
+        return (
+            type(self.agent).stt_node is type(new_activity.agent).stt_node
+            and self.stt is new_activity.stt
+        )
+
+    async def _start_session(
+        self, *, reuse_audio_recognition: AudioRecognition | None = None
+    ) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
         if isinstance(self.llm, llm.LLM):
@@ -615,16 +631,28 @@ class AgentActivity(RecognitionHooks):
         self._agent._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
-        self._audio_recognition = AudioRecognition(
-            self._session,
-            hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
-            min_endpointing_delay=self.min_endpointing_delay,
-            max_endpointing_delay=self.max_endpointing_delay,
-            turn_detection=self._turn_detection,
-        )
-        self._audio_recognition.start()
+
+        stt_node = self._agent.stt_node if self.stt else None
+        if reuse_audio_recognition is not None:
+            logger.debug("reusing audio recognition from previous activity")
+            self._audio_recognition = reuse_audio_recognition
+            self._audio_recognition.update_hooks(self, stt_node=stt_node, vad=self.vad)
+            self._audio_recognition.update_options(
+                min_endpointing_delay=self.min_endpointing_delay,
+                max_endpointing_delay=self.max_endpointing_delay,
+                turn_detection=self._turn_detection,
+            )
+        else:
+            self._audio_recognition = AudioRecognition(
+                self._session,
+                hooks=self,
+                stt=stt_node,
+                vad=self.vad,
+                min_endpointing_delay=self.min_endpointing_delay,
+                max_endpointing_delay=self.max_endpointing_delay,
+                turn_detection=self._turn_detection,
+            )
+            self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -685,7 +713,7 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self) -> None:
+    async def resume(self, *, reuse_audio_recognition: AudioRecognition | None = None) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
@@ -694,7 +722,7 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                await self._start_session()
+                await self._start_session(reuse_audio_recognition=reuse_audio_recognition)
             finally:
                 span.end()
 

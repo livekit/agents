@@ -176,6 +176,20 @@ class AudioRecognition:
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
 
+    def update_hooks(
+        self,
+        hooks: RecognitionHooks,
+        *,
+        stt_node: io.STTNode | None,
+        vad: vad.VAD | None,
+    ) -> None:
+        """Redirect event callbacks and update stt_node/vad for handoff reuse."""
+        self._hooks = hooks
+        self._stt = stt_node
+
+        # always reset vad
+        self.update_vad(vad)
+
     def start(self) -> None:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
@@ -236,6 +250,24 @@ class AudioRecognition:
             self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
+
+    def reset_turn_state(self) -> None:
+        """Reset per-turn accumulated state without restarting the STT stream.
+
+        Used during agent handoff when reusing the AudioRecognition instance.
+        """
+        if self._end_of_turn_task is not None:
+            self._end_of_turn_task.cancel()
+            self._end_of_turn_task = None
+        self._audio_transcript = ""
+        self._audio_interim_transcript = ""
+        self._audio_preflight_transcript = ""
+        self._final_transcript_confidence = []
+        self._user_turn_committed = False
+        self._final_transcript_received.clear()
+        if self._user_turn_span is not None:
+            self._user_turn_span.end()
+            self._user_turn_span = None
 
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
