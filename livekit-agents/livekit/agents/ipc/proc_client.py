@@ -64,6 +64,13 @@ class _ProcClient:
         loop.slow_callback_duration = 0.1  # 100ms
 
         try:
+            import blockguard
+
+            blockguard.install()
+        except Exception:
+            pass
+
+        try:
             self._task = loop.create_task(self._monitor_task(), name="proc_client_main")
             while not self._task.done():
                 try:
@@ -76,6 +83,12 @@ class _ProcClient:
         except KeyboardInterrupt:
             pass
         finally:
+            try:
+                import blockguard
+
+                blockguard.uninstall()
+            except Exception:
+                pass
             loop.run_until_complete(loop.shutdown_default_executor())
 
     async def send(self, msg: Message) -> None:
