@@ -187,7 +187,7 @@ class AMD(EventEmitter[Literal["amd_result"]]):
                 self._verdict.set_result(
                     AMDResult(
                         speech_duration=speech_duration or self.speech_duration,
-                        category=category,  # type: ignore[arg-type]
+                        category=category,
                         reason=reason,
                         transcript="",
                         delay=time.time() - (self._speech_ended_at or time.time()),
@@ -298,3 +298,21 @@ class AMD(EventEmitter[Literal["amd_result"]]):
             if self._speech_started_at is not None
             else 0.0
         )
+
+    def __repr__(self) -> str:
+        verdict = self._verdict.result() if self._verdict.done() else None
+        return (
+            f"AMD(llm={self._llm.label}, model={self._llm.model}, "
+            f"started={self._started}, closed={self._closed}, "
+            f"speech_duration={self.speech_duration:.2f}, verdict={verdict!r})"
+        )
+
+    def __str__(self) -> str:
+        if self._verdict.done():
+            result = self._verdict.result()
+            return f"AMD({result.category}, reason={result.reason})"
+        if self._closed:
+            return "AMD(closed)"
+        if not self._started:
+            return "AMD(pending)"
+        return "AMD(listening)"

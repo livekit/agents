@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
-from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
+from collections.abc import AsyncIterable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
@@ -992,7 +992,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def amd_result(self) -> AMDResult:
         """
-        Wait for the AMD result and return it.
+        Wait for the answering machine detection result and return it.
 
         Returns:
             AMDResult: The AMD result.
@@ -1180,6 +1180,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
         )
+
+    def resume_authorization(self) -> None:
+        """Resume speech playout authorization so that queued responses can be played out."""
+        if self._activity:
+            self._activity._resume_authorization()
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -1546,11 +1551,3 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
-
-    @asynccontextmanager
-    async def disable_preemptive_generation(self) -> AsyncGenerator[None, None]:
-        prev_val, self.options.preemptive_generation = self.options.preemptive_generation, False
-        try:
-            yield
-        finally:
-            self.options.preemptive_generation = prev_val

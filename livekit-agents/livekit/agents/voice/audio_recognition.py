@@ -200,6 +200,8 @@ class AudioRecognition:
 
         if self._amd is not None and not self._amd.started:
             self._amd.start()
+            if self._session._activity:
+                self._session._activity._pause_authorization()
 
     async def aclose(self) -> None:
         self._closing.set()
