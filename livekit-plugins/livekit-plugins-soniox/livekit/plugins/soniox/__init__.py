@@ -17,7 +17,15 @@
 See https://docs.livekit.io/agents/integrations/stt/soniox/ for more information.
 """
 
-from .stt import STT, ContextGeneralItem, ContextObject, ContextTranslationTerm, STTOptions
+from .models import SonioxLanguages, SonioxRTModels
+from .stt import (
+    STT,
+    ContextGeneralItem,
+    ContextObject,
+    ContextTranslationTerm,
+    STTOptions,
+    TranslationConfig,
+)
 from .version import __version__
 
 __all__ = [
@@ -26,6 +34,9 @@ __all__ = [
     "ContextObject",
     "ContextGeneralItem",
     "ContextTranslationTerm",
+    "TranslationConfig",
+    "SonioxLanguages",
+    "SonioxRTModels",
     "__version__",
 ]
 

@@ -15,10 +15,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 
@@ -40,19 +41,12 @@ from livekit.agents.types import (
 )
 
 from .log import logger
+from .models import SonioxLanguages, SonioxRTModels
 
-# Base URL for Soniox Speech-to-Text API.
 BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-
-# WebSocket messages and tokens.
-KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
-END_TOKEN = "<end>"
-FINALIZED_TOKEN = "<fin>"
-
-
-def is_end_token(token: dict) -> bool:
-    """Return True if the given token marks an end or finalized event."""
-    return token.get("text") in (END_TOKEN, FINALIZED_TOKEN)
+KEEPALIVE_MSG = '{"type": "keepalive"}'
+FINALIZE_MSG = '{"type": "finalize"}'
+_END_TOKENS = frozenset(("<end>", "<fin>"))
 
 
 @dataclass
@@ -82,12 +76,31 @@ class ContextObject:
 
 
 @dataclass
+class TranslationConfig:
+    """Configuration for Soniox real-time translation.
+
+    See: https://soniox.com/docs/stt/rt/real-time-translation
+    """
+
+    type: Literal["one_way", "two_way"]
+    target_language: LgType | None = None
+    """Required for one_way: translate all speech into this language (e.g. ``"es"``)."""
+    language_a: LgType | None = None
+    """Required for two_way: first language (e.g. ``"en"``)."""
+    language_b: LgType | None = None
+    """Required for two_way: second language (e.g. ``"de"``)."""
+
+
+LgType = SonioxLanguages | str
+
+
+@dataclass
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v4"
+    model: SonioxRTModels | str = "stt-rt-v4"
 
-    language_hints: list[str] | None = None
+    language_hints: list[LgType] | None = None
     language_hints_strict: bool = False
     context: ContextObject | str | None = None
 
@@ -99,13 +112,17 @@ class STTOptions:
 
     client_reference_id: str | None = None
 
+    max_endpoint_delay_ms: int | None = None
+    """Must be between 500 and 3000 when set. None uses the API default (2000)."""
+    translation: TranslationConfig | None = None
+
 
 class STT(stt.STT):
     """Speech-to-Text service using Soniox Speech-to-Text API.
 
     This service connects to Soniox Speech-to-Text API for real-time transcription
     with support for multiple languages, custom context, speaker diarization,
-    and more.
+    real-time translation, and more.
 
     For complete API documentation, see: https://soniox.com/docs/stt/api-reference/websocket-api
     """
@@ -186,291 +203,206 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
         self._stt: STT = stt
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._reconnect_event = asyncio.Event()
-
-        self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
-
-        self._reported_duration_ms = 0
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp ClientSession for WebSocket connections."""
-        if not self._stt._http_session:
-            self._stt._http_session = utils.http_context.http_session()
-
-        return self._stt._http_session
+        self._reported_duration_ms: float = 0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
-        initial configuration."""
-        context_raw = self._stt._params.context
-        context_value: dict[str, Any] | str | None
-        if isinstance(context_raw, ContextObject):
-            context_value = asdict(context_raw)
-        else:
-            context_value = context_raw
-
-        # Create initial config object.
+        params = self._stt._params
         config: dict[str, Any] = {
             "api_key": self._stt._api_key,
-            "model": self._stt._params.model,
+            "model": params.model,
             "audio_format": "pcm_s16le",
-            "num_channels": self._stt._params.num_channels or 1,
+            "num_channels": params.num_channels or 1,
+            "sample_rate": params.sample_rate,
             "enable_endpoint_detection": True,
-            "sample_rate": self._stt._params.sample_rate,
-            "language_hints": self._stt._params.language_hints,
-            "language_hints_strict": self._stt._params.language_hints_strict,
-            "context": context_value,
-            "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,
-            "enable_language_identification": self._stt._params.enable_language_identification,
-            "client_reference_id": self._stt._params.client_reference_id,
+            "max_endpoint_delay_ms": params.max_endpoint_delay_ms,
+            "language_hints": params.language_hints,
+            "language_hints_strict": params.language_hints_strict,
+            "context": (
+                asdict(params.context)
+                if isinstance(params.context, ContextObject)
+                else params.context
+            ),
+            "enable_speaker_diarization": params.enable_speaker_diarization,
+            "enable_language_identification": params.enable_language_identification,
+            "client_reference_id": params.client_reference_id,
+            "translation": (
+                {k: v for k, v in asdict(params.translation).items() if v is not None}
+                if params.translation is not None
+                else None
+            ),
         }
-        # Connect to the Soniox Speech-to-Text API.
+        config = {k: v for k, v in config.items() if v is not None}
+
+        session = self._stt._http_session or utils.http_context.http_session()
+        self._stt._http_session = session
         ws = await asyncio.wait_for(
-            self._ensure_session().ws_connect(self._stt._base_url),
+            session.ws_connect(self._stt._base_url),
             timeout=self._conn_options.timeout,
         )
-        # Set initial configuration message.
         await ws.send_str(json.dumps(config))
-        logger.debug("Soniox Speech-to-Text API connection established!")
-
-        # Reset duration tracking on new connection
         self._reported_duration_ms = 0
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
-        """Report the total audio duration processed by the STT engine."""
         to_report_ms = total_audio_proc_ms - self._reported_duration_ms
         if to_report_ms <= 0:
             return
 
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(
-                audio_duration=to_report_ms / 1000,
-            ),
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                alternatives=[],
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=to_report_ms / 1000,
+                ),
+            )
         )
-        self._event_ch.send_nowait(usage_event)
         self._reported_duration_ms = int(total_audio_proc_ms)
 
     async def _run(self) -> None:
-        """Manage connection lifecycle, spawning tasks and handling reconnection."""
-        while True:
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                # Create task for audio processing, voice turn detection and message handling.
-                tasks: list[asyncio.Task[None]] = [
-                    asyncio.create_task(self._prepare_audio_task()),
-                    asyncio.create_task(self._send_audio_task()),
-                    asyncio.create_task(self._recv_messages_task()),
-                    asyncio.create_task(self._keepalive_task()),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
-
-            except asyncio.TimeoutError as e:
-                logger.error(
-                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
-                )
-                raise APITimeoutError(
-                    "Timeout connecting to or initializing Soniox Speech-to-Text API session"
-                ) from e
-
-            except aiohttp.ClientResponseError as e:
-                logger.error(
-                    "Soniox Speech-to-Text API status error during session init:"
-                    + f"{e.status} {e.message}"
-                )
-                raise APIStatusError(
-                    message=e.message, status_code=e.status, request_id=None, body=None
-                ) from e
-
-            except aiohttp.ClientError as e:
-                logger.error(f"Soniox Speech-to-Text API connection error: {e}")
-                raise APIConnectionError(f"Soniox Speech-to-Text API connection error: {e}") from e
-
-            except Exception as e:
-                logger.exception(f"Unexpected error occurred: {e}")
-                raise APIConnectionError(f"An unexpected error occurred: {e}") from e
-            # Close the WebSocket connection on finish.
-            finally:
-                if self._ws is not None:
-                    await self._ws.close()
-                    self._ws = None
-
-    async def _keepalive_task(self) -> None:
-        """Periodically send keepalive messages (while no audio is being sent)
-        to maintain the WebSocket connection."""
         try:
-            while self._ws:
-                await self._ws.send_str(KEEPALIVE_MESSAGE)
-                await asyncio.sleep(5)
-        except Exception as e:
-            logger.error(f"Error while sending keep alive message: {e}")
+            ws = await self._connect_ws()
+            try:
+                send = asyncio.create_task(self._send_task(ws), name="soniox-send")
+                recv = asyncio.create_task(self._recv_task(ws), name="soniox-recv")
+                keepalive = asyncio.create_task(self._keepalive_task(ws), name="soniox-keepalive")
+                await asyncio.gather(send, recv)
+            finally:
+                await utils.aio.gracefully_cancel(send, recv, keepalive)
+                with contextlib.suppress(Exception):
+                    await ws.close()
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Timeout connecting to Soniox") from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"Soniox connection error: {e}") from e
 
-    async def _prepare_audio_task(self) -> None:
-        """Read audio frames and enqueue PCM data for sending."""
-        if not self._ws:
-            logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
-            return
-
+    @utils.log_exceptions(logger=logger)
+    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         async for data in self._input_ch:
             if isinstance(data, rtc.AudioFrame):
-                # Get the raw bytes from the audio frame.
-                pcm_data = data.data.tobytes()
-                self.audio_queue.put_nowait(pcm_data)
+                await ws.send_bytes(data.data.tobytes())
+            elif isinstance(data, self._FlushSentinel):
+                await ws.send_str(FINALIZE_MSG)
+        await ws.send_str("")
 
-    async def _send_audio_task(self) -> None:
-        """Take queued audio data and transmit it over the WebSocket."""
-        if not self._ws:
-            logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
+    async def _keepalive_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        try:
+            while True:
+                await ws.send_str(KEEPALIVE_MSG)
+                await asyncio.sleep(5)
+        except Exception:
             return
 
-        while self._ws:
-            try:
-                data = await self.audio_queue.get()
-
-                if isinstance(data, bytes):
-                    await self._ws.send_bytes(data)
-                else:
-                    await self._ws.send_str(data)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(f"Error while sending audio data: {e}")
-                break
-
-    async def _recv_messages_task(self) -> None:
-        """Receive transcription messages, handle tokens, errors, and dispatch events."""
-
-        # final tokens are accumulated across messages until an endpoint is detected.
-        final = _TokenAccumulator()
+    @utils.log_exceptions(logger=logger)
+    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        final: dict[str, _TokenAccumulator] = {
+            "original": _TokenAccumulator(),
+            "translation": _TokenAccumulator(),
+        }
         is_speaking = False
 
-        def send_endpoint_transcript() -> None:
+        def flush_endpoint(audio_proc_ms: float) -> None:
             nonlocal is_speaking
-            if final.text:
+            alternatives = [
+                final[cat].to_speech_data(self.start_time_offset)
+                for cat in ("original", "translation")
+                if final[cat].text
+            ]
+            if alternatives:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[final.to_speech_data(self.start_time_offset)],
+                        alternatives=alternatives,
                     )
                 )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+            for acc in final.values():
+                acc.reset()
+            is_speaking = False
+            self._report_processed_audio_duration(audio_proc_ms)
+
+        async for msg in ws:
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                break
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                logger.warning("unexpected message type from Soniox: %s", msg.type)
+                continue
+
+            try:
+                content = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning("malformed JSON from Soniox")
+                continue
+
+            tokens = content.get("tokens", [])
+            total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+            non_final: dict[str, _TokenAccumulator] = {
+                "original": _TokenAccumulator(),
+                "translation": _TokenAccumulator(),
+            }
+
+            for token in tokens:
+                cat = (
+                    "translation"
+                    if token.get("translation_status") == "translation"
+                    else "original"
+                )
+                if token["is_final"]:
+                    if token.get("text") in _END_TOKENS:
+                        flush_endpoint(total_audio_proc_ms)
+                    else:
+                        final[cat].update(token)
+                else:
+                    non_final[cat].update(token)
+
+            has_content = any(
+                final[c].text or non_final[c].text for c in ("original", "translation")
+            )
+            if has_content:
+                if not is_speaking:
+                    is_speaking = True
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
+                alternatives = [
+                    final[c].merged_speech_data(non_final[c], self.start_time_offset)
+                    for c in ("original", "translation")
+                    if final[c].text or non_final[c].text
+                ]
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
-                        type=SpeechEventType.END_OF_SPEECH,
+                        type=SpeechEventType.INTERIM_TRANSCRIPT,
+                        alternatives=alternatives,
                     )
                 )
 
-                # Reset buffers.
-                final.reset()
+            if content.get("error_code"):
+                code = content["error_code"]
+                error_msg = content.get("error_message", "")
+                logger.error("Soniox error: %s - %s", code, error_msg)
+                flush_endpoint(total_audio_proc_ms)
+                if code >= 500:
+                    raise APIConnectionError(f"Soniox server error {code}: {error_msg}")
+                raise APIStatusError(
+                    message=error_msg, status_code=code, request_id=None, body=None
+                )
 
-                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
-                is_speaking = False
+            if content.get("finished"):
+                flush_endpoint(total_audio_proc_ms)
+                return
 
-        # Method handles receiving messages from the Soniox Speech-to-Text API.
-        while self._ws:
-            try:
-                async for msg in self._ws:
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        break
-
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning(
-                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
-                        )
-                        continue
-
-                    try:
-                        content = json.loads(msg.data)
-                        tokens = content["tokens"]
-
-                        non_final = _TokenAccumulator()
-                        total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
-
-                        # 1) process tokens: accumulate final/non-final,
-                        #    flush immediately on endpoint tokens.
-                        for token in tokens:
-                            if token["is_final"]:
-                                if is_end_token(token):
-                                    send_endpoint_transcript()
-                                    self._report_processed_audio_duration(
-                                        total_audio_proc_ms,
-                                    )
-                                else:
-                                    final.update(token)
-                            else:
-                                non_final.update(token)
-
-                        # 2) emit START_OF_SPEECH + interim for remaining content.
-                        if final.text or non_final.text:
-                            if not is_speaking:
-                                is_speaking = True
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                                )
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=SpeechEventType.INTERIM_TRANSCRIPT,
-                                    alternatives=[
-                                        final.merged_speech_data(non_final, self.start_time_offset)
-                                    ],
-                                )
-                            )
-
-                        # 3) on error or finish, flush any remaining final tokens.
-                        if (
-                            content.get("finished")
-                            or content.get("error_code")
-                            or content.get("error_message")
-                        ):
-                            send_endpoint_transcript()
-                            self._report_processed_audio_duration(total_audio_proc_ms)
-
-                        if content.get("error_code") or content.get("error_message"):
-                            logger.error(
-                                f"WebSocket error: {content.get('error_code')}"
-                                f" - {content.get('error_message')}"
-                            )
-
-                        if content.get("finished"):
-                            logger.debug("Transcription finished")
-
-                    except Exception as e:
-                        logger.exception(f"Error processing message: {e}")
-
-            except aiohttp.ClientError as e:
-                logger.error(f"WebSocket error while receiving: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error while receiving messages: {e}")
+        raise APIConnectionError("Soniox connection closed unexpectedly")
 
 
 class _TokenAccumulator:
