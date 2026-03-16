@@ -21,7 +21,7 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .agent import ModelSettings
-from .amd import AMD, AMDResult
+from .amd import AMD
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -94,7 +94,6 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-    def on_amd_result(self, result: AMDResult) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
@@ -150,9 +149,7 @@ class AudioRecognition:
         self._closing = asyncio.Event()
 
         # automatic machine detection
-        self._amd: AMD | None = session._activity.amd if session._activity is not None else None
-        if self._amd:
-            self._amd.on("amd_result", self._on_amd_result)
+        self._amd: AMD | None = session._amd
 
     def update_options(
         self,
@@ -198,10 +195,8 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-        if self._amd is not None and not self._amd.started:
-            self._amd.start()
-            if self._session._activity:
-                self._session._activity._pause_authorization()
+        if self._amd is not None:
+            self._amd.on_first_audio()
 
     async def aclose(self) -> None:
         self._closing.set()
@@ -220,10 +215,7 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
 
-        if self._amd is not None:
-            self._amd.off("amd_result", self._on_amd_result)
-            await self._amd.close()
-            self._amd = None
+        self._amd = None
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -401,8 +393,8 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
-            if self._amd:
-                self._amd.push_text(transcript)
+            if self._amd is not None:
+                self._amd.on_transcript(transcript)
 
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
@@ -535,7 +527,7 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-            if self._amd:
+            if self._amd is not None:
                 self._amd.on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
@@ -560,17 +552,8 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
-            if self._amd:
+            if self._amd is not None:
                 self._amd.on_user_speech_ended(ev.silence_duration)
-
-    def _on_amd_result(self, result: AMDResult) -> None:
-        self._hooks.on_amd_result(result)
-        if self._amd is not None:
-            self._amd.off("amd_result", self._on_amd_result)
-            task = asyncio.create_task(self._amd.close())
-            self._tasks.add(task)
-            task.add_done_callback(lambda _: self._tasks.discard(task))
-            self._amd = None
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":

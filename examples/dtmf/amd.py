@@ -33,16 +33,17 @@ class MyAgent(Agent):
         )
 
     async def on_enter(self):
-        result = await self.session.amd_result()
+        assert self.session.amd is not None
+        result = await self.session.amd.result()
         if result.is_human:
             # resume playout authorization so that any queued responses can be played out
             logger.info("human answered the call, proceeding with normal conversation")
-            self.session.resume_authorization()
+            self.session.amd.resume_authorization()
             return
 
         # interrupt any pending responses first before resuming playout authorization
         self.session.interrupt(force=True)
-        self.session.resume_authorization()
+        self.session.amd.resume_authorization()
 
         if result.category == "machine-dtmf":
             logger.info("dtmf menu detected, starting IVR detection")

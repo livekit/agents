@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import heapq
 import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
@@ -39,7 +37,6 @@ from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
-from ..voice.amd import AMD, AMDResult
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
@@ -47,6 +44,7 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
+from .amd import AMD
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -149,8 +147,6 @@ class AgentActivity(RecognitionHooks):
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
-
-        self._amd_result: asyncio.Future[AMDResult] | None = asyncio.Future() if self.amd else None
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -501,8 +497,9 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    if self._amd_result is not None and not self._session._amd_result_consumed:
-                        await self._amd_result
+                    detector: AMD | None = self._session._ensure_amd(activity=self)
+                    if detector is not None and detector.pending:
+                        await detector.result()
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)
@@ -622,6 +619,8 @@ class AgentActivity(RecognitionHooks):
         )
         initial_config._tools = llm.ToolContext(self.tools).flatten()
         self._agent._chat_ctx.insert(initial_config)
+
+        self._session._ensure_amd(activity=self)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
@@ -787,8 +786,6 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
-            if self._amd_result is not None:
-                await utils.aio.cancel_and_wait(self._amd_result)
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
@@ -995,11 +992,9 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation = None
 
     def _pause_authorization(self) -> None:
-        logger.debug("speech playout authorization paused", extra={"amd": self.amd})
         self._authorization_allowed.clear()
 
     def _resume_authorization(self) -> None:
-        logger.debug("speech playout authorization resumed", extra={"amd": self.amd})
         self._authorization_allowed.set()
 
     def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
@@ -1513,11 +1508,6 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity._user_turn_completed_task",
         )
         return True
-
-    def on_amd_result(self, result: AMDResult) -> None:
-        if self._amd_result is not None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._amd_result.set_result(result)
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
@@ -2934,17 +2924,3 @@ class AgentActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
-
-    @cached_property
-    def amd(self) -> AMD | None:
-        if not self._session._amd:
-            return None
-        if isinstance(self._session._amd, llm.LLM):
-            return AMD(self._session._amd)
-        if self.llm:
-            if isinstance(self.llm, llm.LLM):
-                return AMD(self.llm)
-            elif self._session._amd:
-                logger.warning("amd will be disabled as the LLM provided is not compatible")
-
-        return None
