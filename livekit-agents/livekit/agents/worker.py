@@ -206,6 +206,15 @@ class ServerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
 
+    log_level: str | ServerEnvOption[str] = ServerEnvOption(
+        dev_default="DEBUG", prod_default="INFO"
+    )
+    """Log level for the worker.
+
+    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
+    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
+    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
+
     host: str = ""  # default to all interfaces
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -285,6 +294,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        log_level: str | ServerEnvOption[str] = ServerEnvOption(
+            dev_default="DEBUG", prod_default="INFO"
+        ),
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -314,6 +326,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
+        self._log_level = log_level
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -336,6 +349,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    @property
+    def log_level(self) -> str | ServerEnvOption[str]:
+        return self._log_level
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -380,6 +397,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            log_level=options.log_level,
         )
         server.rtc_session(
             options.entrypoint_fnc,
