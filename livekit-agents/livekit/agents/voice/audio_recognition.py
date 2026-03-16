@@ -535,7 +535,6 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._vad_speech_started = False
             self._speaking = False
 
             if self._vad_base_turn_detection or (
@@ -680,6 +679,7 @@ class AudioRecognition:
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
                     self._speech_start_time = None
+                    self._vad_speech_started = False
                     self._last_speaking_time = None
 
             self._user_turn_committed = False
