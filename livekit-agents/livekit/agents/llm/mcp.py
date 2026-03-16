@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
-from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -13,10 +16,12 @@ from urllib.parse import urlparse
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
+    import httpx
+    import mcp.types
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
+    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -38,11 +43,44 @@ from .tool_context import (
 MCPTool = RawFunctionTool
 
 
+@dataclass
+class MCPToolResultContext:
+    """Context passed to an MCPToolResultResolver callback."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    result: mcp.types.CallToolResult
+
+
+MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
+
+
+def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
+    # TODO(theomonnom): handle images & binary messages
+    if len(ctx.result.content) == 1:
+        return ctx.result.content[0].model_dump_json()
+    elif len(ctx.result.content) > 1:
+        return json.dumps([item.model_dump() for item in ctx.result.content])
+
+    raise ToolError(
+        f"Tool '{ctx.tool_name}' completed without producing a result. "
+        "This might indicate an issue with internal processing."
+    )
+
+
 class MCPServer(ABC):
-    def __init__(self, *, client_session_timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        client_session_timeout_seconds: float,
+        tool_result_resolver: MCPToolResultResolver | None = None,
+    ) -> None:
         self._client: ClientSession | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
+        self._tool_result_resolver: MCPToolResultResolver = (
+            tool_result_resolver or _default_tool_result_resolver
+        )
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
@@ -114,16 +152,11 @@ class MCPServer(ABC):
                 )
                 raise ToolError(error_str)
 
-            # TODO(theomonnom): handle images & binary messages
-            if len(tool_result.content) == 1:
-                return tool_result.content[0].model_dump_json()
-            elif len(tool_result.content) > 1:
-                return json.dumps([item.model_dump() for item in tool_result.content])
-
-            raise ToolError(
-                f"Tool '{name}' completed without producing a result. "
-                "This might indicate an issue with internal processing."
-            )
+            ctx = MCPToolResultContext(tool_name=name, arguments=raw_arguments, result=tool_result)
+            resolved = self._tool_result_resolver(ctx)
+            if asyncio.iscoroutine(resolved):
+                resolved = await resolved
+            return resolved
 
         raw_schema = {
             "name": name,
@@ -190,8 +223,13 @@ class MCPServerHTTP(MCPServer):
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
+        *,
+        tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            tool_result_resolver=tool_result_resolver,
+        )
         self.url = url
         self.headers = headers
         self._timeout = timeout
@@ -234,12 +272,19 @@ class MCPServerHTTP(MCPServer):
         ]
     ]:
         if self._use_streamable_http:
-            return streamablehttp_client(  # type: ignore[no-any-return]
-                url=self.url,
-                headers=self.headers,
-                timeout=timedelta(seconds=self._timeout),
-                sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
-            )
+
+            @asynccontextmanager
+            async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
+                async with httpx.AsyncClient(
+                    headers=self.headers or {},
+                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+                ) as http_client:
+                    async with streamable_http_client(
+                        url=self.url, http_client=http_client
+                    ) as streams:
+                        yield streams
+
+            return _streamable_http_with_client()  # type: ignore[return-value]
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
@@ -268,7 +313,7 @@ class MCPServerHTTP(MCPServer):
         if self._allowed_tools is None:
             return tools
 
-        filtered_tools = []
+        filtered_tools: list[MCPTool] = []
         for tool in tools:
             # Get tool name based on tool type
             if is_function_tool(tool):
@@ -280,7 +325,7 @@ class MCPServerHTTP(MCPServer):
                 continue
 
             if tool_name in self._allowed_tools:
-                filtered_tools.append(tool)
+                filtered_tools.append(tool)  # type: ignore[arg-type]
 
         return filtered_tools
 
@@ -298,8 +343,13 @@ class MCPServerStdio(MCPServer):
         env: dict[str, str] | None = None,
         cwd: str | Path | None = None,
         client_session_timeout_seconds: float = 5,
+        *,
+        tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            tool_result_resolver=tool_result_resolver,
+        )
         self.command = command
         self.args = args
         self.env = env

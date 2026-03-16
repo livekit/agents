@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, TypeGuard, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
-from typing_extensions import TypeGuard
 
 _T = TypeVar("_T")
 
@@ -63,7 +62,7 @@ def _ensure_strict_json_schema(
     # object types
     # { 'type': 'object', 'properties': { 'a':  {...} } }
     properties = json_schema.get("properties")
-    if is_dict(properties):
+    if is_dict(properties) and properties:
         json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
             key: _ensure_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
@@ -163,12 +162,14 @@ def _ensure_strict_json_schema(
                 continue
 
             t = non_null["type"]
-            if isinstance(t, str):
-                non_null["type"] = [t, "null"]
+            non_null["type"] = [t, "null"] if isinstance(t, str) else t
+            enum = non_null.get("enum")
+            if is_list(enum):
+                enum.append(None)
 
-            merged = {k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")}
-            merged.update(non_null)
-            json_schema = merged
+            json_schema = {
+                k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")
+            } | non_null
             break
 
     return json_schema

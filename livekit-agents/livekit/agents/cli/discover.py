@@ -5,7 +5,6 @@ import sys
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
-from typing import Union
 
 from .._exceptions import CLIError
 from ..worker import AgentServer
@@ -84,7 +83,7 @@ class ImportData:
     import_string: str
 
 
-def get_import_data(*, path: Union[Path, None] = None) -> ImportData:
+def get_import_data(*, path: Path | None = None) -> ImportData:
     if not path:
         path = get_default_path()
 

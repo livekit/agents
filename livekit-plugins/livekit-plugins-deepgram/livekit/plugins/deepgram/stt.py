@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -49,7 +51,7 @@ from .models import DeepgramLanguages, DeepgramModels
 
 @dataclass
 class STTOptions:
-    language: DeepgramLanguages | str | None
+    language: LanguageCode | None
     detect_language: bool
     interim_results: bool
     punctuate: bool
@@ -62,7 +64,7 @@ class STTOptions:
     sample_rate: int
     num_channels: int
     keywords: list[tuple[str, float]]
-    keyterms: list[str]
+    keyterm: str | Sequence[str]
     profanity_filter: bool
     endpoint_url: str
     vad_events: bool = True
@@ -88,7 +90,7 @@ class STT(stt.STT):
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -97,6 +99,8 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        # deprecated
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -113,9 +117,9 @@ class STT(stt.STT):
             filler_words: Whether to include filler words (um, uh, etc.) in transcription. Defaults to True.
             keywords: List of tuples containing keywords and their boost values for improved recognition.
                      Each tuple should be (keyword: str, boost: float). Defaults to None.
-                     `keywords` does not work with Nova-3 models. Use `keyterms` instead.
-            keyterms: List of key terms to improve recognition accuracy. Defaults to None.
-                     `keyterms` is supported by Nova-3 models.
+                     `keywords` does not work with Nova-3 models. Use `keyterm` instead.
+            keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
+                     `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
@@ -145,14 +149,22 @@ class STT(stt.STT):
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
-            raise ValueError("Deepgram API key is required")
+            raise ValueError(
+                "Deepgram API key is required, either as argument or set"
+                " DEEPGRAM_API_KEY environment variable"
+            )
         self._api_key = deepgram_api_key
 
         model = _validate_model(model, language)
-        _validate_keyterms(model, language, keyterms, keywords)
+        if is_given(keyterms):
+            logger.warning(
+                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
+            )
+            keyterm = keyterms
+        _validate_keyterm(model, language, keyterm, keywords)
 
         self._opts = STTOptions(
-            language=language,
+            language=LanguageCode(language) if language else None,
             detect_language=detect_language,
             interim_results=interim_results,
             punctuate=punctuate,
@@ -165,7 +177,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             num_channels=1,
             keywords=keywords if is_given(keywords) else [],
-            keyterms=keyterms if is_given(keyterms) else [],
+            keyterm=keyterm if is_given(keyterm) else [],
             profanity_filter=profanity_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
@@ -278,16 +290,18 @@ class STT(stt.STT):
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        # deprecated
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(model):
             self._opts.model = _validate_model(model, language)
         if is_given(interim_results):
@@ -309,7 +323,12 @@ class STT(stt.STT):
         if is_given(keywords):
             self._opts.keywords = keywords
         if is_given(keyterms):
-            self._opts.keyterms = keyterms
+            logger.warning(
+                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
+            )
+            keyterm = keyterms
+        if is_given(keyterm):
+            self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
@@ -335,7 +354,7 @@ class STT(stt.STT):
                 endpointing_ms=endpointing_ms,
                 filler_words=filler_words,
                 keywords=keywords,
-                keyterms=keyterms,
+                keyterm=keyterm,
                 profanity_filter=profanity_filter,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
@@ -348,7 +367,7 @@ class STT(stt.STT):
     ) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if is_given(language):
-            config.language = language
+            config.language = LanguageCode(language)
 
         if config.detect_language:
             config.language = None
@@ -405,16 +424,18 @@ class SpeechStream(stt.SpeechStream):
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        # deprecated
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(model):
             self._opts.model = _validate_model(model, language)
         if is_given(interim_results):
@@ -436,7 +457,12 @@ class SpeechStream(stt.SpeechStream):
         if is_given(keywords):
             self._opts.keywords = keywords
         if is_given(keyterms):
-            self._opts.keyterms = keyterms
+            logger.warning(
+                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
+            )
+            keyterm = keyterms
+        if is_given(keyterm):
+            self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
@@ -518,8 +544,9 @@ class SpeechStream(stt.SpeechStream):
 
                     # this will trigger a reconnection, see the _run loop
                     raise APIStatusError(
-                        message=f"deepgram connection closed unexpectedly: "
-                        f"code={ws.close_code}, reason={msg.extra if msg.extra else 'no reason provided'}"
+                        message="deepgram connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -587,10 +614,8 @@ class SpeechStream(stt.SpeechStream):
             live_config["diarize"] = True
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
-        if self._opts.keyterms:
-            # the query param is `keyterm`
-            # See: https://developers.deepgram.com/docs/keyterm
-            live_config["keyterm"] = self._opts.keyterms
+        if self._opts.keyterm:
+            live_config["keyterm"] = self._opts.keyterm
 
         if self._opts.language:
             live_config["language"] = self._opts.language
@@ -709,7 +734,7 @@ def live_transcription_to_speech_data(
             speaker = None
 
         sd = stt.SpeechData(
-            language=language,
+            language=LanguageCode(language),
             start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
             end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
             confidence=alt["confidence"],
@@ -728,7 +753,7 @@ def live_transcription_to_speech_data(
             else None,
         )
         if language == "multi" and "languages" in alt:
-            sd.language = alt["languages"][0]  # TODO: handle multiple languages
+            sd.language = LanguageCode(alt["languages"][0])  # TODO: handle multiple languages
         speech_data.append(sd)
     return speech_data
 
@@ -744,14 +769,14 @@ def prerecorded_transcription_to_speech_event(
 
     # Use the detected language if enabled
     # https://developers.deepgram.com/docs/language-detection
-    detected_language = channel.get("detected_language", "")
+    detected_language = LanguageCode(channel.get("detected_language", ""))
 
     return stt.SpeechEvent(
         request_id=request_id,
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             stt.SpeechData(
-                language=language or detected_language,
+                language=LanguageCode(language or detected_language),
                 start_time=alt["words"][0]["start"] if alt["words"] else 0,
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
@@ -799,14 +824,14 @@ def _validate_tags(tags: list[str]) -> list[str]:
     return tags
 
 
-def _validate_keyterms(
+def _validate_keyterm(
     model: DeepgramModels | str,
     language: NotGivenOr[DeepgramLanguages | str],
-    keyterms: NotGivenOr[list[str]],
+    keyterm: NotGivenOr[str | list[str]],
     keywords: NotGivenOr[list[tuple[str, float]]],
 ) -> None:
     """
-    Validating keyterms and keywords for model compatibility.
+    Validating keyterm and keywords for model compatibility.
     See: https://developers.deepgram.com/docs/keyterm and https://developers.deepgram.com/docs/keywords
     """
     if model.startswith("nova-3") and is_given(keywords):
@@ -815,7 +840,7 @@ def _validate_keyterms(
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterms) and (not model.startswith("nova-3")):
+    if is_given(keyterm) and (not model.startswith("nova-3")):
         raise ValueError(
             "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."

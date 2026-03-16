@@ -259,7 +259,7 @@ class FallbackLLMStream(LLMStream):
                         self._event_ch.send_nowait(result)
 
                     return
-                except Exception:  # exceptions already logged inside _try_synthesize
+                except Exception:  # exceptions already logged inside _try_generate
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(

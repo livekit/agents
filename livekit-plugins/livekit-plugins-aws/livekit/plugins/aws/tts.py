@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import cast
 
 import aioboto3  # type: ignore
 import botocore  # type: ignore
@@ -24,6 +23,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
+    LanguageCode,
     tts,
 )
 from livekit.agents.types import (
@@ -48,7 +48,7 @@ class _TTSOptions:
     speech_engine: TTSSpeechEngine
     region: str | None
     sample_rate: int
-    language: TTSLanguages | str | None
+    language: LanguageCode | None
     text_type: TTSTextType
 
 
@@ -103,7 +103,7 @@ class TTS(tts.TTS):
             speech_engine=speech_engine,
             text_type=text_type,
             region=region or None,
-            language=language or None,
+            language=LanguageCode(language) if is_given(language) and language else None,
             sample_rate=sample_rate,
         )
 
@@ -131,11 +131,11 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(speech_engine):
-            self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
+            self._opts.speech_engine = speech_engine
         if is_given(text_type):
-            self._opts.text_type = cast(TTSTextType, text_type)
+            self._opts.text_type = text_type
 
 
 class ChunkedStream(tts.ChunkedStream):

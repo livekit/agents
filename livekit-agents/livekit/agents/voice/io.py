@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Union
+from typing import Literal
 
 from livekit import rtc
 
@@ -16,10 +16,9 @@ from .agent import ModelSettings
 # TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame], ModelSettings],
-    Union[
-        Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]],
-        Awaitable[Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]]],
-    ],
+    AsyncIterable[stt.SpeechEvent | str]
+    | None
+    | Awaitable[AsyncIterable[stt.SpeechEvent | str] | None],
 ]
 LLMNode = Callable[
     [
@@ -27,23 +26,15 @@ LLMNode = Callable[
         list[llm.Tool],
         ModelSettings,
     ],
-    Union[
-        Optional[
-            Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
-        ],
-        Awaitable[
-            Optional[
-                Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
-            ]
-        ],
-    ],
+    AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+    | str
+    | llm.ChatChunk
+    | None
+    | Awaitable[AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | llm.ChatChunk | None],
 ]
 TTSNode = Callable[
     [AsyncIterable[str], ModelSettings],
-    Union[
-        Optional[AsyncIterable[rtc.AudioFrame]],
-        Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
-    ],
+    AsyncIterable[rtc.AudioFrame] | None | Awaitable[AsyncIterable[rtc.AudioFrame] | None],
 ]
 
 

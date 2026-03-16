@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import aioboto3  # type: ignore
 from botocore.config import Config  # type: ignore
@@ -150,9 +150,7 @@ class LLM(llm.LLM):
                 tools_list.append({"cachePoint": {"type": "default"}})
 
             tool_config: dict[str, Any] = {"tools": tools_list}
-            tool_choice = (
-                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                     tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
@@ -231,6 +229,9 @@ class LLMStream(llm.LLMStream):
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
                         f"aws bedrock llm: error generating content: {response}",
+                        status_code=response["ResponseMetadata"]["HTTPStatusCode"],
+                        # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
+                        # body=response,
                         retryable=False,
                         request_id=request_id,
                     )

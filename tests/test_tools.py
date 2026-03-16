@@ -1,10 +1,15 @@
 import enum
+from typing import Literal
 
 import pytest
+from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    build_legacy_openai_schema,
+    build_strict_openai_schema,
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
@@ -101,17 +106,23 @@ class DummyAgent(Agent):
 
 
 class DummyProviderTool(ProviderTool):
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self, id: str):
+        super().__init__(id=id)
 
 
 class MockToolset1(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_1")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_1, mock_tool_2]
 
 
 class MockToolset2(Toolset):
+    def __init__(self):
+        super().__init__(id="mock_toolset_2")
+
     @property
     def tools(self) -> list[Tool]:
         return [mock_tool_2, DummyProviderTool("provider1")]
@@ -308,7 +319,13 @@ class TestToolExecution:
 
         schema4 = function_arguments_to_pydantic_model(agent.raw_tool_in_agent)
         assert schema4.model_json_schema() == {
-            "properties": {"raw_arguments": {"title": "Raw Arguments", "type": "object"}},
+            "properties": {
+                "raw_arguments": {
+                    "additionalProperties": True,
+                    "title": "Raw Arguments",
+                    "type": "object",
+                }
+            },
             "required": ["raw_arguments"],
             "title": "RawToolInAgentArgs",
             "type": "object",
@@ -380,3 +397,53 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestNoParametersSchema:
+    """Test that functions with no parameters generate valid JSON schema."""
+
+    def test_legacy_schema_no_parameters_has_no_required(self):
+        """Legacy schema for no-param function must not include 'required'."""
+        params = build_legacy_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
+
+    def test_strict_schema_no_parameters_has_no_required(self):
+        """Strict schema for no-param function must not include 'required'."""
+        params = build_strict_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
+
+
+class _NullableEnumModel(BaseModel):
+    status: Literal["active", "inactive"] | None = Field(None)
+
+
+class _NullableBoolModel(BaseModel):
+    flag: bool | None = Field(None)
+
+
+class _NonNullableEnumModel(BaseModel):
+    status: Literal["active", "inactive"] = Field(...)
+
+
+class TestStrictJsonSchema:
+    def test_nullable_enum_includes_null_in_enum(self):
+        schema = to_strict_json_schema(_NullableEnumModel)
+        status = schema["properties"]["status"]
+        assert None in status["enum"], f"enum should contain None: {status}"
+        assert "null" in status["type"], f"type should contain 'null': {status}"
+
+    def test_nullable_bool_has_null_type(self):
+        schema = to_strict_json_schema(_NullableBoolModel)
+        flag = schema["properties"]["flag"]
+        assert "enum" not in flag, f"bool field should not have enum: {flag}"
+        assert "null" in flag["type"], f"type should contain 'null': {flag}"
+
+    def test_non_nullable_enum_excludes_null(self):
+        schema = to_strict_json_schema(_NonNullableEnumModel)
+        status = schema["properties"]["status"]
+        assert None not in status["enum"], f"enum should not contain None: {status}"
+        assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"

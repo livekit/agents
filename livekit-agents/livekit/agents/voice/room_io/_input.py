@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
-from typing import Any, Generic, TypeVar, Union, cast
+from typing import Any, Generic, TypeVar, cast
 
 from typing_extensions import override
 
@@ -16,7 +16,7 @@ from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
 
-T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
+T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
 
 class _ParticipantInputStream(Generic[T], ABC):

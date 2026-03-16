@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING
 
 from livekit import api, rtc
 
@@ -66,11 +66,13 @@ class WarmTransferResult:
 class WarmTransferTask(AgentTask[WarmTransferResult]):
     def __init__(
         self,
-        target_phone_number: str,
+        sip_call_to: NotGivenOr[str] = NOT_GIVEN,
         *,
-        hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
+        sip_trunk_id: NotGivenOr[str | None] = NOT_GIVEN,
+        sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
+        sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -80,7 +82,27 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        # deprecated
+        target_phone_number: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Initialize a WarmTransferTask to dial a human agent via SIP.
+
+        Args:
+            sip_call_to: The phone number or SIP URI to dial for the human agent
+                (e.g. ``"+15105550123"`` or ``"sip:user@example.com"``).
+            sip_trunk_id: ID of a pre-configured LiveKit SIP outbound trunk used to
+                originate the call. Falls back to the ``LIVEKIT_SIP_OUTBOUND_TRUNK``
+                environment variable when not provided.
+            sip_connection: Low-level SIP connection config (``api.SIPOutboundConfig``)
+                for originating calls from a **custom SIP domain** instead of through a
+                saved trunk. Use this when you need to specify a custom hostname,
+                transport, or authentication credentials directly, bypassing the
+                trunk-based configuration.
+            hold_audio: Audio played to the caller while they are on hold during the
+                    transfer.
+            extra_instructions: Extra instructions to append to the base instructions
+                that are used to summarize the conversation history.
+        """
         super().__init__(
             instructions=self.get_instructions(
                 chat_ctx=chat_ctx, extra_instructions=extra_instructions
@@ -100,24 +122,37 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
 
-        self._target_phone_number = target_phone_number
+        if target_phone_number:
+            logger.warning("`target_phone_number` is deprecated, use `sip_call_to` instead")
+            if not sip_call_to:
+                sip_call_to = target_phone_number
+
+        if not sip_call_to:
+            raise ValueError("`sip_call_to` must be set")
+
+        self._sip_call_to = sip_call_to
+        self._sip_connection = sip_connection if is_given(sip_connection) else None
         self._sip_trunk_id = (
-            sip_trunk_id if is_given(sip_trunk_id) else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+            sip_trunk_id
+            if is_given(sip_trunk_id)
+            else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         )
-        if not self._sip_trunk_id:
+        if self._sip_trunk_id is None and self._sip_connection is None:
             raise ValueError(
-                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable or `sip_trunk_id` argument must be set"
+                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`,"
+                " or `sip_connection` must be set"
             )
 
         self._sip_number = (
             sip_number if is_given(sip_number) else os.getenv("LIVEKIT_SIP_NUMBER", "")
         )
+        self._sip_headers = sip_headers if is_given(sip_headers) else {}
 
         # background audio and io
         self._background_audio = BackgroundAudioPlayer()
         self._hold_audio_handle: PlayHandle | None = None
         self._hold_audio = (
-            cast(Optional[Union[AudioSource, AudioConfig, list[AudioConfig]]], hold_audio)
+            hold_audio
             if is_given(hold_audio)
             else AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
         )
@@ -130,14 +165,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # users can override this method if they want to customize the entire instructions
         prev_convo = ""
         if chat_ctx:
-            context_copy = chat_ctx.copy(
-                exclude_empty_message=True,
-                exclude_instructions=True,
-                exclude_function_call=True,
-                exclude_handoff=True,
-            )
-            for msg in context_copy.items:
-                if msg.type != "message":
+            for msg in chat_ctx.messages():
+                if msg.role not in ("user", "assistant"):
+                    continue
+                if not msg.text_content:
                     continue
                 role = "Caller" if msg.role == "user" else "Assistant"
                 prev_convo += f"{role}: {msg.text_content}\n"
@@ -303,16 +334,18 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
 
         # dial the human agent
-        await job_ctx.api.sip.create_sip_participant(
-            api.CreateSIPParticipantRequest(
-                sip_trunk_id=self._sip_trunk_id,
-                sip_call_to=self._target_phone_number,
-                room_name=human_agent_room_name,
-                participant_identity=self._human_agent_identity,
-                wait_until_answered=True,
-                sip_number=self._sip_number or None,
-            )
+        sip_request = api.CreateSIPParticipantRequest(
+            sip_trunk_id=self._sip_trunk_id,
+            sip_call_to=self._sip_call_to,
+            room_name=human_agent_room_name,
+            participant_identity=self._human_agent_identity,
+            wait_until_answered=True,
+            sip_number=self._sip_number or None,
+            headers=self._sip_headers,
         )
+        if self._sip_connection is not None:
+            sip_request.trunk.CopyFrom(self._sip_connection)
+        await job_ctx.api.sip.create_sip_participant(sip_request)
 
         return human_agent_sess
 

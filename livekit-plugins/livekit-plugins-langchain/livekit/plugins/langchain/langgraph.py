@@ -19,17 +19,20 @@ from typing import Any, Generic
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
+from langgraph.types import StreamMode
 from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
+
+_SUPPORTED_MODES: set[StreamMode] = {"messages", "custom"}
 
 
 class LLMAdapter(llm.LLM, Generic[ContextT]):
@@ -40,12 +43,20 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
+        stream_mode: StreamMode | list[StreamMode] = "messages",
     ) -> None:
         super().__init__()
+        modes = {stream_mode} if isinstance(stream_mode, str) else set(stream_mode)
+        unsupported = modes - _SUPPORTED_MODES
+        if unsupported:
+            raise ValueError(
+                f"Unsupported stream mode(s): {unsupported}. Only {_SUPPORTED_MODES} are supported."
+            )
         self._graph = graph
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
+        self._stream_mode = stream_mode
 
     @property
     def model(self) -> str:
@@ -75,6 +86,7 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
             config=self._config,
             context=self._context,
             subgraphs=self._subgraphs,
+            stream_mode=self._stream_mode,
         )
 
 
@@ -90,6 +102,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
+        stream_mode: StreamMode | list[StreamMode] = "messages",
     ):
         super().__init__(
             llm,
@@ -101,9 +114,11 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
+        self._stream_mode = stream_mode
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
+        is_multi_mode = isinstance(self._stream_mode, list)
 
         # Some LangGraph versions don't accept the `subgraphs` or `context` kwargs yet.
         # Try with them first; fall back gracefully if unsupported.
@@ -112,40 +127,65 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 state,
                 self._config,
                 context=self._context,
-                stream_mode="messages",
+                stream_mode=self._stream_mode,
                 subgraphs=self._subgraphs,
             )
         except TypeError:
             aiter = self._graph.astream(
                 state,
                 self._config,
-                stream_mode="messages",
+                stream_mode=self._stream_mode,
             )
 
         async for item in aiter:
-            token_like = _extract_message_chunk(item)
-            if token_like is None:
-                continue
+            # Multi-mode: item is (mode, data) tuple wrapper
+            if is_multi_mode and isinstance(item, tuple) and len(item) == 2:
+                mode, data = item
+                if isinstance(mode, str):
+                    if mode == "custom":
+                        # data = payload (str, dict, object)
+                        chat_chunk = _to_chat_chunk(data)
+                        if chat_chunk:
+                            self._event_ch.send_nowait(chat_chunk)
+                        continue
+                    elif mode == "messages":
+                        # data = (token, metadata)
+                        token_like = _extract_message_chunk(data)
+                        if token_like is None:
+                            continue
+                        chat_chunk = _to_chat_chunk(token_like)
+                        if chat_chunk:
+                            self._event_ch.send_nowait(chat_chunk)
+                        continue
 
-            chat_chunk = _to_chat_chunk(token_like)
-            if chat_chunk:
-                self._event_ch.send_nowait(chat_chunk)
+            # Single-mode: item is data directly (no tuple wrapper)
+            if self._stream_mode == "custom":
+                # item = payload (str, dict, object)
+                chat_chunk = _to_chat_chunk(item)
+                if chat_chunk:
+                    self._event_ch.send_nowait(chat_chunk)
+            elif self._stream_mode == "messages":
+                # item = (token, metadata)
+                token_like = _extract_message_chunk(item)
+                if token_like is None:
+                    continue
+                chat_chunk = _to_chat_chunk(token_like)
+                if chat_chunk:
+                    self._event_ch.send_nowait(chat_chunk)
 
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
 
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
-        for item in self._chat_ctx.items:
-            # only support chat messages, ignoring tool calls
-            if isinstance(item, ChatMessage):
-                content = item.text_content
-                if content:
-                    if item.role == "assistant":
-                        messages.append(AIMessage(content=content, id=item.id))
-                    elif item.role == "user":
-                        messages.append(HumanMessage(content=content, id=item.id))
-                    elif item.role in ["system", "developer"]:
-                        messages.append(SystemMessage(content=content, id=item.id))
+        for msg in self._chat_ctx.messages():
+            content = msg.text_content
+            if content:
+                if msg.role == "assistant":
+                    messages.append(AIMessage(content=content, id=msg.id))
+                elif msg.role == "user":
+                    messages.append(HumanMessage(content=content, id=msg.id))
+                elif msg.role in ["system", "developer"]:
+                    messages.append(SystemMessage(content=content, id=msg.id))
 
         return {"messages": messages}
 
@@ -198,9 +238,17 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     if isinstance(msg, str):
         content = msg
     elif isinstance(msg, BaseMessageChunk):
-        content = msg.text()
+        content = msg.text
         if getattr(msg, "id", None):
             message_id = msg.id  # type: ignore
+    elif isinstance(msg, dict):
+        raw = msg.get("content")
+        if isinstance(raw, str):
+            content = raw
+    elif hasattr(msg, "content"):
+        raw = msg.content
+        if isinstance(raw, str):
+            content = raw
 
     if not content:
         return None

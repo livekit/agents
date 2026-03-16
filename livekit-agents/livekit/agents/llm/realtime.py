@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -127,6 +127,8 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+    confidence: float | None = None
+    """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
 
 
 @dataclass
@@ -134,7 +136,7 @@ class RealtimeSessionReconnectedEvent:
     pass
 
 
-class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
+class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model

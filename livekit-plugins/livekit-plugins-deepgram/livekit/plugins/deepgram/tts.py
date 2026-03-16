@@ -328,7 +328,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("Deepgram websocket connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Deepgram websocket connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     output_emitter.push(msg.data)

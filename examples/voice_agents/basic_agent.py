@@ -14,6 +14,7 @@ from livekit.agents import (
     inference,
     metrics,
     room_io,
+    text_transforms,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
@@ -30,7 +31,7 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Kelly. You would interact with users via voice."
+            instructions="Your name is Kelly, built by LiveKit. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
@@ -40,8 +41,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
-        self.session.generate_reply(allow_interruptions=False)
+        self.session.generate_reply(instructions="greet the user and introduce yourself")
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -102,6 +102,13 @@ async def entrypoint(ctx: JobContext):
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
+        # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
+        aec_warmup_duration=3.0,
+        tts_text_transforms=[
+            "filter_emoji",
+            "filter_markdown",
+            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"}),
+        ],
     )
 
     # log metrics as they are emitted, and total usage after session is over

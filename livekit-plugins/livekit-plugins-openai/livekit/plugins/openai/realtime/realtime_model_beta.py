@@ -10,7 +10,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Union, cast, overload
+from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -27,6 +27,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
 from openai.types.beta.realtime import (
     ConversationItem,
     ConversationItemContent,
@@ -70,6 +71,7 @@ from openai.types.beta.realtime.session import (
 
 from ..log import logger
 from ..models import RealtimeModels
+from .utils import calculate_confidence_from_logprobs
 
 # This file contains the implementation for Realtime API beta
 # the beta version of the API does not support new features such as images.
@@ -284,7 +286,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else None,
-            tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
+            tracing=tracing if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -421,7 +423,7 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
+            self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -430,13 +432,13 @@ class RealtimeModelBeta(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(speed):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = cast(Union[Tracing, None], tracing)
+            self._opts.tracing = tracing
 
         for sess in self._sessions:
             sess.update_options(
@@ -523,7 +525,7 @@ class RealtimeSessionBeta(
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModelBeta = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
+        self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
@@ -577,6 +579,7 @@ class RealtimeSessionBeta(
                 exclude_instructions=True,
                 exclude_empty_message=True,
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -917,7 +920,6 @@ class RealtimeSessionBeta(
         kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
-            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -934,7 +936,7 @@ class RealtimeSessionBeta(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
@@ -950,8 +952,8 @@ class RealtimeSessionBeta(
             kwargs["speed"] = speed
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
-            kwargs["tracing"] = cast(Union[Tracing, None], tracing)
+            self._realtime_model._opts.tracing = tracing
+            kwargs["tracing"] = tracing
 
         if kwargs:
             self.send_event(
@@ -964,6 +966,13 @@ class RealtimeSessionBeta(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
+            chat_ctx = chat_ctx.copy(
+                exclude_handoff=True,
+                exclude_config_update=True,
+            )
+            # only remove the instructions but keep other system messages
+            remove_instructions(chat_ctx)
+
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
 
@@ -1169,6 +1178,7 @@ class RealtimeSessionBeta(
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
                 exclude_handoff=True,
+                exclude_config_update=True,
             )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
@@ -1321,9 +1331,12 @@ class RealtimeSessionBeta(
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        confidence = calculate_confidence_from_logprobs(event.logprobs)
+
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             assert isinstance(remote_item.item, llm.ChatMessage)
             remote_item.item.content.append(event.transcript)
+            remote_item.item.transcript_confidence = confidence
 
         self.emit(
             "input_audio_transcription_completed",
@@ -1331,6 +1344,7 @@ class RealtimeSessionBeta(
                 item_id=event.item_id,
                 transcript=event.transcript,
                 is_final=True,
+                confidence=confidence,
             ),
         )
 
@@ -1409,6 +1423,7 @@ class RealtimeSessionBeta(
 
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
+                    id=item_id,
                     call_id=item.call_id,
                     name=item.name,
                     arguments=item.arguments,

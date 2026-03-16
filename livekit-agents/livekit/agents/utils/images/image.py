@@ -33,7 +33,7 @@ class EncodeOptions:
     resize_options: Optional["ResizeOptions"] = None
     """Options for resizing the image."""
 
-    quality: Optional[int] = 75
+    quality: int | None = 75
     """Image compression quality, 0-100. Only applies to JPEG."""
 
 
@@ -95,7 +95,9 @@ def _image_from_frame(frame: rtc.VideoFrame) -> "Image.Image":
     if frame.type != rtc.VideoBufferType.RGBA:
         converted = frame.convert(rtc.VideoBufferType.RGBA)
 
-    rgb_image = Image.frombytes("RGBA", (frame.width, frame.height), converted.data).convert("RGB")
+    rgb_image = Image.frombytes("RGBA", (frame.width, frame.height), bytes(converted.data)).convert(
+        "RGB"
+    )
     return rgb_image
 
 

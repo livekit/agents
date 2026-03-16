@@ -86,7 +86,10 @@ class TTS(tts.TTS):
 
         groq_api_key = api_key if is_given(api_key) else os.getenv("GROQ_API_KEY")
         if not groq_api_key:
-            raise ValueError("GROQ_API_KEY is not set")
+            raise ValueError(
+                "Groq API key is required, either as argument or set"
+                " GROQ_API_KEY environment variable"
+            )
 
         self._opts = _TTSOptions(
             model=model,
