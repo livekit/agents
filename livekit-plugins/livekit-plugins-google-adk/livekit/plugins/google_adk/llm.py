@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from google.adk.agents import BaseAgent, LlmAgent
@@ -21,7 +23,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService, Session
 from google.genai import types as genai_types
 
-from livekit.agents import APIConnectionError, APIStatusError, llm, utils
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.types import (
@@ -41,6 +43,15 @@ class LLMAdapter(llm.LLM):
     ADK handles tool calling and multi-agent orchestration internally.
     LiveKit tools passed via ``chat()`` are not used — define tools on the
     ADK agent instead.
+
+    Args:
+        agent: The ADK agent to wrap.
+        runner: Optional pre-configured ADK Runner.
+        session_service: Session persistence backend (defaults to in-memory).
+        app_name: Application name for ADK session management.
+        model_name: Override for the model name reported to LiveKit.
+        response_timeout: Max seconds to wait for the first token from ADK.
+            ``None`` disables the timeout (default).
     """
 
     def __init__(
@@ -51,11 +62,13 @@ class LLMAdapter(llm.LLM):
         session_service: BaseSessionService | None = None,
         app_name: str = "livekit_adk_app",
         model_name: str | None = None,
+        response_timeout: float | None = None,
     ) -> None:
         super().__init__()
         self._agent = agent
         self._app_name = app_name
         self._model_name = model_name
+        self._response_timeout = response_timeout
 
         if session_service is None:
             session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
@@ -104,14 +117,22 @@ class LLMAdapter(llm.LLM):
             conn_options=conn_options,
             runner=self._runner,
             extra_kwargs=extra_kwargs if is_given(extra_kwargs) else {},
+            response_timeout=self._response_timeout,
         )
 
     async def _get_or_create_session(
         self,
         user_id: str,
         session_id: str | None = None,
+        state: dict[str, Any] | None = None,
     ) -> Session:
-        """Return an existing ADK session or create a new one."""
+        """Return an existing ADK session or create a new one.
+
+        Args:
+            user_id: Unique identifier for the user.
+            session_id: Optional explicit session ID.
+            state: Initial state dict merged into the session on creation.
+        """
         cache_key = f"{user_id}:{session_id or ''}"
         if cache_key in self._sessions:
             return self._sessions[cache_key]
@@ -120,6 +141,7 @@ class LLMAdapter(llm.LLM):
             app_name=self._app_name,
             user_id=user_id,
             session_id=session_id,
+            state=state or {},
         )
         self._sessions[cache_key] = session
         logger.debug(
@@ -133,6 +155,9 @@ class LLMAdapter(llm.LLM):
 class ADKStream(llm.LLMStream):
     """LLMStream implementation that delegates to a Google ADK Runner."""
 
+    # Keys consumed from extra_kwargs that are not forwarded to ADK session state
+    _RESERVED_KEYS = {"user_id", "session_id", "state"}
+
     def __init__(
         self,
         llm_instance: LLMAdapter,
@@ -142,6 +167,7 @@ class ADKStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         runner: Runner,
         extra_kwargs: dict[str, Any],
+        response_timeout: float | None = None,
     ) -> None:
         super().__init__(
             llm_instance,
@@ -151,6 +177,7 @@ class ADKStream(llm.LLMStream):
         )
         self._runner = runner
         self._extra_kwargs = extra_kwargs
+        self._response_timeout = response_timeout
 
     async def _run(self) -> None:
         request_id = utils.shortuuid("adk_")
@@ -166,8 +193,12 @@ class ADKStream(llm.LLMStream):
         user_id: str = self._extra_kwargs.get("user_id", "livekit_user")
         session_id: str | None = self._extra_kwargs.get("session_id", None)
 
+        # Custom state passed via extra_kwargs["state"] is forwarded to the ADK
+        # session on creation so the ADK agent can read it from session.state.
+        custom_state: dict[str, Any] | None = self._extra_kwargs.get("state", None)
+
         adapter: LLMAdapter = self._llm  # type: ignore[assignment]
-        session = await adapter._get_or_create_session(user_id, session_id)
+        session = await adapter._get_or_create_session(user_id, session_id, state=custom_state)
 
         content = genai_types.Content(
             role="user",
@@ -177,10 +208,10 @@ class ADKStream(llm.LLMStream):
         retryable = True
         has_emitted_partials = False
         try:
-            async for event in self._runner.run_async(
+            async for event in self._run_with_timeout(
                 user_id=user_id,
                 session_id=session.id,
-                new_message=content,
+                content=content,
             ):
                 # Once we start getting events, errors should not be retried
                 retryable = False
@@ -230,15 +261,48 @@ class ADKStream(llm.LLMStream):
                             )
                         )
 
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError(
+                f"google-adk: no response within {self._response_timeout}s",
+                retryable=False,
+            ) from e
         except APIConnectionError:
             raise
         except APIStatusError:
+            raise
+        except APITimeoutError:
             raise
         except Exception as e:
             raise APIConnectionError(
                 f"google-adk: error during agent execution: {e}",
                 retryable=retryable,
             ) from e
+
+    async def _run_with_timeout(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        content: genai_types.Content,
+    ) -> AsyncIterator[Any]:
+        """Iterate ADK runner events, raising ``asyncio.TimeoutError`` if the
+        first event does not arrive within ``self._response_timeout`` seconds."""
+        aiter = self._runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content,
+        ).__aiter__()
+
+        timeout = self._response_timeout
+        while True:
+            try:
+                event = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
+            except StopAsyncIteration:
+                return
+            yield event
+            # After receiving the first event, disable the timeout for
+            # subsequent events — the bot is actively responding.
+            timeout = None
 
 
 def _extract_latest_user_message(chat_ctx: ChatContext) -> str | None:
