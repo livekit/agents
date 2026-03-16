@@ -30,10 +30,10 @@ class TestServerOptionsLogLevel:
         assert ServerEnvOption.getvalue(opts.log_level, True) == "DEBUG"
 
     def test_custom_string_log_level(self):
-        opts = ServerOptions(entrypoint_fnc=lambda ctx: None, log_level="WARNING")
-        assert opts.log_level == "WARNING"
-        assert ServerEnvOption.getvalue(opts.log_level, False) == "WARNING"
-        assert ServerEnvOption.getvalue(opts.log_level, True) == "WARNING"
+        opts = ServerOptions(entrypoint_fnc=lambda ctx: None, log_level="WARN")
+        assert opts.log_level == "WARN"
+        assert ServerEnvOption.getvalue(opts.log_level, False) == "WARN"
+        assert ServerEnvOption.getvalue(opts.log_level, True) == "WARN"
 
     def test_custom_server_env_option(self):
         opts = ServerOptions(
@@ -52,8 +52,8 @@ class TestAgentServerLogLevel:
         assert ServerEnvOption.getvalue(server.log_level, True) == "DEBUG"
 
     def test_custom_log_level(self):
-        server = AgentServer(log_level="WARNING")
-        assert server.log_level == "WARNING"
+        server = AgentServer(log_level="WARN")
+        assert server.log_level == "WARN"
 
     def test_from_server_options_passes_log_level(self):
         server = _make_server(log_level="ERROR")
@@ -147,3 +147,30 @@ class TestDevCommandLogLevel:
         result = runner.invoke(app, ["dev", "--no-reload"])
         assert result.exit_code == 0
         assert mock_run_worker.call_args.kwargs["args"].log_level == "CRITICAL"
+
+
+class TestLogLevelValidation:
+    def test_invalid_string_rejected_by_server_options(self):
+        with pytest.raises(ValueError, match="Invalid log level"):
+            ServerOptions(entrypoint_fnc=lambda ctx: None, log_level="WARNING")
+
+    def test_invalid_string_rejected_by_agent_server(self):
+        with pytest.raises(ValueError, match="Invalid log level"):
+            AgentServer(log_level="NOTSET")
+
+    def test_invalid_server_env_option_rejected(self):
+        with pytest.raises(ValueError, match="Invalid log level"):
+            ServerOptions(
+                entrypoint_fnc=lambda ctx: None,
+                log_level=ServerEnvOption(dev_default="WARNING", prod_default="INFO"),
+            )
+
+    def test_valid_levels_accepted_by_server_options(self):
+        for level in ("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"):
+            opts = ServerOptions(entrypoint_fnc=lambda ctx: None, log_level=level)
+            assert opts.log_level == level
+
+    def test_valid_levels_accepted_by_agent_server(self):
+        for level in ("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"):
+            server = AgentServer(log_level=level)
+            assert server.log_level == level

@@ -147,6 +147,21 @@ _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7
 _default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
 
+VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
+
+
+def _validate_log_level(log_level: str | ServerEnvOption[str]) -> None:
+    if isinstance(log_level, ServerEnvOption):
+        levels_to_check = [log_level.dev_default, log_level.prod_default]
+    else:
+        levels_to_check = [log_level]
+
+    for level in levels_to_check:
+        if level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            )
+
 
 # NOTE: this object must be pickle-able
 @dataclass
@@ -241,6 +256,9 @@ class ServerOptions:
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
 
+    def __post_init__(self) -> None:
+        _validate_log_level(self.log_level)
+
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
         if load_threshold > 1 and not devmode:
@@ -323,6 +341,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
+        _validate_log_level(log_level)
         self._log_level = log_level
         self._agent_name = ""
         self._server_type = ServerType.ROOM
