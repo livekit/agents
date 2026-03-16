@@ -104,7 +104,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         try:
             ws = await asyncio.wait_for(
-                self._create_session().ws_connect(
+                self._ensure_session().ws_connect(
                     XAI_WEBSOCKET_URL,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ),
@@ -118,7 +118,11 @@ class TTS(tts.TTS):
                     "sample_rate_hertz": "Hz24000",
                 },
             }
-            await ws.send_str(json.dumps(config_msg))
+            try:
+                await ws.send_str(json.dumps(config_msg))
+            except Exception:
+                await ws.close()
+                raise
         except (
             aiohttp.ClientConnectorError,
             aiohttp.ClientConnectionResetError,
@@ -130,8 +134,10 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    def _create_session(self) -> aiohttp.ClientSession:
-        return utils.http_context.http_session()
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
 
     def update_options(
         self,
@@ -259,7 +265,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("xAI connection closed unexpectedly")
+                    raise APIStatusError(
+                        "xAI connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("Unexpected xAI message type %s", msg.type)
