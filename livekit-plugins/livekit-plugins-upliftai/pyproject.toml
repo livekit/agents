@@ -35,4 +35,4 @@ path = "livekit/plugins/upliftai/version.py"
 packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/livekit"] 
+include = ["/livekit"]
