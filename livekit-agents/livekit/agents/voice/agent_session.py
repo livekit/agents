@@ -41,6 +41,7 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
+from .amd import AMD
 from .audio_recognition import TurnDetectionMode
 from .client_events import ClientEventsHandler
 from .events import (
@@ -208,6 +209,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         preemptive_generation: bool = False,
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
+        amd: bool | llm.LLM | LLMModels | str = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -301,6 +303,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Set to ``None`` to disable. Default ``3.0`` s.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
+            amd (bool | llm.LLM | str): Answering machine detection. When enabled, the agent
+                holds its response until AMD classifies the callee's greeting as human or
+                machine. Pass ``True`` to reuse the session's main LLM for classification,
+                or pass a dedicated ``llm.LLM`` instance (e.g. a cheaper/faster model).
+                Default ``False`` (disabled).
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -314,6 +321,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "`agent_false_interruption_timeout` is deprecated, use `false_interruption_timeout` instead"  # noqa: E501
             )
             false_interruption_timeout = agent_false_interruption_timeout
+
+        if ivr_detection and amd:
+            logger.warning("ivr detection will be disabled when amd is enabled")
+            ivr_detection = False
 
         if not is_given(video_sampler):
             video_sampler = VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
@@ -420,8 +431,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recording_options: RecordingOptions = _RECORDING_ALL_OFF.copy()
         self._started_at: float | None = None
 
-        # ivr activity
+        # ivr and amd
         self._ivr_activity: IVRActivity | None = None
+        self._amd_llm = amd
+        self._amd: AMD | None = None
+
+    @property
+    def amd(self) -> AMD | None:
+        """The answering-machine detector, or ``None`` if AMD is disabled."""
+        return self._amd
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
@@ -682,13 +700,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 if self.options.ivr_detection:
-                    self._ivr_activity = IVRActivity(self)
-
-                    # inject the IVR activity tools into the session tools
-                    self._tools.extend(self._ivr_activity.tools)
-
                     tasks.append(
-                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                        asyncio.create_task(self.start_ivr_detection(), name="_ivr_activity_start")
                     )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
@@ -905,6 +918,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._recorder_io:
                 await self._recorder_io.aclose()
 
+            if self._amd is not None:
+                await self._amd.aclose()
+                self._amd = None
+
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
 
@@ -969,6 +986,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 turn_detection=turn_detection,
             )
 
+    async def start_ivr_detection(self, transcript: str | None = None) -> None:
+        """Start IVR detection on this session.
+
+        This method injects the DTMF tool and enables loop/silence detection,
+        allowing the agent to navigate IVR phone trees. Safe to call after AMD resolves.
+
+        Args:
+            transcript (str | None, optional): The transcript to start IVR detection with.
+        """
+        if self._ivr_activity is not None:
+            logger.warning("IVR detection already started, skipping")
+            return
+
+        self._ivr_activity = IVRActivity(self)
+        self._tools.extend(self._ivr_activity.tools)
+        await self._ivr_activity.start()
+        if transcript is not None:
+            logger.debug("IVR detection started with transcript", extra={"transcript": transcript})
+            self._ivr_activity._on_user_input_transcribed(
+                UserInputTranscribedEvent(transcript=transcript, is_final=True)
+            )
+
     def say(
         self,
         text: str | AsyncIterable[str],
@@ -980,6 +1019,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
+        self._warn_if_amd_pending("say")
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
@@ -1032,6 +1072,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
+        self._warn_if_amd_pending("generate_reply")
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
             if isinstance(user_input, str)
@@ -1410,6 +1451,31 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
+
+    def _ensure_amd(self, *, activity: AgentActivity | None = None) -> AMD | None:
+        """Create the AMD detector if AMD is enabled.
+
+        Called by ``AgentActivity._start_session`` once the agent's LLM is
+        resolved.  No-op on subsequent calls.
+        """
+        if self._amd is not None:
+            return self._amd
+        if not self._amd_llm:
+            return None
+
+        detector = AMD(llm=self._amd_llm, session=self, activity=activity)
+        if detector.enabled:
+            self._amd = detector
+            return detector
+        return None
+
+    def _warn_if_amd_pending(self, method: str) -> None:
+        if self._amd is not None and self._amd.pending:
+            logger.warning(
+                "%s() called before AMD result is available, "
+                "the agent may be speaking to an answering machine",
+                method,
+            )
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

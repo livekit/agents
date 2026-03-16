@@ -10,7 +10,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -58,7 +58,7 @@ MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     # TODO(theomonnom): handle images & binary messages
     if len(ctx.result.content) == 1:
-        return ctx.result.content[0].model_dump_json()
+        return cast(str, ctx.result.content[0].model_dump_json())
     elif len(ctx.result.content) > 1:
         return json.dumps([item.model_dump() for item in ctx.result.content])
 

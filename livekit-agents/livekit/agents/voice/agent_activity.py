@@ -44,6 +44,7 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
+from .amd import AMD
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -138,6 +139,8 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        self._authorization_allowed = asyncio.Event()
+        self._authorization_allowed.set()
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPTool] = []
@@ -494,6 +497,13 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
+                    detector: AMD | None = self._session._ensure_amd(activity=self)
+                    if detector is not None and detector.pending:
+                        try:
+                            await detector.result()
+                        except BaseException:
+                            detector.resume_authorization()
+                            raise
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)
@@ -613,6 +623,8 @@ class AgentActivity(RecognitionHooks):
         )
         initial_config._tools = llm.ToolContext(self.tools).flatten()
         self._agent._chat_ctx.insert(initial_config)
+
+        self._session._ensure_amd(activity=self)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
@@ -982,6 +994,12 @@ class AgentActivity(RecognitionHooks):
         if self._preemptive_generation is not None:
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
+
+    def _pause_authorization(self) -> None:
+        self._authorization_allowed.clear()
+
+    def _resume_authorization(self) -> None:
+        self._authorization_allowed.set()
 
     def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
@@ -1733,7 +1751,8 @@ class AgentActivity(RecognitionHooks):
 
         # See discussion in https://github.com/livekit/agents/issues/4432
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2022,7 +2041,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_agent_state("thinking")
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2316,7 +2336,8 @@ class AgentActivity(RecognitionHooks):
 
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2416,7 +2437,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(self.tools)
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))

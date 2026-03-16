@@ -91,6 +91,7 @@ from .voice import (
     room_io,
     text_transforms,
 )
+from .voice.amd import AMD, AMDResult
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
@@ -217,6 +218,8 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "AMD",
+    "AMDResult",
 ]
 
 # Cleanup docs of unexported modules
