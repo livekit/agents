@@ -36,7 +36,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .types import GrokVoices
+from .types import GrokVoices, TTSLanguages
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -48,6 +48,7 @@ DEFAULT_VOICE = "ara"
 @dataclass
 class _TTSOptions:
     voice: GrokVoices | str
+    language: TTSLanguages | str
     tokenizer: tokenize.WordTokenizer
 
 
@@ -57,6 +58,7 @@ class TTS(tts.TTS):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: GrokVoices | str = DEFAULT_VOICE,
+        language: TTSLanguages | str = "auto",
         tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -67,6 +69,7 @@ class TTS(tts.TTS):
 
         Args:
             voice (str, optional): The voice ID for the desired voice. Defaults to "ara".
+            language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja"). Defaults to "auto".
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """  # noqa: E501
@@ -87,6 +90,7 @@ class TTS(tts.TTS):
             tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
             voice=voice,
+            language=language,
             tokenizer=tokenizer,
         )
 
@@ -114,6 +118,7 @@ class TTS(tts.TTS):
                 "type": "config",
                 "data": {
                     "voice_id": self._opts.voice,
+                    "language": self._opts.language,
                     "output_format": {"Raw": {"encoding": "Linear16"}},
                     "sample_rate_hertz": "Hz24000",
                 },
@@ -143,14 +148,17 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str | None = None,
+        language: TTSLanguages | str | None = None,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
         Args:
-            voice_uuid (str, optional): The voice ID for the desired voice.
+            voice (str, optional): The voice ID for the desired voice.
+            language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja").
         """  # noqa: E501
         self._opts.voice = voice or self._opts.voice
+        self._opts.language = language or self._opts.language
 
     def synthesize(
         self,
