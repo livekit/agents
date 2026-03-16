@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import TYPE_CHECKING
 
 from ...inference import LLM as _InferenceLLM, LLMModels
@@ -38,9 +37,7 @@ class AMD:
         self._classifier: _AMDClassifier | None = self._resolve_classifier(
             llm, session, activity=activity
         )
-        self._result: asyncio.Future[AMDResult] | None = (
-            asyncio.get_running_loop().create_future() if self._classifier is not None else None
-        )
+        self._result: AMDResult | None = None
         self._closed = False
 
         if self._classifier is not None:
@@ -52,7 +49,7 @@ class AMD:
 
     @property
     def pending(self) -> bool:
-        return self._result is not None and not self._result.done()
+        return self._classifier is not None and self._result is None
 
     # region: lifecycle methods
 
@@ -84,8 +81,6 @@ class AMD:
             self._classifier.off("amd_result", self._on_amd_result)
             await self._classifier.close()
             self._classifier = None
-        if self._result is not None and not self._result.done():
-            self._result.cancel()
 
     # endregion
     # region: public API
@@ -94,11 +89,16 @@ class AMD:
         """Wait for the answering-machine detection result and return it.
 
         Raises:
-            RuntimeError: If AMD was not enabled or could not be resolved.
+            RuntimeError: If AMD was not enabled or could not be resolved, or
+                if the detector was closed before producing a result.
         """
-        if self._result is None:
+        if self._classifier is None and self._result is None:
             raise RuntimeError("AMD could not be resolved, please provide a compatible LLM")
-        return await self._result
+        if self._classifier is not None:
+            await self._classifier._verdict_ready.wait()
+        if self._result is None:
+            raise RuntimeError("AMD was closed before a result was available")
+        return self._result
 
     def resume_authorization(self) -> None:
         """Resume speech playout authorization so queued responses can play."""
@@ -109,9 +109,7 @@ class AMD:
     # region: internal methods
 
     def _on_amd_result(self, result: AMDResult) -> None:
-        if self._result is not None and not self._result.done():
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._result.set_result(result)
+        self._result = result
         task = asyncio.create_task(self.aclose())
         task.add_done_callback(lambda _: None)
 
@@ -122,7 +120,6 @@ class AMD:
         *,
         activity: AgentActivity | None = None,
     ) -> _AMDClassifier | None:
-
         if not llm:
             return None
         if isinstance(llm, str):

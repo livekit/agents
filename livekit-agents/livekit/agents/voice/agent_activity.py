@@ -499,7 +499,11 @@ class AgentActivity(RecognitionHooks):
                 async def _traceable_on_enter() -> None:
                     detector: AMD | None = self._session._ensure_amd(activity=self)
                     if detector is not None and detector.pending:
-                        await detector.result()
+                        try:
+                            await detector.result()
+                        except BaseException:
+                            detector.resume_authorization()
+                            raise
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)

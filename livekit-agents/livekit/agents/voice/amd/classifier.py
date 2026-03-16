@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import functools
 import time
 from collections.abc import Callable
@@ -95,7 +94,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._silence_timer: asyncio.TimerHandle | None = None
         self._amd_timeout_timer: asyncio.TimerHandle | None = None
 
-        self._verdict: asyncio.Future[AMDResult] = asyncio.get_running_loop().create_future()
+        self._verdict_result: AMDResult | None = None
+        self._verdict_ready = asyncio.Event()
 
         self._llm = llm
         self._speech_started_at: float | None = None
@@ -103,6 +103,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._started = False
         self._closed = False
         self._machine_silence_reached = False
+        self._emitted = False
 
     def start(self) -> None:
         if self._started:
@@ -125,7 +126,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             ),
         )
 
-    @_state_guard()
+    @_state_guard
     def on_user_speech_started(self) -> None:
         if self._silence_timer is not None:
             self._silence_timer.cancel()
@@ -137,7 +138,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             self._speech_started_at = time.time()
         self._machine_silence_reached = False
 
-    @_state_guard()
+    @_state_guard
     def on_user_speech_ended(self, silence_duration: float) -> None:
         if self._speech_started_at is None:
             logger.warning("on_user_speech_ended called before on_user_speech_started")
@@ -171,36 +172,47 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             functools.partial(self._silence_timer_callback, speech_duration=speech_duration),
         )
 
+    def _set_verdict(self, result: AMDResult) -> None:
+        self._verdict_result = result
+        self._try_emit_result()
+
+    def _try_emit_result(self) -> None:
+        if self._verdict_result is None:
+            return
+        if not self._machine_silence_reached:
+            return
+        if self._closed or self._emitted:
+            return
+        self._verdict_ready.set()
+        if self._amd_timeout_timer is not None:
+            self._amd_timeout_timer.cancel()
+            self._amd_timeout_timer = None
+        self.emit("amd_result", self._verdict_result)
+        self._emitted = True
+
     @log_exceptions(logger=logger)
-    @_state_guard()
+    @_state_guard
     def _silence_timer_callback(
         self,
         category: NotGivenOr[AMDCategory] = NOT_GIVEN,
         reason: NotGivenOr[str] = NOT_GIVEN,
         speech_duration: float | None = None,
     ) -> None:
-        """Callback for either model prediction or reaching the silence threshold."""
         if is_given(category) and is_given(reason):
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._verdict.set_result(
-                    AMDResult(
-                        speech_duration=speech_duration or self.speech_duration,
-                        category=category,
-                        reason=reason,
-                        transcript="",
-                        delay=time.time() - (self._speech_ended_at or time.time()),
-                    )
+            self._set_verdict(
+                AMDResult(
+                    speech_duration=speech_duration or self.speech_duration,
+                    category=category,
+                    reason=reason,
+                    transcript="",
+                    delay=time.time() - (self._speech_ended_at or time.time()),
                 )
+            )
 
         self._machine_silence_reached = True
-        if self._verdict.done() and not self.closed:
-            if self._amd_timeout_timer is not None:
-                self._amd_timeout_timer.cancel()
-                self._amd_timeout_timer = None
-            self.emit("amd_result", self._verdict.result())
-            return
+        self._try_emit_result()
 
-    @_state_guard()
+    @_state_guard
     def push_text(self, text: str) -> None:
         """Push transcript text to the AMD classifier."""
         if self._input_ch.closed:
@@ -223,22 +235,15 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         ) -> None:
             """Save the prediction to the verdict."""
             if label in set(get_args(AMDCategory)) and label != "uncertain":
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    result = AMDResult(
+                self._set_verdict(
+                    AMDResult(
                         speech_duration=self.speech_duration,
                         category=label,
                         reason="llm",
                         transcript=transcript,
                         delay=time.time() - (self._speech_ended_at or time.time()),
                     )
-                    self._verdict.set_result(result)
-                    # This might arrive after all the timer callbacks
-                    # so we emit the result immediately
-                    if self._machine_silence_reached and not self._closed:
-                        if self._amd_timeout_timer is not None:
-                            self._amd_timeout_timer.cancel()
-                            self._amd_timeout_timer = None
-                        self.emit("amd_result", result)
+                )
 
         async def _run(transcript: str) -> None:
             stream = self._llm.chat(
@@ -269,8 +274,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._closed:
             return
 
-        if not self._verdict.done():
-            self._verdict.cancel()
+        self._verdict_ready.set()
 
         if self._no_speech_timer is not None:
             self._no_speech_timer.cancel()
@@ -307,17 +311,15 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         )
 
     def __repr__(self) -> str:
-        verdict = self._verdict.result() if self._verdict.done() else None
         return (
             f"AMD(llm={self._llm.label}, model={self._llm.model}, "
             f"started={self._started}, closed={self._closed}, "
-            f"speech_duration={self.speech_duration:.2f}, verdict={verdict!r})"
+            f"speech_duration={self.speech_duration:.2f}, verdict={self._verdict_result!r})"
         )
 
     def __str__(self) -> str:
-        if self._verdict.done():
-            result = self._verdict.result()
-            return f"AMD({result.category}, reason={result.reason})"
+        if self._verdict_result is not None:
+            return f"AMD({self._verdict_result.category}, reason={self._verdict_result.reason})"
         if self._closed:
             return "AMD(closed)"
         if not self._started:
