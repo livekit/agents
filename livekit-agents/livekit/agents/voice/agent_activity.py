@@ -1175,7 +1175,7 @@ class AgentActivity(RecognitionHooks):
         # so they don't need placeholders.
         last_item_id = local_chat_ctx.items[-1].id if local_chat_ctx.items else None
         if ev.previous_item_id is None or ev.previous_item_id == last_item_id:
-            local_chat_ctx.items.append(ev.item)
+            local_chat_ctx.items.append(ev.item.model_copy())
 
     def _on_error(
         self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
