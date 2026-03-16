@@ -33,6 +33,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .types import GrokVoices
@@ -75,13 +76,13 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("XAI_API_KEY")
-        if not api_key:
+        resolved_key: str | None = api_key if is_given(api_key) else os.environ.get("XAI_API_KEY")
+        if not resolved_key:
             raise ValueError(
                 "xAI API key is required, either as argument or set XAI_API_KEY"
                 " environment variable"
             )
-        self._api_key = api_key
+        self._api_key = resolved_key
         if tokenizer is None:
             tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
@@ -150,7 +151,8 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> None: ...
+    ) -> tts.ChunkedStream:
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
