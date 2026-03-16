@@ -564,6 +564,7 @@ class AgentActivity(RecognitionHooks):
                 self._on_input_audio_transcription_completed,
             )
             self._rt_session.on("metrics_collected", self._on_metrics_collected)
+            self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
 
             remove_instructions(self._agent._chat_ctx)
@@ -1161,6 +1162,20 @@ class AgentActivity(RecognitionHooks):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
+    def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
+        # add the remote item to the local chat context as a placeholder
+        local_chat_ctx = self._agent._chat_ctx
+        if local_chat_ctx.get_by_id(ev.item.id) is not None:
+            return
+
+        # only add placeholders for server-initiated items (responses, function calls),
+        # which always append at the end of the conversation. client-initiated items
+        # (from update_chat_ctx) already exist in _agent._chat_ctx and go local→remote,
+        # so they don't need placeholders.
+        last_item_id = local_chat_ctx.items[-1].id if local_chat_ctx.items else None
+        if ev.previous_item_id is None or ev.previous_item_id == last_item_id:
+            local_chat_ctx.items.append(ev.item)
+
     def _on_error(
         self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
     ) -> None:
@@ -1210,7 +1225,7 @@ class AgentActivity(RecognitionHooks):
             # TODO: for realtime models, the created_at field is off. it should be set to when the user started speaking.
             # but we don't have that information here.
             msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-            self._agent._chat_ctx.items.append(msg)
+            self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
@@ -2328,7 +2343,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
-            self._agent._chat_ctx.items.append(msg)
+            self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
         ori_tool_choice = self._tool_choice
@@ -2587,7 +2602,7 @@ class AgentActivity(RecognitionHooks):
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
-            self._agent._chat_ctx.items.append(fnc_call)
+            self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
@@ -2689,7 +2704,7 @@ class AgentActivity(RecognitionHooks):
                 forwarded_text=forwarded_text,
                 interrupted=speech_handle.interrupted,
             )
-            self._agent._chat_ctx.items.append(msg)
+            self._agent._chat_ctx._upsert_item(msg)
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
@@ -2741,7 +2756,7 @@ class AgentActivity(RecognitionHooks):
                         fnc_executed_ev._reply_required = True
 
                     # add tool output to the chat context
-                    self._agent._chat_ctx.items.append(sanitized_out.fnc_call_out)
+                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
