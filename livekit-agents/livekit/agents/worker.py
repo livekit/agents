@@ -144,6 +144,7 @@ class ServerEnvOption(Generic[T]):
 
 
 _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
+_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
 
 
@@ -206,9 +207,7 @@ class ServerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
 
-    log_level: str | ServerEnvOption[str] = ServerEnvOption(
-        dev_default="DEBUG", prod_default="INFO"
-    )
+    log_level: str | ServerEnvOption[str] = _default_log_level
     """Log level for the worker.
 
     Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
@@ -294,9 +293,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
-        log_level: str | ServerEnvOption[str] = ServerEnvOption(
-            dev_default="DEBUG", prod_default="INFO"
-        ),
+        log_level: str | ServerEnvOption[str] = _default_log_level,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
