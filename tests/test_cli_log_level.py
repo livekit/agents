@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from livekit.agents.cli.cli import LogLevel, _build_cli
+from livekit.agents.cli.cli import _build_cli
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
 
 
@@ -136,9 +136,7 @@ class TestDevCommandLogLevel:
     def test_env_var_overrides_default(self, mock_run_worker, runner):
         server = _make_server()
         app = _build_cli(server)
-        result = runner.invoke(
-            app, ["dev", "--no-reload"], env={"LIVEKIT_LOG_LEVEL": "ERROR"}
-        )
+        result = runner.invoke(app, ["dev", "--no-reload"], env={"LIVEKIT_LOG_LEVEL": "ERROR"})
         assert result.exit_code == 0
         assert mock_run_worker.call_args.kwargs["args"].log_level == "ERROR"
 
@@ -149,5 +147,3 @@ class TestDevCommandLogLevel:
         result = runner.invoke(app, ["dev", "--no-reload"])
         assert result.exit_code == 0
         assert mock_run_worker.call_args.kwargs["args"].log_level == "CRITICAL"
-
-

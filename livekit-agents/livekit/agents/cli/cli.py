@@ -1718,7 +1718,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"),
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
         ] = _start_log_default,
         url: Annotated[
             str | None,  # noqa: UP007
@@ -1766,7 +1768,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"),
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
         ] = _dev_log_default,
         reload: Annotated[
             bool,
