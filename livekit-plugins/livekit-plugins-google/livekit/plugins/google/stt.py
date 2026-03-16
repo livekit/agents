@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast, get_args
 
+import google.auth
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
@@ -215,6 +216,7 @@ class STT(stt.STT):
         self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
+        self._project_id: str | None = None
 
         if not is_given(credentials_file) and not is_given(credentials_info):
             try:
@@ -278,9 +280,12 @@ class STT(stt.STT):
                 self._credentials_info, client_options=client_options
             )
         elif is_given(self._credentials_file):
-            client = client_cls.from_service_account_file(
-                self._credentials_file, client_options=client_options
+            credentials, project_id = google.auth.load_credentials_from_file(  # type: ignore[no-untyped-call]
+                self._credentials_file,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
+            self._project_id = project_id
+            client = client_cls(credentials=credentials, client_options=client_options)
         else:
             client = client_cls(client_options=client_options)
         assert client is not None
@@ -289,6 +294,9 @@ class STT(stt.STT):
     def _get_recognizer(self, client: SpeechAsyncClientV2) -> str:
         # TODO(theomonnom): should we use recognizers?
         # recognizers may improve latency https://cloud.google.com/speech-to-text/v2/docs/recognizers#understand_recognizers
+
+        if self._project_id is not None:
+            return f"projects/{self._project_id}/locations/{self._location}/recognizers/_"
 
         # TODO(theomonnom): find a better way to access the project_id
         try:

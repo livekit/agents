@@ -11,7 +11,7 @@ from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
-from ..llm.chat_context import _ReadOnlyChatContext
+from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -37,7 +37,7 @@ class Agent:
     def __init__(
         self,
         *,
-        instructions: str,
+        instructions: str | Instructions,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
@@ -120,7 +120,7 @@ class Agent:
         return self.id
 
     @property
-    def instructions(self) -> str:
+    def instructions(self) -> str | Instructions:
         """
         Returns:
             str: The core instructions that guide the agent's behavior.
@@ -691,7 +691,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
         *,
-        instructions: str,
+        instructions: str | Instructions,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,

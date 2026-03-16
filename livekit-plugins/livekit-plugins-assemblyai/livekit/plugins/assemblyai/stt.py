@@ -112,6 +112,7 @@ class STT(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                diarization=is_given(speaker_labels) and speaker_labels is True,
             ),
         )
         if model == "u3-pro":
@@ -500,6 +501,10 @@ class SpeechStream(stt.SpeechStream):
         transcript = data.get("transcript", "")
         language = LanguageCode(data.get("language_code", "en"))
 
+        # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
+        speaker_label = data.get("speaker_label")
+        speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
+
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
         start_time: float = 0
@@ -535,6 +540,7 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=timed_words,
                         confidence=confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
@@ -565,6 +571,7 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=utterance_words,
                         confidence=utterance_confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
@@ -584,6 +591,7 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=timed_words,
                         confidence=confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
