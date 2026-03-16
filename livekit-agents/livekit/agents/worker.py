@@ -150,7 +150,9 @@ _default_permissions = WorkerPermissions()
 VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
 
 
-def _validate_log_level(log_level: str | ServerEnvOption[str]) -> None:
+def _validate_and_normalize_log_level(
+    log_level: str | ServerEnvOption[str],
+) -> str | ServerEnvOption[str]:
     if isinstance(log_level, ServerEnvOption):
         levels_to_check = [log_level.dev_default, log_level.prod_default]
     else:
@@ -161,6 +163,13 @@ def _validate_log_level(log_level: str | ServerEnvOption[str]) -> None:
             raise ValueError(
                 f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
             )
+
+    if isinstance(log_level, ServerEnvOption):
+        return ServerEnvOption(
+            dev_default=log_level.dev_default.upper(),
+            prod_default=log_level.prod_default.upper(),
+        )
+    return log_level.upper()
 
 
 # NOTE: this object must be pickle-able
@@ -257,7 +266,7 @@ class ServerOptions:
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
 
     def __post_init__(self) -> None:
-        _validate_log_level(self.log_level)
+        self.log_level = _validate_and_normalize_log_level(self.log_level)
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -341,8 +350,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
-        _validate_log_level(log_level)
-        self._log_level = log_level
+        self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
