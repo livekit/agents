@@ -70,7 +70,8 @@ ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 # but not yet in the official OpenTelemetry specification.
 ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"
 ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS = "gen_ai.usage.input_audio_tokens"
-ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS = "gen_ai.usage.input_cached_tokens"
+ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS = "gen_ai.usage.input_text_cached_tokens"
+ATTR_GEN_AI_USAGE_INPUT_AUDIO_CACHED_TOKENS = "gen_ai.usage.input_audio_cached_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS = "gen_ai.usage.output_text_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.output_audio_tokens"
 
@@ -88,5 +89,3 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
-ATTR_LANGFUSE_UNCACHED_INPUT_TEXT_TOKENS = "langfuse.observation.cost_details.uncached_input_text_tokens"
-ATTR_LANGFUSE_UNCACHED_INPUT_AUDIO_TOKENS = "langfuse.observation.cost_details.uncached_input_audio_tokens"
