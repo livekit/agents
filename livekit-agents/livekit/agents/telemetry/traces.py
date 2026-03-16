@@ -318,7 +318,9 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
+def _build_proto_chat_item(
+    item: ChatItem,
+) -> agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
     if item.type == "message":
@@ -394,7 +396,22 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb, preserving_proto_field_name=True)
+    elif item.type == "agent_config_update":
+        acu = item_pb.agent_config_update
+        acu.id = item.id
+        if item.instructions is not None:
+            acu.instructions = item.instructions
+        if item.tools_added:
+            acu.tools_added.extend(item.tools_added)
+        if item.tools_removed:
+            acu.tools_removed.extend(item.tools_removed)
+        acu.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    return item_pb
+
+
+def _to_proto_chat_item(item: ChatItem) -> dict:
+    return MessageToDict(_build_proto_chat_item(item), preserving_proto_field_name=True)
 
 
 async def _upload_session_report(

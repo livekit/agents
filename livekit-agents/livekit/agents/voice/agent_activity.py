@@ -356,6 +356,7 @@ class AgentActivity(RecognitionHooks):
             agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
+        self._session._config_update_added(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
@@ -383,6 +384,7 @@ class AgentActivity(RecognitionHooks):
         # Store full tool definitions in-memory (not serialized)
         config_update._tools = llm.ToolContext(tools).flatten()
         self._agent._chat_ctx.insert(config_update)
+        self._session._config_update_added(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -684,6 +686,7 @@ class AgentActivity(RecognitionHooks):
         )
         initial_config._tools = llm.ToolContext(self.tools).flatten()
         self._agent._chat_ctx.insert(initial_config)
+        self._session._config_update_added(initial_config)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
