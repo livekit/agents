@@ -2,6 +2,7 @@
 
 from . import realtime, responses
 from .tools import FileSearch, WebSearch, XSearch
+from .tts import TTS
 from .version import __version__
 
 __all__ = [
@@ -9,6 +10,7 @@ __all__ = [
     "responses",
     "WebSearch",
     "XSearch",
+    "TTS",
     "FileSearch",
     "__version__",
 ]
