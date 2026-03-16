@@ -269,7 +269,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
                 id=item.id,
                 call_id=item.call_id,
                 name=item.name,
-                arguments=item.raw_arguments,
+                arguments=item.arguments,
             )
         )
     elif isinstance(item, FunctionCallOutput):
@@ -432,7 +432,7 @@ class _SessionHost:
         pb_calls = [
             agent_pb.FunctionCall(
                 name=fc.name,
-                arguments=fc.raw_arguments,
+                arguments=fc.arguments,
                 call_id=fc.call_id,
             )
             for fc in event.function_calls

@@ -1413,6 +1413,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
 
+    def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:
+        self._chat_ctx.insert(item)
+
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def stt(self) -> stt.STT | None:

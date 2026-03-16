@@ -200,7 +200,7 @@ class AgentsConsole:
                 sess.output.transcription = text_output
 
 
-def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
+def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = False) -> None:
     """Run console in TCP mode — connects to the Go CLI's TCP server."""
     from ..voice.remote_session import TcpSessionTransport
     from .tcp_console import TcpAudioInput, TcpAudioOutput
@@ -223,6 +223,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str) -> None:
 
         console_inst = AgentsConsole.get_instance()
         console_inst.enabled = True
+        console_inst.record = record
         console_inst._tcp_transport = transport
         tcp_audio_input = TcpAudioInput()
         console_inst._tcp_audio_input = tcp_audio_input
@@ -379,6 +380,7 @@ def run_app(server: AgentServer | WorkerOptions) -> None:
 
     console_p = sub.add_parser("console")
     console_p.add_argument("--connect-addr", required=True)
+    console_p.add_argument("--record", action="store_true", default=False)
 
     args = parser.parse_args()
     if args.command is None:
@@ -386,7 +388,7 @@ def run_app(server: AgentServer | WorkerOptions) -> None:
         sys.exit(1)
 
     if args.command == "console":
-        _run_tcp_console(server=server, connect_addr=args.connect_addr)
+        _run_tcp_console(server=server, connect_addr=args.connect_addr, record=args.record)
     elif args.command == "start":
         _run_worker(
             server=server,
