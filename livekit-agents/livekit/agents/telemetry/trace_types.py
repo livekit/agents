@@ -88,3 +88,5 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+ATTR_LANGFUSE_UNCACHED_INPUT_TEXT_TOKENS = "langfuse.observation.cost_details.uncached_input_text_tokens"
+ATTR_LANGFUSE_UNCACHED_INPUT_AUDIO_TOKENS = "langfuse.observation.cost_details.uncached_input_audio_tokens"

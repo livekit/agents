@@ -95,7 +95,10 @@ class RealtimeModelMetrics(BaseModel):
         image_tokens: int
 
     class InputTokenDetails(BaseModel):
+        # audio tokens is inclusive of cached tokens consistently with note 12 of OTEL docs.
+        # https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
         audio_tokens: int
+        # text tokens is inclusive of cached tokens
         text_tokens: int
         image_tokens: int
         cached_tokens: int
