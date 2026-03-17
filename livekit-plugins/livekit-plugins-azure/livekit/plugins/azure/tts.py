@@ -19,7 +19,7 @@ from typing import Literal
 
 import aiohttp
 
-import azure.cognitiveservices.speech as speechsdk
+import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
