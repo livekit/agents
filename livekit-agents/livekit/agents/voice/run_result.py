@@ -966,7 +966,7 @@ class ChatMessageAssert:
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
                     trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: usage.prompt_cached_tokens,
                 }
             )
 
