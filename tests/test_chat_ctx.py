@@ -327,6 +327,67 @@ def test_truncate_multiple_instructions():
     assert ctx.items[0].content == ["first"]
 
 
+# --- remove tests ---
+
+
+def test_remove_by_id():
+    ctx = _make_ctx("system", "user", "assistant")
+    target = ctx.items[1]  # user message
+    removed = ctx.remove(target.id)
+    assert len(removed) == 1
+    assert removed[0].id == target.id
+    assert ctx.get_by_id(target.id) is None
+
+
+def test_remove_by_item():
+    ctx = _make_ctx("user", "assistant", "user")
+    target = ctx.items[0]
+    removed = ctx.remove(target)
+    assert removed[0].id == target.id
+    assert len(ctx.items) == 2
+
+
+def test_remove_sequence():
+    ctx = _make_ctx("user", "assistant", "user", "assistant")
+    ids = [ctx.items[0].id, ctx.items[2].id]
+    removed = ctx.remove(ids)
+    assert len(removed) == 2
+    assert len(ctx.items) == 2
+
+
+def test_remove_nonexistent_returns_empty():
+    ctx = _make_ctx("user", "assistant")
+    removed = ctx.remove("nonexistent_id")
+    assert removed == []
+    assert len(ctx.items) == 2
+
+
+def test_remove_sequence_of_items():
+    """Remove a sequence of ChatItem instances (not just IDs)."""
+    ctx = _make_ctx("user", "assistant", "user", "assistant")
+    items_to_remove = [ctx.items[0], ctx.items[2]]
+    removed = ctx.remove(items_to_remove)
+    assert len(removed) == 2
+    assert len(ctx.items) == 2
+
+
+def test_remove_sequence_mixed():
+    """Remove a mix of ChatItem instances and ID strings."""
+    ctx = _make_ctx("user", "assistant", "user", "assistant")
+    mixed = [ctx.items[0], ctx.items[2].id]
+    removed = ctx.remove(mixed)
+    assert len(removed) == 2
+    assert len(ctx.items) == 2
+
+
+def test_remove_sequence_partial_match():
+    """Only existing items are removed; nonexistent IDs are silently skipped."""
+    ctx = _make_ctx("user", "assistant")
+    removed = ctx.remove([ctx.items[0].id, "nonexistent_id"])
+    assert len(removed) == 1
+    assert len(ctx.items) == 1
+
+
 def test_instructions_serialization():
     """Instructions must survive Pydantic validation, to_dict, and from_dict round-trips."""
     from livekit.agents.beta import Instructions
