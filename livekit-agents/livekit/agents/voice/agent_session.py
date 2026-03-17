@@ -63,7 +63,7 @@ from .speech_handle import InputDetails, SpeechHandle
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
-    from .transcription.filters import TextTransforms
+    from .transcription.text_transforms import TextTransforms
 
 
 class RecordingOptions(TypedDict, total=False):

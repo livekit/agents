@@ -20,6 +20,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
 from typing import Any
 
+import google.auth
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
@@ -258,8 +259,12 @@ class TTS(tts.TTS):
                 )
 
             elif self._credentials_file:
-                self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_file(
-                    self._credentials_file, client_options=ClientOptions(api_endpoint=api_endpoint)
+                credentials, _ = google.auth.load_credentials_from_file(  # type: ignore[no-untyped-call]
+                    self._credentials_file,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                self._client = texttospeech.TextToSpeechAsyncClient(
+                    credentials=credentials, client_options=ClientOptions(api_endpoint=api_endpoint)
                 )
             else:
                 self._client = texttospeech.TextToSpeechAsyncClient(

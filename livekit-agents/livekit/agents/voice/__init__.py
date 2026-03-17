@@ -22,7 +22,7 @@ from .room_io import (
     _ParticipantTranscriptionOutput,
 )
 from .speech_handle import SpeechHandle
-from .transcription import TranscriptSynchronizer
+from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
@@ -52,6 +52,7 @@ __all__ = [
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
+    "text_transforms",
 ]
 
 # Cleanup docs of unexported modules
