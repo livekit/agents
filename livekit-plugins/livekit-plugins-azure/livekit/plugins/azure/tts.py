@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import aiohttp
 
+import azure.cognitiveservices.speech as speechsdk
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    tokenize,
     tts,
     utils,
 )
@@ -35,6 +37,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
+
+# REST API format strings (for non-streaming synthesize())
 SUPPORTED_OUTPUT_FORMATS = {
     8000: "raw-8khz-16bit-mono-pcm",
     16000: "raw-16khz-16bit-mono-pcm",
@@ -42,6 +47,16 @@ SUPPORTED_OUTPUT_FORMATS = {
     24000: "raw-24khz-16bit-mono-pcm",
     44100: "raw-44100hz-16bit-mono-pcm",
     48000: "raw-48khz-16bit-mono-pcm",
+}
+
+# SDK output format enums (for streaming via WebSocket V2)
+SUPPORTED_SDK_FORMATS = {
+    8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
+    16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+    22050: speechsdk.SpeechSynthesisOutputFormat.Raw22050Hz16BitMonoPcm,
+    24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+    44100: speechsdk.SpeechSynthesisOutputFormat.Raw44100Hz16BitMonoPcm,
+    48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
 }
 
 
@@ -120,6 +135,9 @@ class _TTSOptions:
     style: NotGivenOr[StyleConfig]
     lexicon_uri: NotGivenOr[str]
     auth_token: str | None = None
+    sentence_tokenizer: tokenize.SentenceTokenizer = field(
+        default_factory=lambda: tokenize.blingfire.SentenceTokenizer(retain_format=True)
+    )
 
     def get_endpoint_url(self) -> str:
         base = (
@@ -129,6 +147,16 @@ class _TTSOptions:
         if self.deployment_id:
             return f"{base}?deploymentId={self.deployment_id}"
         return base
+
+    def get_ws_endpoint_url(self) -> str:
+        """Construct the WebSocket V2 endpoint URL for text streaming."""
+        if self.region:
+            return f"wss://{self.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v2"
+        if self.speech_endpoint:
+            return self.speech_endpoint.replace("https://", "wss://").replace(
+                "/cognitiveservices/v1", "/cognitiveservices/websocket/v2"
+            )
+        raise ValueError("Cannot construct WebSocket endpoint: region or speech_endpoint required")
 
 
 class TTS(tts.TTS):
@@ -147,9 +175,20 @@ class TTS(tts.TTS):
         deployment_id: str | None = None,
         speech_auth_token: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        use_streaming: bool = False,
+        sentence_tokenizer: tokenize.SentenceTokenizer | None = None,
     ) -> None:
+        # Text streaming (WSv2) does not support SSML features
+        has_ssml_features = is_given(prosody) or is_given(style) or is_given(lexicon_uri)
+        if use_streaming and has_ssml_features:
+            logger.warning(
+                "Azure TTS text streaming does not support SSML features "
+                "(prosody, style, lexicon). These will be ignored in streaming mode. "
+                "Set use_streaming=False to use SSML features via the REST API."
+            )
+
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -183,6 +222,7 @@ class TTS(tts.TTS):
             style.validate()
 
         self._session = http_session
+        self._use_streaming = use_streaming
         self._opts = _TTSOptions(
             sample_rate=sample_rate,
             subscription_key=speech_key,
@@ -195,6 +235,8 @@ class TTS(tts.TTS):
             style=style,
             lexicon_uri=lexicon_uri,
             auth_token=speech_auth_token,
+            sentence_tokenizer=sentence_tokenizer
+            or tokenize.blingfire.SentenceTokenizer(retain_format=True),
         )
 
     @property
@@ -232,6 +274,28 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
+    def _create_speech_config(self, opts: _TTSOptions) -> speechsdk.SpeechConfig:
+        """Create a SpeechConfig for the WebSocket V2 text streaming endpoint."""
+        ws_endpoint = opts.get_ws_endpoint_url()
+
+        if opts.subscription_key:
+            config = speechsdk.SpeechConfig(
+                endpoint=ws_endpoint, subscription=opts.subscription_key
+            )
+        elif opts.auth_token:
+            config = speechsdk.SpeechConfig(endpoint=ws_endpoint)
+            config.authorization_token = opts.auth_token
+        else:
+            raise ValueError("Streaming TTS requires subscription_key or auth_token with a region")
+
+        config.speech_synthesis_voice_name = opts.voice
+        config.set_speech_synthesis_output_format(SUPPORTED_SDK_FORMATS[opts.sample_rate])
+
+        if opts.language:
+            config.speech_synthesis_language = str(opts.language)
+
+        return config
+
     def synthesize(
         self,
         text: str,
@@ -240,8 +304,17 @@ class TTS(tts.TTS):
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> tts.SynthesizeStream:
+        return SynthesizeStream(tts=self, conn_options=conn_options)
+
 
 class ChunkedStream(tts.ChunkedStream):
+    """Non-streaming TTS via Azure REST API. Supports full SSML features."""
+
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -321,3 +394,145 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(str(e)) from e
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    """Streaming TTS via Azure Speech SDK WebSocket V2 with text streaming.
+
+    Text tokens from the LLM are fed incrementally into the Azure synthesizer
+    as they arrive, enabling audio output to begin before the full utterance
+    is complete. This significantly reduces time-to-first-audio-byte compared
+    to the REST API approach.
+
+    Note: Text streaming does not support SSML features (prosody, style, lexicon).
+    """
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+
+        async def _tokenize_input() -> None:
+            """Read text tokens from input channel and split into sentence segments."""
+            input_stream: tokenize.SentenceStream | None = None
+            async for data in self._input_ch:
+                if isinstance(data, str):
+                    if input_stream is None:
+                        input_stream = self._opts.sentence_tokenizer.stream()
+                        self._segments_ch.send_nowait(input_stream)
+                    input_stream.push_text(data)
+                elif isinstance(data, self._FlushSentinel):
+                    if input_stream is not None:
+                        input_stream.end_input()
+                    input_stream = None
+
+            if input_stream is not None:
+                input_stream.end_input()
+            self._segments_ch.close()
+
+        async def _run_segments() -> None:
+            """Process each sentence segment sequentially via Azure SDK."""
+            async for input_stream in self._segments_ch:
+                await self._run_stream(input_stream, output_emitter)
+
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+
+    async def _run_stream(
+        self,
+        input_stream: tokenize.SentenceStream,
+        output_emitter: tts.AudioEmitter,
+    ) -> None:
+        """Run a single synthesis segment using Azure SDK text streaming.
+
+        Creates a SpeechSynthesisRequest with TextStream input, feeds tokenized
+        sentences as they arrive, and collects audio chunks via the synthesizing
+        event callback, bridging the SDK's callback thread to asyncio.
+        """
+        loop = asyncio.get_running_loop()
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        error_holder: list[Exception] = []
+
+        speech_config = self._tts._create_speech_config(self._opts)
+        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+
+        # Bridge SDK callbacks (fired on background thread) to asyncio
+        def _on_synthesizing(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            if evt.result.audio_data:
+                loop.call_soon_threadsafe(audio_queue.put_nowait, evt.result.audio_data)
+
+        def _on_completed(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            loop.call_soon_threadsafe(audio_queue.put_nowait, None)
+
+        def _on_canceled(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            details = evt.result.cancellation_details
+            if details.reason == speechsdk.CancellationReason.Error:
+                error_holder.append(
+                    APIConnectionError(f"Azure TTS synthesis canceled: {details.error_details}")
+                )
+            loop.call_soon_threadsafe(audio_queue.put_nowait, None)
+
+        synthesizer.synthesizing.connect(_on_synthesizing)
+        synthesizer.synthesis_completed.connect(_on_completed)
+        synthesizer.synthesis_canceled.connect(_on_canceled)
+
+        try:
+            # Pre-connect the WebSocket for lower TTFB
+            connection = speechsdk.Connection.from_speech_synthesizer(synthesizer)
+            await loop.run_in_executor(None, lambda: connection.open(True))
+
+            # Create a text stream request — tokens are fed incrementally
+            request = speechsdk.SpeechSynthesisRequest(
+                input_type=speechsdk.SpeechSynthesisRequestInputType.TextStream
+            )
+            result_future = synthesizer.speak_async(request)
+
+            output_emitter.start_segment(segment_id=utils.shortuuid())
+
+            # Feed tokenized sentences into the SDK as they arrive
+            async for token_event in input_stream:
+                self._mark_started()
+                request.input_stream.write(token_event.token)
+
+            # Signal end of text input to the SDK
+            request.input_stream.close()
+
+            # Collect audio chunks until synthesis completes
+            while True:
+                chunk = await audio_queue.get()
+                if chunk is None:
+                    break
+                output_emitter.push(chunk)
+
+            if error_holder:
+                raise error_holder[0]
+
+            # Wait for the SDK to fully finalize (run in executor to avoid blocking)
+            await loop.run_in_executor(None, result_future.get)
+
+            output_emitter.end_segment()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except (APIConnectionError, APIStatusError):
+            raise
+        except Exception as e:
+            raise APIConnectionError(str(e)) from e
+        finally:
+            del synthesizer
