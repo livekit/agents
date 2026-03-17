@@ -13,7 +13,6 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import llm, utils
-from ..language import LanguageCode
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -27,22 +26,11 @@ from ..llm import (
 )
 from ..log import logger
 from ..metrics import (
-    AgentMetrics,
     AgentSessionUsage,
     InterruptionModelUsage,
     LLMModelUsage,
     STTModelUsage,
     TTSModelUsage,
-)
-from ..types import (
-    RPC_GET_AGENT_INFO,
-    RPC_GET_CHAT_HISTORY,
-    RPC_GET_SESSION_STATE,
-    RPC_SEND_MESSAGE,
-    TOPIC_AGENT_REQUEST,
-    TOPIC_AGENT_RESPONSE,
-    TOPIC_CHAT,
-    TOPIC_CLIENT_EVENTS,
 )
 from .events import (
     AgentState,
@@ -50,7 +38,6 @@ from .events import (
     ConversationItemAddedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
     SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
@@ -58,12 +45,9 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
-
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession
-    from .room_io import RoomIO
     from .room_io.types import TextInputCallback
 
 
@@ -428,9 +412,11 @@ class SessionHost:
         elif msg_type == "audio_playback_finished" and self._audio_output is not None:
             self._audio_output.notify_playout_finished()
 
-    def _send_event(self, event: agent_pb.AgentSessionEvent) -> None:
+    def _send_event(
+        self, event: agent_pb.AgentSessionEvent, created_at: float | None = None
+    ) -> None:
         ts = Timestamp()
-        ts.FromNanoseconds(int(time.time() * 1e9))
+        ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
         self._tasks.create_task(self._transport.send_message(msg))
@@ -450,19 +436,16 @@ class SessionHost:
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.US_LISTENING)
         new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.US_LISTENING)
-
-        pb_event = agent_pb.AgentSessionEvent(
-            user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
-                old_state=old_pb,
-                new_state=new_pb,
+        # use the original timestamp which is adjusted for VAD latency
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
+                    old_state=old_pb,
+                    new_state=new_pb,
+                )
             ),
+            created_at=event.created_at,
         )
-        # we need to use the original timestamps which are adjusted for VAD latency
-        ts = Timestamp()
-        ts.FromNanoseconds(int(event.created_at * 1e9))
-        pb_event.created_at.CopyFrom(ts)
-        msg = agent_pb.AgentSessionMessage(event=pb_event)
-        self._tasks.create_task(self._transport.send_message(msg))
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
         self._send_event(
@@ -518,7 +501,7 @@ class SessionHost:
 
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
         detected_at = Timestamp()
-        detected_at.FromSeconds(int(event.detected_at))
+        detected_at.FromNanoseconds(int(event.detected_at * 1e9))
 
         kwargs: dict[str, Any] = {
             "is_interruption": event.is_interruption,
@@ -527,7 +510,7 @@ class SessionHost:
         }
         if event.overlap_started_at is not None:
             overlap_ts = Timestamp()
-            overlap_ts.FromSeconds(int(event.overlap_started_at))
+            overlap_ts.FromNanoseconds(int(event.overlap_started_at * 1e9))
             kwargs["overlap_started_at"] = overlap_ts
 
         self._send_event(
@@ -656,12 +639,10 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_session_state"):
-            from google.protobuf.timestamp_pb2 import Timestamp
-
             agent = self._session.current_agent
             created_at = Timestamp()
-            started_at = getattr(self._session, "_started_at", None) or time.time()
-            created_at.FromSeconds(int(started_at))
+            started_at = self._session._started_at or time.time()
+            created_at.FromNanoseconds(int(started_at * 1e9))
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -719,10 +700,8 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_session_usage"):
-            from google.protobuf.timestamp_pb2 import Timestamp
-
             created_at = Timestamp()
-            created_at.FromSeconds(int(time.time()))
+            created_at.FromNanoseconds(int(time.time() * 1e9))
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
