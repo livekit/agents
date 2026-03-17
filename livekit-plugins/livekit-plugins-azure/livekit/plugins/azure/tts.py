@@ -150,12 +150,12 @@ class _TTSOptions:
 
     def get_ws_endpoint_url(self) -> str:
         """Construct the WebSocket V2 endpoint URL for text streaming."""
-        if self.region:
-            return f"wss://{self.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v2"
         if self.speech_endpoint:
             return self.speech_endpoint.replace("https://", "wss://").replace(
                 "/cognitiveservices/v1", "/cognitiveservices/websocket/v2"
             )
+        if self.region:
+            return f"wss://{self.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v2"
         raise ValueError("Cannot construct WebSocket endpoint: region or speech_endpoint required")
 
 
@@ -505,20 +505,30 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             output_emitter.start_segment(segment_id=utils.shortuuid())
 
-            # Feed tokenized sentences into the SDK as they arrive
-            async for token_event in input_stream:
-                self._mark_started()
-                request.input_stream.write(token_event.token)
+            async def _feed_text() -> None:
+                """Feed tokenized sentences into the SDK as they arrive."""
+                async for token_event in input_stream:
+                    self._mark_started()
+                    request.input_stream.write(token_event.token)
+                request.input_stream.close()
 
-            # Signal end of text input to the SDK
-            request.input_stream.close()
+            async def _consume_audio() -> None:
+                """Drain audio chunks and push to emitter as they arrive."""
+                while True:
+                    chunk = await audio_queue.get()
+                    if chunk is None:
+                        break
+                    output_emitter.push(chunk)
 
-            # Collect audio chunks until synthesis completes
-            while True:
-                chunk = await audio_queue.get()
-                if chunk is None:
-                    break
-                output_emitter.push(chunk)
+            # Run text feeding and audio consumption concurrently so audio
+            # is pushed to the emitter as soon as the SDK produces it,
+            # rather than waiting for all text to be fed first.
+            feed_task = asyncio.create_task(_feed_text())
+            consume_task = asyncio.create_task(_consume_audio())
+            try:
+                await asyncio.gather(feed_task, consume_task)
+            finally:
+                await utils.aio.cancel_and_wait(feed_task, consume_task)
 
             if error_holder:
                 raise error_holder[0]
