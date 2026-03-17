@@ -31,12 +31,12 @@ from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-from .transcription.filters import apply_text_transforms
+from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
-    from .transcription.filters import TextTransforms
+    from .transcription.text_transforms import TextTransforms
 
 
 @runtime_checkable
@@ -242,7 +242,7 @@ async def _tts_inference_task(
     @tracer.start_as_current_span("tts_node")
     async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
         if text_transforms:
-            input = apply_text_transforms(input, text_transforms)
+            input = _apply_text_transforms(input, text_transforms)
 
         tts_node = node(input, model_settings)
         if asyncio.iscoroutine(tts_node):
