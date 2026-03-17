@@ -90,6 +90,12 @@ class TranslationConfig:
     language_b: LgType | None = None
     """Required for two_way: second language (e.g. ``"de"``)."""
 
+    def __post_init__(self) -> None:
+        if self.type == "one_way" and not self.target_language:
+            raise ValueError("target_language is required for one_way translation")
+        if self.type == "two_way" and (not self.language_a or not self.language_b):
+            raise ValueError("language_a and language_b are required for two_way translation")
+
 
 LgType = SonioxLanguages | str
 
