@@ -27,6 +27,7 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm.async_toolset import AsyncToolset
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
@@ -404,6 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
+        self._async_toolsets = set[AsyncToolset]()
 
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
@@ -908,6 +910,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
 
+            # shutdown all async toolsets
+            if self._async_toolsets:
+                await asyncio.gather(*[toolset.shutdown() for toolset in self._async_toolsets])
+                self._async_toolsets.clear()
+
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
@@ -1011,6 +1018,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        merge_chat_ctx: bool = False,
         input_modality: Literal["text", "audio"] = "text",
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
@@ -1024,6 +1032,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
             chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
                 Defaults to the chat context of the current agent if not provided.
+            merge_chat_ctx (bool): When True, the items in ``chat_ctx`` are merged into the
+                agent's global chat context (persisted for future turns). When False (default),
+                ``chat_ctx`` is used as-is for this turn only.
             input_modality (Literal["text", "audio"], optional): The input mode to use for generating the reply.
 
         Returns:
@@ -1056,6 +1067,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
+                merge_chat_ctx=merge_chat_ctx,
                 input_details=InputDetails(modality=input_modality),
             )
             if run_state:
@@ -1410,6 +1422,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
+
+    def _register_async_toolset(self, toolset: AsyncToolset) -> None:
+        self._async_toolsets.add(toolset)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

@@ -880,6 +880,7 @@ class AgentActivity(RecognitionHooks):
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        merge_chat_ctx: bool = False,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
@@ -934,6 +935,11 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
 
+        extra_chat_ctx: llm.ChatContext | None = None
+        if chat_ctx and merge_chat_ctx:
+            extra_chat_ctx = chat_ctx  # merge the chat_ctx into the agent's chat context
+            chat_ctx = None
+
         if isinstance(self.llm, llm.RealtimeModel):
             self._create_speech_task(
                 self._realtime_reply_task(
@@ -941,6 +947,7 @@ class AgentActivity(RecognitionHooks):
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
+                    extra_chat_ctx=extra_chat_ctx,
                     # TODO(theomonnom): the list of tools should always be passed here
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
@@ -961,6 +968,7 @@ class AgentActivity(RecognitionHooks):
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=tools,
                     new_message=user_message if is_given(user_message) else None,
+                    extra_chat_ctx=extra_chat_ctx,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
@@ -1898,6 +1906,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
+        extra_chat_ctx: llm.ChatContext | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
@@ -1916,6 +1925,7 @@ class AgentActivity(RecognitionHooks):
                 tools=tools,
                 model_settings=model_settings,
                 new_message=new_message,
+                extra_chat_ctx=extra_chat_ctx,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
                 _previous_tools_messages=_previous_tools_messages,
@@ -1929,6 +1939,7 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
+        extra_chat_ctx: llm.ChatContext | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
@@ -1953,6 +1964,9 @@ class AgentActivity(RecognitionHooks):
         )
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
+
+        if extra_chat_ctx is not None:
+            chat_ctx.merge(extra_chat_ctx)
 
         if new_message is not None:
             chat_ctx.insert(new_message)
@@ -2008,10 +2022,15 @@ class AgentActivity(RecognitionHooks):
         # add new message to chat context if the speech is scheduled
 
         user_metrics: llm.MetricsReport | None = _previous_user_metrics
-        if new_message is not None and speech_handle.scheduled:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
-            user_metrics = new_message.metrics
+
+        if speech_handle.scheduled:
+            if extra_chat_ctx is not None:
+                self._agent._chat_ctx.merge(extra_chat_ctx)
+
+            if new_message is not None:
+                self._agent._chat_ctx.insert(new_message)
+                self._session._conversation_item_added(new_message)
+                user_metrics = new_message.metrics
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -2311,6 +2330,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
+        extra_chat_ctx: llm.ChatContext | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
@@ -2324,12 +2344,23 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
 
-        if user_input is not None:
+        user_message = (
+            llm.ChatMessage(role="user", content=user_input) if user_input is not None else None
+        )
+        if extra_chat_ctx or user_message:
             chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
+            if extra_chat_ctx:
+                chat_ctx.merge(extra_chat_ctx)
+            if user_message:
+                chat_ctx.items.append(user_message)
+
             await self._rt_session.update_chat_ctx(chat_ctx)
-            self._agent._chat_ctx.items.append(msg)
-            self._session._conversation_item_added(msg)
+
+            if extra_chat_ctx:
+                self._agent._chat_ctx.merge(extra_chat_ctx)
+            if user_message:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):

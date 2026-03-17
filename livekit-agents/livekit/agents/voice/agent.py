@@ -899,3 +899,9 @@ def _set_activity_task_info(
 
 def _get_activity_task_info(task: asyncio.Task[Any]) -> _ActivityTaskInfo | None:
     return getattr(task, "__livekit_agents_activity_task", None)
+
+
+def _pass_through_activity_task_info(task: asyncio.Task[Any]) -> None:
+    current_task = asyncio.current_task()
+    if current_task and (info := _get_activity_task_info(current_task)):
+        setattr(task, "__livekit_agents_activity_task", info)
