@@ -19,7 +19,7 @@ This plugin connects to Baseten's Whisper Streaming WebSocket endpoint
 
 Endpoint URL formats:
     - Truss:  ``wss://model-{model_id}.api.baseten.co/environments/production/websocket``
-    - Chain:  ``wss://chain-{chain_id}.api.baseten.co/environments/production/run_remote``
+    - Chain:  ``wss://chain-{chain_id}.api.baseten.co/environments/production/websocket``
 
 The WebSocket protocol is:
     1. Connect with ``Authorization: Api-Key <api_key>`` header.
@@ -108,7 +108,7 @@ class STTOptions:
     sample_rate: int = 16000
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
-    language: str = "en"
+    language: LanguageCode = LanguageCode("en")
 
     # Streaming params – controls how transcripts are delivered
     enable_partial_transcripts: bool = True
@@ -122,7 +122,6 @@ class STTOptions:
     vad_threshold: float = 0.5
     vad_min_silence_duration_ms: int = 300
     vad_speech_pad_ms: int = 30
-    language: LanguageCode = LanguageCode("en")
 
 
 class STT(stt.STT):
@@ -140,7 +139,7 @@ class STT(stt.STT):
 
     3. ``chain_id`` – auto-constructs a **chain** endpoint URL::
 
-           wss://chain-{chain_id}.api.baseten.co/environments/production/run_remote
+           wss://chain-{chain_id}.api.baseten.co/environments/production/websocket
 
     If none of the above are provided, the ``BASETEN_MODEL_ENDPOINT`` environment
     variable is used as a fallback.
@@ -239,7 +238,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
-            language=language,
+            language=LanguageCode(language),
             enable_partial_transcripts=enable_partial_transcripts,
             partial_transcript_interval_s=partial_transcript_interval_s,
             final_transcript_max_duration_s=final_transcript_max_duration_s,
@@ -247,7 +246,6 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
-            language=LanguageCode(language),
         )
 
         if is_given(encoding):

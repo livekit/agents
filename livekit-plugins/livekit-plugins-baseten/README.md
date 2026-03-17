@@ -27,7 +27,7 @@ The STT plugin connects to Baseten's [Whisper Streaming](https://docs.baseten.co
 | Deployment type | URL pattern |
 |---|---|
 | **Truss** | `wss://model-{model_id}.api.baseten.co/environments/production/websocket` |
-| **Chain** | `wss://chain-{chain_id}.api.baseten.co/environments/production/run_remote` |
+| **Chain** | `wss://chain-{chain_id}.api.baseten.co/environments/production/websocket` |
 
 ### Basic usage
 
