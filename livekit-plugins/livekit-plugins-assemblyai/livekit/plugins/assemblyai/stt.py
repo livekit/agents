@@ -277,6 +277,21 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._session_id: str | None = None
+        self._expires_at: int | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        """The AssemblyAI session ID. Set when the WebSocket connection is established
+        (before any speech events). None until the connection completes.
+        Share this with the AssemblyAI team when reporting issues."""
+        return self._session_id
+
+    @property
+    def expires_at(self) -> int | None:
+        """Unix timestamp when the AssemblyAI session expires. Set alongside session_id
+        when the WebSocket connection is established."""
+        return self._expires_at
 
     def update_options(
         self,
@@ -487,6 +502,16 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type == "Begin":
+            self._session_id = data.get("id")
+            self._expires_at = data.get("expires_at")
+            logger.info(
+                "AssemblyAI session started id=%s expires_at=%s",
+                self._session_id,
+                self._expires_at,
+            )
+            return
 
         if message_type == "SpeechStarted":
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
