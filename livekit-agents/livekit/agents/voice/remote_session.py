@@ -260,7 +260,7 @@ _METRICS_FIELDS = (
 def _tool_names(tools: list[Any]) -> list[str]:
     result: list[str] = []
     for tool in tools:
-        if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        if isinstance(tool, FunctionTool | RawFunctionTool):
             result.append(tool.info.name)
         elif isinstance(tool, Toolset):
             result.extend(_tool_names(tool.tools))
@@ -472,7 +472,7 @@ class SessionHost:
     def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
         if not isinstance(
             event.item,
-            (ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate),
+            ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
         ):
             return
         chat_item = _chat_item_to_proto(event.item)
