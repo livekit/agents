@@ -34,6 +34,7 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         trace_types.ATTR_GEN_AI_PROVIDER_NAME: model_provider or "unknown",
         trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
+        # Input text tokens (cached + uncached)
         # As per OTEL spec, ATTR_GEN_AI_USAGE_INPUT_TOKENS should be inclusive of cached tokens
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
