@@ -51,7 +51,7 @@ from .version import __version__
 USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
-DEFAULT_ENCODING = "LINEAR16"
+DEFAULT_ENCODING = "PCM"
 DEFAULT_MODEL = "inworld-tts-1.5-max"
 DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
@@ -63,7 +63,7 @@ DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"] | str
+Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"] | str
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
@@ -88,14 +88,14 @@ class _TTSOptions:
 
     @property
     def mime_type(self) -> str:
-        if self.encoding == "MP3":
+        if self.encoding == "PCM":
+            return "audio/pcm"
+        elif self.encoding == "MP3":
             return "audio/mpeg"
         elif self.encoding == "OGG_OPUS":
             return "audio/ogg"
         elif self.encoding == "FLAC":
             return "audio/flac"
-        elif self.encoding in ("ALAW", "MULAW"):
-            return "audio/basic"
         else:
             return "audio/wav"
 
@@ -114,6 +114,7 @@ class _ContextInfo:
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
     segment_started: bool = False
+    flush_after_push: bool = False
     created_at: float = field(default_factory=time.time)
     close_started_at: float | None = None
     # Cumulative timestamp tracking for monotonic timestamps across generations.
@@ -295,6 +296,7 @@ class _InworldConnection:
                         state=_ContextState.CREATING,
                         emitter=emitter,
                         waiter=waiter,
+                        flush_after_push=opts.encoding == "PCM",
                     )
                     self._contexts[ctx_id] = ctx_info
                     # Release reservation now that we have a real context
@@ -500,6 +502,8 @@ class _InworldConnection:
 
                         if audio_content := audio_chunk.get("audioContent"):
                             ctx.emitter.push(base64.b64decode(audio_content))
+                            if ctx.flush_after_push:
+                                ctx.emitter.flush()
                     continue
 
                 if "flushCompleted" in result:
@@ -806,7 +810,7 @@ class TTS(tts.TTS):
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
             model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1.5-max".
-            encoding (str, optional): The encoding to use. Defaults to "LINEAR16".
+            encoding (str, optional): The encoding to use. Defaults to "PCM".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
@@ -875,9 +879,7 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
-            timestamp_transport_strategy=cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
-            )
+            timestamp_transport_strategy=timestamp_transport_strategy
             if is_given(timestamp_transport_strategy)
             else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
@@ -972,13 +974,11 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
-            self._opts.timestamp_type = cast(TimestampType, timestamp_type)
+            self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            self._opts.text_normalization = cast(TextNormalization, text_normalization)
+            self._opts.text_normalization = text_normalization
         if is_given(timestamp_transport_strategy):
-            self._opts.timestamp_transport_strategy = cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
-            )
+            self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
@@ -1126,7 +1126,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
-                            output_emitter.flush()
+                            if self._opts.encoding == "PCM":
+                                output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
                             message=error.get("message"),

@@ -560,7 +560,7 @@ class _Connection:
                 preferred_alignment = "original"
             else:
                 preferred_alignment = "normalized"
-        return preferred_alignment  # type: ignore[return-value]
+        return preferred_alignment
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
@@ -877,6 +877,9 @@ def _to_timed_words(
     timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], text
+
     timed_words = []
     _, start_indices, _ = zip(*words, strict=False)
     end = 0

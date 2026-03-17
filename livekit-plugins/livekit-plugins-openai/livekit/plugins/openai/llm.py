@@ -124,7 +124,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
                 reasoning_effort = "none"
             else:
                 reasoning_effort = "minimal"
@@ -1001,7 +1001,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):

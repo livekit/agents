@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import aiohttp
 
@@ -166,9 +166,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_session : aiohttp.ClientSession, optional
             HTTP session to use for requests.
         """
-        output_medium = (
-            cast(Literal["text", "voice"], output_medium) if is_given(output_medium) else "voice"
-        )
+        output_medium = output_medium if is_given(output_medium) else "voice"
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -243,7 +241,6 @@ class RealtimeModel(llm.RealtimeModel):
         """Update model options."""
 
         if is_given(output_medium):
-            output_medium = cast(Literal["text", "voice"], output_medium)
             self._opts.output_medium = output_medium
             for sess in self._sessions:
                 sess.update_options(output_medium=output_medium)
@@ -336,9 +333,7 @@ class RealtimeSession(
     ) -> None:
         """Update session options."""
         if is_given(output_medium):
-            self._send_client_event(
-                SetOutputMediumEvent(medium=cast(Literal["text", "voice"], output_medium))
-            )
+            self._send_client_event(SetOutputMediumEvent(medium=output_medium))
 
         if is_given(tool_choice):
             logger.warning("tool choice updates are not supported by Ultravox.")
