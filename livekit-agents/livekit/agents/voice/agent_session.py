@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Callable,
     Generic,
     Literal,
+    Optional,
     Protocol,
     TypeVar,
     overload,
@@ -43,7 +45,7 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
-from .client_events import ClientEventsHandler
+from .remote_session import ClientEventsHandler
 from .events import (
     AgentEvent,
     AgentState,
@@ -53,6 +55,7 @@ from .events import (
     ConversationItemAddedEvent,
     EventTypes,
     MetricsCollectedEvent,
+    SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -451,10 +454,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
+    def on(self, event: EventTypes, callback: Optional[Callable] = None) -> Callable:
+        if event == "metrics_collected":
+            logger.warning(
+                "metrics_collected is deprecated. "
+                "Use session_usage_updated for usage tracking "
+                "and ChatMessage.metrics for per-turn latency."
+            )
+        return super().on(event, callback)
+
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
         if isinstance(arg, MetricsCollectedEvent):
             self._usage_collector.collect(arg.metrics)
+            usage_event = SessionUsageUpdatedEvent(usage=self.usage)
+            self._recorded_events.append(usage_event)
+            super().emit(event, arg)
+            super().emit("session_usage_updated", usage_event)
+            return
         super().emit(event, arg)
 
     @property

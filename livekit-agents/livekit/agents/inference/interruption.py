@@ -132,8 +132,11 @@ class OverlappingSpeechEvent(BaseModel):
 
     type: Literal["user_overlapping_speech"] = "user_overlapping_speech"
 
-    timestamp: float = Field(default_factory=time.time)
-    """Timestamp (in seconds) when the event was fired."""
+    created_at: float = Field(default_factory=time.time)
+    """Timestamp (in seconds) when the event was emitted."""
+
+    detected_at: float = Field(default_factory=time.time)
+    """Timestamp (in seconds) when the overlap was detected."""
 
     is_interruption: bool = False
     """Whether interruption is detected."""
@@ -196,7 +199,7 @@ class OverlappingSpeechEvent(BaseModel):
         """
         return cls(
             type="user_overlapping_speech",
-            timestamp=ended_at or time.time(),
+            detected_at=ended_at or time.time(),
             is_interruption=is_interruption,
             overlap_started_at=started_at,
             speech_input=entry.speech_input,
