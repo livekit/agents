@@ -4,8 +4,10 @@ import asyncio
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Literal
+
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -58,7 +60,7 @@ from .events import (
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession
     from .room_io import RoomIO
@@ -69,6 +71,7 @@ TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
 
 class SessionTransport(ABC):
+    @abstractmethod
     async def start(self) -> None: ...
     @abstractmethod
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None: ...
@@ -87,17 +90,21 @@ class RoomSessionTransport(SessionTransport):
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
 
+    @property
+    def remote_identity(self) -> str | None:
+        return self._remote_identity
+
+    @remote_identity.setter
+    def remote_identity(self, value: str | None) -> None:
+        self._remote_identity = value
+
     async def start(self) -> None:
         if self._handler_registered:
             return
-        self._room.register_byte_stream_handler(
-            TOPIC_SESSION_MESSAGES, self._on_byte_stream
-        )
+        self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
 
-    def _on_byte_stream(
-        self, reader: rtc.ByteStreamReader, participant_identity: str
-    ) -> None:
+    def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
             return
         asyncio.create_task(self._read_stream(reader))
@@ -121,13 +128,12 @@ class RoomSessionTransport(SessionTransport):
             return
         try:
             data = msg.SerializeToString()
-            kwargs: dict[str, str | list[str]] = {
-                "topic": TOPIC_SESSION_MESSAGES,
-                "name": TOPIC_SESSION_MESSAGES,
-            }
-            if self._remote_identity:
-                kwargs["destination_identities"] = [self._remote_identity]
-            writer = await self._room.local_participant.stream_bytes(**kwargs)
+            dest = [self._remote_identity] if self._remote_identity else None
+            writer = await self._room.local_participant.stream_bytes(
+                TOPIC_SESSION_MESSAGES,
+                topic=TOPIC_SESSION_MESSAGES,
+                destination_identities=dest,
+            )
             await writer.write(data)
             await writer.aclose()
         except Exception:
@@ -156,7 +162,6 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
-
     def __init__(self, host: str, port: int) -> None:
         self._host = host
         self._port = port
@@ -213,7 +218,7 @@ class TcpSessionTransport(SessionTransport):
         try:
             header = await self._reader.readexactly(_TCP_HEADER_SIZE)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
         length = struct.unpack(">I", header)[0]
         if length > _TCP_MAX_MESSAGE_SIZE:
@@ -223,25 +228,25 @@ class TcpSessionTransport(SessionTransport):
         try:
             data = await self._reader.readexactly(length)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
         msg = agent_pb.AgentSessionMessage()
         msg.ParseFromString(data)
         return msg
 
 
-_AGENT_STATE_MAP: dict[AgentState, int] = {
-    "initializing": agent_pb.SESSION_AGENT_STATE_INITIALIZING,
-    "idle": agent_pb.SESSION_AGENT_STATE_IDLE,
-    "listening": agent_pb.SESSION_AGENT_STATE_LISTENING,
-    "thinking": agent_pb.SESSION_AGENT_STATE_THINKING,
-    "speaking": agent_pb.SESSION_AGENT_STATE_SPEAKING,
+_AGENT_STATE_MAP: dict[AgentState, agent_pb.AgentState] = {
+    "initializing": agent_pb.AS_INITIALIZING,
+    "idle": agent_pb.AS_IDLE,
+    "listening": agent_pb.AS_LISTENING,
+    "thinking": agent_pb.AS_THINKING,
+    "speaking": agent_pb.AS_SPEAKING,
 }
 
-_USER_STATE_MAP: dict[UserState, int] = {
-    "speaking": agent_pb.SESSION_USER_STATE_SPEAKING,
-    "listening": agent_pb.SESSION_USER_STATE_LISTENING,
-    "away": agent_pb.SESSION_USER_STATE_AWAY,
+_USER_STATE_MAP: dict[UserState, agent_pb.UserState] = {
+    "speaking": agent_pb.US_SPEAKING,
+    "listening": agent_pb.US_LISTENING,
+    "away": agent_pb.US_AWAY,
 }
 
 _METRICS_FIELDS = (
@@ -257,14 +262,14 @@ _METRICS_FIELDS = (
 def _tool_names(tools: list[Any]) -> list[str]:
     result: list[str] = []
     for tool in tools:
-        if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        if isinstance(tool, FunctionTool | RawFunctionTool):
             result.append(tool.info.name)
         elif isinstance(tool, Toolset):
             result.extend(_tool_names(tool.tools))
     return result
 
 
-def _metrics_to_proto(metrics: dict | None) -> agent_pb.MetricsReport:
+def _metrics_to_proto(metrics: Mapping[str, Any] | None) -> agent_pb.MetricsReport:
     if not metrics:
         return agent_pb.MetricsReport()
     kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
@@ -340,8 +345,7 @@ def _serialize_options(opts: Any) -> dict[str, str]:
     }
 
 
-class _SessionHost:
-
+class SessionHost:
     def __init__(
         self,
         transport: SessionTransport,
@@ -356,6 +360,7 @@ class _SessionHost:
         self._tasks = utils.aio.TaskSet()
         self._session: AgentSession | None = None
         self._events_registered = False
+        self._text_input_cb: TextInputCallback | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -369,6 +374,9 @@ class _SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("user_overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
+
+    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
+        self._text_input_cb = text_input_cb
 
     async def start(self) -> None:
         if self._started:
@@ -414,24 +422,25 @@ class _SessionHost:
         except Exception:
             logger.warning("error processing session message", exc_info=True)
 
-    def _dispatch_transport_message(
-        self, msg_type: str, msg: agent_pb.AgentSessionMessage
-    ) -> None:
+    def _dispatch_transport_message(self, msg_type: str, msg: agent_pb.AgentSessionMessage) -> None:
         if msg_type == "audio_input" and self._audio_input is not None:
             self._audio_input.push_frame(msg.audio_input)
         elif msg_type == "audio_playback_finished" and self._audio_output is not None:
             self._audio_output.notify_playout_finished()
 
-    def _send_event(self, event: agent_pb.SessionEvent) -> None:
+    def _send_event(self, event: agent_pb.AgentSessionEvent) -> None:
+        ts = Timestamp()
+        ts.FromNanoseconds(int(time.time() * 1e9))
+        event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
         self._tasks.create_task(self._transport.send_message(msg))
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
-        old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.SESSION_AGENT_STATE_IDLE)
-        new_pb = _AGENT_STATE_MAP.get(event.new_state, agent_pb.SESSION_AGENT_STATE_IDLE)
+        old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)
+        new_pb = _AGENT_STATE_MAP.get(event.new_state, agent_pb.AS_IDLE)
         self._send_event(
-            agent_pb.SessionEvent(
-                agent_state_changed=agent_pb.SessionEvent.AgentStateChanged(
+            agent_pb.AgentSessionEvent(
+                agent_state_changed=agent_pb.AgentSessionEvent.AgentStateChanged(
                     old_state=old_pb,
                     new_state=new_pb,
                 )
@@ -439,21 +448,26 @@ class _SessionHost:
         )
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
-        old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.SESSION_USER_STATE_LISTENING)
-        new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.SESSION_USER_STATE_LISTENING)
-        self._send_event(
-            agent_pb.SessionEvent(
-                user_state_changed=agent_pb.SessionEvent.UserStateChanged(
-                    old_state=old_pb,
-                    new_state=new_pb,
-                )
-            )
+        old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.US_LISTENING)
+        new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.US_LISTENING)
+
+        pb_event = agent_pb.AgentSessionEvent(
+            user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
+                old_state=old_pb,
+                new_state=new_pb,
+            ),
         )
+        # we need to use the original timestamps which are adjusted for VAD latency
+        ts = Timestamp()
+        ts.FromNanoseconds(int(event.created_at * 1e9))
+        pb_event.created_at.CopyFrom(ts)
+        msg = agent_pb.AgentSessionMessage(event=pb_event)
+        self._tasks.create_task(self._transport.send_message(msg))
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
         self._send_event(
-            agent_pb.SessionEvent(
-                user_input_transcribed=agent_pb.SessionEvent.UserInputTranscribed(
+            agent_pb.AgentSessionEvent(
+                user_input_transcribed=agent_pb.AgentSessionEvent.UserInputTranscribed(
                     transcript=event.transcript,
                     is_final=event.is_final,
                 )
@@ -461,10 +475,15 @@ class _SessionHost:
         )
 
     def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
+        if not isinstance(
+            event.item,
+            ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
+        ):
+            return
         chat_item = _chat_item_to_proto(event.item)
         self._send_event(
-            agent_pb.SessionEvent(
-                conversation_item_added=agent_pb.SessionEvent.ConversationItemAdded(
+            agent_pb.AgentSessionEvent(
+                conversation_item_added=agent_pb.AgentSessionEvent.ConversationItemAdded(
                     item=chat_item,
                 )
             )
@@ -486,10 +505,11 @@ class _SessionHost:
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
+            if fco is not None
         ]
         self._send_event(
-            agent_pb.SessionEvent(
-                function_tools_executed=agent_pb.SessionEvent.FunctionToolsExecuted(
+            agent_pb.AgentSessionEvent(
+                function_tools_executed=agent_pb.AgentSessionEvent.FunctionToolsExecuted(
                     function_calls=pb_calls,
                     function_call_outputs=pb_outputs,
                 )
@@ -497,8 +517,6 @@ class _SessionHost:
         )
 
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
-        from google.protobuf.timestamp_pb2 import Timestamp
-
         detected_at = Timestamp()
         detected_at.FromSeconds(int(event.detected_at))
 
@@ -513,15 +531,15 @@ class _SessionHost:
             kwargs["overlap_started_at"] = overlap_ts
 
         self._send_event(
-            agent_pb.SessionEvent(
-                overlapping_speech=agent_pb.SessionEvent.OverlappingSpeech(**kwargs)
+            agent_pb.AgentSessionEvent(
+                overlapping_speech=agent_pb.AgentSessionEvent.OverlappingSpeech(**kwargs)
             )
         )
 
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(
-            agent_pb.SessionEvent(
-                session_usage_updated=agent_pb.SessionEvent.SessionUsageUpdated(
+            agent_pb.AgentSessionEvent(
+                session_usage_updated=agent_pb.AgentSessionEvent.SessionUsageUpdated(
                     usage=_session_usage_to_proto(event.usage),
                 )
             )
@@ -529,8 +547,8 @@ class _SessionHost:
 
     def _on_error(self, event: ErrorEvent) -> None:
         self._send_event(
-            agent_pb.SessionEvent(
-                error=agent_pb.SessionEvent.Error(
+            agent_pb.AgentSessionEvent(
+                error=agent_pb.AgentSessionEvent.Error(
                     message=str(event.error) if event.error else "Unknown error",
                 )
             )
@@ -601,20 +619,30 @@ class _SessionHost:
             error: str | None = None
             text = req.run_input.text
             if text:
-                self._session.output.audio = None
-                self._session.output.transcription = None
+                if self._text_input_cb is not None:
+                    from .room_io.types import TextInputEvent
 
-                try:
-                    await self._session.interrupt(force=True)
-                except RuntimeError:
-                    pass
+                    cb_result = self._text_input_cb(
+                        self._session,
+                        TextInputEvent(text=text, info=None, participant=None),
+                    )
+                    if asyncio.iscoroutine(cb_result):
+                        await cb_result
+                else:
+                    self._session.output.audio = None
+                    self._session.output.transcription = None
 
-                result = self._session.run(user_input=text)
-                try:
-                    await result
-                except Exception as e:
-                    error = str(e)
-                items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                    try:
+                        await self._session.interrupt(force=True)
+                    except RuntimeError:
+                        pass
+
+                    result: Any = self._session.run(user_input=text)
+                    try:
+                        await result
+                    except Exception as e:
+                        error = str(e)
+                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -641,11 +669,11 @@ class _SessionHost:
                     get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
                         agent_state=_AGENT_STATE_MAP.get(
                             self._session.agent_state,
-                            agent_pb.SESSION_AGENT_STATE_IDLE,
+                            agent_pb.AS_IDLE,
                         ),
                         user_state=_USER_STATE_MAP.get(
                             self._session.user_state,
-                            agent_pb.SESSION_USER_STATE_LISTENING,
+                            agent_pb.US_LISTENING,
                         ),
                         agent_id=agent.id,
                         options=_serialize_options(self._session.options),
@@ -656,10 +684,13 @@ class _SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_rtc_stats"):
-            from google.protobuf.json_format import ParseDict
             from google.protobuf.struct_pb2 import Struct
 
-            rtc_stats = await self._session._room.get_rtc_stats() if hasattr(self._session, "_room") else None
+            rtc_stats = (
+                await self._session._room.get_rtc_stats()
+                if hasattr(self._session, "_room")
+                else None
+            )
             publisher_stats: list[Struct] = []
             subscriber_stats: list[Struct] = []
             if rtc_stats:
@@ -767,11 +798,12 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
     return agent_pb.AgentSessionUsage(model_usage=model_usages)
 
 
-# --- JSON-over-text-streams handler for room-based communication ---
+# --- JSON-over-text-streams handler (deprecated, use SessionHost + protobuf transport) ---
 
 # Pydantic models for JSON protocol (used by ClientEventsHandler and RemoteSession)
-from pydantic import BaseModel, Field
-from typing import Annotated
+from typing import Annotated  # noqa: E402
+
+from pydantic import BaseModel, Field  # noqa: E402
 
 
 class ClientAgentStateChangedEvent(BaseModel):
@@ -920,13 +952,10 @@ class StreamResponse(BaseModel):
 
 
 class ClientEventsHandler:
-    """
-    Handles exposing AgentSession state to room participants and allows interaction.
+    """Deprecated: use SessionHost with RoomSessionTransport instead.
 
-    This class provides:
-    - Event streaming: Automatically streams AgentSession events to clients via a text stream
-    - RPC handlers: Allows clients to request state, chat history, and agent info on demand
-    - Text input handling: Receives text messages from clients and generates agent replies
+    Handles exposing AgentSession state to room participants via JSON text streams and RPC.
+    Kept for backward compatibility during the transition to protobuf transport.
     """
 
     def __init__(
@@ -1365,12 +1394,10 @@ RemoteSessionEventTypes = Literal[
 
 class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
     """
-    Client-side interface to interact with a remote AgentSession.
+    Deprecated: JSON-based client interface. Will be replaced by a protobuf-based
+    client that communicates via SessionTransport.
 
-    This class allows frontends/clients to:
-    - Subscribe to real-time events from the agent session
-    - Query session state, chat history, and agent info via RPC
-    - Send messages to the agent
+    Client-side interface to interact with a remote AgentSession via JSON text streams.
     """
 
     def __init__(
@@ -1387,7 +1414,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     @classmethod
     def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
-        transport = RoomSessionTransport(room, agent_identity)
+        transport = RoomSessionTransport(room, agent_identity)  # noqa: F841
         return cls(room, agent_identity)
 
     async def start(self) -> None:
@@ -1496,9 +1523,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             self._pending_requests.pop(request_id, None)
             raise
 
-    async def wait_for_ready(
-        self, timeout: float = 5.0, retry_interval: float = 0.5
-    ) -> None:
+    async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
@@ -1509,7 +1534,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 return
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
-                    raise TimeoutError("wait_for_ready timed out")
+                    raise TimeoutError("wait_for_ready timed out") from None
 
     async def fetch_session_state(self) -> GetSessionStateResponse:
         request = GetSessionStateRequest()
