@@ -184,7 +184,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE,
             NUM_CHANNELS,
-            samples_per_channel=SAMPLE_RATE // 10,  # 100ms frames
+            samples_per_channel=1920,  # 80ms — valid Opus frame size
         )
 
         self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
@@ -395,6 +395,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 if restart_wait_task not in done and self._closed:
                     break
 
+                old_ch = self._msg_ch
+                old_ch.close()
+                self._msg_ch = utils.aio.Chan[bytes]()
+
                 if restart_wait_task in done:
                     self.emit(
                         "session_reconnected",
@@ -443,6 +447,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     @utils.log_exceptions(logger=logger)
     async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+        # The server's is_alive() check consumes WS messages during system
+        # prompt processing without feeding them to the opus decoder.  Wait
+        # for the handshake before sending audio so nothing gets dropped.
+        # Queued frames are sent immediately — they're the first audio the
+        # server's recv_loop will see.
+        await self._handshake_event.wait()
+
         async for msg in self._msg_ch:
             if self._session_should_close.is_set():
                 break
@@ -493,6 +504,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             ):
                 if self._closing:
                     return
+
+                # Code 1000 (normal close) — finalize gracefully and reconnect
+                # rather than treating it as a retriable error.
+                if ws_conn.close_code in (1000, None):
+                    logger.debug("PersonaPlex server closed connection normally")
+                    if self._current_generation and not self._current_generation._done:
+                        self._finalize_generation(interrupted=False)
+                    return
+
                 raise APIConnectionError(message="PersonaPlex connection closed unexpectedly")
 
             elif msg.type == aiohttp.WSMsgType.ERROR:
