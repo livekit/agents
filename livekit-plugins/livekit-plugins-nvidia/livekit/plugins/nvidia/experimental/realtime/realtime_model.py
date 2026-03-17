@@ -360,7 +360,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             self._bstream = utils.audio.AudioByteStream(
                 SAMPLE_RATE,
                 NUM_CHANNELS,
-                samples_per_channel=1920,  # 80ms — valid Opus frame size
+                samples_per_channel=SAMPLE_RATE // 10,
             )
 
             try:
