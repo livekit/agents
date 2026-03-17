@@ -11,11 +11,12 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace, trace as trace_api
+from opentelemetry import context as otel_context, metrics as metrics_api, trace, trace as trace_api
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
@@ -25,6 +26,8 @@ from opentelemetry.sdk._logs import (
     ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -229,6 +232,20 @@ def _setup_cloud_tracer(
 
         root = logging.getLogger()
         root.addHandler(handler)
+
+    # Set up the MeterProvider for OTEL metrics export
+    current_meter_provider = metrics_api.get_meter_provider()
+    if not isinstance(current_meter_provider, SdkMeterProvider):
+        metric_exporter = OTLPMetricExporter(
+            endpoint=f"https://{cloud_hostname}/observability/metrics/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+        )
+        reader = PeriodicExportingMetricReader(
+            metric_exporter, export_interval_millis=30000
+        )
+        meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
+        metrics_api.set_meter_provider(meter_provider)
 
 
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
@@ -523,3 +540,8 @@ def _shutdown_telemetry() -> None:
 
         logger_provider.force_flush()
         logger_provider.shutdown()  # type: ignore
+
+    if isinstance(meter_provider := metrics_api.get_meter_provider(), SdkMeterProvider):
+        logger.debug("shutting down telemetry meter provider")
+        meter_provider.force_flush()
+        meter_provider.shutdown()
