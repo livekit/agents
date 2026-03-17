@@ -408,6 +408,31 @@ class ChatContext:
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
 
+    def remove(self, item: ChatItem | str | Sequence[ChatItem | str]) -> list[ChatItem]:
+        """Remove one or more items from the chat context by ChatItem or item ID.
+
+        Returns a list of the removed ChatItems.
+        Returns an empty list if none of the provided items/IDs were found.
+        """
+        if isinstance(item, (str, ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff)):
+            items_to_remove = [item]
+        else:
+            items_to_remove = list(item)
+
+        ids_to_remove = {i.id if not isinstance(i, str) else i for i in items_to_remove}
+
+        removed: list[ChatItem] = []
+        new_items: list[ChatItem] = []
+        for existing in self._items:
+            if existing.id in ids_to_remove:
+                removed.append(existing)
+                ids_to_remove.discard(existing.id)
+            else:
+                new_items.append(existing)
+
+        self._items[:] = new_items
+        return removed
+
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
