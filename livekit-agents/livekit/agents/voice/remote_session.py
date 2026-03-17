@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from google.protobuf.timestamp_pb2 import Timestamp
+
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
@@ -427,8 +429,6 @@ class SessionHost:
             self._audio_output.notify_playout_finished()
 
     def _send_event(self, event: agent_pb.AgentSessionEvent) -> None:
-        from google.protobuf.timestamp_pb2 import Timestamp
-
         ts = Timestamp()
         ts.FromNanoseconds(int(time.time() * 1e9))
         event.created_at.CopyFrom(ts)
@@ -450,14 +450,19 @@ class SessionHost:
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.US_LISTENING)
         new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.US_LISTENING)
-        self._send_event(
-            agent_pb.AgentSessionEvent(
-                user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
-                    old_state=old_pb,
-                    new_state=new_pb,
-                )
-            )
+
+        pb_event = agent_pb.AgentSessionEvent(
+            user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
+                old_state=old_pb,
+                new_state=new_pb,
+            ),
         )
+        # we need to use the original timestamps which are adjusted for VAD latency
+        ts = Timestamp()
+        ts.FromNanoseconds(int(event.created_at * 1e9))
+        pb_event.created_at.CopyFrom(ts)
+        msg = agent_pb.AgentSessionMessage(event=pb_event)
+        self._tasks.create_task(self._transport.send_message(msg))
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
         self._send_event(
@@ -512,8 +517,6 @@ class SessionHost:
         )
 
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
-        from google.protobuf.timestamp_pb2 import Timestamp
-
         detected_at = Timestamp()
         detected_at.FromSeconds(int(event.detected_at))
 
