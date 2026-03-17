@@ -4,7 +4,7 @@ import asyncio
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
@@ -58,7 +58,7 @@ from .events import (
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession
     from .room_io import RoomIO
@@ -69,6 +69,7 @@ TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
 
 class SessionTransport(ABC):
+    @abstractmethod
     async def start(self) -> None: ...
     @abstractmethod
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None: ...
@@ -125,13 +126,12 @@ class RoomSessionTransport(SessionTransport):
             return
         try:
             data = msg.SerializeToString()
-            kwargs: dict[str, str | list[str]] = {
-                "topic": TOPIC_SESSION_MESSAGES,
-                "name": TOPIC_SESSION_MESSAGES,
-            }
-            if self._remote_identity:
-                kwargs["destination_identities"] = [self._remote_identity]
-            writer = await self._room.local_participant.stream_bytes(**kwargs)
+            dest = [self._remote_identity] if self._remote_identity else None
+            writer = await self._room.local_participant.stream_bytes(
+                TOPIC_SESSION_MESSAGES,
+                topic=TOPIC_SESSION_MESSAGES,
+                destination_identities=dest,
+            )
             await writer.write(data)
             await writer.aclose()
         except Exception:
@@ -226,14 +226,14 @@ class TcpSessionTransport(SessionTransport):
         try:
             data = await self._reader.readexactly(length)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
         msg = agent_pb.AgentSessionMessage()
         msg.ParseFromString(data)
         return msg
 
 
-_AGENT_STATE_MAP: dict[AgentState, int] = {
+_AGENT_STATE_MAP: dict[AgentState, agent_pb.AgentState] = {
     "initializing": agent_pb.AS_INITIALIZING,
     "idle": agent_pb.AS_IDLE,
     "listening": agent_pb.AS_LISTENING,
@@ -241,7 +241,7 @@ _AGENT_STATE_MAP: dict[AgentState, int] = {
     "speaking": agent_pb.AS_SPEAKING,
 }
 
-_USER_STATE_MAP: dict[UserState, int] = {
+_USER_STATE_MAP: dict[UserState, agent_pb.UserState] = {
     "speaking": agent_pb.US_SPEAKING,
     "listening": agent_pb.US_LISTENING,
     "away": agent_pb.US_AWAY,
@@ -267,7 +267,7 @@ def _tool_names(tools: list[Any]) -> list[str]:
     return result
 
 
-def _metrics_to_proto(metrics: dict | None) -> agent_pb.MetricsReport:
+def _metrics_to_proto(metrics: Mapping[str, Any] | None) -> agent_pb.MetricsReport:
     if not metrics:
         return agent_pb.MetricsReport()
     kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
@@ -470,6 +470,11 @@ class SessionHost:
         )
 
     def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
+        if not isinstance(
+            event.item,
+            (ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff, AgentConfigUpdate),
+        ):
+            return
         chat_item = _chat_item_to_proto(event.item)
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -629,7 +634,7 @@ class SessionHost:
                     except RuntimeError:
                         pass
 
-                    result = self._session.run(user_input=text)
+                    result: Any = self._session.run(user_input=text)
                     try:
                         await result
                     except Exception as e:
@@ -793,9 +798,9 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
 # --- JSON-over-text-streams handler (deprecated, use SessionHost + protobuf transport) ---
 
 # Pydantic models for JSON protocol (used by ClientEventsHandler and RemoteSession)
-from typing import Annotated
+from typing import Annotated  # noqa: E402
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field  # noqa: E402
 
 
 class ClientAgentStateChangedEvent(BaseModel):
@@ -1406,7 +1411,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     @classmethod
     def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
-        transport = RoomSessionTransport(room, agent_identity)
+        transport = RoomSessionTransport(room, agent_identity)  # noqa: F841
         return cls(room, agent_identity)
 
     async def start(self) -> None:
@@ -1526,7 +1531,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 return
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
-                    raise TimeoutError("wait_for_ready timed out")
+                    raise TimeoutError("wait_for_ready timed out") from None
 
     async def fetch_session_state(self) -> GetSessionStateResponse:
         request = GetSessionStateRequest()

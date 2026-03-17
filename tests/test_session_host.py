@@ -68,7 +68,7 @@ class InMemoryTransport(SessionTransport):
         try:
             return await asyncio.wait_for(self._inbound.get(), timeout=0.5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 # ---------------------------------------------------------------------------
