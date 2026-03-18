@@ -78,6 +78,10 @@ def _ensure_strict_json_schema(
     # unions
     any_of = json_schema.get("anyOf")
     if is_list(any_of):
+        # Strip empty schema objects ({}) — they are JSON Schema's identity element
+        # for anyOf (match anything) and cause OpenAI strict mode to reject the schema.
+        # Common when Union[..., Any] or ForwardRef patterns produce bare {} entries.
+        any_of = [v for v in any_of if v != {}]
         json_schema["anyOf"] = [
             _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
             for i, variant in enumerate(any_of)
@@ -86,6 +90,8 @@ def _ensure_strict_json_schema(
     # unions (oneOf)
     one_of = json_schema.get("oneOf")
     if is_list(one_of):
+        # Strip empty schema objects — same rationale as anyOf above.
+        one_of = [v for v in one_of if v != {}]
         json_schema["oneOf"] = [
             _ensure_strict_json_schema(variant, path=(*path, "oneOf", str(i)), root=root)
             for i, variant in enumerate(one_of)
