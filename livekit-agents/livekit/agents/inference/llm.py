@@ -53,8 +53,13 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
 }
 
+# models that don't support reasoning_effort when function tools are present
+_REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
-def drop_unsupported_params(model: str, params: dict[str, Any]) -> dict[str, Any]:
+
+def drop_unsupported_params(
+    model: str, params: dict[str, Any], tools: list[Any] | None = None
+) -> dict[str, Any]:
     """Remove parameters that are not supported by the given model.
 
     Strips any provider prefix (e.g. ``openai/o3-pro`` -> ``o3-pro``) before
@@ -63,7 +68,12 @@ def drop_unsupported_params(model: str, params: dict[str, Any]) -> dict[str, Any
     model_name = model.split("/")[-1] if "/" in model else model
     for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
         if model_name.startswith(prefix):
-            return {k: v for k, v in params.items() if k not in unsupported}
+            params = {k: v for k, v in params.items() if k not in unsupported}
+            break
+    if tools and any(
+        model_name.startswith(p) for p in _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES
+    ):
+        params = {k: v for k, v in params.items() if k != "reasoning_effort"}
     return params
 
 
@@ -80,6 +90,8 @@ OpenAIModels = Literal[
     "openai/gpt-5.1-chat-latest",
     "openai/gpt-5.2",
     "openai/gpt-5.2-chat-latest",
+    "openai/gpt-5.3-chat-latest",
+    "openai/gpt-5.4",
     "openai/gpt-oss-120b",
 ]
 
@@ -89,8 +101,6 @@ GoogleModels = Literal[
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
-    "google/gemini-2.0-flash",
-    "google/gemini-2.0-flash-lite",
 ]
 
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
@@ -248,7 +258,7 @@ class LLM(llm.LLM):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
         extra_tool_choice = self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
-        tool_choice = tool_choice if is_given(tool_choice) else extra_tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else extra_tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):
@@ -302,7 +312,7 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm_v
-        self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
+        self._extra_kwargs = drop_unsupported_params(model, extra_kwargs, tools=tools)
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:

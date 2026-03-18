@@ -1,6 +1,8 @@
-# LiveKit Plugins Smallest AI
+# Smallest AI plugin for LiveKit Agents
 
-LiveKit Agent Framework plugin for speech synthesis with the [Smallest AI](https://smallest.ai/) API ([documentation](https://waves-docs.smallest.ai/)).
+Support for speech synthesis with the [Smallest AI](https://smallest.ai/) API.
+
+See the [Smallest AI TTS integration docs](https://docs.livekit.io/agents/models/tts/smallestai/) for more information.
 
 ## Installation
 

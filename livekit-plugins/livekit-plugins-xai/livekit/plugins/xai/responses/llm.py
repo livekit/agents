@@ -37,6 +37,7 @@ class LLM(openai.responses.LLM):
             model=model,
             base_url=base_url if is_given(base_url) else XAI_BASE_URL,
             api_key=api_key,
+            use_websocket=False,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
