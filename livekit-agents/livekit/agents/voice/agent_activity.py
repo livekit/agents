@@ -1269,6 +1269,7 @@ class AgentActivity(RecognitionHooks):
             self._session.emit("error", error_event)
 
             if not error.recoverable:
+                self._session._on_error(error)
                 self._fallback_to_vad_interruption()
                 return
 
