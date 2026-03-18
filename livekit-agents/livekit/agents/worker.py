@@ -144,7 +144,32 @@ class ServerEnvOption(Generic[T]):
 
 
 _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
+_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
+
+VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
+
+
+def _validate_and_normalize_log_level(
+    log_level: str | ServerEnvOption[str],
+) -> str | ServerEnvOption[str]:
+    if isinstance(log_level, ServerEnvOption):
+        levels_to_check = [log_level.dev_default, log_level.prod_default]
+    else:
+        levels_to_check = [log_level]
+
+    for level in levels_to_check:
+        if level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            )
+
+    if isinstance(log_level, ServerEnvOption):
+        return ServerEnvOption(
+            dev_default=log_level.dev_default.upper(),
+            prod_default=log_level.prod_default.upper(),
+        )
+    return log_level.upper()
 
 
 # NOTE: this object must be pickle-able
@@ -206,6 +231,13 @@ class ServerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
 
+    log_level: str | ServerEnvOption[str] = _default_log_level
+    """Log level for the worker.
+
+    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
+    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
+    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
+
     host: str = ""  # default to all interfaces
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -232,6 +264,9 @@ class ServerOptions:
     When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
+
+    def __post_init__(self) -> None:
+        self.log_level = _validate_and_normalize_log_level(self.log_level)
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -285,6 +320,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        log_level: str | ServerEnvOption[str] = _default_log_level,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -314,6 +350,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
+        self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -336,6 +373,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    @property
+    def log_level(self) -> str | ServerEnvOption[str]:
+        return self._log_level
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -380,6 +421,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            log_level=options.log_level,
         )
         server.rtc_session(
             options.entrypoint_fnc,
@@ -566,6 +608,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._host, ServerEnvOption.getvalue(self._port, devmode)
             )
             self._worker_load: float = 0.0
+            self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
@@ -691,18 +734,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 while True:
                     await interval.tick()
 
-                    def load_fnc() -> float:
-                        assert self._load_fnc is not None
-                        signature = inspect.signature(self._load_fnc)
-                        parameters = list(signature.parameters.values())
-                        if len(parameters) == 0:
-                            return self._load_fnc()  # type: ignore
-
-                        return self._load_fnc(self)  # type: ignore
-
-                    self._worker_load = await asyncio.get_event_loop().run_in_executor(
-                        None, load_fnc
-                    )
+                    self._worker_load = await self._invoke_load_fnc()
 
                     telemetry.metrics._update_worker_load(self._worker_load)
                     if self._prometheus_multiproc_dir:
@@ -1149,17 +1181,59 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
+    async def _invoke_load_fnc(self) -> float:
+        """Run load_fnc in executor. Uses signature to call with or without self."""
+
+        def load_fnc() -> float:
+            assert self._load_fnc is not None
+            signature = inspect.signature(self._load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._load_fnc()  # type: ignore
+            return self._load_fnc(self)  # type: ignore
+
+        return await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+    async def _refresh_worker_load(self) -> None:
+        """Refresh _worker_load by running load_fnc. Used before availability checks
+        so concurrent job requests see up-to-date load (fixes race with periodic interval).
+        """
+        if self._load_fnc is None:
+            return
+
+        self._worker_load = await self._invoke_load_fnc()
+        telemetry.metrics._update_worker_load(self._worker_load)
+
+    def _get_effective_load(self) -> float:
+        """Current load including reserved slots (accepted but not yet launched)."""
+        active_jobs = self.active_jobs
+        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
+        if active_jobs:
+            job_load_estimate = self._worker_load / len(active_jobs)
+        elif math.isinf(load_threshold):
+            job_load_estimate = 0.0
+        else:
+            default_idle = ServerEnvOption.getvalue(self._num_idle_processes, self._devmode)
+            job_load_estimate = load_threshold / max(default_idle, 1)
+        return self._worker_load + self._reserved_slots * job_load_estimate
+
     def _is_available(self) -> bool:
         if self._draining:
             return False
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        return self._worker_load < load_threshold
+        if math.isinf(load_threshold):
+            return True
+
+        # Use effective load so we don't over-accept when two requests arrive
+        # before either job appears in active_jobs.
+        return self._get_effective_load() < load_threshold
 
     async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1167,6 +1241,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._queue_msg(availability_resp)
             return
 
+        # Reserve a slot immediately so concurrent availability checks see updated
+        # load before the user's request_fnc runs or calls accept().
+        self._reserved_slots += 1
         answered = False
 
         async def _on_reject(terminate: bool) -> None:
@@ -1255,9 +1332,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 await _on_reject(terminate=False)
 
+        def _on_job_request_done(task: asyncio.Task[Any]) -> None:
+            self._reserved_slots -= 1
+            self._job_lifecycle_tasks.discard(task)
+
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._job_lifecycle_tasks.add(user_task)
-        user_task.add_done_callback(self._job_lifecycle_tasks.discard)
+        user_task.add_done_callback(_on_job_request_done)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
         logger.debug(
@@ -1298,7 +1379,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        is_full = self._worker_load >= load_threshold
+        effective_load = self._get_effective_load()
+        is_full = effective_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (
@@ -1310,7 +1392,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # only log if status has changed
         if self._previous_status != status and not self._draining:
             self._previous_status = status
-            extra = {"load": self._worker_load, "threshold": load_threshold}
+            extra = {"load": effective_load, "threshold": load_threshold}
             if is_full:
                 logger.info("worker is at full capacity, marking as unavailable", extra=extra)
             else:
