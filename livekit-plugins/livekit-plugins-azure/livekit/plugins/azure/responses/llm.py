@@ -5,7 +5,6 @@ from openai import AsyncAzureOpenAI
 from openai.types import Reasoning
 from openai.types.shared_params import ResponsesModel
 
-from livekit.agents import llm
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
@@ -16,6 +15,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
+from livekit.plugins.openai.responses.llm import LLMStream as _OpenAILLMStream
 from livekit.plugins.openai.utils import AsyncAzureADTokenProvider
 
 
@@ -89,7 +89,7 @@ class LLM(openai.responses.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> llm.LLMStream:
+    ) -> _OpenAILLMStream:
         if is_given(self._max_output_tokens):
             if not is_given(extra_kwargs):
                 extra_kwargs = {}
