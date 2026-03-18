@@ -307,23 +307,6 @@ class FunctionCall(BaseModel):
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
 
-    def to_message(self) -> ChatMessage:
-        return ChatMessage(
-            role="user",
-            content=[
-                to_xml(
-                    "function_call",
-                    self.arguments,
-                    attrs={
-                        "name": self.name,
-                        "call_id": self.call_id,
-                    },
-                )
-            ],
-            created_at=self.created_at,
-            extra={"is_function_call": True},
-        )
-
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
@@ -333,23 +316,6 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
-
-    def to_message(self) -> ChatMessage:
-        return ChatMessage(
-            role="assistant",
-            content=[
-                to_xml(
-                    "function_call_output",
-                    self.output if not self.is_error else to_xml("error", self.output),
-                    attrs={
-                        "call_id": self.call_id,
-                        "name": self.name,
-                    },
-                )
-            ],
-            created_at=self.created_at,
-            extra={"is_function_call_output": True},
-        )
 
 
 class AgentHandoff(BaseModel):
@@ -761,7 +727,7 @@ class ChatContext:
         contents: list[str] = []
         for m in to_summarize:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
-                contents.append(m.to_message().text_content or "")
+                contents.append(_function_call_item_to_message(m).text_content or "")
             else:
                 contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
@@ -937,3 +903,38 @@ def to_xml(
         )
     else:
         return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"
+
+
+def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> ChatMessage:
+    if isinstance(item, FunctionCall):
+        return ChatMessage(
+            role="user",
+            content=[
+                to_xml(
+                    "function_call",
+                    item.arguments,
+                    attrs={
+                        "name": item.name,
+                        "call_id": item.call_id,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call": True},
+        )
+    elif isinstance(item, FunctionCallOutput):
+        return ChatMessage(
+            role="assistant",
+            content=[
+                to_xml(
+                    "function_call_output",
+                    item.output if not item.is_error else to_xml("error", item.output),
+                    attrs={
+                        "call_id": item.call_id,
+                        "name": item.name,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call_output": True},
+        )
