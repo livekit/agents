@@ -23,7 +23,7 @@ from ..llm import (
     RealtimeModelError,
 )
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
@@ -96,6 +96,7 @@ EventTypes = Literal[
     "user_overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
+    "session_usage_updated",
     "speech_created",
     "error",
     "close",
@@ -147,8 +148,17 @@ class AgentFalseInterruptionEvent(BaseModel):
 
 
 class MetricsCollectedEvent(BaseModel):
+    """Deprecated: use session_usage_updated for usage tracking.
+    Per-turn latency metrics are available on ChatMessage.metrics."""
+
     type: Literal["metrics_collected"] = "metrics_collected"
     metrics: AgentMetrics
+    created_at: float = Field(default_factory=time.time)
+
+
+class SessionUsageUpdatedEvent(BaseModel):
+    type: Literal["session_usage_updated"] = "session_usage_updated"
+    usage: AgentSessionUsage
     created_at: float = Field(default_factory=time.time)
 
 
@@ -240,6 +250,7 @@ AgentEvent = Annotated[
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
     | MetricsCollectedEvent
+    | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent

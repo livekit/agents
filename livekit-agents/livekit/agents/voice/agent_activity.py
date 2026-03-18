@@ -56,6 +56,7 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
+    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
@@ -1222,7 +1223,12 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
+        self._session._usage_collector.collect(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+        self._session.emit(
+            "session_usage_updated",
+            SessionUsageUpdatedEvent(usage=self._session.usage),
+        )
 
     def _on_error(
         self,
@@ -1492,12 +1498,12 @@ class AgentActivity(RecognitionHooks):
         # restore interruption by audio activity and then immediately interrupt
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity(
-            ignore_user_transcript_until=ev.overlap_started_at or ev.timestamp
+            ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
         )
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition.on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.timestamp
+                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
