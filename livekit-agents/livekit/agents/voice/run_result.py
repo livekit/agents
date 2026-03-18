@@ -962,11 +962,12 @@ class ChatMessageAssert:
         if usage:
             current_span.set_attributes(
                 {
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: usage.prompt_cached_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,  # cached + uncached tokens
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,  # output tokens
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens
+                    - usage.prompt_cached_tokens,  # uncached text tokens
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,  # output text tokens
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: usage.prompt_cached_tokens,  # cached text tokens
                 }
             )
 
