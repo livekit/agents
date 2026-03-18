@@ -5,7 +5,7 @@ import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -16,7 +16,6 @@ from .. import llm, utils
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
-    ChatItem,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
@@ -114,7 +113,7 @@ class RoomSessionTransport(SessionTransport):
             data = msg.SerializeToString()
             dest = [self._remote_identity] if self._remote_identity else None
             writer = await self._room.local_participant.stream_bytes(
-                TOPIC_SESSION_MESSAGES,
+                name=utils.shortuuid("AS_"),
                 topic=TOPIC_SESSION_MESSAGES,
                 destination_identities=dest,
             )
@@ -612,9 +611,6 @@ class SessionHost:
                     if asyncio.iscoroutine(cb_result):
                         await cb_result
                 else:
-                    self._session.output.audio = None
-                    self._session.output.transcription = None
-
                     try:
                         await self._session.interrupt(force=True)
                     except RuntimeError:
@@ -623,9 +619,11 @@ class SessionHost:
                     result: Any = self._session.run(user_input=text)
                     try:
                         await result
+                        items_list = [
+                            _chat_item_to_proto(ev.item) for ev in result.events
+                        ]
                     except Exception as e:
                         error = str(e)
-                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -668,8 +666,8 @@ class SessionHost:
             from google.protobuf.struct_pb2 import Struct
 
             rtc_stats = (
-                await self._session._room.get_rtc_stats()
-                if hasattr(self._session, "_room")
+                await self._session._room_io.room.get_rtc_stats()
+                if self._session._room_io is not None
                 else None
             )
             publisher_stats: list[Struct] = []
