@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents.voice.room_io import RoomOptions
 from livekit.plugins import openai, spatialreal
 
 logger = logging.getLogger("spatialreal-avatar-example")
@@ -16,6 +17,8 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
         resume_false_interruption=False,
@@ -33,10 +36,15 @@ async def entrypoint(ctx: JobContext):
     spatialreal_avatar = spatialreal.AvatarSession()
     await spatialreal_avatar.start(session, room=ctx.room)
 
+    room_options = RoomOptions(
+        audio_output=False,  # Avatar publishes audio, not the agent
+    )
+
     # start the agent, it will join the room and wait for the avatar to join
     await session.start(
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
+        room_options=room_options,
     )
 
     session.generate_reply(instructions="say hello to the user")
