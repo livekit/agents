@@ -64,6 +64,8 @@ def to_chat_ctx(
                 tool_content.append({"text": msg.output.text_contents})
             for img in msg.output.image_contents:
                 tool_content.append(_build_image(img))
+            if not tool_content:
+                tool_content.append({"text": ""})
             current_content.append(
                 {
                     "toolResult": {
