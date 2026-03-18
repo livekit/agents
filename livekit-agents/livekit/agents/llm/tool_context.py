@@ -61,14 +61,14 @@ class Toolset:
 
     def __init__(self, *, id: str, tools: list[Tool | Toolset] | None = None) -> None:
         self._id = id
-        self._tools = tools or []
+        self._tools: Sequence[Tool | Toolset] = tools or []
 
     @property
     def id(self) -> str:
         return self._id
 
     @property
-    def tools(self) -> list[Tool | Toolset]:
+    def tools(self) -> Sequence[Tool | Toolset]:
         return self._tools
 
     async def setup(self) -> Self:

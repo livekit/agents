@@ -29,9 +29,15 @@ class MCPToolset(Toolset):
             return self
 
     def filter_tools(self, filter_fn: Callable[[MCPTool], bool]) -> Self:
-        self._tools = list(filter(filter_fn, self._tools))
+        self._tools = [
+            tool for tool in self._tools if isinstance(tool, MCPTool) and filter_fn(tool)
+        ]
         return self
 
     async def aclose(self) -> None:
-        await super().aclose()
-        await self._mcp_server.aclose()
+        try:
+            await super().aclose()
+            await self._mcp_server.aclose()
+        finally:
+            self._initialized = False
+            self._tools = []

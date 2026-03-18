@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -165,7 +166,7 @@ class StreamResponse(BaseModel):
     error: str | None = None
 
 
-def _tool_names(tools: list[Any]) -> list[str]:
+def _tool_names(tools: Sequence[Any]) -> list[str]:
     result: list[str] = []
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):

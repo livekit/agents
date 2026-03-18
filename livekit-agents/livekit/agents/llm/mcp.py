@@ -106,7 +106,6 @@ class MCPServer(ABC):
                 )
             )
             await self._client.initialize()  # type: ignore[union-attr]
-            self._initialized = True
         except Exception:
             await self.aclose()
             raise
