@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast, get_args
 
+from opentelemetry import trace
+
 import google.auth
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -44,6 +46,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -826,13 +829,16 @@ class SpeechStream(stt.SpeechStream):
                     timeout=self._conn_options.timeout
                 ) as conn_result:
                     client = conn_result.connection
-                    self._ws_connection_time = conn_result.connect_time
-                    self._ws_connection_reused = conn_result.from_pool
+                    span = trace.get_current_span()
+                    span.set_attribute(
+                        trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+                    )
+                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, conn_result.from_pool)
                     logger.debug(
                         "acquired Google STT connection",
                         extra={
-                            "connection_time": self._ws_connection_time,
-                            "connection_reused": self._ws_connection_reused,
+                            "connection_time": conn_result.connect_time,
+                            "connection_reused": conn_result.from_pool,
                         },
                     )
                     self._streaming_config = self._build_streaming_config()

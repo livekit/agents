@@ -434,10 +434,6 @@ class SynthesizeStream(ABC):
 
         self._tts_request_span: trace.Span | None = None
 
-        # WebSocket connection timing (set by implementations)
-        self._ws_connection_time: float | None = None
-        self._ws_connection_reused: bool | None = None
-
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
@@ -549,8 +545,6 @@ class SynthesizeStream(ABC):
                 cancelled=self._task.cancelled(),
                 label=self._tts._label,
                 streamed=True,
-                websocket_connection_time=self._ws_connection_time,
-                websocket_connection_reused=self._ws_connection_reused,
                 metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:

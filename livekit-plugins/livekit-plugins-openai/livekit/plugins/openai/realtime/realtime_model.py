@@ -14,12 +14,14 @@ from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
+from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -701,10 +703,6 @@ class RealtimeSession(
         )
         self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
-        # WebSocket connection timing metrics
-        self._ws_connection_time: float | None = None  # time taken to establish the connection
-        self._ws_connection_reused: bool | None = None  # True if reused from pool (N/A for OpenAI)
-
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
@@ -829,13 +827,15 @@ class RealtimeSession(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
-            self._ws_connection_time = time.perf_counter() - start_time
-            self._ws_connection_reused = False  # OpenAI Realtime creates new connections each time
+            ws_connection_time = time.perf_counter() - start_time
+            span = trace.get_current_span()
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, False)
             logger.debug(
                 "established OpenAI Realtime API WebSocket connection",
                 extra={
-                    "connection_time": self._ws_connection_time,
-                    "connection_reused": self._ws_connection_reused,
+                    "connection_time": ws_connection_time,
+                    "connection_reused": False,
                 },
             )
             return ws
@@ -1716,8 +1716,6 @@ class RealtimeSession(
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=usage.get("output_token_details", {}).get("image_tokens", 0),
             ),
-            websocket_connection_time=self._ws_connection_time,
-            websocket_connection_reused=self._ws_connection_reused,
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

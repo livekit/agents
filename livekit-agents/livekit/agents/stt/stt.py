@@ -296,10 +296,6 @@ class RecognizeStream(ABC):
 
         self._start_time_offset: float = 0.0
 
-        # WebSocket connection timing (set by implementations)
-        self._ws_connection_time: float | None = None
-        self._ws_connection_reused: bool | None = None
-
     @property
     def start_time_offset(self) -> float:
         return self._start_time_offset
@@ -380,8 +376,6 @@ class RecognizeStream(ABC):
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
-                    websocket_connection_time=self._ws_connection_time,
-                    websocket_connection_reused=self._ws_connection_reused,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider
                     ),

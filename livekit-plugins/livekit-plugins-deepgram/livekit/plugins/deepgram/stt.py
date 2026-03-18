@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+from opentelemetry import trace
 
 from livekit import rtc
 from livekit.agents import (
@@ -38,6 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -633,17 +635,19 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            self._ws_connection_time = time.perf_counter() - start_time
-            self._ws_connection_reused = False  # Deepgram STT creates new connections each time
+            ws_connection_time = time.perf_counter() - start_time
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
+            span = trace.get_current_span()
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, False)
             logger.debug(
                 "Established new Deepgram STT WebSocket connection",
                 extra={
                     "headers": ws_headers,
-                    "connection_time": self._ws_connection_time,
-                    "connection_reused": self._ws_connection_reused,
+                    "connection_time": ws_connection_time,
+                    "connection_reused": False,
                 },
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:

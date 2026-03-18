@@ -7,6 +7,7 @@ import weakref
 from dataclasses import dataclass, replace
 
 import aiohttp
+from opentelemetry import trace
 
 from livekit.agents import (
     APIConnectionError,
@@ -17,6 +18,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -353,13 +355,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             timeout=self._conn_options.timeout
         ) as conn_result:
             ws = conn_result.connection
-            self._ws_connection_time = conn_result.connect_time
-            self._ws_connection_reused = conn_result.from_pool
+            span = trace.get_current_span()
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time)
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, conn_result.from_pool)
             logger.debug(
                 "acquired Deepgram TTS WebSocket connection",
                 extra={
-                    "connection_time": self._ws_connection_time,
-                    "connection_reused": self._ws_connection_reused,
+                    "connection_time": conn_result.connect_time,
+                    "connection_reused": conn_result.from_pool,
                     "segment_id": segment_id,
                 },
             )

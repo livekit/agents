@@ -10,6 +10,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from opentelemetry import trace
+
 import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
@@ -18,6 +20,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -484,10 +487,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
 
-        # WebSocket connection timing metrics
-        self._ws_connection_time: float | None = None  # time taken to establish the connection
-        self._ws_connection_reused: bool | None = None  # True if reused from pool (N/A for Gemini)
-
     async def _close_active_session(self) -> None:
         async with self._session_lock:
             if self._active_session:
@@ -797,13 +796,15 @@ class RealtimeSession(llm.RealtimeSession):
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
-                    self._ws_connection_time = time.perf_counter() - connect_start_time
-                    self._ws_connection_reused = False  # Gemini creates new connections each time
+                    ws_connection_time = time.perf_counter() - connect_start_time
+                    span = trace.get_current_span()
+                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
+                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, False)
                     logger.debug(
                         "established Gemini Realtime API WebSocket connection",
                         extra={
-                            "connection_time": self._ws_connection_time,
-                            "connection_reused": self._ws_connection_reused,
+                            "connection_time": ws_connection_time,
+                            "connection_reused": False,
                         },
                     )
                     async with self._session_lock:
@@ -1340,8 +1341,6 @@ class RealtimeSession(llm.RealtimeSession):
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 **_token_details_map(usage_metadata.response_tokens_details),
             ),
-            websocket_connection_time=self._ws_connection_time,
-            websocket_connection_reused=self._ws_connection_reused,
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

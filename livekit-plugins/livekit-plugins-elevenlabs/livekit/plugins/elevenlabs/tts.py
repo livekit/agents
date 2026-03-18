@@ -26,6 +26,7 @@ from functools import cached_property
 from typing import Any, Literal
 
 import aiohttp
+from opentelemetry import trace
 
 from livekit.agents import (
     APIConnectionError,
@@ -38,6 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -412,17 +414,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts.current_connection(), self._conn_options.timeout
             )
             total_time = time.perf_counter() - start_time
-            self._ws_connection_reused = is_reused
             # Use the actual WebSocket connection time if available (for new connections),
             # otherwise use the time to acquire the connection (for reused connections)
-            self._ws_connection_time = (
+            ws_connection_time = (
                 connection._connect_time if connection._connect_time else total_time
             )
+            span = trace.get_current_span()
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
+            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, is_reused)
             logger.debug(
                 "acquired ElevenLabs TTS WebSocket connection",
                 extra={
-                    "connection_time": self._ws_connection_time,
-                    "connection_reused": self._ws_connection_reused,
+                    "connection_time": ws_connection_time,
+                    "connection_reused": is_reused,
                     "context_id": self._context_id,
                 },
             )
