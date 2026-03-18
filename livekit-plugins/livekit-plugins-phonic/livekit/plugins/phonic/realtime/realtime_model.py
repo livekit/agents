@@ -387,6 +387,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._close_current_generation(interrupted=False)
 
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generate_reply_fut = fut
 
