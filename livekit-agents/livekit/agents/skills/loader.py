@@ -82,7 +82,7 @@ def load_skill_from_directory(path: str | Path) -> Skill:
 
 def _load_tools_from_file(path: Path) -> list[Tool]:
     """Dynamically import a Python file and extract function tools from it."""
-    module_name = f"_livekit_skill_{path.parent.name}_tools"
+    module_name = f"_livekit_skill_{path.parent.name}_{id(path)}_tools"
 
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
