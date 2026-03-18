@@ -1304,8 +1304,11 @@ class RealtimeSessionBeta(
         assert event.item.id is not None, "item.id is None"
 
         try:
-            self._remote_chat_ctx.insert(
-                event.previous_item_id, _openai_item_to_livekit_item(event.item)
+            lk_item = _openai_item_to_livekit_item(event.item)
+            self._remote_chat_ctx.insert(event.previous_item_id, lk_item)
+            self.emit(
+                "remote_item_added",
+                llm.RemoteItemAddedEvent(previous_item_id=event.previous_item_id, item=lk_item),
             )
         except ValueError as e:
             logger.warning(
