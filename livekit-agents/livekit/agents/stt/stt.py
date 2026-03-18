@@ -61,7 +61,7 @@ class SpeechData:
     is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
     input_language: LanguageCode | None = None
-    """the detected/input language spoken by the user. populated by STT services that support translation,  # noqa: E501
+    """the detected/input language spoken by the user. populated by STT services that support translation,
     where `language` holds the target language and `input_language` holds the original spoken language"""
     input_text: str | None = None
     """the original transcription in the input language, when translation is active"""
