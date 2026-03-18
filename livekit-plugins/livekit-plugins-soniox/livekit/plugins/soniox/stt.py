@@ -428,6 +428,8 @@ class SpeechStream(stt.SpeechStream):
 
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
+            else:
+                final_original.reset()
 
         is_translation_mode = self._stt._params.translation is not None
         # Method handles receiving messages from the Soniox Speech-to-Text API.
