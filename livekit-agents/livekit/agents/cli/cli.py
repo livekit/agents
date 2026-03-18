@@ -1665,6 +1665,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
     @app.callback(invoke_without_command=True)
     def _set_dev_mode(ctx: typer.Context) -> None:
+        if ctx.invoked_subcommand is None:
+            print(ctx.get_help())
+            raise typer.Exit()
         if ctx.invoked_subcommand in ("console", "dev"):
             os.environ["LIVEKIT_DEV_MODE"] = "1"
 
