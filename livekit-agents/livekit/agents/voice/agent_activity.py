@@ -76,7 +76,7 @@ from .generation import (
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 
 if TYPE_CHECKING:
-    from ..beta.toolsets import MCPToolset
+    from ..beta.toolsets.mcp import MCPToolset
     from ..llm import mcp
     from .agent_session import AgentSession
 
@@ -529,7 +529,7 @@ class AgentActivity(RecognitionHooks):
             self.vad.on("metrics_collected", self._on_metrics_collected)
 
         if self.mcp_servers:
-            from ..beta.toolsets import MCPToolset
+            from ..beta.toolsets.mcp import MCPToolset
 
             logger.warning(
                 "passing MCP servers to AgentSession or Agent is deprecated "
