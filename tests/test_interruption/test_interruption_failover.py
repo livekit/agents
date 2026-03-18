@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents._exceptions import APIConnectionError, APIError, APIStatusError
+from livekit.agents._exceptions import APIError
 from livekit.agents.inference.interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDetectionError,
@@ -127,7 +127,7 @@ class TestHttpTimeout:
         exc = await _wait_for_stream_failure(stream)
 
         assert exc is not None, f"Expected exception, got None. Errors: {errors}"
-        assert isinstance(exc, (APIConnectionError, APIError))
+        assert isinstance(exc, APIError)
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
@@ -162,7 +162,7 @@ class TestHttp429:
         exc = await _wait_for_stream_failure(stream)
 
         assert exc is not None, f"Expected exception, got None. Errors: {errors}"
-        assert isinstance(exc, (APIConnectionError, APIError))
+        assert isinstance(exc, APIError)
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
@@ -212,7 +212,7 @@ class TestWsConnectionTimeout:
         exc = await _wait_for_stream_failure(stream)
 
         assert exc is not None
-        assert isinstance(exc, (APIConnectionError, APIError))
+        assert isinstance(exc, APIError)
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
@@ -240,7 +240,7 @@ class TestWsConnection429:
         exc = await _wait_for_stream_failure(stream)
 
         assert exc is not None
-        assert isinstance(exc, (APIStatusError, APIError))
+        assert isinstance(exc, APIError)
 
         # 429 -> APIStatusError(retryable=False) so no retries, immediate unrecoverable
         recoverable_errors = [e for e in errors if e.recoverable]
@@ -286,7 +286,7 @@ class TestWsCacheTimeout:
         exc = await _wait_for_stream_failure(stream)
 
         assert exc is not None
-        assert isinstance(exc, (APIConnectionError, APIError))
+        assert isinstance(exc, APIError)
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]

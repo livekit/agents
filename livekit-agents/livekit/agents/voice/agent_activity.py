@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import json
+import os
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -3145,6 +3146,11 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detection_enabled = False
         self._restore_interruption_by_audio_activity()
 
+        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+            self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
+            self._interruption_detector.off("error", self._on_error)
+            self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
+
         if self._audio_recognition:
             self._audio_recognition.update_interruption_detection(None)
 
@@ -3196,6 +3202,7 @@ class AgentActivity(RecognitionHooks):
         if (
             not is_given(self._agent.interruption_detection)
             and not is_given(self._session.interruption_detection)
+            and not os.getenv("LIVEKIT_REMOTE_EOT_URL")
             and not utils.is_dev_mode()
         ):
             logger.warning("adaptive interruption is disabled by default in production mode")
