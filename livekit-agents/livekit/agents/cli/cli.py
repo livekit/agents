@@ -1493,13 +1493,14 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    log_level: int | str = logging.DEBUG,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
     c.record = record
 
-    _configure_logger(c, logging.DEBUG)
+    _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1691,6 +1692,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1711,6 +1718,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             output_device=output_device,
             mode="text" if text else "audio",
             record=record,
+            log_level=log_level.value,
         )
 
     @app.command()
