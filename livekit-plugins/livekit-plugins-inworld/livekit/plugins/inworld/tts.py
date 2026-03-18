@@ -24,7 +24,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 from urllib.parse import urljoin
 
 import aiohttp
@@ -57,18 +57,24 @@ DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
-DEFAULT_TEMPERATURE = 1.1
+DEFAULT_TEMPERATURE = 1.0
 DEFAULT_SPEAKING_RATE = 1.0
 DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"] | str
+Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
 
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
+
+
+def _validate_str_param(value: object, name: str, literal_type: type) -> None:
+    valid = get_args(literal_type)
+    if not isinstance(value, str) or value not in valid:
+        raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
 
 
 @dataclass
@@ -336,6 +342,14 @@ class _InworldConnection:
         except asyncio.QueueFull:
             logger.warning("Outbound queue full, dropping flush")
 
+    def _release_context(self, context_id: str) -> None:
+        """Remove a context and signal that capacity is available."""
+        self._contexts.pop(context_id, None)
+        self._last_activity = time.time()
+        self._context_available.set()
+        if self._on_capacity_available:
+            self._on_capacity_available()
+
     def close_context(self, context_id: str) -> None:
         """Queue a close message for a context (removes from pool)."""
         ctx = self._contexts.get(context_id)
@@ -427,6 +441,18 @@ class _InworldConnection:
                     continue
 
                 data = json.loads(msg.data)
+
+                # Check for errors that are not associated with a context
+                if err_obj := data.get("error"):
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "error_code": err_obj.get("code", 0),
+                            "error_message": err_obj.get("message", "Unknown error"),
+                        },
+                    )
+                    continue
+
                 result = data.get("result", {})
                 context_id = result.get("contextId")
 
@@ -435,16 +461,22 @@ class _InworldConnection:
                 # Check for errors in status
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
-                    error = APIError(f"Inworld error: {status.get('message', 'Unknown error')}")
+                    error_msg = status.get("message", "Unknown error")
+                    error = APIError(f"Inworld error: {error_msg}")
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "context_id": context_id,
+                            "error_code": status.get("code"),
+                            "error_message": error_msg,
+                            "context_state": ctx.state.value if ctx else "unknown",
+                            "context_known": ctx is not None,
+                        },
+                    )
                     if ctx:
                         if ctx.waiter and not ctx.waiter.done():
                             ctx.waiter.set_exception(error)
-                        # Release the stuck context and signal capacity
-                        self._contexts.pop(context_id, None)
-                        self._last_activity = time.time()
-                        self._context_available.set()
-                        if self._on_capacity_available:
-                            self._on_capacity_available()
+                        self._release_context(context_id)
                     continue
 
                 if not ctx:
@@ -452,6 +484,10 @@ class _InworldConnection:
 
                 if "contextCreated" in result:
                     ctx.state = _ContextState.ACTIVE
+                    logger.info(
+                        "Context created confirmed by server",
+                        extra={"context_id": context_id},
+                    )
                     continue
 
                 if audio_chunk := result.get("audioChunk"):
@@ -526,11 +562,7 @@ class _InworldConnection:
                 if "contextClosed" in result:
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(context_id, None)
-                    self._last_activity = time.time()
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(context_id)
                     continue
 
         except Exception as e:
@@ -548,14 +580,9 @@ class _InworldConnection:
                 # Use close_started_at if available, otherwise fall back to created_at
                 close_time = ctx.close_started_at or ctx.created_at
                 if ctx.state == _ContextState.CLOSING and now - close_time > 120.0:
-                    # Resolve waiter before evicting
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(ctx.context_id, None)
-                    self._last_activity = now
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(ctx.context_id)
 
     async def _handle_connection_error(self, error: Exception) -> None:
         """Handle connection-level error by failing all active contexts."""
@@ -816,7 +843,7 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
                 Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
-                tokens to generate the response. Range [0, 2]. Defaults to 1.1.
+                tokens to generate the response. Range (0, 2]. Defaults to 1.0.
             timestamp_type (str, optional): Controls timestamp metadata returned with the audio.
                 Use "WORD" for word-level timestamps or "CHARACTER" for character-level.
                 Useful for karaoke-style captions, word highlighting, and lipsync.
@@ -868,6 +895,19 @@ class TTS(tts.TTS):
         self._base_url = base_url
         self._ws_url = ws_url
         self._session = http_session
+
+        if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
+        if is_given(timestamp_type):
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+        if is_given(text_normalization):
+            _validate_str_param(text_normalization, "text_normalization", TextNormalization)
+        if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
 
         self._opts = _TTSOptions(
             voice=voice if is_given(voice) else DEFAULT_VOICE,
@@ -964,6 +1004,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
             self._opts.encoding = encoding
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
@@ -974,10 +1015,17 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
             self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
+            _validate_str_param(text_normalization, "text_normalization", TextNormalization)
             self._opts.text_normalization = text_normalization
         if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
             self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
