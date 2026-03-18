@@ -172,13 +172,7 @@ class TestLoader:
 
     def test_load_skill_with_tools_py(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            md_content = (
-                "---\n"
-                "name: with_tools\n"
-                "description: Has tools\n"
-                "---\n\n"
-                "Use the tool.\n"
-            )
+            md_content = "---\nname: with_tools\ndescription: Has tools\n---\n\nUse the tool.\n"
             with open(os.path.join(tmpdir, "skill.md"), "w") as f:
                 f.write(md_content)
 

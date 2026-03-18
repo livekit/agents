@@ -164,6 +164,7 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session instructions fails.
         """
+        self._base_instructions = instructions
         if self._activity is None:
             self._instructions = instructions
             return
@@ -260,7 +261,7 @@ class Agent:
         # rebuild tools and instructions
         all_tools = self._get_all_tools()
         await self.update_tools(all_tools)
-        await self.update_instructions(self._compose_instructions())
+        await self._apply_composed_instructions()
 
     async def remove_skill(self, name: str) -> None:
         """Deactivate a skill by name.
@@ -284,7 +285,15 @@ class Agent:
 
         all_tools = self._get_all_tools()
         await self.update_tools(all_tools)
-        await self.update_instructions(self._compose_instructions())
+        await self._apply_composed_instructions()
+
+    async def _apply_composed_instructions(self) -> None:
+        """Recompose and apply instructions without updating _base_instructions."""
+        composed = self._compose_instructions()
+        if self._activity is None:
+            self._instructions = composed
+            return
+        await self._activity.update_instructions(composed)
 
     def _compose_instructions(self) -> str | Instructions:
         """Rebuild instructions from base + active skills + registry listing."""

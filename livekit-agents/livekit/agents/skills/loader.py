@@ -24,7 +24,7 @@ def _parse_skill_md(text: str) -> tuple[dict[str, str], str]:
         raise ValueError("skill.md must start with a --- frontmatter block")
 
     fields = dict(_FIELD_RE.findall(match.group(1)))
-    body = text[match.end():].strip()
+    body = text[match.end() :].strip()
     return fields, body
 
 
