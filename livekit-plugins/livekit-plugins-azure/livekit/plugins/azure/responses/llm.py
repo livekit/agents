@@ -1,21 +1,14 @@
-from typing import Any
-
 import httpx
 from openai import AsyncAzureOpenAI
 from openai.types import Reasoning
 from openai.types.shared_params import ResponsesModel
 
-from livekit.agents.llm import ChatContext, ToolChoice
-from livekit.agents.llm.tool_context import Tool
+from livekit.agents.llm import ToolChoice
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
 from livekit.plugins import openai
-from livekit.plugins.openai.responses.llm import LLMStream as _OpenAILLMStream
 from livekit.plugins.openai.utils import AsyncAzureADTokenProvider
 
 
@@ -39,7 +32,6 @@ class LLM(openai.responses.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
-        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -78,31 +70,6 @@ class LLM(openai.responses.LLM):
             reasoning=reasoning,
         )
         self._azure_client = azure_client
-        self._max_output_tokens = max_output_tokens
-
-    def chat(
-        self,
-        *,
-        chat_ctx: ChatContext,
-        tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> _OpenAILLMStream:
-        if is_given(self._max_output_tokens):
-            if not is_given(extra_kwargs):
-                extra_kwargs = {}
-            extra_kwargs.setdefault("max_output_tokens", self._max_output_tokens)
-
-        return super().chat(
-            chat_ctx=chat_ctx,
-            tools=tools,
-            conn_options=conn_options,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-            extra_kwargs=extra_kwargs,
-        )
 
     async def aclose(self) -> None:
         await super().aclose()
