@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm import ChatContext, FunctionTool, RealtimeModel, ToolError, find_function_tools
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -20,6 +20,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from ..skills import Skill, SkillRegistry
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .audio_recognition import TurnDetectionMode
@@ -40,6 +41,8 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        skills: list[Skill] | None = None,
+        skill_registry: SkillRegistry | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -58,8 +61,29 @@ class Agent:
         else:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
+        self._base_instructions = instructions
+        self._active_skills: list[Skill] = []
+        self._skill_registry: SkillRegistry | None = skill_registry
+
+        # inject meta-tools when a registry is provided
+        meta_tools: list[FunctionTool] = []
+        if skill_registry is not None:
+            from ..skills.meta_tools import create_skill_meta_tools
+
+            meta_tools = create_skill_meta_tools(self)
+
         self._instructions = instructions
-        self._tools = [*tools, *find_function_tools(self)]
+        self._tools = [*tools, *meta_tools, *find_function_tools(self)]
+
+        # activate initial skills
+        if skills:
+            for skill in skills:
+                self._active_skills.append(skill)
+                self._tools.append(skill)
+
+        # compose instructions from base + active skills + registry listing
+        self._instructions = self._compose_instructions()
+
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
 
@@ -204,6 +228,107 @@ class Agent:
         await self._activity.update_chat_ctx(
             chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
         )
+
+    async def add_skill(self, skill: Skill | str) -> None:
+        """Activate a skill on this agent.
+
+        Args:
+            skill: A :class:`Skill` instance, or a skill name to look up in the registry.
+
+        Raises:
+            ValueError: If a string name is given but no registry is set or the skill is not found.
+        """
+        from ..skills import Skill as SkillCls
+
+        if isinstance(skill, str):
+            if self._skill_registry is None:
+                raise ValueError(f"Cannot look up skill '{skill}' — no skill_registry configured")
+            resolved = self._skill_registry.get(skill)
+            if resolved is None:
+                raise ValueError(f"Skill '{skill}' not found in registry")
+            skill = resolved
+
+        if not isinstance(skill, SkillCls):
+            raise TypeError(f"Expected Skill instance, got {type(skill)}")
+
+        # avoid duplicates
+        if any(s.name == skill.name for s in self._active_skills):
+            return
+
+        self._active_skills.append(skill)
+
+        # rebuild tools and instructions
+        all_tools = self._get_all_tools()
+        await self.update_tools(all_tools)
+        await self.update_instructions(self._compose_instructions())
+
+    async def remove_skill(self, name: str) -> None:
+        """Deactivate a skill by name.
+
+        Args:
+            name: The name of the skill to remove.
+
+        Raises:
+            KeyError: If no active skill has that name.
+        """
+        idx = None
+        for i, s in enumerate(self._active_skills):
+            if s.name == name:
+                idx = i
+                break
+
+        if idx is None:
+            raise KeyError(f"Skill '{name}' is not active")
+
+        self._active_skills.pop(idx)
+
+        all_tools = self._get_all_tools()
+        await self.update_tools(all_tools)
+        await self.update_instructions(self._compose_instructions())
+
+    def _compose_instructions(self) -> str | Instructions:
+        """Rebuild instructions from base + active skills + registry listing."""
+        parts: list[str] = [str(self._base_instructions)]
+
+        if self._active_skills:
+            parts.append("\n\n--- Active Skills ---")
+            for skill in self._active_skills:
+                parts.append(f"\n\n### Skill: {skill.name}\n{skill.instructions}")
+
+        if self._skill_registry:
+            available = self._skill_registry.available_skills
+            if available:
+                parts.append("\n\n--- Available Skills ---")
+                parts.append(
+                    "\nYou can activate/deactivate these skills using the "
+                    "activate_skill and deactivate_skill tools:"
+                )
+                for name, skill in available.items():
+                    parts.append(f"\n- **{name}**: {skill.description}")
+
+        composed = "".join(parts)
+
+        # preserve Instructions modality if base uses it
+        if isinstance(self._base_instructions, Instructions):
+            return self._base_instructions + composed[len(str(self._base_instructions)) :]
+
+        return composed
+
+    def _get_all_tools(self) -> list[llm.Tool | llm.Toolset]:
+        """Collect all tools: explicit tools, meta-tools, function_tools, and active skills."""
+        tools: list[llm.Tool | llm.Toolset] = []
+        for tool in self._tools:
+            # skip old skill toolsets — we'll re-add current active ones
+            from ..skills import Skill as SkillCls
+
+            if isinstance(tool, SkillCls):
+                continue
+            tools.append(tool)
+
+        for skill in self._active_skills:
+            tools.append(skill)
+
+        return tools
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the

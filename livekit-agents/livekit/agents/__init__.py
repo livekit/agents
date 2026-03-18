@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import cli, inference, ipc, llm, metrics, skills, stt, tokenize, tts, utils, vad, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -58,6 +58,7 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .skills import Skill, SkillRegistry
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -193,6 +194,9 @@ __all__ = [
     "PlayHandle",
     "FlushSentinel",
     "LanguageCode",
+    "Skill",
+    "SkillRegistry",
+    "skills",
     "io",
     "avatar",
     "cli",
