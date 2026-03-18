@@ -701,6 +701,10 @@ class RealtimeSession(
         )
         self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
+        # WebSocket connection timing metrics
+        self._ws_connection_time: float | None = None  # time taken to establish the connection
+        self._ws_connection_reused: bool | None = None  # True if reused from pool (N/A for OpenAI)
+
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
@@ -819,11 +823,22 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        start_time = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            self._ws_connection_time = time.perf_counter() - start_time
+            self._ws_connection_reused = False  # OpenAI Realtime creates new connections each time
+            logger.debug(
+                "established OpenAI Realtime API WebSocket connection",
+                extra={
+                    "connection_time": self._ws_connection_time,
+                    "connection_reused": self._ws_connection_reused,
+                },
+            )
+            return ws
         except aiohttp.ClientError as e:
             raise APIConnectionError("OpenAI Realtime API client connection error") from e
         except asyncio.TimeoutError as e:
@@ -1701,6 +1716,8 @@ class RealtimeSession(
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=usage.get("output_token_details", {}).get("image_tokens", 0),
             ),
+            websocket_connection_time=self._ws_connection_time,
+            websocket_connection_reused=self._ws_connection_reused,
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

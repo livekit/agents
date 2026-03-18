@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from collections import Counter
 from collections.abc import Sequence
@@ -623,6 +624,7 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
+        start_time = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -631,12 +633,18 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            self._ws_connection_time = time.perf_counter() - start_time
+            self._ws_connection_reused = False  # Deepgram STT creates new connections each time
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
             logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
+                "Established new Deepgram STT WebSocket connection",
+                extra={
+                    "headers": ws_headers,
+                    "connection_time": self._ws_connection_time,
+                    "connection_reused": self._ws_connection_reused,
+                },
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e

@@ -822,7 +822,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             audio_pushed = False
             try:
-                async with self._pool.connection(timeout=self._conn_options.timeout) as client:
+                async with self._pool.connection_with_timing(
+                    timeout=self._conn_options.timeout
+                ) as conn_result:
+                    client = conn_result.connection
+                    self._ws_connection_time = conn_result.connect_time
+                    self._ws_connection_reused = conn_result.from_pool
+                    logger.debug(
+                        "acquired Google STT connection",
+                        extra={
+                            "connection_time": self._ws_connection_time,
+                            "connection_reused": self._ws_connection_reused,
+                        },
+                    )
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

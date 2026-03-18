@@ -349,7 +349,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        async with self._tts._pool.connection_with_timing(
+            timeout=self._conn_options.timeout
+        ) as conn_result:
+            ws = conn_result.connection
+            self._ws_connection_time = conn_result.connect_time
+            self._ws_connection_reused = conn_result.from_pool
+            logger.debug(
+                "acquired Deepgram TTS WebSocket connection",
+                extra={
+                    "connection_time": self._ws_connection_time,
+                    "connection_reused": self._ws_connection_reused,
+                    "segment_id": segment_id,
+                },
+            )
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

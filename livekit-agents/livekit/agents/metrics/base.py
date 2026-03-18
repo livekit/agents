@@ -38,6 +38,12 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    websocket_connection_time: float | None = None
+    """Time in seconds taken to establish the WebSocket connection.
+    None if not using WebSocket or not measured."""
+    websocket_connection_reused: bool | None = None
+    """True if the WebSocket connection was reused from a pool, False if newly created.
+    None if not using WebSocket or not measured."""
     metadata: Metadata | None = None
 
 
@@ -54,6 +60,12 @@ class TTSMetrics(BaseModel):
     streamed: bool
     segment_id: str | None = None
     speech_id: str | None = None
+    websocket_connection_time: float | None = None
+    """Time in seconds taken to establish the WebSocket connection.
+    None if not using WebSocket or not measured."""
+    websocket_connection_reused: bool | None = None
+    """True if the WebSocket connection was reused from a pool, False if newly created.
+    None if not using WebSocket or not measured."""
     metadata: Metadata | None = None
 
 
@@ -129,6 +141,12 @@ class RealtimeModelMetrics(BaseModel):
     """Details about the input tokens used in the Response."""
     output_token_details: OutputTokenDetails
     """Details about the output tokens used in the Response."""
+    websocket_connection_time: float | None = None
+    """Time in seconds taken to establish the WebSocket connection.
+    None if not using WebSocket or not measured."""
+    websocket_connection_reused: bool | None = None
+    """True if the WebSocket connection was reused from a pool, False if newly created.
+    None if not using WebSocket or not measured."""
     metadata: Metadata | None = None
 
 

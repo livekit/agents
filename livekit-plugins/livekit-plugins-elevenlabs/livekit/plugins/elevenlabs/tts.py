@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -270,21 +271,26 @@ class TTS(tts.TTS):
             self._current_connection.mark_non_current()
             self._current_connection = None
 
-    async def current_connection(self) -> _Connection:
-        """Get the current connection, creating one if needed"""
+    async def current_connection(self) -> tuple[_Connection, bool]:
+        """Get the current connection, creating one if needed.
+
+        Returns:
+            A tuple of (_Connection, is_reused) where is_reused is True if the
+            connection was reused from the pool.
+        """
         async with self._connection_lock:
             if (
                 self._current_connection
                 and self._current_connection.is_current
                 and not self._current_connection._closed
             ):
-                return self._current_connection
+                return self._current_connection, True  # reused connection
 
             session = self._ensure_session()
             conn = _Connection(self._opts, session)
             await conn.connect()
             self._current_connection = conn
-            return conn
+            return conn, False  # new connection
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -401,8 +407,24 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
-            connection = await asyncio.wait_for(
+            start_time = time.perf_counter()
+            connection, is_reused = await asyncio.wait_for(
                 self._tts.current_connection(), self._conn_options.timeout
+            )
+            total_time = time.perf_counter() - start_time
+            self._ws_connection_reused = is_reused
+            # Use the actual WebSocket connection time if available (for new connections),
+            # otherwise use the time to acquire the connection (for reused connections)
+            self._ws_connection_time = (
+                connection._connect_time if connection._connect_time else total_time
+            )
+            logger.debug(
+                "acquired ElevenLabs TTS WebSocket connection",
+                extra={
+                    "connection_time": self._ws_connection_time,
+                    "connection_reused": self._ws_connection_reused,
+                    "context_id": self._context_id,
+                },
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -539,6 +561,9 @@ class _Connection:
         self._recv_task: asyncio.Task | None = None
         self._closed = False
 
+        # WebSocket connection timing
+        self._connect_time: float | None = None
+
     @property
     def voice_id(self) -> str:
         return self._opts.voice_id
@@ -573,7 +598,13 @@ class _Connection:
 
         url = _multi_stream_url(self._opts)
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
+        start_time = time.perf_counter()
         self._ws = await self._session.ws_connect(url, headers=headers)
+        self._connect_time = time.perf_counter() - start_time
+        logger.debug(
+            "established ElevenLabs TTS WebSocket connection",
+            extra={"connection_time": self._connect_time},
+        )
 
         self._send_task = asyncio.create_task(self._send_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())

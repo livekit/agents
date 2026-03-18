@@ -484,6 +484,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
 
+        # WebSocket connection timing metrics
+        self._ws_connection_time: float | None = None  # time taken to establish the connection
+        self._ws_connection_reused: bool | None = None  # True if reused from pool (N/A for Gemini)
+
     async def _close_active_session(self) -> None:
         async with self._session_lock:
             if self._active_session:
@@ -789,9 +793,19 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                connect_start_time = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._ws_connection_time = time.perf_counter() - connect_start_time
+                    self._ws_connection_reused = False  # Gemini creates new connections each time
+                    logger.debug(
+                        "established Gemini Realtime API WebSocket connection",
+                        extra={
+                            "connection_time": self._ws_connection_time,
+                            "connection_reused": self._ws_connection_reused,
+                        },
+                    )
                     async with self._session_lock:
                         self._active_session = session
 
@@ -1326,6 +1340,8 @@ class RealtimeSession(llm.RealtimeSession):
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 **_token_details_map(usage_metadata.response_tokens_details),
             ),
+            websocket_connection_time=self._ws_connection_time,
+            websocket_connection_reused=self._ws_connection_reused,
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),

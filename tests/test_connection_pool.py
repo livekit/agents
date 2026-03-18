@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from livekit.agents.utils import ConnectionPool
+from livekit.agents.utils import ConnectionPool, ConnectionResult
 
 
 class DummyConnection:
@@ -81,3 +81,52 @@ async def test_get_expired():
 
     conn2 = await pool.get(timeout=10.0)
     assert conn2 is not conn, "Expected a new connection to be returned."
+
+
+@pytest.mark.asyncio
+async def test_get_with_timing_new_connection():
+    """Test get_with_timing returns correct timing info for new connection."""
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    result = await pool.get_with_timing(timeout=10.0)
+    assert isinstance(result, ConnectionResult)
+    assert result.connection is not None
+    assert result.connect_time >= 0
+    assert result.from_pool is False, "Expected from_pool to be False for new connection"
+
+
+@pytest.mark.asyncio
+async def test_get_with_timing_reused_connection():
+    """Test get_with_timing returns correct timing info for reused connection."""
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    # Create a connection and return it to the pool
+    conn1 = await pool.get(timeout=10.0)
+    pool.put(conn1)
+
+    # Get with timing - should reuse the connection
+    result = await pool.get_with_timing(timeout=10.0)
+    assert isinstance(result, ConnectionResult)
+    assert result.connection is conn1, "Expected the same connection to be reused"
+    assert result.connect_time >= 0
+    assert result.from_pool is True, "Expected from_pool to be True for reused connection"
+
+
+@pytest.mark.asyncio
+async def test_connection_with_timing_context_manager():
+    """Test connection_with_timing context manager."""
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    async with pool.connection_with_timing(timeout=10.0) as result:
+        assert isinstance(result, ConnectionResult)
+        assert result.connection is not None
+        assert result.connect_time >= 0
+        assert result.from_pool is False
+
+    # Connection should be returned to pool
+    async with pool.connection_with_timing(timeout=10.0) as result2:
+        assert result2.connection is result.connection
+        assert result2.from_pool is True
