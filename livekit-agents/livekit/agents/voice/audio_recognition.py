@@ -1017,16 +1017,7 @@ class AudioRecognition:
         if task is not None:
             await aio.cancel_and_wait(task)
 
-        try:
-            stream = interruption_detection.stream()
-        except Exception:
-            logger.exception(
-                "failed to create interruption detection stream, "
-                "will disable interruption detection"
-            )
-            self._interruption_detection = None
-            self._reset_interruption_detection()
-            raise
+        stream = interruption_detection.stream()
 
         @utils.log_exceptions(logger=logger)
         async def _forward() -> None:
@@ -1038,13 +1029,6 @@ class AudioRecognition:
         try:
             async for ev in stream:
                 await self._on_overlap_speech_event(ev)
-        except Exception as e:
-            logger.exception(
-                f"interruption detection stream failed: {e}, will disable interruption detection"
-            )
-            self._interruption_detection = None
-            self._reset_interruption_detection()
-            raise
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()

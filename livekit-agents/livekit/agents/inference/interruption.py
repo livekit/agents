@@ -399,11 +399,15 @@ class AdaptiveInterruptionDetector(
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> InterruptionHttpStream | InterruptionWebSocketStream:
-        stream: InterruptionHttpStream | InterruptionWebSocketStream
-        if self._opts.use_proxy:
-            stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
-        else:
-            stream = InterruptionHttpStream(model=self, conn_options=conn_options)
+        try:
+            stream: InterruptionHttpStream | InterruptionWebSocketStream
+            if self._opts.use_proxy:
+                stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
+            else:
+                stream = InterruptionHttpStream(model=self, conn_options=conn_options)
+        except Exception as e:
+            self._emit_error(e, recoverable=False)
+            raise
         self._streams.add(stream)
         return stream
 
