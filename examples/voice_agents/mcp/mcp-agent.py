@@ -24,7 +24,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply()
+        self.session.generate_reply(instructions="greeting the user and introducing yourself")
 
 
 server = AgentServer()
