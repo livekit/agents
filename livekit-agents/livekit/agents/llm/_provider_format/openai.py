@@ -204,14 +204,13 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
 
 def _to_responses_file_content(file: llm.FileContent) -> dict[str, Any]:
     if isinstance(file.data, bytes):
-        file_data = f"data:{file.mime_type};base64,{base64.b64encode(file.data).decode('utf-8')}"
+        data = base64.b64encode(file.data).decode("utf-8")
     else:
-        file_data = file.data
+        data = base64.b64encode(file.data.encode("utf-8")).decode("utf-8")
     return {
         "type": "input_file",
         "filename": file.name,
-        "file_data": file_data,
-        "file_content_type": file.mime_type,
+        "file_data": data,
     }
 
 

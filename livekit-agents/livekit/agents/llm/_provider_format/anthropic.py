@@ -77,6 +77,8 @@ def to_chat_ctx(
                     result_content = [{"type": "text", "text": msg.output.text_contents}]
             for img in msg.output.image_contents:
                 result_content.append(_to_image_content(img))
+            for f in msg.output.file_contents:
+                result_content.append(_to_document_content(f))
             content.append(
                 {
                     "tool_use_id": msg.call_id,
@@ -105,6 +107,27 @@ def to_chat_ctx(
         messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
+
+
+def _to_document_content(file: llm.FileContent) -> dict[str, Any]:
+    if file.mime_type == "text/plain":
+        data = file.data if isinstance(file.data, str) else file.data.decode("utf-8")
+        return {
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": data},
+            "title": file.name,
+        }
+    # default to base64 PDF for binary types
+    raw = file.data if isinstance(file.data, bytes) else file.data.encode("utf-8")
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": file.mime_type,
+            "data": base64.b64encode(raw).decode("utf-8"),
+        },
+        "title": file.name,
+    }
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
