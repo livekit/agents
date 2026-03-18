@@ -4,7 +4,7 @@ import asyncio
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -12,7 +12,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
-from .. import llm, utils
+from .. import RunResult, llm, utils
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -247,7 +247,7 @@ _METRICS_FIELDS = (
 )
 
 
-def _tool_names(tools: list[llm.Tool | Toolset]) -> list[str]:
+def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
     for tool in tools:
         if isinstance(tool, FunctionTool | RawFunctionTool):
@@ -621,7 +621,7 @@ class SessionHost:
                         pass
 
                     try:
-                        result = self._session.run(user_input=text)
+                        result: RunResult[None] = self._session.run(user_input=text)
                         await result
                         items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                     except Exception as e:
