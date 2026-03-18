@@ -220,7 +220,7 @@ class ToolSearchToolset(Toolset):
 def _get_tool_description(tool: FunctionTool | RawFunctionTool) -> str:
     if isinstance(tool, FunctionTool):
         return tool.info.description or ""
-    return tool.info.raw_schema.get("description", "")
+    return str(tool.info.raw_schema.get("description", ""))
 
 
 def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
