@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ...job import get_job_context
-from ...llm import RealtimeModel, Tool, Toolset, function_tool
+from ...llm import RealtimeModel, Toolset, function_tool
 from ...log import logger
 from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
 from ...voice.speech_handle import SpeechHandle
@@ -45,7 +45,13 @@ class EndCallTool(Toolset):
             on_tool_called: Callback to call when the tool is called.
             on_tool_completed: Callback to call when the tool is completed.
         """
-        super().__init__(id="end_call")
+        end_call_tool = function_tool(
+            self._end_call,
+            name="end_call",
+            description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
+        )
+        super().__init__(id="end_call", tools=[end_call_tool])
+
         self._delete_room = delete_room
         self._extra_description = extra_description
 
@@ -53,11 +59,6 @@ class EndCallTool(Toolset):
         self._on_tool_called = on_tool_called
         self._on_tool_completed = on_tool_completed
 
-        self._end_call_tool = function_tool(
-            self._end_call,
-            name="end_call",
-            description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
-        )
         self._shutdown_session_task: asyncio.Task[None] | None = None
 
     async def _end_call(self, ctx: RunContext) -> Any | None:
@@ -126,7 +127,3 @@ class EndCallTool(Toolset):
 
         # shutdown the job process
         job_ctx.shutdown(reason=ev.reason.value)
-
-    @property
-    def tools(self) -> list[Tool]:
-        return [self._end_call_tool]

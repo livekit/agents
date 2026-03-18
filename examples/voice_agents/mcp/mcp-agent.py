@@ -3,6 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
+from livekit.agents.beta.toolsets import MCPToolset
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -37,8 +38,10 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
-        mcp_servers=[
-            mcp.MCPServerHTTP(url="http://localhost:8000/sse"),
+        tools=[
+            MCPToolset(
+                id="mcp_toolset_1", mcp_server=mcp.MCPServerHTTP(url="http://localhost:8000/sse")
+            )
         ],
     )
 

@@ -908,6 +908,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
 
+            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets),
+                    return_exceptions=True,
+                )
+
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None

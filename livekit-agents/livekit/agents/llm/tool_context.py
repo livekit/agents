@@ -47,7 +47,7 @@ class ProviderTool(Tool):
         return self._id
 
 
-class Toolset(ABC):
+class Toolset:
     @dataclass
     class ToolCalledEvent:
         ctx: RunContext
@@ -58,16 +58,23 @@ class Toolset(ABC):
         ctx: RunContext
         output: Any | Exception | None
 
-    def __init__(self, *, id: str) -> None:
+    def __init__(self, *, id: str, tools: list[Tool] | None = None) -> None:
         self._id = id
+        self._tools = tools or []
 
     @property
     def id(self) -> str:
         return self._id
 
     @property
-    @abstractmethod
-    def tools(self) -> list[Tool]: ...
+    def tools(self) -> list[Tool]:
+        return self._tools
+
+    async def setup(self) -> Self:
+        return self
+
+    async def aclose(self) -> None:
+        pass
 
 
 # Used by ToolChoice
