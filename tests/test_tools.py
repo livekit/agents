@@ -1,5 +1,7 @@
 import enum
-from typing import Literal
+import json
+import typing
+from typing import Any, Literal, Union
 
 import pytest
 from pydantic import BaseModel, Field
@@ -447,3 +449,53 @@ class TestStrictJsonSchema:
         status = schema["properties"]["status"]
         assert None not in status["enum"], f"enum should not contain None: {status}"
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
+
+
+class _OpenEnumModel(BaseModel):
+    """Simulates a codegen'd "open enum" pattern (e.g. Fern Python SDK).
+    Union[Literal["a", "b"], Any] produces an anyOf with a bare {} entry."""
+
+    preference: Union[Literal["a", "b"], Any, None] = None
+
+
+class _NestedOpenEnumModel(BaseModel):
+    items: list[_OpenEnumModel]
+
+
+class TestEmptySchemaStripping:
+    """Test that empty {} entries are stripped from anyOf/oneOf."""
+
+    def _has_empty_in_union(self, schema: dict, union_key: str) -> bool:
+        """Check if any union variant in the schema is an empty {}."""
+        if isinstance(schema, dict):
+            variants = schema.get(union_key)
+            if isinstance(variants, list) and any(v == {} for v in variants):
+                return True
+            for v in schema.values():
+                if isinstance(v, dict) and self._has_empty_in_union(v, union_key):
+                    return True
+            if isinstance(variants, list):
+                for v in variants:
+                    if isinstance(v, dict) and self._has_empty_in_union(v, union_key):
+                        return True
+        return False
+
+    def test_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_OpenEnumModel)
+        assert not self._has_empty_in_union(schema, "anyOf"), (
+            f"anyOf should not contain empty {{}}: {schema}"
+        )
+
+    def test_nested_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_NestedOpenEnumModel)
+        assert not self._has_empty_in_union(schema, "anyOf"), (
+            f"Nested anyOf should not contain empty {{}}: {schema}"
+        )
+
+    def test_open_enum_produces_valid_schema(self):
+        """The schema should be valid for OpenAI strict mode (no empty {})."""
+        schema = to_strict_json_schema(_OpenEnumModel)
+        json_str = json.dumps(schema)
+        assert "{}" not in json_str or '"{}"' in json_str, (
+            "Schema should not contain bare empty objects"
+        )
