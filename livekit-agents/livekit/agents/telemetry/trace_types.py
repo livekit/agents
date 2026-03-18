@@ -65,7 +65,7 @@ ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"  # input tokens (cached + uncached)
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 
-# Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse
+# Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse:
 # https://langfuse.com/integrations/native/opentelemetry#usage
 # but not in the official OpenTelemetry specification.
 ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"  # uncached text tokens
