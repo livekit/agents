@@ -1901,9 +1901,6 @@ simli = [
 simplismart = [
     { name = "livekit-plugins-simplismart" },
 ]
-skills = [
-    { name = "pyyaml" },
-]
 smallestai = [
     { name = "livekit-plugins-smallestai" },
 ]
@@ -2023,14 +2020,13 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.0" },
     { name = "pydantic", specifier = ">=2.0,<3" },
     { name = "pyjwt", specifier = ">=2.0" },
-    { name = "pyyaml", marker = "extra == 'skills'", specifier = ">=6.0" },
     { name = "sounddevice", specifier = ">=0.5" },
     { name = "typer", specifier = ">=0.15.1" },
     { name = "types-protobuf", specifier = ">=4" },
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "skills", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"

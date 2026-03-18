@@ -1,20 +1,45 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
-from typing import Any
 
 from ..llm.tool_context import Tool, find_function_tools
 from ..log import logger
 from .skill import Skill
 
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_FIELD_RE = re.compile(r"^(\w+):\s*(.+)$", re.MULTILINE)
+
+
+def _parse_skill_md(text: str) -> tuple[dict[str, str], str]:
+    """Parse a skill.md file into (frontmatter fields, body instructions).
+
+    Raises:
+        ValueError: If the file has no valid frontmatter block.
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        raise ValueError("skill.md must start with a --- frontmatter block")
+
+    fields = dict(_FIELD_RE.findall(match.group(1)))
+    body = text[match.end():].strip()
+    return fields, body
+
 
 def load_skill_from_directory(path: str | Path) -> Skill:
-    """Load a skill from a directory containing ``skill.yaml`` and optionally ``tools.py``.
+    """Load a skill from a directory containing ``skill.md`` and optionally ``tools.py``.
 
-    The ``skill.yaml`` must define ``name``, ``description``, and either ``instructions``
-    (inline) or ``instructions_file`` (path relative to the skill directory).
+    The ``skill.md`` uses markdown with frontmatter::
+
+        ---
+        name: calendar
+        description: Manage calendar events and scheduling
+        ---
+
+        You can help users manage their calendar. Use the available
+        calendar tools to book, check, and cancel meetings.
 
     Args:
         path: Path to the skill directory.
@@ -23,52 +48,28 @@ def load_skill_from_directory(path: str | Path) -> Skill:
         A fully constructed :class:`Skill` instance.
 
     Raises:
-        FileNotFoundError: If the directory or ``skill.yaml`` does not exist.
-        ValueError: If required fields are missing from the YAML.
-        ImportError: If ``pyyaml`` is not installed.
+        FileNotFoundError: If the directory or ``skill.md`` does not exist.
+        ValueError: If required fields are missing.
     """
     skill_dir = Path(path)
     if not skill_dir.is_dir():
         raise FileNotFoundError(f"Skill directory not found: {skill_dir}")
 
-    yaml_path = skill_dir / "skill.yaml"
-    if not yaml_path.exists():
-        raise FileNotFoundError(f"skill.yaml not found in {skill_dir}")
+    md_path = skill_dir / "skill.md"
+    if not md_path.exists():
+        raise FileNotFoundError(f"skill.md not found in {skill_dir}")
 
-    try:
-        import yaml
-    except ImportError as e:
-        raise ImportError(
-            "pyyaml is required for file-based skill loading. Install it with: pip install pyyaml"
-        ) from e
+    text = md_path.read_text()
+    fields, instructions = _parse_skill_md(text)
 
-    with open(yaml_path) as f:
-        config: dict[str, Any] = yaml.safe_load(f)
-
-    name = config.get("name")
+    name = fields.get("name")
     if not name:
-        raise ValueError(f"skill.yaml in {skill_dir} must define 'name'")
+        raise ValueError(f"skill.md in {skill_dir} must define 'name' in frontmatter")
 
-    description = config.get("description", "")
+    description = fields.get("description", "")
 
-    instructions = config.get("instructions")
-    instructions_file = config.get("instructions_file")
-
-    if instructions and instructions_file:
-        raise ValueError(
-            f"skill.yaml in {skill_dir} must define either 'instructions' or "
-            "'instructions_file', not both"
-        )
-
-    if instructions_file:
-        instr_path = skill_dir / instructions_file
-        if not instr_path.exists():
-            raise FileNotFoundError(f"Instructions file not found: {instr_path}")
-        instructions = instr_path.read_text()
-    elif not instructions:
-        raise ValueError(
-            f"skill.yaml in {skill_dir} must define 'instructions' or 'instructions_file'"
-        )
+    if not instructions:
+        raise ValueError(f"skill.md in {skill_dir} must have instructions after the frontmatter")
 
     # load tools from tools.py if present
     tools: list[Tool] = []

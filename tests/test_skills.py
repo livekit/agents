@@ -155,42 +155,32 @@ class TestSkillRegistry:
 class TestLoader:
     def test_load_skill_from_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            # write skill.yaml
-            yaml_content = (
+            md_content = (
+                "---\n"
                 "name: test_skill\n"
                 "description: A test skill\n"
-                "instructions: |\n"
-                "  These are test instructions.\n"
+                "---\n\n"
+                "These are test instructions.\n"
             )
-            with open(os.path.join(tmpdir, "skill.yaml"), "w") as f:
-                f.write(yaml_content)
+            with open(os.path.join(tmpdir, "skill.md"), "w") as f:
+                f.write(md_content)
 
             skill = load_skill_from_directory(tmpdir)
             assert skill.name == "test_skill"
             assert skill.description == "A test skill"
             assert "test instructions" in skill.instructions.lower()
 
-    def test_load_skill_with_instructions_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_content = (
-                "name: file_instr\n"
-                "description: With file instructions\n"
-                "instructions_file: instructions.md\n"
-            )
-            with open(os.path.join(tmpdir, "skill.yaml"), "w") as f:
-                f.write(yaml_content)
-
-            with open(os.path.join(tmpdir, "instructions.md"), "w") as f:
-                f.write("Instructions from file.")
-
-            skill = load_skill_from_directory(tmpdir)
-            assert skill.instructions == "Instructions from file."
-
     def test_load_skill_with_tools_py(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_content = "name: with_tools\ndescription: Has tools\ninstructions: Use the tool.\n"
-            with open(os.path.join(tmpdir, "skill.yaml"), "w") as f:
-                f.write(yaml_content)
+            md_content = (
+                "---\n"
+                "name: with_tools\n"
+                "description: Has tools\n"
+                "---\n\n"
+                "Use the tool.\n"
+            )
+            with open(os.path.join(tmpdir, "skill.md"), "w") as f:
+                f.write(md_content)
 
             tools_py = (
                 "from livekit.agents.llm import function_tool\n\n"
@@ -213,27 +203,32 @@ class TestLoader:
         with pytest.raises(FileNotFoundError):
             load_skill_from_directory("/nonexistent/path")
 
-    def test_load_missing_yaml_raises(self):
+    def test_load_missing_md_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(FileNotFoundError, match="skill.yaml"):
+            with pytest.raises(FileNotFoundError, match="skill.md"):
                 load_skill_from_directory(tmpdir)
 
     def test_load_missing_name_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_content = "description: No name\ninstructions: test\n"
-            with open(os.path.join(tmpdir, "skill.yaml"), "w") as f:
-                f.write(yaml_content)
+            md_content = "---\ndescription: No name\n---\n\nSome instructions.\n"
+            with open(os.path.join(tmpdir, "skill.md"), "w") as f:
+                f.write(md_content)
             with pytest.raises(ValueError, match="name"):
                 load_skill_from_directory(tmpdir)
 
-    def test_load_both_instructions_raises(self):
+    def test_load_no_frontmatter_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_content = (
-                "name: bad\ndescription: Both\ninstructions: inline\ninstructions_file: file.md\n"
-            )
-            with open(os.path.join(tmpdir, "skill.yaml"), "w") as f:
-                f.write(yaml_content)
-            with pytest.raises(ValueError, match="not both"):
+            with open(os.path.join(tmpdir, "skill.md"), "w") as f:
+                f.write("Just plain text, no frontmatter.\n")
+            with pytest.raises(ValueError, match="frontmatter"):
+                load_skill_from_directory(tmpdir)
+
+    def test_load_empty_body_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            md_content = "---\nname: empty_body\ndescription: d\n---\n"
+            with open(os.path.join(tmpdir, "skill.md"), "w") as f:
+                f.write(md_content)
+            with pytest.raises(ValueError, match="instructions"):
                 load_skill_from_directory(tmpdir)
 
     def test_registry_from_directory(self):
@@ -242,13 +237,12 @@ class TestLoader:
             for name in ["skill_a", "skill_b"]:
                 skill_dir = os.path.join(tmpdir, name)
                 os.makedirs(skill_dir)
-                yaml_content = (
-                    f"name: {name}\n"
-                    f"description: Skill {name}\n"
-                    f"instructions: Instructions for {name}\n"
+                md_content = (
+                    f"---\nname: {name}\ndescription: Skill {name}\n---\n\n"
+                    f"Instructions for {name}.\n"
                 )
-                with open(os.path.join(skill_dir, "skill.yaml"), "w") as f:
-                    f.write(yaml_content)
+                with open(os.path.join(skill_dir, "skill.md"), "w") as f:
+                    f.write(md_content)
 
             registry = SkillRegistry.from_directory(tmpdir)
             assert "skill_a" in registry.available_skills

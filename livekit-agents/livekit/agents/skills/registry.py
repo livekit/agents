@@ -66,7 +66,7 @@ class SkillRegistry:
     def from_directory(cls, path: str | Path) -> SkillRegistry:
         """Create a registry by scanning a directory for skill subdirectories.
 
-        Each subdirectory must contain a ``skill.yaml`` file.
+        Each subdirectory must contain a ``skill.md`` file.
 
         Args:
             path: Path to the parent directory containing skill directories.
@@ -83,8 +83,8 @@ class SkillRegistry:
         for child in sorted(skills_dir.iterdir()):
             if not child.is_dir():
                 continue
-            yaml_path = child / "skill.yaml"
-            if not yaml_path.exists():
+            md_path = child / "skill.md"
+            if not md_path.exists():
                 continue
             try:
                 skill = load_skill_from_directory(child)

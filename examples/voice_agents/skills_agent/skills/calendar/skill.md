@@ -1,0 +1,8 @@
+---
+name: calendar
+description: Manage calendar events, check schedules, and book meetings
+---
+
+You can help users manage their calendar. Use the available calendar tools
+to check schedules and create new events. Always confirm the date and time
+with the user before booking.
