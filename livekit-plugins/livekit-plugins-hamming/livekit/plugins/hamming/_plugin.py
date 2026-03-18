@@ -423,9 +423,7 @@ class _SessionMonitor:
             close_event=close_event,
         )
 
-        enable_test_case_matching_override = _env_optional_bool(
-            "HAMMING_ENABLE_TEST_CASE_MATCHING"
-        )
+        enable_test_case_matching_override = _env_optional_bool("HAMMING_ENABLE_TEST_CASE_MATCHING")
         if enable_test_case_matching_override is not None:
             envelope["enableTestCaseMatching"] = enable_test_case_matching_override
         return envelope
@@ -495,7 +493,9 @@ class _SessionMonitor:
             return
 
         if recording.mode == RECORDING_MODE_SESSION_AUDIO:
-            await self._attach_inline_recording_capture(report=report, payload_record=payload_record)
+            await self._attach_inline_recording_capture(
+                report=report, payload_record=payload_record
+            )
             return
 
         if recording.mode not in {
@@ -1162,10 +1162,7 @@ def _validate_payload_config(config: HammingConfig) -> None:
             "Unsupported call_id_strategy. Expected one of: "
             f"{', '.join(sorted(SUPPORTED_CALL_ID_STRATEGIES))}."
         )
-    if (
-        config.call_id_strategy == CALL_ID_STRATEGY_CUSTOM
-        and config.resolve_call_id is None
-    ):
+    if config.call_id_strategy == CALL_ID_STRATEGY_CUSTOM and config.resolve_call_id is None:
         raise ValueError("call_id_strategy='custom' requires resolve_call_id")
 
 
@@ -1534,12 +1531,8 @@ def _wrap_session_start_for_recording(session: AgentSession[Any]) -> None:
         if record is NOT_GIVEN or record is None:
             kwargs["record"] = _default_auto_recording_options()
         if inspect.ismethod(original_start):
-            return await cast(Callable[..., Awaitable[Any]], original_start)(
-                *args, **kwargs
-            )
-        return await cast(Callable[..., Awaitable[Any]], original_start)(
-            self, *args, **kwargs
-        )
+            return await cast(Callable[..., Awaitable[Any]], original_start)(*args, **kwargs)
+        return await cast(Callable[..., Awaitable[Any]], original_start)(self, *args, **kwargs)
 
     session_runtime = cast(Any, session)
     session_runtime.start = MethodType(_wrapped_start, session)
@@ -1769,9 +1762,7 @@ def _recording_debug_context(
     recording_context: RecordingContext | None,
 ) -> dict[str, Any]:
     participant_metadata = _parse_json_object(participant_metadata_raw)
-    metadata_keys = sorted(
-        key for key in participant_metadata.keys() if isinstance(key, str)
-    )
+    metadata_keys = sorted(key for key in participant_metadata.keys() if isinstance(key, str))
     return {
         "test_case_run_id": _extract_test_case_run_id(
             participant_metadata_raw=participant_metadata_raw,
@@ -1779,24 +1770,16 @@ def _recording_debug_context(
         ),
         "participant_metadata_keys": metadata_keys,
         "customer_conversation_id": (
-            recording_context.get("customer_conversation_id")
-            if recording_context
-            else None
+            recording_context.get("customer_conversation_id") if recording_context else None
         ),
         "provider_recording_id": (
-            recording_context.get("provider_recording_id")
-            if recording_context
-            else None
+            recording_context.get("provider_recording_id") if recording_context else None
         ),
         "provider_recording_filepath": (
-            recording_context.get("provider_recording_filepath")
-            if recording_context
-            else None
+            recording_context.get("provider_recording_filepath") if recording_context else None
         ),
         "recording_context_room_name": (
-            recording_context.get("room_name")
-            if recording_context
-            else None
+            recording_context.get("room_name") if recording_context else None
         ),
     }
 

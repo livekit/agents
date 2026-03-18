@@ -136,10 +136,7 @@ class HammingTransport:
         test_case_run_id: str,
     ) -> str | None:
         session = await self._ensure_session()
-        url = (
-            f"{self._base_url}/api/rest/test-case-runs/"
-            f"{quote(test_case_run_id, safe='')}/details"
-        )
+        url = f"{self._base_url}/api/rest/test-case-runs/{quote(test_case_run_id, safe='')}/details"
         timeout = aiohttp.ClientTimeout(total=self._policy.timeout_seconds)
 
         backoff = self._policy.retry_backoff_seconds
@@ -219,9 +216,7 @@ class HammingTransport:
             response = await lkapi.egress.start_room_composite_egress(request)
             egress_id = (response.egress_id or "").strip()
             if not egress_id:
-                raise RuntimeError(
-                    f"LiveKit returned an empty egress_id for room={room_name}"
-                )
+                raise RuntimeError(f"LiveKit returned an empty egress_id for room={room_name}")
             logger.info(
                 "started plugin-managed room composite egress",
                 extra={
@@ -254,7 +249,11 @@ class HammingTransport:
             )
             last_status_name: str | None = None
             for attempt in range(1, max_attempts + 1):
-                resolved_url, last_status_name, should_continue = await self._poll_plugin_managed_egress(
+                (
+                    resolved_url,
+                    last_status_name,
+                    should_continue,
+                ) = await self._poll_plugin_managed_egress(
                     lkapi=lkapi,
                     egress_id=egress_id,
                     filepath=filepath,
@@ -320,15 +319,21 @@ class HammingTransport:
         max_attempts: int,
         last_status_name: str | None,
     ) -> tuple[str | None, str | None, bool]:
-        response = await lkapi.egress.list_egress(livekit_api.ListEgressRequest(egress_id=egress_id))
+        response = await lkapi.egress.list_egress(
+            livekit_api.ListEgressRequest(egress_id=egress_id)
+        )
         egress_info = next(iter(response.items), None)
         if egress_info is None:
-            return _handle_missing_plugin_managed_egress(
-                egress_id=egress_id,
-                filepath=filepath,
-                attempt=attempt,
-                max_attempts=max_attempts,
-            ), last_status_name, False
+            return (
+                _handle_missing_plugin_managed_egress(
+                    egress_id=egress_id,
+                    filepath=filepath,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                ),
+                last_status_name,
+                False,
+            )
 
         resolved_location = _extract_egress_location(egress_info)
         if resolved_location:
@@ -405,9 +410,7 @@ def _resolve_encoded_file_type(filepath: str) -> livekit_api.EncodedFileType:
         encoded_file_type = getattr(livekit_api.EncodedFileType, "OGG", None)
         if encoded_file_type is not None:
             return cast(livekit_api.EncodedFileType, encoded_file_type)
-        raise RuntimeError(
-            "LiveKit EncodedFileType.OGG is unavailable on this livekit-api version"
-        )
+        raise RuntimeError("LiveKit EncodedFileType.OGG is unavailable on this livekit-api version")
 
     encoded_file_type = getattr(livekit_api.EncodedFileType, "MP4", None)
     if encoded_file_type is not None:
@@ -525,9 +528,7 @@ def _assert_plugin_managed_room_composite_environment() -> None:
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
     )
-    missing_env_names = [
-        name for name in required_env_names if not os.getenv(name, "").strip()
-    ]
+    missing_env_names = [name for name in required_env_names if not os.getenv(name, "").strip()]
     if missing_env_names:
         joined_names = ", ".join(missing_env_names)
         raise RuntimeError(
