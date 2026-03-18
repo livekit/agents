@@ -5,17 +5,27 @@ import functools
 import inspect
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
+from attr import dataclass
 from typing_extensions import TypeVar
 
 from .. import utils
 from ..llm.chat_context import ChatContext, ChatRole, FunctionCall
-from ..llm.tool_context import FunctionTool, RawFunctionTool, Tool, Toolset, find_function_tools
+from ..llm.tool_context import (
+    FunctionTool,
+    RawFunctionTool,
+    Tool,
+    Toolset,
+    find_function_tools,
+    function_tool,
+)
 from ..log import logger
 from ..voice.agent import _pass_through_activity_task_info
 from ..voice.events import RunContext
+from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
     from ..voice.speech_handle import SpeechHandle
+
 
 Userdata_T = TypeVar("Userdata_T")
 
@@ -48,8 +58,9 @@ class AsyncRunContext(RunContext[Userdata_T]):
             function_call=run_ctx.function_call,
         )
         self._pending_fut = asyncio.Future[Any]()
+        self._update_step = 0
 
-    def pending(self, message: str) -> SpeechHandle:
+    def pending(self, message: str | Any) -> SpeechHandle:
         """Set the message returned to the LLM when the tool is first called.
 
         Args:
@@ -68,8 +79,8 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self,
         message: str,
         *,
-        role: ChatRole | Literal["instructions"] = "instructions",
-        template: str = "[Progress update for {function_name}]: {message}",
+        role: ChatRole | Literal["instructions", "tool_output"] = "instructions",
+        template: str = "[Update for tool call {function_name}]: {message}",
     ) -> SpeechHandle:
         """Push an intermediate progress update into the conversation.
 
@@ -83,16 +94,43 @@ class AsyncRunContext(RunContext[Userdata_T]):
         Returns:
             SpeechHandle: A handle to the generated reply.
         """
+        self._update_step += 1
 
         formatted_message = template.format(function_name=self.function_call.name, message=message)
         if role == "instructions":
             return self.session.generate_reply(instructions=formatted_message, tool_choice="none")
 
         chat_ctx = ChatContext.empty()
-        chat_ctx.add_message(role=role, content=formatted_message)
+        if role == "tool_output":
+            result = self._make_tool_output(formatted_message, suffix=f"update_{self._update_step}")
+            assert result.fnc_call_out is not None
+            chat_ctx.items.extend([result.fnc_call, result.fnc_call_out])
+        else:
+            chat_ctx.add_message(role=role, content=formatted_message)
+
         return self.session.generate_reply(
             chat_ctx=chat_ctx, merge_chat_ctx=True, tool_choice="none"
         )
+
+    def _make_tool_output(self, output: Any | BaseException, *, suffix: str) -> ToolExecutionOutput:
+        exception: BaseException | None = None
+        if isinstance(output, BaseException):
+            exception = output
+            output = None
+
+        fnc_call = FunctionCall(
+            call_id=f"{self.function_call.call_id}/{suffix}",
+            name=self.function_call.name,
+            arguments=self.function_call.arguments,
+            extra=self.function_call.extra,
+        )
+        return make_tool_output(fnc_call=fnc_call, output=output, exception=exception)
+
+
+@dataclass
+class _RunningTask:
+    exe_task: asyncio.Task[Any]
+    async_ctx: AsyncRunContext
 
 
 def _is_async_context_type(ty: type) -> bool:
@@ -137,11 +175,16 @@ class AsyncToolset(Toolset):
         all_tools: list[Tool] = list(tools or [])
         all_tools.extend(find_function_tools(self))
         self._tools = [self._wrap_tool(t) for t in all_tools]
-        self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._tasks: dict[str, _RunningTask] = {}
 
     @property
     def tools(self) -> list[Tool]:
         return self._tools
+
+    @function_tool
+    async def get_running_tasks(self) -> list[dict]:
+        """Get the list of running async tool calls"""
+        return [task.async_ctx.function_call.model_dump() for task in self._tasks.values()]
 
     def _wrap_tool(self, tool: Tool) -> Tool:
         """Wrap a FunctionTool with async dispatch if it has an AsyncRunContext param."""
@@ -165,7 +208,7 @@ class AsyncToolset(Toolset):
         if ctx_param_name is None:
             return tool
 
-        # Build wrapper that receives RunContext from the framework,
+        # build wrapper that receives RunContext from the framework,
         # converts to AsyncRunContext, and dispatches as a background task.
         @functools.wraps(tool)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -189,7 +232,7 @@ class AsyncToolset(Toolset):
                 tool(**arguments), name=f"async_tool_{async_ctx.function_call.name}"
             )
             _pass_through_activity_task_info(exe_task)
-            self._tasks[call_id] = exe_task
+            self._tasks[call_id] = _RunningTask(exe_task=exe_task, async_ctx=async_ctx)
 
             def _on_task_done(task: asyncio.Task[Any]) -> None:
                 self._tasks.pop(call_id, None)
@@ -216,9 +259,6 @@ class AsyncToolset(Toolset):
         return wrapped_tool
 
     def _on_completed(self, task: asyncio.Task[Any], async_ctx: AsyncRunContext) -> None:
-        from ..voice.generation import make_tool_output
-
-        exception: BaseException | None = None
         try:
             output = task.result()
         except BaseException as e:
@@ -230,31 +270,24 @@ class AsyncToolset(Toolset):
                         "function": async_ctx.function_call.name,
                     },
                 )
-            exception = e
-            output = None
+            output = e
 
         if not (fut := async_ctx._pending_fut).done():
-            if exception:
-                fut.set_exception(exception)
+            # set pending fut to stop the wrapper function from waiting
+            # it will create a tool output so we return from here directly
+            if isinstance(output, BaseException):
+                fut.set_exception(output)
             else:
                 fut.set_result(output)
             return
 
-        if exception:
-            logger.error(f"Error in async tool {async_ctx.function_call.name}", exc_info=exception)
+        if isinstance(output, BaseException):
+            logger.error(f"Error in async tool {async_ctx.function_call.name}", exc_info=output)
 
-        if (exception is None or isinstance(exception, asyncio.CancelledError)) and output is None:
+        if output is None or isinstance(output, asyncio.CancelledError):
             return
 
-        origin_fnc_call = async_ctx.function_call
-        fnc_call = FunctionCall(
-            call_id=f"{origin_fnc_call.call_id}/completed",
-            name=origin_fnc_call.name,
-            arguments=origin_fnc_call.arguments,
-            extra=origin_fnc_call.extra,
-        )
-        result = make_tool_output(fnc_call=fnc_call, output=output, exception=exception)
-
+        result = async_ctx._make_tool_output(output, suffix="completed")
         if result.agent_task is not None:
             raise RuntimeError("returning Agent from async tool function is not supported")
 
@@ -269,11 +302,12 @@ class AsyncToolset(Toolset):
     async def cancel(self, call_id: str) -> bool:
         task = self._tasks.get(call_id)
         if task is not None:
-            await utils.aio.cancel_and_wait(task)
+            await utils.aio.cancel_and_wait(task.exe_task)
             return True
         return False
 
     async def shutdown(self) -> None:
         """Cancel all tasks."""
-        await utils.aio.cancel_and_wait(*self._tasks.values())
+        tasks = [task.exe_task for task in self._tasks.values()]
+        await utils.aio.cancel_and_wait(*tasks)
         self._tasks.clear()
