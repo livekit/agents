@@ -619,9 +619,7 @@ class SessionHost:
                     result: Any = self._session.run(user_input=text)
                     try:
                         await result
-                        items_list = [
-                            _chat_item_to_proto(ev.item) for ev in result.events
-                        ]
+                        items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                     except Exception as e:
                         error = str(e)
 
@@ -773,4 +771,3 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
                 )
             )
     return agent_pb.AgentSessionUsage(model_usage=model_usages)
-
