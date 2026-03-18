@@ -22,10 +22,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.0.0",
+    "livekit-agents>=1.4.6",
     "websockets>=11.0",
     "aiohttp>=3.8.0",
-    "phonic>=0.31.1"
+    "phonic>=0.31.4"
 ]
 
 [project.urls]

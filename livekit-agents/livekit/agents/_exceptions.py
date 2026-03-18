@@ -74,6 +74,18 @@ class APIStatusError(APIError):
         self.status_code = status_code
         self.request_id = request_id
 
+    def __str__(self) -> str:
+        parts = [
+            f"message={self.message!r}",
+            f"status_code={self.status_code}",
+            f"retryable={self.retryable}",
+        ]
+        if self.request_id:
+            parts.append(f"request_id={self.request_id}")
+        if self.body:
+            parts.append(f"body={self.body}")
+        return ", ".join(parts)
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}({self.message!r}, "

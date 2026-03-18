@@ -4,8 +4,10 @@ import platform
 import re
 import time
 import uuid
-from typing import TypeGuard, TypeVar
+from typing import TypeVar
 from urllib.parse import urlparse
+
+from typing_extensions import TypeIs
 
 from ..types import NotGiven, NotGivenOr
 
@@ -20,7 +22,7 @@ def shortuuid(prefix: str = "") -> str:
     return prefix + str(uuid.uuid4().hex)[:12]
 
 
-def is_given(obj: NotGivenOr[_T]) -> TypeGuard[_T]:
+def is_given(obj: NotGivenOr[_T]) -> TypeIs[_T]:
     return not isinstance(obj, NotGiven)
 
 
