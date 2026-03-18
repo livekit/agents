@@ -140,7 +140,7 @@ class OverlappingSpeechEvent(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    type: Literal["user_overlapping_speech"] = "user_overlapping_speech"
+    type: Literal["overlapping_speech"] = "overlapping_speech"
 
     created_at: float = Field(default_factory=time.time)
     """Timestamp (in seconds) when the event was emitted."""
@@ -208,7 +208,7 @@ class OverlappingSpeechEvent(BaseModel):
             The initialized event.
         """
         return cls(
-            type="user_overlapping_speech",
+            type="overlapping_speech",
             detected_at=ended_at or time.time(),
             is_interruption=is_interruption,
             overlap_started_at=started_at,
@@ -270,7 +270,7 @@ InterruptionDataFrameType: TypeAlias = (
 class AdaptiveInterruptionDetector(
     rtc.EventEmitter[
         Literal[
-            "user_overlapping_speech",
+            "overlapping_speech",
             "error",
             "metrics_collected",
         ]
