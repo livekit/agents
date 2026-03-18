@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import itertools
@@ -58,7 +59,7 @@ class Toolset:
         ctx: RunContext
         output: Any | Exception | None
 
-    def __init__(self, *, id: str, tools: list[Tool] | None = None) -> None:
+    def __init__(self, *, id: str, tools: list[Tool | Toolset] | None = None) -> None:
         self._id = id
         self._tools = tools or []
 
@@ -67,14 +68,19 @@ class Toolset:
         return self._id
 
     @property
-    def tools(self) -> list[Tool]:
+    def tools(self) -> list[Tool | Toolset]:
         return self._tools
 
     async def setup(self) -> Self:
+        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        if toolsets:
+            await asyncio.gather(*(toolset.setup() for toolset in toolsets))
         return self
 
     async def aclose(self) -> None:
-        pass
+        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        if toolsets:
+            await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
 
 
 # Used by ToolChoice

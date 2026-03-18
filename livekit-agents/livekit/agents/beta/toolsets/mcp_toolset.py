@@ -15,6 +15,7 @@ class MCPToolset(Toolset):
         self._lock = asyncio.Lock()
 
     async def setup(self, *, reload: bool = False) -> Self:
+        await super().setup()
         async with self._lock:
             if not reload and self._initialized:
                 return self
@@ -32,4 +33,5 @@ class MCPToolset(Toolset):
         return self
 
     async def aclose(self) -> None:
+        await super().aclose()
         await self._mcp_server.aclose()
