@@ -3194,6 +3194,14 @@ class AgentActivity(RecognitionHooks):
         ):
             return None
 
+        if (
+            not is_given(self._agent.interruption_detection)
+            and not is_given(self._session.interruption_detection)
+            and not utils.is_dev_mode()
+        ):
+            logger.warning("adaptive interruption is disabled by default in production mode")
+            return None
+
         try:
             detector = inference.AdaptiveInterruptionDetector()
         except ValueError as e:

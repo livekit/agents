@@ -60,6 +60,16 @@ AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 1
 _FRAMES_PER_SECOND = 40
 
+# --- TEST HOOKS (set env vars to activate, HTTP stream only) ---
+# LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER: seconds after first request before predict() crashes
+# LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER_N: crash after N predict() calls
+_TEST_FAIL_AFTER: float | None = (
+    float(v) if (v := os.getenv("LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER")) else None
+)
+_TEST_FAIL_AFTER_N: int | None = (
+    int(v) if (v := os.getenv("LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER_N")) else None
+)
+
 
 class InterruptionDetectionError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -473,7 +483,7 @@ class InterruptionStreamBase(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if max_retries == 0:
+                if max_retries == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif self._num_retries == max_retries:
@@ -575,7 +585,6 @@ class InterruptionStreamBase(ABC):
             trace_types.ATTR_INTERRUPTION_DETECTION_DELAY, entry.get_detection_delay()
         )
 
-    @log_exceptions(logger=logger)
     async def _forward_data(self, output_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
         """Preprocess the audio data and forward it to the output channel for inference."""
 
@@ -668,7 +677,6 @@ class InterruptionStreamBase(ABC):
     async def _metrics_monitor_task(
         self, event_aiter: AsyncIterable[OverlappingSpeechEvent]
     ) -> None:
-
         async for ev in event_aiter:
             metrics = InterruptionMetrics(
                 timestamp=time.time(),
@@ -713,16 +721,29 @@ class InterruptionHttpStream(InterruptionStreamBase):
         if is_given(min_interruption_duration):
             self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
 
-    @log_exceptions(logger=logger)
     async def _run(self) -> None:
-
-        @log_exceptions(logger=logger)
         async def _send_task(input_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
+            test_first_request_at: float | None = None
+            test_request_count = 0
+
             async for data in input_ch:
                 if (
                     overlap_started_at := self._overlap_started_at
                 ) is None or not self._overlap_started:
                     continue
+
+                if _TEST_FAIL_AFTER is not None or _TEST_FAIL_AFTER_N is not None:
+                    test_request_count += 1
+                    if test_first_request_at is None:
+                        test_first_request_at = time.monotonic()
+                    if _TEST_FAIL_AFTER_N is not None and test_request_count >= _TEST_FAIL_AFTER_N:
+                        raise APIError(
+                            f"[TEST] http stream killed after {test_request_count} requests"
+                        )
+                    if _TEST_FAIL_AFTER is not None:
+                        elapsed = time.monotonic() - test_first_request_at
+                        if elapsed >= _TEST_FAIL_AFTER:
+                            raise APIError(f"[TEST] http stream killed after {elapsed:.1f}s")
 
                 # we don't increment the request counter for hosted agents
                 resp: InterruptionResponse = await self.predict(data)
@@ -915,17 +936,27 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
         self._reconnect_event.set()
 
-    @log_exceptions(logger=logger)
     async def _run(self) -> None:
         closing_ws = False
 
-        @log_exceptions(logger=logger)
         async def send_task(
             ws: aiohttp.ClientWebSocketResponse, input_ch: aio.Chan[npt.NDArray[np.int16]]
         ) -> None:
             nonlocal closing_ws
+            timeout_ns = int(self._opts.inference_timeout * 1e9)
 
             async for audio_data in input_ch:
+                now = perf_counter_ns()
+                for _key, entry in self._cache.items():
+                    if entry.total_duration is not None:
+                        continue
+                    if now - entry.created_at > timeout_ns:
+                        raise APIError(
+                            f"interruption inference timed out after "
+                            f"{(now - entry.created_at) / 1e9:.1f}s (ws)"
+                        )
+                    break  # oldest unanswered entry is still within timeout
+
                 await self._num_requests.increment()
                 created_at = perf_counter_ns()
                 header = struct.pack("<Q", created_at)  # 8 bytes
@@ -941,7 +972,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             )
             await ws.send_str(msg.model_dump_json())
 
-        @log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
@@ -1087,7 +1117,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 if ws is not None and not ws.closed:
                     await ws.close()
 
-    @log_exceptions(logger=logger)
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Adaptive Interruption WebSocket."""
         settings = InterruptionWSSessionCreateSettings(

@@ -1040,8 +1040,7 @@ class AudioRecognition:
                 await self._on_overlap_speech_event(ev)
         except Exception as e:
             logger.exception(
-                f"interruption detection stream failed: {e}, "
-                "will disable interruption detection"
+                f"interruption detection stream failed: {e}, will disable interruption detection"
             )
             self._interruption_detection = None
             self._reset_interruption_detection()

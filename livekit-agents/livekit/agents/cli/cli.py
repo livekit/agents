@@ -1663,6 +1663,11 @@ class LogLevel(str, enum.Enum):
 def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
+    @app.callback(invoke_without_command=True)
+    def _set_dev_mode(ctx: typer.Context) -> None:
+        if ctx.invoked_subcommand in ("console", "dev"):
+            os.environ["LIVEKIT_DEV_MODE"] = "1"
+
     _start_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, False))
     _dev_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, True))
 
