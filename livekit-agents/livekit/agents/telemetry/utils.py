@@ -40,14 +40,18 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
         # Input text tokens (uncached)
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens
-        - ev.input_token_details.cached_tokens_details.text_tokens
-        if ev.input_token_details.cached_tokens_details
-        else 0,
+        - (
+            ev.input_token_details.cached_tokens_details.text_tokens
+            if ev.input_token_details.cached_tokens_details
+            else 0
+        ),
         # Input audio tokens (uncached)
         trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens
-        - ev.input_token_details.cached_tokens_details.audio_tokens
-        if ev.input_token_details.cached_tokens_details
-        else 0,
+        - (
+            ev.input_token_details.cached_tokens_details.audio_tokens
+            if ev.input_token_details.cached_tokens_details
+            else 0
+        ),
         # Input text tokens (cached)
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.text_tokens
         if ev.input_token_details.cached_tokens_details
