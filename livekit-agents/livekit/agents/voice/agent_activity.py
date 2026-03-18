@@ -1270,6 +1270,10 @@ class AgentActivity(RecognitionHooks):
             error_event = ErrorEvent(error=error, source=self._interruption_detector)
             self._session.emit("error", error_event)
 
+            if not error.recoverable:
+                self._fallback_to_vad_interruption()
+                return
+
         self._session._on_error(error)
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
@@ -3127,6 +3131,27 @@ class AgentActivity(RecognitionHooks):
     def _restore_interruption_by_audio_activity(self) -> None:
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
+        )
+
+    def _fallback_to_vad_interruption(self) -> None:
+        """Degrade gracefully from adaptive interruption to VAD-based interruption.
+
+        Called when the adaptive interruption detector encounters an unrecoverable error.
+        Re-enables audio-activity interruption so VAD events can trigger interruptions,
+        and flushes any held transcripts that were waiting on the detector.
+        """
+        if not self._interruption_detection_enabled:
+            return
+
+        self._interruption_detection_enabled = False
+        self._restore_interruption_by_audio_activity()
+
+        if self._audio_recognition:
+            self._audio_recognition.update_interruption_detection(None)
+
+        logger.warning(
+            "adaptive interruption disabled due to unrecoverable error, "
+            "falling back to VAD-based interruption"
         )
 
     # move them to the end to avoid shadowing the same named modules for mypy
