@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
-from livekit.agents.beta.toolsets import MCPToolset
+from livekit.agents.beta.toolsets.mcp import MCPToolset
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 

@@ -72,12 +72,23 @@ class Toolset:
         return self._tools
 
     async def setup(self) -> Self:
+        """Initialize the toolset and any nested toolsets.
+
+        Called automatically by ``AgentActivity`` when an agent starts.
+        """
         toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.setup() for toolset in toolsets))
         return self
 
     async def aclose(self) -> None:
+        """Close the toolset and release any held resources.
+
+        Agent-scoped toolsets (passed to ``Agent(tools=...)``) are closed when the
+        ``AgentActivity`` ends (on agent transition or session close). Session-scoped
+        toolsets (passed to ``AgentSession(tools=...)``) are closed only when the
+        ``AgentSession`` shuts down.
+        """
         toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
