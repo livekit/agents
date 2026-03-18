@@ -56,6 +56,7 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
+    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
@@ -1222,7 +1223,12 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
+        self._session._usage_collector.collect(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+        self._session.emit(
+            "session_usage_updated",
+            SessionUsageUpdatedEvent(usage=self._session.usage),
+        )
 
     def _on_error(
         self,

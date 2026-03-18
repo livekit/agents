@@ -51,8 +51,6 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
-    MetricsCollectedEvent,
-    SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -463,13 +461,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
-        if isinstance(arg, MetricsCollectedEvent):
-            self._usage_collector.collect(arg.metrics)
-            usage_event = SessionUsageUpdatedEvent(usage=self.usage)
-            self._recorded_events.append(usage_event)
-            super().emit(event, arg)
-            super().emit("session_usage_updated", usage_event)
-            return
         super().emit(event, arg)
 
     @property
