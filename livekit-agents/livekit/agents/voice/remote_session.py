@@ -46,7 +46,7 @@ from .events import (
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
     from ..inference.interruption import OverlappingSpeechEvent
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, AgentSessionOptions
     from .room_io.types import TextInputCallback
 
 
@@ -72,6 +72,7 @@ class RoomSessionTransport(SessionTransport):
         self._remote_identity = remote_identity
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def remote_identity(self) -> str | None:
@@ -90,7 +91,9 @@ class RoomSessionTransport(SessionTransport):
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
             return
-        asyncio.create_task(self._read_stream(reader))
+        task = asyncio.create_task(self._read_stream(reader))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
@@ -126,6 +129,8 @@ class RoomSessionTransport(SessionTransport):
         if self._recv_ch.closed:
             return
         self._recv_ch.close()
+        await utils.aio.cancel_and_wait(*self._tasks)
+        self._tasks.clear()
         if self._handler_registered:
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
@@ -242,7 +247,7 @@ _METRICS_FIELDS = (
 )
 
 
-def _tool_names(tools: list[Any]) -> list[str]:
+def _tool_names(tools: list[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
     for tool in tools:
         if isinstance(tool, FunctionTool | RawFunctionTool):
@@ -315,7 +320,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
     return agent_pb.ChatContext.ChatItem()
 
 
-def _serialize_options(opts: Any) -> dict[str, str]:
+def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
     return {
         "endpointing": str(dict(opts.endpointing)),
         "interruption": str(dict(opts.interruption)),
@@ -502,21 +507,20 @@ class SessionHost:
         detected_at = Timestamp()
         detected_at.FromNanoseconds(int(event.detected_at * 1e9))
 
-        kwargs: dict[str, Any] = {
-            "is_interruption": event.is_interruption,
-            "detection_delay": event.detection_delay,
-            "detected_at": detected_at,
-        }
+        overlap_started_at: Timestamp | None = None
         if event.overlap_started_at is not None:
-            overlap_ts = Timestamp()
-            overlap_ts.FromNanoseconds(int(event.overlap_started_at * 1e9))
-            kwargs["overlap_started_at"] = overlap_ts
+            overlap_started_at = Timestamp()
+            overlap_started_at.FromNanoseconds(int(event.overlap_started_at * 1e9))
 
-        self._send_event(
-            agent_pb.AgentSessionEvent(
-                overlapping_speech=agent_pb.AgentSessionEvent.OverlappingSpeech(**kwargs)
-            )
+        pb = agent_pb.AgentSessionEvent.OverlappingSpeech(
+            is_interruption=event.is_interruption,
+            detection_delay=event.detection_delay,
+            detected_at=detected_at,
         )
+        if overlap_started_at is not None:
+            pb.overlap_started_at.CopyFrom(overlap_started_at)
+
+        self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
 
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(
@@ -616,8 +620,8 @@ class SessionHost:
                     except RuntimeError:
                         pass
 
-                    result: Any = self._session.run(user_input=text)
                     try:
+                        result = self._session.run(user_input=text)
                         await result
                         items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                     except Exception as e:
