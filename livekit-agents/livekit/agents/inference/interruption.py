@@ -60,16 +60,6 @@ AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 1
 _FRAMES_PER_SECOND = 40
 
-# --- TEST HOOKS (set env vars to activate, HTTP stream only) ---
-# LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER: seconds after first request before predict() crashes
-# LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER_N: crash after N predict() calls
-_TEST_FAIL_AFTER: float | None = (
-    float(v) if (v := os.getenv("LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER")) else None
-)
-_TEST_FAIL_AFTER_N: int | None = (
-    int(v) if (v := os.getenv("LIVEKIT_TEST_INTERRUPTION_FAIL_AFTER_N")) else None
-)
-
 
 class InterruptionDetectionError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -723,27 +713,11 @@ class InterruptionHttpStream(InterruptionStreamBase):
 
     async def _run(self) -> None:
         async def _send_task(input_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
-            test_first_request_at: float | None = None
-            test_request_count = 0
-
             async for data in input_ch:
                 if (
                     overlap_started_at := self._overlap_started_at
                 ) is None or not self._overlap_started:
                     continue
-
-                if _TEST_FAIL_AFTER is not None or _TEST_FAIL_AFTER_N is not None:
-                    test_request_count += 1
-                    if test_first_request_at is None:
-                        test_first_request_at = time.monotonic()
-                    if _TEST_FAIL_AFTER_N is not None and test_request_count >= _TEST_FAIL_AFTER_N:
-                        raise APIError(
-                            f"[TEST] http stream killed after {test_request_count} requests"
-                        )
-                    if _TEST_FAIL_AFTER is not None:
-                        elapsed = time.monotonic() - test_first_request_at
-                        if elapsed >= _TEST_FAIL_AFTER:
-                            raise APIError(f"[TEST] http stream killed after {elapsed:.1f}s")
 
                 # we don't increment the request counter for hosted agents
                 resp: InterruptionResponse = await self.predict(data)
