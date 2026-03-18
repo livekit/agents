@@ -324,16 +324,13 @@ class HammingTransport:
         )
         egress_info = next(iter(response.items), None)
         if egress_info is None:
-            return (
-                _handle_missing_plugin_managed_egress(
-                    egress_id=egress_id,
-                    filepath=filepath,
-                    attempt=attempt,
-                    max_attempts=max_attempts,
-                ),
-                last_status_name,
-                False,
+            result = _handle_missing_plugin_managed_egress(
+                egress_id=egress_id,
+                filepath=filepath,
+                attempt=attempt,
+                max_attempts=max_attempts,
             )
+            return result, last_status_name, result is None
 
         resolved_location = _extract_egress_location(egress_info)
         if resolved_location:
