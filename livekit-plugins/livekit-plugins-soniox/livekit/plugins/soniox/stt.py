@@ -18,7 +18,7 @@ import asyncio
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 
@@ -82,6 +82,28 @@ class ContextObject:
 
 
 @dataclass
+class TranslationConfig:
+    """Translation configuration for the Soniox Speech-to-Text API.
+
+    See: https://soniox.com/docs/stt/api-reference/websocket-api
+    """
+
+    type: Literal["one_way", "two_way"]
+    target_language: str | None = None
+    """Target language for one-way translation."""
+    language_a: str | None = None
+    """First language for two-way translation."""
+    language_b: str | None = None
+    """Second language for two-way translation."""
+
+    def __post_init__(self) -> None:
+        if self.type == "one_way" and not self.target_language:
+            raise ValueError("target_language is required for one_way translation")
+        if self.type == "two_way" and not (self.language_a and self.language_b):
+            raise ValueError("language_a and language_b are both required for two_way translation")
+
+
+@dataclass
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
@@ -98,6 +120,7 @@ class STTOptions:
     enable_language_identification: bool = True
 
     client_reference_id: str | None = None
+    translation: TranslationConfig | None = None
 
 
 class STT(stt.STT):
@@ -228,6 +251,15 @@ class SpeechStream(stt.SpeechStream):
             "enable_language_identification": self._stt._params.enable_language_identification,
             "client_reference_id": self._stt._params.client_reference_id,
         }
+        if self._stt._params.translation is not None:
+            tr = self._stt._params.translation
+            translation_dict: dict[str, Any] = {"type": tr.type}
+            if tr.type == "one_way":
+                translation_dict["target_language"] = tr.target_language
+            elif tr.type == "two_way":
+                translation_dict["language_a"] = tr.language_a
+                translation_dict["language_b"] = tr.language_b
+            config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
         ws = await asyncio.wait_for(
             self._ensure_session().ws_connect(self._stt._base_url),
@@ -369,15 +401,19 @@ class SpeechStream(stt.SpeechStream):
 
         # final tokens are accumulated across messages until an endpoint is detected.
         final = _TokenAccumulator()
+        final_original = _TokenAccumulator()
         is_speaking = False
 
         def send_endpoint_transcript() -> None:
             nonlocal is_speaking
             if final.text:
+                input_text = final_original.text or None
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[final.to_speech_data(self.start_time_offset)],
+                        alternatives=[
+                            final.to_speech_data(self.start_time_offset, input_text=input_text)
+                        ],
                     )
                 )
                 self._event_ch.send_nowait(
@@ -388,10 +424,12 @@ class SpeechStream(stt.SpeechStream):
 
                 # Reset buffers.
                 final.reset()
+                final_original.reset()
 
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
 
+        is_translation_mode = self._stt._params.translation is not None
         # Method handles receiving messages from the Soniox Speech-to-Text API.
         while self._ws:
             try:
@@ -414,11 +452,24 @@ class SpeechStream(stt.SpeechStream):
                         tokens = content["tokens"]
 
                         non_final = _TokenAccumulator()
+                        non_final_original = _TokenAccumulator()
                         total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
 
                         # 1) process tokens: accumulate final/non-final,
                         #    flush immediately on endpoint tokens.
                         for token in tokens:
+                            is_translated = token.get("translation_status") == "translation"
+                            if (
+                                is_translation_mode
+                                and not is_end_token(token)
+                                and not is_translated
+                            ):
+                                # Original-language token: capture text for input_text only.
+                                if token["is_final"]:
+                                    final_original.update(token)
+                                else:
+                                    non_final_original.update(token)
+                                continue
                             if token["is_final"]:
                                 if is_end_token(token):
                                     send_endpoint_transcript()
@@ -437,11 +488,16 @@ class SpeechStream(stt.SpeechStream):
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                                 )
+                            input_text = (final_original.text + non_final_original.text) or None
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=SpeechEventType.INTERIM_TRANSCRIPT,
                                     alternatives=[
-                                        final.merged_speech_data(non_final, self.start_time_offset)
+                                        final.merged_speech_data(
+                                            non_final,
+                                            self.start_time_offset,
+                                            input_text=input_text,
+                                        )
                                     ],
                                 )
                             )
@@ -483,6 +539,7 @@ class _TokenAccumulator:
     def __init__(self) -> None:
         self.text: str = ""
         self.language: str = ""
+        self.source_language: str = ""
         self.speaker_id: str | None = None
         self.start_time: float = 0.0
         self.end_time: float = 0.0
@@ -494,6 +551,8 @@ class _TokenAccumulator:
         self.text += token["text"]
         if token.get("language") and not self.language:
             self.language = token["language"]
+        if token.get("source_language") and not self.source_language:
+            self.source_language = token["source_language"]
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
         if "start_ms" in token and not self._has_start_time:
@@ -514,6 +573,7 @@ class _TokenAccumulator:
     def reset(self) -> None:
         self.text = ""
         self.language = ""
+        self.source_language = ""
         self.speaker_id = None
         self.start_time = 0.0
         self.end_time = 0.0
@@ -521,10 +581,14 @@ class _TokenAccumulator:
         self._confidence_count = 0
         self._has_start_time = False
 
-    def to_speech_data(self, start_time_offset: float = 0.0) -> stt.SpeechData:
+    def to_speech_data(
+        self, start_time_offset: float = 0.0, input_text: str | None = None
+    ) -> stt.SpeechData:
         return stt.SpeechData(
             text=self.text,
             language=LanguageCode(self.language),
+            input_language=LanguageCode(self.source_language) if self.source_language else None,
+            input_text=input_text,
             speaker_id=self.speaker_id,
             start_time=self.start_time / 1000 + start_time_offset,
             end_time=self.end_time / 1000 + start_time_offset,
@@ -532,7 +596,10 @@ class _TokenAccumulator:
         )
 
     def merged_speech_data(
-        self, other: _TokenAccumulator, start_time_offset: float = 0.0
+        self,
+        other: _TokenAccumulator,
+        start_time_offset: float = 0.0,
+        input_text: str | None = None,
     ) -> stt.SpeechData:
         """Build a SpeechData combining self (final) with other (non-final)."""
         candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
@@ -540,9 +607,12 @@ class _TokenAccumulator:
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
         total_sum = self._confidence_sum + other._confidence_sum
+        source_lang = self.source_language if self.source_language else other.source_language
         return stt.SpeechData(
             text=self.text + other.text,
             language=LanguageCode(self.language if self.language else other.language),
+            input_language=LanguageCode(source_lang) if source_lang else None,
+            input_text=input_text,
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,
