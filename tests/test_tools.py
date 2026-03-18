@@ -444,14 +444,21 @@ class TestToolOutput:
         img = ImageContent(image="https://example.com/img.jpg")
         out = ToolOutput._coerce(img)
         assert out.text_contents == ""
+        assert str(out) == "[image]"  # no mime_type set
         assert len(out.image_contents) == 1
         assert out.image_contents[0] is img
         assert not out.file_contents
+
+    def test_image_content_coercion_with_mime_type(self):
+        img = ImageContent(image="https://example.com/img.jpg", mime_type="image/jpeg")
+        out = ToolOutput._coerce(img)
+        assert str(out) == "[image: image/jpeg]"
 
     def test_file_content_coercion(self):
         f = FileContent(name="report.pdf", data=b"%PDF", mime_type="application/pdf")
         out = ToolOutput._coerce(f)
         assert out.text_contents == ""
+        assert str(out) == "[file: report.pdf]"
         assert len(out.file_contents) == 1
         assert out.file_contents[0] is f
         assert not out.image_contents
@@ -460,12 +467,14 @@ class TestToolOutput:
         img = ImageContent(image="https://example.com/img.jpg")
         out = ToolOutput._coerce(("Here is the image:", img))
         assert out.text_contents == "Here is the image:"
+        assert str(out) == "Here is the image: [image]"
         assert len(out.image_contents) == 1
         assert out.image_contents[0] is img
 
     def test_tuple_text_only(self):
         out = ToolOutput._coerce(("hello", "world"))
         assert out.text_contents == "hello\nworld"
+        assert str(out) == "hello\nworld"
         assert not out.image_contents
 
     def test_mixed_text_image_file(self):
@@ -473,6 +482,7 @@ class TestToolOutput:
         f = FileContent(name="data.csv", data="col1,col2\n1,2", mime_type="text/csv")
         out = ToolOutput._coerce(("Here is the chart and the raw data:", img, f))
         assert out.text_contents == "Here is the chart and the raw data:"
+        assert str(out) == "Here is the chart and the raw data: [image] [file: data.csv]"
         assert len(out.image_contents) == 1
         assert out.image_contents[0] is img
         assert len(out.file_contents) == 1

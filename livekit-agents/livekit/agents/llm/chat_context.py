@@ -137,8 +137,16 @@ class ToolOutput(str):
     _content: list[ImageContent | FileContent | str]
 
     def __new__(cls, content: list[ImageContent | FileContent | str]) -> ToolOutput:
+        parts: list[str] = []
         text = "\n".join(c for c in content if isinstance(c, str))
-        return super().__new__(cls, text)
+        if text:
+            parts.append(text)
+        for c in content:
+            if isinstance(c, ImageContent):
+                parts.append(f"[image: {c.mime_type}]" if c.mime_type else "[image]")
+            elif isinstance(c, FileContent):
+                parts.append(f"[file: {c.name}]")
+        return super().__new__(cls, " ".join(parts))
 
     def __init__(self, content: list[ImageContent | FileContent | str]) -> None:
         self._content = content
@@ -237,18 +245,6 @@ class ToolOutput(str):
         """All file content items."""
         return [c for c in self._content if isinstance(c, FileContent)]
 
-    def __str__(self) -> str:
-        parts: list[str] = []
-        if self.text_contents:
-            parts.append(self.text_contents)
-        for img in self.image_contents:
-            parts.append(f"[image: {img.mime_type}]" if img.mime_type else "[image]")
-        for f in self.file_contents:
-            parts.append(f"[file: {f.name}]")
-        return " ".join(parts)
-
-    def __repr__(self) -> str:
-        return str(self._content)
 
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
