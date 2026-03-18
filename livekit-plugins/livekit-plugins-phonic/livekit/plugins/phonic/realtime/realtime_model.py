@@ -443,6 +443,10 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._close_current_generation(interrupted=False)
 
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+            self._pending_generate_reply_fut = None
+
         if self._generate_reply_task and not self._generate_reply_task.done():
             await utils.aio.cancel_and_wait(self._generate_reply_task)
 
