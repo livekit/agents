@@ -94,9 +94,9 @@ def _load_tools_from_file(path: Path) -> list[Tool]:
 
     try:
         spec.loader.exec_module(module)
-    except Exception:
-        logger.exception(f"Error loading tools from {path}")
-        del sys.modules[module_name]
-        return []
+    except Exception as e:
+        logger.exception("Error loading tools from %s", path)
+        sys.modules.pop(module_name, None)
+        raise ImportError(f"Error loading tools from {path}") from e
 
     return list(find_function_tools(module))

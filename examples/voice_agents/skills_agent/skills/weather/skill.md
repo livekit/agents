@@ -1,6 +1,6 @@
 ---
 name: weather
-description: Get current weather and forecasts for any location
+description: Get current weather for a city
 ---
 
 You can help users check the weather. Use the get_weather tool to look up
