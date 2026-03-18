@@ -39,57 +39,6 @@ class SearchStrategy(Protocol):
     ) -> list[SearchItem] | Awaitable[list[SearchItem]]: ...
 
 
-class KeywordSearchStrategy:
-    """Zero-dependency keyword search using regex matching.
-
-    Scoring: name match = 3pts, description match = 2pts, parameter name/desc match = 1pt each.
-    """
-
-    def build_index(self, items: list[SearchItem]) -> None:
-        for item in items:
-            item.index_data = {
-                "name": item.name.lower(),
-                "description": item.description.lower(),
-                "parameters": " ".join(f"{k} {v}" for k, v in item.parameters.items()).lower(),
-            }
-
-    def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        keywords = list(set(query.lower().split()))
-        if not keywords:
-            return []
-
-        scored: list[tuple[float, SearchItem]] = []
-        for item in items:
-            s = self._score(item, keywords)
-            if s > 0:
-                scored.append((s, item))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [item for _, item in scored[:max_results]]
-
-    def _score(self, item: SearchItem, keywords: list[str]) -> float:
-        score = 0.0
-        idx = item.index_data
-        if idx is None:
-            self.build_index([item])
-            idx = item.index_data
-
-        for kw in keywords:
-            try:
-                pattern = re.compile(kw)
-            except re.error:
-                pattern = re.compile(re.escape(kw))
-
-            if pattern.search(idx["name"]):
-                score += 3.0
-            if pattern.search(idx["description"]):
-                score += 2.0
-            if pattern.search(idx["parameters"]):
-                score += 1.0
-
-        return score
-
-
 _DEFAULT_SEARCH_DESCRIPTION = (
     "Search for available tools by describing what you need. "
     "The matching tools will become available for use after calling this tool. "
@@ -158,7 +107,7 @@ class ToolSearchToolset(Toolset):
             if not reload and self._initialized:
                 return self
 
-            # Setup wrapped toolsets
+            # setup wrapped toolsets
             toolsets = [t for t in self._tools if isinstance(t, Toolset)]
             if toolsets:
                 await asyncio.gather(*(ts.setup() for ts in toolsets))
@@ -235,3 +184,54 @@ def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
         name: prop.get("description", "") if isinstance(prop, dict) else ""
         for name, prop in props.items()
     }
+
+
+class KeywordSearchStrategy:
+    """Zero-dependency keyword search using regex matching.
+
+    Scoring: name match = 3pts, description match = 2pts, parameter name/desc match = 1pt each.
+    """
+
+    def build_index(self, items: list[SearchItem]) -> None:
+        for item in items:
+            item.index_data = {
+                "name": item.name.lower(),
+                "description": item.description.lower(),
+                "parameters": " ".join(f"{k} {v}" for k, v in item.parameters.items()).lower(),
+            }
+
+    def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
+        keywords = list(set(query.lower().split()))
+        if not keywords:
+            return []
+
+        scored: list[tuple[float, SearchItem]] = []
+        for item in items:
+            s = self._score(item, keywords)
+            if s > 0:
+                scored.append((s, item))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [item for _, item in scored[:max_results]]
+
+    def _score(self, item: SearchItem, keywords: list[str]) -> float:
+        score = 0.0
+        idx = item.index_data
+        if idx is None:
+            self.build_index([item])
+            idx = item.index_data
+
+        for kw in keywords:
+            try:
+                pattern = re.compile(kw)
+            except re.error:
+                pattern = re.compile(re.escape(kw))
+
+            if pattern.search(idx["name"]):
+                score += 3.0
+            if pattern.search(idx["description"]):
+                score += 2.0
+            if pattern.search(idx["parameters"]):
+                score += 1.0
+
+        return score
