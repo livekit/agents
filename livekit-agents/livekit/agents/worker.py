@@ -144,7 +144,32 @@ class ServerEnvOption(Generic[T]):
 
 
 _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
+_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
+
+VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
+
+
+def _validate_and_normalize_log_level(
+    log_level: str | ServerEnvOption[str],
+) -> str | ServerEnvOption[str]:
+    if isinstance(log_level, ServerEnvOption):
+        levels_to_check = [log_level.dev_default, log_level.prod_default]
+    else:
+        levels_to_check = [log_level]
+
+    for level in levels_to_check:
+        if level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            )
+
+    if isinstance(log_level, ServerEnvOption):
+        return ServerEnvOption(
+            dev_default=log_level.dev_default.upper(),
+            prod_default=log_level.prod_default.upper(),
+        )
+    return log_level.upper()
 
 
 # NOTE: this object must be pickle-able
@@ -206,6 +231,13 @@ class ServerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
 
+    log_level: str | ServerEnvOption[str] = _default_log_level
+    """Log level for the worker.
+
+    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
+    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
+    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
+
     host: str = ""  # default to all interfaces
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -232,6 +264,9 @@ class ServerOptions:
     When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
+
+    def __post_init__(self) -> None:
+        self.log_level = _validate_and_normalize_log_level(self.log_level)
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -285,6 +320,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        log_level: str | ServerEnvOption[str] = _default_log_level,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -314,6 +350,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
+        self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -336,6 +373,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    @property
+    def log_level(self) -> str | ServerEnvOption[str]:
+        return self._log_level
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -380,6 +421,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            log_level=options.log_level,
         )
         server.rtc_session(
             options.entrypoint_fnc,

@@ -21,7 +21,7 @@ from livekit.plugins import openai
 
 from ..log import logger
 from ..tools import XAITool
-from .types import GrokVoices
+from ..types import GrokVoices
 
 XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
 

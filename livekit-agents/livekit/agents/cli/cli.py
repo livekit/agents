@@ -46,7 +46,7 @@ from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
-from ..worker import AgentServer, WorkerOptions
+from ..worker import AgentServer, ServerEnvOption, WorkerOptions
 from . import proto
 from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
 
@@ -1493,13 +1493,14 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    log_level: int | str = logging.DEBUG,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
     c.record = record
 
-    _configure_logger(c, logging.DEBUG)
+    _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1662,6 +1663,9 @@ class LogLevel(str, enum.Enum):
 def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
+    _start_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, False))
+    _dev_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, True))
+
     @app.command()
     def console(
         *,
@@ -1688,6 +1692,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1708,6 +1718,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             output_device=output_device,
             mode="text" if text else "audio",
             record=record,
+            log_level=log_level.value,
         )
 
     @app.command()
@@ -1715,8 +1726,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.info,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _start_log_default,
         url: Annotated[
             str | None,  # noqa: UP007
             typer.Option(
@@ -1763,8 +1776,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.debug,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
         reload: Annotated[
             bool,
             typer.Option(help="Enable auto-reload of the server when (code) files change."),

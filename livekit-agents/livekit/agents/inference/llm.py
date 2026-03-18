@@ -101,8 +101,6 @@ GoogleModels = Literal[
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
-    "google/gemini-2.0-flash",
-    "google/gemini-2.0-flash-lite",
 ]
 
 KimiModels = Literal["moonshotai/kimi-k2-instruct"]
