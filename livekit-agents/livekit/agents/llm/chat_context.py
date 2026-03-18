@@ -362,7 +362,6 @@ class ToolOutput(str):
         return [c for c in self._content if isinstance(c, FileContent)]
 
 
-
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 

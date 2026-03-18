@@ -412,6 +412,7 @@ class TestToolExecution:
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
 
+
 class TestToolOutput:
     def test_str_coercion(self):
         out = ToolOutput._coerce("hello")
@@ -600,6 +601,8 @@ class TestMakeFunctionCallOutput:
             fnc_call=self._make_call(), output=Unsupported(), exception=None
         )
         assert result.fnc_call_out is None
+
+
 class TestNoParametersSchema:
     """Test that functions with no parameters generate valid JSON schema."""
 
