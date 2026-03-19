@@ -438,7 +438,7 @@ class ChatContext:
             else:
                 kept.append(item)
 
-        self._items = kept
+        self._items[:] = kept
         return removed
 
     def copy(
