@@ -2,6 +2,7 @@ from livekit.agents.beta.toolsets.tool_search import (
     KeywordSearchStrategy,
     SearchItem,
     ToolSearchToolset,
+    _get_tool_params,
 )
 from livekit.agents.llm import Tool, ToolContext, Toolset, function_tool
 
@@ -337,3 +338,122 @@ class TestToolSearchWithToolContext:
         assert "calculator" in ctx.function_tools
         assert "tool_search" in ctx.function_tools
         assert len(ctx.function_tools) == 2
+
+
+class TestGetToolParams:
+    def test_function_tool_params(self):
+        """FunctionTool params extracted from signature + docstring."""
+        params = _get_tool_params(weather_tool)
+        assert "city" in params
+
+    def test_function_tool_with_descriptions(self):
+        """FunctionTool param descriptions come from docstring."""
+
+        @function_tool
+        async def detailed_tool(name: str, age: int) -> str:
+            """A tool with documented params.
+
+            Args:
+                name: The user's full name
+                age: The user's age in years
+            """
+            return f"{name} is {age}"
+
+        params = _get_tool_params(detailed_tool)
+        assert params == {"name": "The user's full name", "age": "The user's age in years"}
+
+    def test_function_tool_no_params(self):
+        """FunctionTool with no parameters returns empty dict."""
+
+        @function_tool
+        async def no_params() -> str:
+            """A tool with no params."""
+            return "done"
+
+        params = _get_tool_params(no_params)
+        assert params == {}
+
+    def test_raw_function_tool_params(self):
+        """RawFunctionTool params extracted from raw_schema properties."""
+
+        @function_tool(
+            raw_schema={
+                "name": "raw_with_params",
+                "description": "A raw tool with params",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City or region name",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "description": "Temperature unit (celsius or fahrenheit)",
+                        },
+                    },
+                },
+            }
+        )
+        async def raw_with_params(raw_arguments: dict[str, object]) -> str:
+            return str(raw_arguments)
+
+        params = _get_tool_params(raw_with_params)
+        assert params == {
+            "location": "City or region name",
+            "unit": "Temperature unit (celsius or fahrenheit)",
+        }
+
+    def test_raw_function_tool_no_descriptions(self):
+        """RawFunctionTool properties without description field get empty string."""
+
+        @function_tool(
+            raw_schema={
+                "name": "raw_no_desc",
+                "description": "A raw tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+            }
+        )
+        async def raw_no_desc(raw_arguments: dict[str, object]) -> str:
+            return str(raw_arguments)
+
+        params = _get_tool_params(raw_no_desc)
+        assert params == {"query": "", "limit": ""}
+
+    def test_raw_function_tool_empty_properties(self):
+        """RawFunctionTool with no properties returns empty dict."""
+
+        @function_tool(
+            raw_schema={
+                "name": "raw_empty",
+                "description": "A raw tool with no params",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        )
+        async def raw_empty(raw_arguments: dict[str, object]) -> str:
+            return "done"
+
+        params = _get_tool_params(raw_empty)
+        assert params == {}
+
+    def test_raw_function_tool_no_properties_key(self):
+        """RawFunctionTool with no 'properties' key in parameters returns empty dict."""
+
+        @function_tool(
+            raw_schema={
+                "name": "raw_no_props",
+                "description": "A raw tool",
+                "parameters": {"type": "object"},
+            }
+        )
+        async def raw_no_props(raw_arguments: dict[str, object]) -> str:
+            return "done"
+
+        params = _get_tool_params(raw_no_props)
+        assert params == {}
