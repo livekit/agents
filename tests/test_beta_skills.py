@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from livekit.agents.beta.skills import Skill, SkillRegistry, load_skill_from_directory
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool, function_tool
+from livekit.agents.beta.skills import (
+    Skill,
+    SkillRegistry,
+    SkillSelector,
+    load_skill_from_directory,
+)
+from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool, ToolError, function_tool
 
 
 @function_tool
@@ -329,9 +334,6 @@ class TestLoader:
 # SkillSelector tests
 # ---------------------------------------------------------------------------
 
-
-from livekit.agents.beta.skills import SkillSelector
-from livekit.agents.llm.tool_context import ToolError
 
 
 def _make_weather_skill() -> Skill:

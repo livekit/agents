@@ -17,7 +17,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 
-from ...llm.tool_context import Tool, ToolError, Toolset
+from ...llm.tool_context import ToolError, Toolset
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ..toolsets.tool_search import SearchStrategy, ToolSearchToolset

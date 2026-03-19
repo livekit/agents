@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-from ...llm.tool_context import Tool, find_function_tools
+from ...llm.tool_context import Tool, Toolset, find_function_tools
 from ...log import logger
 from .skill import Skill
 
@@ -92,10 +92,10 @@ def load_skill_from_directory(path: str | Path) -> Skill:
     if not body:
         raise ValueError(f"skill.md body (instructions) is empty in {skill_md}")
 
-    tools: list[Tool] = []
+    tools: list[Tool | Toolset] = []
     tools_py = directory / "tools.py"
     if tools_py.is_file():
         logger.debug("Loading tools from %s", tools_py)
-        tools = _load_tools_from_file(tools_py)
+        tools = list(_load_tools_from_file(tools_py))
 
     return Skill(name=name, description=description, instructions=body, tools=tools)

@@ -36,7 +36,7 @@ class Skill(Toolset):
         name: str,
         description: str,
         instructions: str,
-        tools: list[Tool] | None = None,
+        tools: list[Tool | Toolset] | None = None,
     ) -> None:
         self._name = name
         self._description = description
