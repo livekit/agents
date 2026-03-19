@@ -805,12 +805,14 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         status_code=status_code,
                         retryable=False if status_code == 429 else None,
                     ) from e
-        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+        except asyncio.TimeoutError as e:
             raise APIStatusError(
                 f"interruption inference timeout: {e}",
                 status_code=408,
                 retryable=False,
             ) from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"interruption inference connection error: {e}") from e
         except APIError as e:
             raise e
         except Exception as e:
