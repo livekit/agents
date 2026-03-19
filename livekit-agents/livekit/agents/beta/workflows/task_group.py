@@ -111,7 +111,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # AgentTask handoff merges omit function calls. Re-merge the completed
                 # task context so task-group summarization can incorporate tool results.
-                self.chat_ctx.merge(
+                self._chat_ctx.merge(
                     self._current_task.chat_ctx.copy(),
                     exclude_instructions=True,
                 )
