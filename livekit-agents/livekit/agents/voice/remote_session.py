@@ -12,7 +12,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
-from .. import RunResult, llm, utils
+from .. import llm, utils
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -42,6 +42,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .run_result import RunResult
 
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
