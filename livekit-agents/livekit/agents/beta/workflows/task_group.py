@@ -108,7 +108,16 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             try:
                 self._visited_tasks.add(task_id)
                 res = await self._current_task
+
+                # AgentTask handoff merges omit function calls. Re-merge the completed
+                # task context so task-group summarization can incorporate tool results.
+                self.chat_ctx.merge(
+                    self._current_task.chat_ctx.copy(),
+                    exclude_instructions=True,
+                )
+
                 task_results[task_id] = res
+
                 if self._task_completed_callback is not None:
                     await self._task_completed_callback(
                         TaskCompletedEvent(
@@ -142,6 +151,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     exclude_empty_message=False,
                     exclude_function_call=False,
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)
+
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
