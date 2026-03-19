@@ -51,7 +51,7 @@ from .version import __version__
 USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
-DEFAULT_ENCODING = "PCM"
+DEFAULT_ENCODING: Encoding = "PCM"
 DEFAULT_MODEL = "inworld-tts-1.5-max"
 DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
@@ -65,16 +65,24 @@ NUM_CHANNELS = 1
 
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
-TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+_TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+TextNormalization = _TextNormalizationStr | bool
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
 
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
 
-def _validate_str_param(value: object, name: str, literal_type: type) -> None:
+def _validate_str_param(value: object, name: str, literal_type: Any) -> None:
     valid = get_args(literal_type)
     if not isinstance(value, str) or value not in valid:
         raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
+
+
+def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
+    if isinstance(value, bool):
+        return "ON" if value else "OFF"
+    _validate_str_param(value, "text_normalization", _TextNormalizationStr)
+    return cast(_TextNormalizationStr, value)
 
 
 @dataclass
@@ -901,7 +909,7 @@ class TTS(tts.TTS):
         if is_given(timestamp_type):
             _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
         if is_given(text_normalization):
-            _validate_str_param(text_normalization, "text_normalization", TextNormalization)
+            text_normalization = _resolve_text_normalization(text_normalization)
         if is_given(timestamp_transport_strategy):
             _validate_str_param(
                 timestamp_transport_strategy,
@@ -1018,8 +1026,7 @@ class TTS(tts.TTS):
             _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
             self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            _validate_str_param(text_normalization, "text_normalization", TextNormalization)
-            self._opts.text_normalization = text_normalization
+            self._opts.text_normalization = _resolve_text_normalization(text_normalization)
         if is_given(timestamp_transport_strategy):
             _validate_str_param(
                 timestamp_transport_strategy,
