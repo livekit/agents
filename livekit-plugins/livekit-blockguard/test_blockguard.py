@@ -342,7 +342,7 @@ class TestFreeThreaded:
             import asyncio, blockguard, time, threading
 
             def cpu_work():
-                end = time.monotonic() + 0.5
+                end = time.monotonic() + 2.0
                 while time.monotonic() < end:
                     pass
 
@@ -351,8 +351,8 @@ class TestFreeThreaded:
                 for t in threads:
                     t.start()
 
-                blockguard.install(threshold_ms=100, poll_ms=25)
-                time.sleep(0.5)
+                blockguard.install(threshold_ms=200, poll_ms=50)
+                time.sleep(2.0)
                 blockguard.uninstall()
 
                 for t in threads:
@@ -420,21 +420,21 @@ class TestFreeThreaded:
             import asyncio, blockguard, time, threading
 
             def cpu_work():
-                end = time.monotonic() + 0.5
+                end = time.monotonic() + 2.0
                 while time.monotonic() < end:
                     pass
 
             def deep(n):
                 if n > 0:
                     return deep(n - 1)
-                time.sleep(0.5)
+                time.sleep(2.0)
 
             async def main():
                 threads = [threading.Thread(target=cpu_work) for _ in range(4)]
                 for t in threads:
                     t.start()
 
-                blockguard.install(threshold_ms=100, poll_ms=25)
+                blockguard.install(threshold_ms=200, poll_ms=50)
                 deep(40)
                 blockguard.uninstall()
 

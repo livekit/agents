@@ -33,19 +33,24 @@ jobs:
       - name: Run blockguard tests on all Python versions
         shell: bash
         run: |
-          set -e
+          failed=""
           for ver in 3.10 3.11 3.12 3.13 3.13t 3.14 3.14t; do
             echo ""
             echo "::group::Python $ver"
             uv venv ".venv-$ver" --python "$ver"
             VIRTUAL_ENV=".venv-$ver" uv pip install ./livekit-plugins/livekit-blockguard/ pytest
-            # bin path differs on Windows vs POSIX
             py=".venv-$ver/bin/python"
             [ -f "$py" ] || py=".venv-$ver/Scripts/python.exe"
-            "$py" -m pytest livekit-plugins/livekit-blockguard/test_blockguard.py -v
+            if ! "$py" -m pytest livekit-plugins/livekit-blockguard/test_blockguard.py -v; then
+              failed="$failed $ver"
+            fi
             rm -rf ".venv-$ver"
             echo "::endgroup::"
           done
+          if [ -n "$failed" ]; then
+            echo "::error::Tests failed on:$failed"
+            exit 1
+          fi
 
   unit-tests:
     runs-on: ubuntu-latest
