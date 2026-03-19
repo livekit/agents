@@ -24,7 +24,6 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import aiohttp
-from opentelemetry import trace
 
 from livekit.agents import (
     APIConnectionError,
@@ -520,14 +519,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 timeout=self._conn_options.timeout
             ) as conn_result:
                 ws = conn_result.connection
-                span = trace.get_current_span()
-                span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time)
-                span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, conn_result.from_pool)
+                trace_types.record_ws_connection(conn_result.connect_time, reused=conn_result.from_pool)
                 logger.debug(
-                    "acquired Cartesia TTS WebSocket connection",
+                    "Cartesia TTS WebSocket connected (%s)",
+                    "reused" if conn_result.from_pool else "new",
                     extra={
                         "connection_time": conn_result.connect_time,
-                        "connection_reused": conn_result.from_pool,
                         "cartesia_context_id": cartesia_context_id,
                     },
                 )

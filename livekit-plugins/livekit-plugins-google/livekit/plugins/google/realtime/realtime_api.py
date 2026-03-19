@@ -10,8 +10,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from opentelemetry import trace
-
 import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
@@ -797,15 +795,10 @@ class RealtimeSession(llm.RealtimeSession):
                     model=self._opts.model, config=config
                 ) as session:
                     ws_connection_time = time.perf_counter() - connect_start_time
-                    span = trace.get_current_span()
-                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
-                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, False)
+                    trace_types.record_ws_connection(ws_connection_time, reused=False)
                     logger.debug(
-                        "established Gemini Realtime API WebSocket connection",
-                        extra={
-                            "connection_time": ws_connection_time,
-                            "connection_reused": False,
-                        },
+                        "Gemini Realtime API WebSocket connected (new)",
+                        extra={"connection_time": ws_connection_time},
                     )
                     async with self._session_lock:
                         self._active_session = session

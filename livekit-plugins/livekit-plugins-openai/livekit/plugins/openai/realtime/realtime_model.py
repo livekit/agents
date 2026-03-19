@@ -14,7 +14,6 @@ from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
-from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
@@ -828,15 +827,10 @@ class RealtimeSession(
                 self._realtime_model._opts.conn_options.timeout,
             )
             ws_connection_time = time.perf_counter() - start_time
-            span = trace.get_current_span()
-            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
-            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, False)
+            trace_types.record_ws_connection(ws_connection_time, reused=False)
             logger.debug(
-                "established OpenAI Realtime API WebSocket connection",
-                extra={
-                    "connection_time": ws_connection_time,
-                    "connection_reused": False,
-                },
+                "OpenAI Realtime API WebSocket connected (new)",
+                extra={"connection_time": ws_connection_time},
             )
             return ws
         except aiohttp.ClientError as e:

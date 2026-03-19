@@ -56,6 +56,20 @@ ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_WS_CONNECTION_TIME = "lk.ws.connection_time"
 ATTR_WS_CONNECTION_REUSED = "lk.ws.connection_reused"
 
+
+def record_ws_connection(connect_time: float, reused: bool) -> None:
+    """Record WebSocket connection timing on the current OTEL span.
+
+    Args:
+        connect_time: Time in seconds to establish or acquire the connection.
+        reused: True if connection was reused from pool, False if newly established.
+    """
+    from opentelemetry import trace
+
+    span = trace.get_current_span()
+    span.set_attribute(ATTR_WS_CONNECTION_TIME, connect_time)
+    span.set_attribute(ATTR_WS_CONNECTION_REUSED, reused)
+
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"

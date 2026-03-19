@@ -26,7 +26,6 @@ from functools import cached_property
 from typing import Any, Literal
 
 import aiohttp
-from opentelemetry import trace
 
 from livekit.agents import (
     APIConnectionError,
@@ -419,16 +418,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws_connection_time = (
                 connection._connect_time if connection._connect_time else total_time
             )
-            span = trace.get_current_span()
-            span.set_attribute(trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time)
-            span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, is_reused)
+            trace_types.record_ws_connection(ws_connection_time, reused=is_reused)
             logger.debug(
-                "acquired ElevenLabs TTS WebSocket connection",
-                extra={
-                    "connection_time": ws_connection_time,
-                    "connection_reused": is_reused,
-                    "context_id": self._context_id,
-                },
+                "ElevenLabs TTS WebSocket connected (%s)",
+                "reused" if is_reused else "new",
+                extra={"connection_time": ws_connection_time, "context_id": self._context_id},
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e

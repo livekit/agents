@@ -23,8 +23,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast, get_args
 
-from opentelemetry import trace
-
 import google.auth
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -829,17 +827,13 @@ class SpeechStream(stt.SpeechStream):
                     timeout=self._conn_options.timeout
                 ) as conn_result:
                     client = conn_result.connection
-                    span = trace.get_current_span()
-                    span.set_attribute(
-                        trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+                    trace_types.record_ws_connection(
+                        conn_result.connect_time, reused=conn_result.from_pool
                     )
-                    span.set_attribute(trace_types.ATTR_WS_CONNECTION_REUSED, conn_result.from_pool)
                     logger.debug(
-                        "acquired Google STT connection",
-                        extra={
-                            "connection_time": conn_result.connect_time,
-                            "connection_reused": conn_result.from_pool,
-                        },
+                        "Google STT connected (%s)",
+                        "reused" if conn_result.from_pool else "new",
+                        extra={"connection_time": conn_result.connect_time},
                     )
                     self._streaming_config = self._build_streaming_config()
 
