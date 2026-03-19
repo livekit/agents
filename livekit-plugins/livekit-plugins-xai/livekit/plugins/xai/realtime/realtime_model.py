@@ -4,7 +4,7 @@ from typing import Any
 
 import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
-from openai.types.realtime import RealtimeConversationItemFunctionCall
+from openai.types.realtime import AudioTranscription, RealtimeConversationItemFunctionCall
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -24,6 +24,8 @@ from ..tools import XAITool
 from ..types import GrokVoices
 
 XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
+
+XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription()
 
 XAI_DEFAULT_TURN_DETECTION = ServerVad(
     type="server_vad",
@@ -61,6 +63,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             voice=resolved_voice,  # type: ignore[arg-type]
             api_key=api_key,
             modalities=["audio"],
+            input_audio_transcription=XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
             turn_detection=turn_detection
             if is_given(turn_detection)
             else XAI_DEFAULT_TURN_DETECTION,
