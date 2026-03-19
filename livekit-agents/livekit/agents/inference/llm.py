@@ -45,12 +45,22 @@ _REASONING_UNSUPPORTED_PARAMS: set[str] = {
     "n",
 }
 
+# xAI reasoning models only restrict presence_penalty, frequency_penalty, stop.
+# They still support temperature and top_p.
+_XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "presence_penalty",
+    "frequency_penalty",
+    "stop",
+}
+
 # Model prefix -> set of param names that should be dropped
 _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "o1": _REASONING_UNSUPPORTED_PARAMS,
     "o3": _REASONING_UNSUPPORTED_PARAMS,
     "o4": _REASONING_UNSUPPORTED_PARAMS,
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+    "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
 # models that don't support reasoning_effort when function tools are present
@@ -110,7 +120,14 @@ DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
+XAIModels = Literal[
+    "xai/grok-4-1-fast-non-reasoning",
+    "xai/grok-4-1-fast-reasoning",
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-4.20-0309-reasoning",
+]
+
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):
