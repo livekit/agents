@@ -890,13 +890,22 @@ class _SessionMonitor:
         recording = self._runtime.config.recording
         recording_field_names = (
             "recording_url",
+            "recording_capture",
+        )
+        nested_recording_field_names = (
             "agent_recording_url",
             "user_recording_url",
-            "recording_capture",
         )
         resolved_fields = [
             field_name for field_name in recording_field_names if payload_record.get(field_name)
         ]
+        nested_recording = payload_record.get("recording")
+        if isinstance(nested_recording, dict):
+            resolved_fields.extend(
+                field_name
+                for field_name in nested_recording_field_names
+                if nested_recording.get(field_name)
+            )
         log_method = logger.info if resolved_fields else logger.warning
         log_method(
             "hamming recording payload resolution summary",
