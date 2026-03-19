@@ -32,8 +32,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
-from mistralai import Mistral
-from mistralai.models.sdkerror import SDKError
+from mistralai.client import Mistral
+from mistralai.client.errors.sdkerror import SDKError
 
 from .models import STTModels
 

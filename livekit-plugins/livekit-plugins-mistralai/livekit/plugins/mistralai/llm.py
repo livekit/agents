@@ -21,10 +21,10 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given, shortuuid
-from mistralai import (
-    ChatCompletionStreamRequestMessagesTypedDict,
+from mistralai.client import Mistral
+from mistralai.client.models import (
+    ChatCompletionStreamRequestMessageTypedDict,
     CompletionResponseStreamChoice,
-    Mistral,
     ToolTypedDict,
 )
 
@@ -140,7 +140,7 @@ class LLMStream(llm.LLMStream):
             tools = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             async_response = await self._client.chat.stream_async(
-                messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),
+                messages=cast(list[ChatCompletionStreamRequestMessageTypedDict], messages),
                 tools=cast(list[ToolTypedDict], tools),
                 model=self._model,
                 timeout_ms=int(self._conn_options.timeout * 1000),
