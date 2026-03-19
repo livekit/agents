@@ -9,12 +9,13 @@
  * or fprintf, both of which can hold locks that the stuck loop thread
  * may already own, causing a deadlock.
  *
- * Compatible with CPython 3.10-3.14, POSIX and Windows.
+ * Compatible with CPython 3.10-3.14 (including free-threaded), POSIX and Windows.
  * PyFrameObject fields are opaque from 3.11; only public API is used.
  */
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <frameobject.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -126,55 +127,43 @@ snap_eq(const FrameSnap *a, const FrameSnap *b)
 }
 
 /*
- * The idle event loop sits in selectors.py:select() called from
- * base_events.py:_run_once(). We only skip this specific call chain,
- * not arbitrary selectors.py:select() calls (which would be a real block).
+ * Detects the idle event loop: a function named "select" called from
+ * a function named "_run_once". This covers both the standard asyncio
+ * selector loop (selectors.py:select <- base_events.py:_run_once) and
+ * the Windows proactor loop (windows_events.py:select <-
+ * proactor_events.py:_run_once).
  */
 static int
 snap_is_idle_select(PyThreadState *tstate)
 {
+    int result = 0;
     if (!tstate) return 0;
 
     PyFrameObject *f = PyThreadState_GetFrame(tstate);
     if (!f) return 0;
 
     PyCodeObject *code = PyFrame_GetCode(f);
-    const char *fn = PyUnicode_AsUTF8(code->co_filename);
     const char *name = PyUnicode_AsUTF8(code->co_name);
+
+    if (!name || strcmp(name, "select") != 0) {
+        Py_DECREF(code);
+        Py_DECREF(f);
+        return 0;
+    }
     Py_DECREF(code);
-
-    if (!fn || !name || strcmp(name, "select") != 0) {
-        Py_DECREF(f);
-        return 0;
-    }
-
-    const char *p = strrchr(fn, '/');
-    if (!p) p = strrchr(fn, '\\');
-    const char *basename = p ? p + 1 : fn;
-
-    if (strcmp(basename, "selectors.py") != 0) {
-        Py_DECREF(f);
-        return 0;
-    }
 
     PyFrameObject *caller = PyFrame_GetBack(f);
     Py_DECREF(f);
     if (!caller) return 0;
 
     PyCodeObject *caller_code = PyFrame_GetCode(caller);
-    const char *caller_fn = PyUnicode_AsUTF8(caller_code->co_filename);
     const char *caller_name = PyUnicode_AsUTF8(caller_code->co_name);
+
+    result = caller_name && strcmp(caller_name, "_run_once") == 0;
+
     Py_DECREF(caller_code);
     Py_DECREF(caller);
-
-    if (!caller_fn || !caller_name) return 0;
-
-    const char *cp = strrchr(caller_fn, '/');
-    if (!cp) cp = strrchr(caller_fn, '\\');
-    const char *caller_basename = cp ? cp + 1 : caller_fn;
-
-    return strcmp(caller_basename, "base_events.py") == 0
-        && strcmp(caller_name, "_run_once") == 0;
+    return result;
 }
 
 static int
@@ -398,15 +387,6 @@ py_install(PyObject *self, PyObject *args, PyObject *kwargs)
 #endif
     }
 
-    {
-        char buf[128];
-        int n = snprintf(buf, sizeof(buf),
-                         "[blockguard] watchdog started "
-                         "(threshold=%.0f ms, poll=%.0f ms)\n",
-                         threshold_ms, poll_ms);
-        if (n > 0) write_stderr(buf, (size_t)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
-    }
-
     Py_RETURN_NONE;
 }
 
@@ -439,11 +419,6 @@ py_uninstall(PyObject *self, PyObject *args)
 #endif
     Py_END_ALLOW_THREADS
 
-    {
-        const char msg[] = "[blockguard] watchdog stopped\n";
-        write_stderr(msg, sizeof(msg) - 1);
-    }
-
     Py_RETURN_NONE;
 }
 
@@ -456,14 +431,24 @@ static PyMethodDef blockguard_methods[] = {
     {NULL}
 };
 
+static PyModuleDef_Slot blockguard_slots[] = {
+#if PY_VERSION_HEX >= 0x030D0000
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
+    {0, NULL}
+};
+
 static struct PyModuleDef blockguard_module = {
-    PyModuleDef_HEAD_INIT, "blockguard",
-    "Asyncio event-loop blocking detector.", -1,
-    blockguard_methods
+    PyModuleDef_HEAD_INIT,
+    .m_name = "blockguard",
+    .m_doc = "Asyncio event-loop blocking detector.",
+    .m_size = 0,
+    .m_methods = blockguard_methods,
+    .m_slots = blockguard_slots,
 };
 
 PyMODINIT_FUNC
 PyInit_blockguard(void)
 {
-    return PyModule_Create(&blockguard_module);
+    return PyModuleDef_Init(&blockguard_module);
 }

@@ -23,13 +23,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "${{ matrix.python-version }}"
+          allow-prereleases: true
 
       - name: Build and install blockguard
         run: pip install livekit-plugins/livekit-blockguard/
