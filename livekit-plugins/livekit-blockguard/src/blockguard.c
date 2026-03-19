@@ -9,7 +9,7 @@
  * or fprintf, both of which can hold locks that the stuck loop thread
  * may already own, causing a deadlock.
  *
- * Compatible with CPython 3.10-3.14 (including free-threaded), POSIX and Windows.
+ * Compatible with CPython 3.10-3.14, POSIX and Windows.
  * PyFrameObject fields are opaque from 3.11; only public API is used.
  */
 
