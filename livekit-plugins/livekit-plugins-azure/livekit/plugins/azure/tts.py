@@ -285,8 +285,10 @@ class TTS(tts.TTS):
         elif opts.auth_token:
             config = speechsdk.SpeechConfig(endpoint=ws_endpoint)
             config.authorization_token = opts.auth_token
+        elif opts.speech_endpoint:
+            config = speechsdk.SpeechConfig(endpoint=ws_endpoint)
         else:
-            raise ValueError("Streaming TTS requires subscription_key or auth_token with a region")
+            raise ValueError("Streaming TTS requires subscription_key, auth_token, or speech_endpoint")
 
         config.speech_synthesis_voice_name = opts.voice
         config.set_speech_synthesis_output_format(SUPPORTED_SDK_FORMATS[opts.sample_rate])
