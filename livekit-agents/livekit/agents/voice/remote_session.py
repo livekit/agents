@@ -204,17 +204,17 @@ class TcpSessionTransport(SessionTransport):
 
 
 _AGENT_STATE_MAP: dict[AgentState, int] = {
-    "initializing": agent_pb.SESSION_AGENT_STATE_INITIALIZING,
-    "idle": agent_pb.SESSION_AGENT_STATE_IDLE,
-    "listening": agent_pb.SESSION_AGENT_STATE_LISTENING,
-    "thinking": agent_pb.SESSION_AGENT_STATE_THINKING,
-    "speaking": agent_pb.SESSION_AGENT_STATE_SPEAKING,
+    "initializing": agent_pb.AS_INITIALIZING,
+    "idle": agent_pb.AS_IDLE,
+    "listening": agent_pb.AS_LISTENING,
+    "thinking": agent_pb.AS_THINKING,
+    "speaking": agent_pb.AS_SPEAKING,
 }
 
 _USER_STATE_MAP: dict[UserState, int] = {
-    "speaking": agent_pb.SESSION_USER_STATE_SPEAKING,
-    "listening": agent_pb.SESSION_USER_STATE_LISTENING,
-    "away": agent_pb.SESSION_USER_STATE_AWAY,
+    "speaking": agent_pb.US_SPEAKING,
+    "listening": agent_pb.US_LISTENING,
+    "away": agent_pb.US_AWAY,
 }
 
 _METRICS_FIELDS = (
@@ -380,16 +380,16 @@ class _SessionHost:
         elif msg_type == "audio_playback_finished" and self._audio_output is not None:
             self._audio_output.notify_playout_finished()
 
-    def _send_event(self, event: agent_pb.SessionEvent) -> None:
+    def _send_event(self, event: agent_pb.AgentSessionEvent) -> None:
         msg = agent_pb.AgentSessionMessage(event=event)
         self._tasks.create_task(self._transport.send_message(msg))
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
-        old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.SESSION_AGENT_STATE_IDLE)
-        new_pb = _AGENT_STATE_MAP.get(event.new_state, agent_pb.SESSION_AGENT_STATE_IDLE)
+        old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)
+        new_pb = _AGENT_STATE_MAP.get(event.new_state, agent_pb.AS_IDLE)
         self._send_event(
-            agent_pb.SessionEvent(
-                agent_state_changed=agent_pb.SessionEvent.AgentStateChanged(
+            agent_pb.AgentSessionEvent(
+                agent_state_changed=agent_pb.AgentSessionEvent.AgentStateChanged(
                     old_state=old_pb,
                     new_state=new_pb,
                 )
@@ -397,11 +397,11 @@ class _SessionHost:
         )
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
-        old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.SESSION_USER_STATE_LISTENING)
-        new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.SESSION_USER_STATE_LISTENING)
+        old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.US_LISTENING)
+        new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.US_LISTENING)
         self._send_event(
-            agent_pb.SessionEvent(
-                user_state_changed=agent_pb.SessionEvent.UserStateChanged(
+            agent_pb.AgentSessionEvent(
+                user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
                     old_state=old_pb,
                     new_state=new_pb,
                 )
@@ -410,8 +410,8 @@ class _SessionHost:
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
         self._send_event(
-            agent_pb.SessionEvent(
-                user_input_transcribed=agent_pb.SessionEvent.UserInputTranscribed(
+            agent_pb.AgentSessionEvent(
+                user_input_transcribed=agent_pb.AgentSessionEvent.UserInputTranscribed(
                     transcript=event.transcript,
                     is_final=event.is_final,
                 )
@@ -421,8 +421,8 @@ class _SessionHost:
     def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
         chat_item = _chat_item_to_proto(event.item)
         self._send_event(
-            agent_pb.SessionEvent(
-                conversation_item_added=agent_pb.SessionEvent.ConversationItemAdded(
+            agent_pb.AgentSessionEvent(
+                conversation_item_added=agent_pb.AgentSessionEvent.ConversationItemAdded(
                     item=chat_item,
                 )
             )
@@ -446,8 +446,8 @@ class _SessionHost:
             for fco in event.function_call_outputs
         ]
         self._send_event(
-            agent_pb.SessionEvent(
-                function_tools_executed=agent_pb.SessionEvent.FunctionToolsExecuted(
+            agent_pb.AgentSessionEvent(
+                function_tools_executed=agent_pb.AgentSessionEvent.FunctionToolsExecuted(
                     function_calls=pb_calls,
                     function_call_outputs=pb_outputs,
                 )
@@ -459,8 +459,8 @@ class _SessionHost:
 
     def _on_error(self, event: ErrorEvent) -> None:
         self._send_event(
-            agent_pb.SessionEvent(
-                error=agent_pb.SessionEvent.Error(
+            agent_pb.AgentSessionEvent(
+                error=agent_pb.AgentSessionEvent.Error(
                     message=str(event.error) if event.error else "Unknown error",
                 )
             )
@@ -503,7 +503,7 @@ class _SessionHost:
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
-                    get_chat_history=agent_pb.SessionRequest.GetChatHistoryResponse(
+                    get_chat_history=agent_pb.SessionResponse.GetChatHistoryResponse(
                         items=items,
                     ),
                 )
@@ -516,7 +516,7 @@ class _SessionHost:
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
-                    get_agent_info=agent_pb.SessionRequest.GetAgentInfoResponse(
+                    get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
                         id=agent.id,
                         instructions=agent.instructions,
                         tools=_tool_names(agent.tools),
@@ -526,10 +526,10 @@ class _SessionHost:
             )
             await self._transport.send_message(resp)
 
-        elif req.HasField("send_message"):
+        elif req.HasField("run_input"):
             items: list[agent_pb.ChatContext.ChatItem] = []
             error: str | None = None
-            text = req.send_message.text
+            text = req.run_input.text
             if text:
                 # Disable audio/transcription so TTS is skipped and the run
                 # completes after text generation without waiting for playout.
@@ -554,7 +554,7 @@ class _SessionHost:
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     error=error,
-                    send_message=agent_pb.SessionRequest.SendMessageResponse(
+                    run_input=agent_pb.SessionResponse.RunInputResponse(
                         items=items,
                     ),
                 )
@@ -662,7 +662,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out")
 
-    async def fetch_chat_history(self) -> agent_pb.SessionRequest.GetChatHistoryResponse:
+    async def fetch_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
@@ -670,7 +670,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         resp = await self._send_request(req)
         return resp.get_chat_history
 
-    async def fetch_agent_info(self) -> agent_pb.SessionRequest.GetAgentInfoResponse:
+    async def fetch_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
@@ -680,12 +680,12 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     async def send_message(
         self, text: str, timeout: float = 60.0
-    ) -> agent_pb.SessionRequest.SendMessageResponse:
+    ) -> agent_pb.SessionResponse.RunInputResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
-            send_message=agent_pb.SessionRequest.SendMessage(text=text),
+            run_input=agent_pb.SessionRequest.RunInput(text=text),
         )
         resp = await self._send_request(req, timeout=timeout)
         if resp.error:
             raise RuntimeError(resp.error)
-        return resp.send_message
+        return resp.run_input
