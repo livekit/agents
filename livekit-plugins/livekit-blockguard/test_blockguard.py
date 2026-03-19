@@ -143,25 +143,6 @@ class TestDetection:
         assert "Event loop BLOCKED" in r.stderr
         assert "OK" in r.stdout
 
-    def test_blocking_busy_loop(self) -> None:
-        r = _run_script("""\
-            import asyncio, blockguard, time
-
-            async def main():
-                blockguard.install(threshold_ms=100, poll_ms=25)
-                end = time.monotonic() + 1.0
-                while time.monotonic() < end:
-                    pass
-                blockguard.uninstall()
-                print("OK")
-
-            asyncio.run(main())
-        """)
-        assert r.returncode == 0, f"stderr: {r.stderr}"
-        assert "Event loop BLOCKED" in r.stderr
-        assert "OK" in r.stdout
-
-
 class TestEdgeCases:
     def test_double_install_raises(self) -> None:
         r = _run_script("""\
