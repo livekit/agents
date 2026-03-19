@@ -51,3 +51,8 @@ def is_dev_mode() -> bool:
     Reads the ``LIVEKIT_DEV_MODE`` environment variable.
     """
     return os.getenv("LIVEKIT_DEV_MODE") == "1"
+
+
+def is_hosted() -> bool:
+    """Return whether the agent is hosted on LiveKit Cloud."""
+    return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
