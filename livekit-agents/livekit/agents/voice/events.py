@@ -96,7 +96,7 @@ EventTypes = Literal[
 ]
 
 UserState = Literal["speaking", "listening", "away"]
-AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
+AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking", "processing"]
 
 
 class UserStateChangedEvent(BaseModel):
