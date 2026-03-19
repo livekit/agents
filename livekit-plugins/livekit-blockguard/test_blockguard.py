@@ -328,6 +328,129 @@ class TestStress:
         assert "OK" in r.stdout
 
 
+class TestFreeThreaded:
+    """Tests that stress concurrent frame access.
+
+    On free-threaded Python (3.13t+) these run without the GIL, exercising
+    the ref-counting and frame-walking paths under true concurrency.
+    On regular CPython they still pass (the GIL serializes access).
+    """
+
+    def test_concurrent_threads_during_detection(self) -> None:
+        r = _run_script(
+            """\
+            import asyncio, blockguard, time, threading
+
+            def cpu_work():
+                end = time.monotonic() + 0.5
+                while time.monotonic() < end:
+                    pass
+
+            async def main():
+                threads = [threading.Thread(target=cpu_work) for _ in range(4)]
+                for t in threads:
+                    t.start()
+
+                blockguard.install(threshold_ms=100, poll_ms=25)
+                time.sleep(0.5)
+                blockguard.uninstall()
+
+                for t in threads:
+                    t.join()
+                print("OK")
+
+            asyncio.run(main())
+        """,
+            timeout=15,
+        )
+        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert "Event loop BLOCKED" in r.stderr
+        assert "OK" in r.stdout
+
+    def test_concurrent_asyncio_tasks_no_false_positive(self) -> None:
+        r = _run_script(
+            """\
+            import asyncio, blockguard
+
+            async def background():
+                for _ in range(20):
+                    await asyncio.sleep(0.01)
+
+            async def main():
+                blockguard.install(threshold_ms=200, poll_ms=50)
+                await asyncio.gather(*[background() for _ in range(10)])
+                blockguard.uninstall()
+                print("OK")
+
+            asyncio.run(main())
+        """,
+            timeout=15,
+        )
+        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert "Event loop BLOCKED" not in r.stderr
+        assert "OK" in r.stdout
+
+    def test_thread_churn_during_watchdog(self) -> None:
+        r = _run_script(
+            """\
+            import asyncio, blockguard, threading, time
+
+            def short_work():
+                time.sleep(0.01)
+
+            async def main():
+                blockguard.install(threshold_ms=300, poll_ms=25)
+                for _ in range(50):
+                    t = threading.Thread(target=short_work)
+                    t.start()
+                    t.join()
+                blockguard.uninstall()
+                print("OK")
+
+            asyncio.run(main())
+        """,
+            timeout=15,
+        )
+        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert "OK" in r.stdout
+
+    def test_deep_stack_with_concurrent_threads(self) -> None:
+        r = _run_script(
+            """\
+            import asyncio, blockguard, time, threading
+
+            def cpu_work():
+                end = time.monotonic() + 0.5
+                while time.monotonic() < end:
+                    pass
+
+            def deep(n):
+                if n > 0:
+                    return deep(n - 1)
+                time.sleep(0.5)
+
+            async def main():
+                threads = [threading.Thread(target=cpu_work) for _ in range(4)]
+                for t in threads:
+                    t.start()
+
+                blockguard.install(threshold_ms=100, poll_ms=25)
+                deep(40)
+                blockguard.uninstall()
+
+                for t in threads:
+                    t.join()
+                print("OK")
+
+            asyncio.run(main())
+        """,
+            timeout=15,
+        )
+        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert "Event loop BLOCKED" in r.stderr
+        assert "OK" in r.stdout
+
+
 class TestPythonWrapper:
     def test_wrapper_import(self) -> None:
         r = _run_script("""\
