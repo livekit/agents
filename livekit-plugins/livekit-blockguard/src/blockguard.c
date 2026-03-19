@@ -9,7 +9,7 @@
  * or fprintf, both of which can hold locks that the stuck loop thread
  * may already own, causing a deadlock.
  *
- * Compatible with CPython 3.10-3.14, POSIX and Windows.
+ * Compatible with CPython 3.10-3.14 (including free-threaded), POSIX and Windows.
  * PyFrameObject fields are opaque from 3.11; only public API is used.
  */
 
@@ -457,14 +457,24 @@ static PyMethodDef blockguard_methods[] = {
     {NULL}
 };
 
+static PyModuleDef_Slot blockguard_slots[] = {
+#if PY_VERSION_HEX >= 0x030D0000
+    {Py_mod_gil, Py_MOD_GIL_USED},
+#endif
+    {0, NULL}
+};
+
 static struct PyModuleDef blockguard_module = {
-    PyModuleDef_HEAD_INIT, "blockguard",
-    "Asyncio event-loop blocking detector.", -1,
-    blockguard_methods
+    PyModuleDef_HEAD_INIT,
+    .m_name = "blockguard",
+    .m_doc = "Asyncio event-loop blocking detector.",
+    .m_size = 0,
+    .m_methods = blockguard_methods,
+    .m_slots = blockguard_slots,
 };
 
 PyMODINIT_FUNC
 PyInit_blockguard(void)
 {
-    return PyModule_Create(&blockguard_module);
+    return PyModuleDef_Init(&blockguard_module);
 }
