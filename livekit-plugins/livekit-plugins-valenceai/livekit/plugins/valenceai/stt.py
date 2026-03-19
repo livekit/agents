@@ -89,7 +89,7 @@ class STT(stt.STT):
         *,
         underlying_stt: stt.STT,
         api_key: str | None = None,
-        server_url: str = "https://qa.getvalenceai.com",
+        server_url: str = "https://api.getvalenceai.com",
         model: EmotionModel = "4emotions",
         min_confidence: float = 0.0,
     ) -> None:
@@ -98,6 +98,11 @@ class STT(stt.STT):
 
         self._underlying_stt = underlying_stt
         self._api_key = api_key or os.getenv("VALENCE_API_KEY")
+        if not self._api_key:
+            raise ValueError(
+                "Valence API key is required. Provide it via the 'api_key' parameter "
+                "or set the VALENCE_API_KEY environment variable."
+            )
         self._server_url = server_url
         self._model = model
         self._min_confidence = min_confidence
@@ -120,10 +125,6 @@ class STT(stt.STT):
         if self._valence_client and not self._valence_client.is_connected:
             logger.warning("Valence connection was lost, attempting to reconnect...")
             self._valence_connected = False
-
-        if not self._api_key:
-            logger.warning("No Valence API key provided, emotions will be disabled")
-            return False
 
         try:
             # Create new client if needed

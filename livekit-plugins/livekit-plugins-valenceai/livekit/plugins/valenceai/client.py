@@ -58,7 +58,7 @@ class ValenceWebSocketClient:
     def __init__(
         self,
         api_key: str,
-        server_url: str = "https://qa.getvalenceai.com",
+        server_url: str = "https://api.getvalenceai.com",
         model: EmotionModel = "4emotions",
     ) -> None:
         self._api_key = api_key

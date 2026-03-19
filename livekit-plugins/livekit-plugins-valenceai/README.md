@@ -75,7 +75,7 @@ stt = valenceai.STT(
     api_key="your-valence-api-key",
 
     # Optional: Valence API server URL
-    server_url="https://qa.getvalenceai.com",
+    server_url="https://api.getvalenceai.com",
 
     # Optional: Emotion model - "4emotions" or "7emotions"
     model="4emotions",
@@ -135,7 +135,7 @@ from livekit.plugins.valenceai import ValenceWebSocketClient
 # For advanced use cases
 client = ValenceWebSocketClient(
     api_key="your-api-key",
-    server_url="https://qa.getvalenceai.com",
+    server_url="https://api.getvalenceai.com",
     model="4emotions",
 )
 
@@ -172,7 +172,7 @@ User Audio → [Buffer] → Underlying STT → Transcript
 valenceai.STT(
     underlying_stt: stt.STT,
     api_key: str | None = None,
-    server_url: str = "https://qa.getvalenceai.com",
+    server_url: str = "https://api.getvalenceai.com",
     model: Literal["4emotions", "7emotions"] = "4emotions",
     min_confidence: float = 0.0,
 )
@@ -184,7 +184,7 @@ valenceai.STT(
 |-----------|------|---------|-------------|
 | `underlying_stt` | `stt.STT` | Required | The base STT provider to wrap |
 | `api_key` | `str \| None` | `None` | Valence API key (falls back to `VALENCE_API_KEY` env var) |
-| `server_url` | `str` | `"https://qa.getvalenceai.com"` | Valence API server URL |
+| `server_url` | `str` | `"https://api.getvalenceai.com"` | Valence API server URL |
 | `model` | `"4emotions" \| "7emotions"` | `"4emotions"` | Emotion classification model |
 | `min_confidence` | `float` | `0.0` | Minimum confidence to include emotion tags |
 
@@ -193,7 +193,7 @@ valenceai.STT(
 ```python
 valenceai.ValenceWebSocketClient(
     api_key: str,
-    server_url: str = "https://qa.getvalenceai.com",
+    server_url: str = "https://api.getvalenceai.com",
     model: Literal["4emotions", "7emotions"] = "4emotions",
 )
 ```
@@ -210,7 +210,7 @@ valenceai.ValenceWebSocketClient(
 
 The plugin handles errors gracefully:
 
-- **No API key**: Logs warning, returns plain transcriptions without emotion tags
+- **No API key**: Raises `ValueError` at initialization — set `VALENCE_API_KEY` env var or pass `api_key` directly
 - **Connection failure**: Retries with exponential backoff (max 3 attempts)
 - **Timeout**: Uses last known emotion, logs warning
 - **Processing error**: Logs error, returns plain transcription
