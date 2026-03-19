@@ -201,30 +201,40 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
+def _has_user_configured_handlers() -> bool:
+    """Return True if a non-NullHandler exists on the root or livekit.agents logger."""
+    for lg in (logging.getLogger(), logging.getLogger("livekit.agents")):
+        for h in lg.handlers:
+            if not isinstance(h, logging.NullHandler):
+                return True
+    return False
+
+
 def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
-    root = logging.getLogger()
+    if not _has_user_configured_handlers():
+        root = logging.getLogger()
 
-    handler = logging.StreamHandler(sys.stdout)
-    if devmode:
-        # colorful logs for dev (improves readability)
-        if console:
-            # reset the line before each log message
-            colored_formatter = ColoredFormatter(
-                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
-            )
+        handler = logging.StreamHandler(sys.stdout)
+        if devmode:
+            # colorful logs for dev (improves readability)
+            if console:
+                # reset the line before each log message
+                colored_formatter = ColoredFormatter(
+                    "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+                )
+            else:
+                colored_formatter = ColoredFormatter(
+                    "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+                )
+
+            handler.setFormatter(colored_formatter)
         else:
-            colored_formatter = ColoredFormatter(
-                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
-            )
+            # production logs (serialized of json)
+            json_formatter = JsonFormatter()
+            handler.setFormatter(json_formatter)
 
-        handler.setFormatter(colored_formatter)
-    else:
-        # production logs (serialized of json)
-        json_formatter = JsonFormatter()
-        handler.setFormatter(json_formatter)
-
-    root.addHandler(handler)
-    root.setLevel(log_level)
+        root.addHandler(handler)
+        root.setLevel(log_level)
 
     _silence_noisy_loggers()
 
