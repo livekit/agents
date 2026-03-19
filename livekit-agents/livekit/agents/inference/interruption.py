@@ -57,7 +57,7 @@ MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
-REMOTE_INFERENCE_TIMEOUT = 1
+REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 _FRAMES_PER_SECOND = 40
 
 
@@ -796,9 +796,17 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     return result
                 except Exception as e:
                     msg = await resp.text()
-                    raise APIError(f"error during interruption prediction: {e}", body=msg) from e
+                    raise APIStatusError(
+                        f"error during interruption prediction: {e}",
+                        body=msg,
+                        status_code=resp.status,
+                    ) from e
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-            raise APIError(f"interruption inference timeout: {e}") from e
+            raise APIStatusError(
+                f"interruption inference timeout: {e}",
+                status_code=408,
+                retryable=False,
+            ) from e
         except APIError as e:
             raise e
         except Exception as e:
@@ -929,9 +937,11 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     if entry.total_duration is not None:
                         continue
                     if now - entry.created_at > timeout_ns:
-                        raise APIError(
+                        raise APIStatusError(
                             f"interruption inference timed out after "
-                            f"{(now - entry.created_at) / 1e9:.1f}s (ws)"
+                            f"{(now - entry.created_at) / 1e9:.1f}s (ws)",
+                            status_code=408,
+                            retryable=False,
                         )
                     break  # oldest unanswered entry is still within timeout
 
@@ -1040,9 +1050,10 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                                 },
                             )
                     case InterruptionWSErrorMessage():
-                        raise APIError(
+                        raise APIStatusError(
                             f"LiveKit Adaptive Interruption returned error: {msg.code}",
                             body=msg.message,
+                            status_code=msg.code,
                         )
                     case _:
                         logger.warning(
