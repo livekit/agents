@@ -17,8 +17,8 @@ class CliArgs:
     reload_addr: str | None = None
 
 
-def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningJobInfo:
-    return agent_dev.RunningJobInfo(
+def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningAgentJobInfo:
+    return agent_dev.RunningAgentJobInfo(
         job=info.job,
         accept_name=info.accept_arguments.name,
         accept_identity=info.accept_arguments.identity,
@@ -26,11 +26,11 @@ def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningJobInfo:
         url=info.url,
         token=info.token,
         worker_id=info.worker_id,
-        fake_job=info.fake_job,
+        mock_job=info.fake_job,
     )
 
 
-def running_job_from_proto(pb: agent_dev.RunningJobInfo) -> RunningJobInfo:
+def running_job_from_proto(pb: agent_dev.RunningAgentJobInfo) -> RunningJobInfo:
     return RunningJobInfo(
         accept_arguments=JobAcceptArguments(
             name=pb.accept_name,
@@ -41,5 +41,5 @@ def running_job_from_proto(pb: agent_dev.RunningJobInfo) -> RunningJobInfo:
         url=pb.url,
         token=pb.token,
         worker_id=pb.worker_id,
-        fake_job=pb.fake_job,
+        fake_job=pb.mock_job,
     )
