@@ -37,7 +37,7 @@ class TcpAudioInput(io.AudioInput):
         )
         self._closed = False
 
-    def push_frame(self, frame: agent_pb.SessionAudioFrame) -> None:
+    def push_frame(self, frame: agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame) -> None:
         if self._closed:
             return
         audio_frame = rtc.AudioFrame(
@@ -107,7 +107,7 @@ class TcpAudioOutput(io.AudioOutput):
 
         resampled = self._resampler.push(frame)
         for rf in resampled:
-            audio_frame = agent_pb.SessionAudioFrame(
+            audio_frame = agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame(
                 data=bytes(rf.data),
                 sample_rate=WIRE_SAMPLE_RATE,
                 num_channels=rf.num_channels,
@@ -119,7 +119,7 @@ class TcpAudioOutput(io.AudioOutput):
     def flush(self) -> None:
         super().flush()
         msg = agent_pb.AgentSessionMessage(
-            audio_playback_flush=agent_pb.SessionAudioPlaybackFlush()
+            audio_playback_flush=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackFlush()
         )
         self._transport.send_message_threadsafe(msg)
 
@@ -134,7 +134,7 @@ class TcpAudioOutput(io.AudioOutput):
 
     def clear_buffer(self) -> None:
         msg = agent_pb.AgentSessionMessage(
-            audio_playback_clear=agent_pb.SessionAudioPlaybackClear()
+            audio_playback_clear=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackClear()
         )
         self._transport.send_message_threadsafe(msg)
 

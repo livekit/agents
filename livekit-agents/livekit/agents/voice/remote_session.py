@@ -899,7 +899,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out")
 
-    async def fetch_chat_history(self) -> agent_pb.SessionRequest.GetChatHistoryResponse:
+    async def fetch_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
@@ -907,7 +907,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         resp = await self._send_request(req)
         return resp.get_chat_history
 
-    async def fetch_agent_info(self) -> agent_pb.SessionRequest.GetAgentInfoResponse:
+    async def fetch_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
