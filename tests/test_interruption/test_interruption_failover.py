@@ -218,7 +218,7 @@ class TestWsConnectionTimeout:
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
-        assert len(recoverable_errors) == MAX_RETRY
+        assert len(recoverable_errors) == 0
         assert len(unrecoverable_errors) == 1
 
 

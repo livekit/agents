@@ -1140,7 +1140,14 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError(
-                    "LiveKit Adaptive Interruption quota exceeded", status_code=e.status
+                    "LiveKit Adaptive Interruption quota exceeded",
+                    status_code=e.status,
+                    retryable=False,
+                ) from e
+            elif isinstance(e, asyncio.TimeoutError):
+                raise APIConnectionError(
+                    "failed to connect to LiveKit Adaptive Interruption: timeout",
+                    retryable=False,
                 ) from e
             raise APIConnectionError("failed to connect to LiveKit Adaptive Interruption") from e
 
