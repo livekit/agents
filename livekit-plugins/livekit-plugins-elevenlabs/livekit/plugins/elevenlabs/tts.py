@@ -415,7 +415,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             total_time = time.perf_counter() - start_time
             ws_connection_time = connection._connect_time or total_time
             status = "reused" if is_reused else "new"
-            trace_types.record_ws_connection(ws_connection_time, reused=is_reused)
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+            )
             logger.debug(
                 "ElevenLabs TTS WebSocket connected (%s)",
                 status,

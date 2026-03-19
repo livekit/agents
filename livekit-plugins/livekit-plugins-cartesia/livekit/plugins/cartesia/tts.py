@@ -519,7 +519,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 timeout=self._conn_options.timeout
             ) as conn_result:
                 ws = conn_result.connection
-                trace_types.record_ws_connection(conn_result.connect_time, reused=conn_result.from_pool)
+                from opentelemetry import trace
+                trace.get_current_span().set_attribute(
+                    trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+                )
                 logger.debug(
                     "Cartesia TTS WebSocket connected (%s)",
                     conn_result.status,

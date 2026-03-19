@@ -638,7 +638,10 @@ class SpeechStream(stt.SpeechStream):
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
-            trace_types.record_ws_connection(ws_connection_time, reused=False)
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+            )
             logger.debug(
                 "Deepgram STT WebSocket connected (new)",
                 extra={"headers": ws_headers, "connection_time": ws_connection_time},

@@ -795,7 +795,10 @@ class RealtimeSession(llm.RealtimeSession):
                     model=self._opts.model, config=config
                 ) as session:
                     ws_connection_time = time.perf_counter() - connect_start_time
-                    trace_types.record_ws_connection(ws_connection_time, reused=False)
+                    from opentelemetry import trace
+                    trace.get_current_span().set_attribute(
+                        trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+                    )
                     logger.debug(
                         "Gemini Realtime API WebSocket connected (new)",
                         extra={"connection_time": ws_connection_time},
