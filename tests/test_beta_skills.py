@@ -323,3 +323,159 @@ class TestLoader:
         assert registry.get("good") is not None
         assert registry.get("bad") is None
         assert len(registry.skills_list()) == 1
+
+
+# ---------------------------------------------------------------------------
+# SkillSelector tests
+# ---------------------------------------------------------------------------
+
+
+from livekit.agents.beta.skills import SkillSelector
+from livekit.agents.llm.tool_context import ToolError
+
+
+def _make_weather_skill() -> Skill:
+    return Skill(
+        name="weather",
+        description="Get weather information",
+        instructions="Use the weather tool to check forecasts.",
+        tools=[weather],
+    )
+
+
+def _make_calendar_skill() -> Skill:
+    @function_tool
+    async def schedule_event(title: str, date: str) -> str:
+        """Schedule a calendar event."""
+        return f"Scheduled {title} on {date}"
+
+    return Skill(
+        name="calendar",
+        description="Manage calendar events",
+        instructions="Use calendar tools to schedule and manage events.",
+        tools=[schedule_event],
+    )
+
+
+class TestSkillSelector:
+    def test_create_skill_selector(self) -> None:
+        ws = _make_weather_skill()
+        cs = _make_calendar_skill()
+        selector = SkillSelector(skills=[ws, cs])
+        assert selector.active_skills == []
+
+    def test_create_from_registry(self) -> None:
+        registry = SkillRegistry()
+        registry.register(_make_weather_skill())
+        registry.register(_make_calendar_skill())
+        selector = SkillSelector(skills=registry)
+        assert selector.active_skills == []
+
+    @pytest.mark.asyncio
+    async def test_search_activates_skill(self) -> None:
+        ws = _make_weather_skill()
+        cs = _make_calendar_skill()
+        selector = SkillSelector(skills=[ws, cs])
+        await selector.setup()
+
+        await selector._handle_search({"query": "weather"})
+        active = selector.active_skills
+        assert any(s.name == "weather" for s in active)
+
+    @pytest.mark.asyncio
+    async def test_search_replaces_skills_by_default(self) -> None:
+        ws = _make_weather_skill()
+        cs = _make_calendar_skill()
+        selector = SkillSelector(skills=[ws, cs])
+        await selector.setup()
+
+        await selector._handle_search({"query": "weather"})
+        assert any(s.name == "weather" for s in selector.active_skills)
+
+        await selector._handle_search({"query": "calendar schedule"})
+        active_names = [s.name for s in selector.active_skills]
+        assert "calendar" in active_names
+        assert "weather" not in active_names
+
+    @pytest.mark.asyncio
+    async def test_max_active_skills_accumulate(self) -> None:
+        ws = _make_weather_skill()
+        cs = _make_calendar_skill()
+        selector = SkillSelector(skills=[ws, cs], max_active_skills=5)
+        await selector.setup()
+
+        await selector._handle_search({"query": "weather"})
+        await selector._handle_search({"query": "calendar schedule"})
+        active_names = [s.name for s in selector.active_skills]
+        assert "weather" in active_names
+        assert "calendar" in active_names
+
+    @pytest.mark.asyncio
+    async def test_max_active_skills_eviction(self) -> None:
+        ws = _make_weather_skill()
+        cs = _make_calendar_skill()
+        selector = SkillSelector(skills=[ws, cs], max_active_skills=1)
+        await selector.setup()
+
+        await selector._handle_search({"query": "weather"})
+        assert len(selector.active_skills) == 1
+        assert selector.active_skills[0].name == "weather"
+
+        await selector._handle_search({"query": "calendar schedule"})
+        assert len(selector.active_skills) == 1
+        assert selector.active_skills[0].name == "calendar"
+
+    @pytest.mark.asyncio
+    async def test_on_change_callback_fires(self) -> None:
+        ws = _make_weather_skill()
+        callback_results: list[list[Skill]] = []
+
+        async def on_change(skills: list[Skill]) -> None:
+            callback_results.append(skills)
+
+        selector = SkillSelector(skills=[ws], on_change=on_change)
+        await selector.setup()
+
+        await selector._handle_search({"query": "weather"})
+        assert len(callback_results) == 1
+        assert any(s.name == "weather" for s in callback_results[0])
+
+    @pytest.mark.asyncio
+    async def test_on_change_not_called_when_no_match(self) -> None:
+        ws = _make_weather_skill()
+        callback_results: list[list[Skill]] = []
+
+        async def on_change(skills: list[Skill]) -> None:
+            callback_results.append(skills)
+
+        selector = SkillSelector(skills=[ws], on_change=on_change)
+        await selector.setup()
+
+        with pytest.raises(ToolError):
+            await selector._handle_search({"query": "xyznonexistent123"})
+        assert len(callback_results) == 0
+
+    @pytest.mark.asyncio
+    async def test_search_result_includes_instructions(self) -> None:
+        ws = _make_weather_skill()
+        selector = SkillSelector(skills=[ws])
+        await selector.setup()
+
+        result = await selector._handle_search({"query": "weather"})
+        assert "Use the weather tool to check forecasts." in result
+        assert "weather" in result
+
+    @pytest.mark.asyncio
+    async def test_tools_property_includes_search_tool(self) -> None:
+        ws = _make_weather_skill()
+        selector = SkillSelector(skills=[ws])
+        await selector.setup()
+
+        tools = selector.tools
+        tool_names = []
+        for t in tools:
+            if hasattr(t, "info"):
+                tool_names.append(t.info.name)
+            elif hasattr(t, "id"):
+                tool_names.append(t.id)
+        assert "tool_search" in tool_names
