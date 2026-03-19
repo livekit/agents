@@ -165,6 +165,10 @@ class ToolSearchToolset(Toolset):
         if toolsets:
             await asyncio.gather(*(ts.aclose() for ts in toolsets))
 
+        self._initialized = False
+        self._search_items.clear()
+        self._loaded_tools.clear()
+
 
 def _get_tool_description(tool: FunctionTool | RawFunctionTool) -> str:
     if isinstance(tool, FunctionTool):
