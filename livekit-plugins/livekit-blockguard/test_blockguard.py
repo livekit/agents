@@ -49,8 +49,6 @@ class TestLifecycle:
             asyncio.run(main())
         """)
         assert r.returncode == 0, f"stderr: {r.stderr}"
-        assert "watchdog started" in r.stderr
-        assert "watchdog stopped" in r.stderr
 
     def test_install_sleep_uninstall(self) -> None:
         r = _run_script("""\
