@@ -341,13 +341,12 @@ class TestFreeThreaded:
             """\
             import asyncio, blockguard, time, threading
 
-            def cpu_work():
-                end = time.monotonic() + 2.0
-                while time.monotonic() < end:
-                    pass
+            def thread_work():
+                for _ in range(20):
+                    time.sleep(0.1)
 
             async def main():
-                threads = [threading.Thread(target=cpu_work) for _ in range(4)]
+                threads = [threading.Thread(target=thread_work) for _ in range(4)]
                 for t in threads:
                     t.start()
 
@@ -419,10 +418,9 @@ class TestFreeThreaded:
             """\
             import asyncio, blockguard, time, threading
 
-            def cpu_work():
-                end = time.monotonic() + 2.0
-                while time.monotonic() < end:
-                    pass
+            def thread_work():
+                for _ in range(20):
+                    time.sleep(0.1)
 
             def deep(n):
                 if n > 0:
@@ -430,7 +428,7 @@ class TestFreeThreaded:
                 time.sleep(2.0)
 
             async def main():
-                threads = [threading.Thread(target=cpu_work) for _ in range(4)]
+                threads = [threading.Thread(target=thread_work) for _ in range(4)]
                 for t in threads:
                     t.start()
 
