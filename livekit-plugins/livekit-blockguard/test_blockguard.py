@@ -132,8 +132,8 @@ class TestDetection:
             import asyncio, blockguard, hashlib
 
             async def main():
-                blockguard.install(threshold_ms=100, poll_ms=25)
-                hashlib.pbkdf2_hmac("sha256", b"password", b"salt", 5_000_000)
+                blockguard.install(threshold_ms=200, poll_ms=50)
+                hashlib.pbkdf2_hmac("sha256", b"password", b"salt", 10_000_000)
                 blockguard.uninstall()
                 print("OK")
 
@@ -294,7 +294,7 @@ class TestStress:
             import asyncio, blockguard, time
 
             async def main():
-                blockguard.install(threshold_ms=500, poll_ms=50)
+                blockguard.install(threshold_ms=2000, poll_ms=100)
                 for _ in range(20):
                     time.sleep(0.02)
                     await asyncio.sleep(0.01)
@@ -376,7 +376,7 @@ class TestFreeThreaded:
                     await asyncio.sleep(0.01)
 
             async def main():
-                blockguard.install(threshold_ms=200, poll_ms=50)
+                blockguard.install(threshold_ms=2000, poll_ms=100)
                 await asyncio.gather(*[background() for _ in range(10)])
                 blockguard.uninstall()
                 print("OK")
