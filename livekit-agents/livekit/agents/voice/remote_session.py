@@ -4,7 +4,7 @@ import asyncio
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -42,6 +42,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .run_result import RunResult
 
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
@@ -247,7 +248,7 @@ _METRICS_FIELDS = (
 )
 
 
-def _tool_names(tools: list[llm.Tool | Toolset]) -> list[str]:
+def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
     for tool in tools:
         if isinstance(tool, FunctionTool | RawFunctionTool):
@@ -360,7 +361,7 @@ class SessionHost:
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
             session.on("session_usage_updated", self._on_session_usage_updated)
-            session.on("user_overlapping_speech", self._on_overlapping_speech)
+            session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
 
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
@@ -386,7 +387,7 @@ class SessionHost:
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
-            self._session.off("user_overlapping_speech", self._on_overlapping_speech)
+            self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
 
         if self._recv_task:
@@ -621,7 +622,7 @@ class SessionHost:
                         pass
 
                     try:
-                        result = self._session.run(user_input=text)
+                        result: RunResult[None] = self._session.run(user_input=text)
                         await result
                         items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                     except Exception as e:

@@ -579,7 +579,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
-            self._interruption_detector.on("user_overlapping_speech", self._on_overlap_speech_ended)
+            self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
 
@@ -811,9 +811,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
-            self._interruption_detector.off(
-                "user_overlapping_speech", self._on_overlap_speech_ended
-            )
+            self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1270,6 +1268,13 @@ class AgentActivity(RecognitionHooks):
             error_event = ErrorEvent(error=error, source=self._interruption_detector)
             self._session.emit("error", error_event)
 
+            if not error.recoverable:
+                # redundant no op, but keeping it for clarity
+                self._session._on_error(error)
+
+                self._fallback_to_vad_interruption()
+                return
+
         self._session._on_error(error)
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
@@ -1277,7 +1282,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detected = True
         else:
             self._interruption_detected = False
-        self._session.emit("user_overlapping_speech", ev)
+        self._session.emit("overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None:
@@ -3129,6 +3134,32 @@ class AgentActivity(RecognitionHooks):
             self._default_interruption_by_audio_activity_enabled
         )
 
+    def _fallback_to_vad_interruption(self) -> None:
+        """Degrade gracefully from adaptive interruption to VAD-based interruption.
+
+        Called when the adaptive interruption detector encounters an unrecoverable error.
+        Re-enables audio-activity interruption so VAD events can trigger interruptions,
+        and flushes any held transcripts that were waiting on the detector.
+        """
+        if not self._interruption_detection_enabled:
+            return
+
+        self._interruption_detection_enabled = False
+        self._restore_interruption_by_audio_activity()
+
+        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+            self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
+            self._interruption_detector.off("error", self._on_error)
+            self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
+
+        if self._audio_recognition:
+            self._audio_recognition.update_interruption_detection(None)
+
+        logger.warning(
+            "adaptive interruption disabled due to unrecoverable error, "
+            "falling back to VAD-based interruption"
+        )
+
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def vad(self) -> vad.VAD | None:
@@ -3167,6 +3198,15 @@ class AgentActivity(RecognitionHooks):
             is_given(self._session.interruption_detection)
             and self._session.interruption_detection == "vad"
         ):
+            return None
+
+        if (
+            not is_given(self._agent.interruption_detection)
+            and not is_given(self._session.interruption_detection)
+            and not utils.is_hosted()
+            and not utils.is_dev_mode()
+        ):
+            logger.info("adaptive interruption is disabled by default in production mode")
             return None
 
         try:

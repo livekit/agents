@@ -93,7 +93,7 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
-    "user_overlapping_speech",
+    "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
     "session_usage_updated",
