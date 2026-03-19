@@ -24,7 +24,6 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import PersonaplexVoice
@@ -229,35 +228,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     # -- Public API: generation control --
 
-    @utils.log_exceptions(logger=logger)
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            self._pending_generation_fut.cancel("Superseded by new generate_reply")
-
-        fut = asyncio.Future[llm.GenerationCreatedEvent]()
-        self._pending_generation_fut = fut
-
-        if is_given(instructions):
-            logger.warning(
-                "PersonaPlex does not support dynamic instructions. "
-                "Instruction changes require reconnection via update_instructions()."
-            )
-
-        def _on_timeout() -> None:
-            if not fut.done():
-                fut.set_exception(
-                    llm.RealtimeError(
-                        "generate_reply timed out waiting for generation_created event."
-                    )
-                )
-                if self._pending_generation_fut is fut:
-                    self._pending_generation_fut = None
-
-        timeout_handle = asyncio.get_running_loop().call_later(10.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
-        return fut
+        raise NotImplementedError(
+            "generate_reply is not yet supported by the PersonaPlex realtime model. "
+            "Consider using `welcome_message` instead."
+        )
 
     def interrupt(self) -> None:
         if self._current_generation and not self._current_generation._done:
@@ -638,20 +615,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             )
         )
 
-        pending_fut = self._pending_generation_fut
-        user_initiated = pending_fut is not None and not pending_fut.done()
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
-            user_initiated=user_initiated,
+            user_initiated=False,
             response_id=response_id,
         )
         self.emit("generation_created", generation_ev)
-
-        if user_initiated and not pending_fut.done():
-            pending_fut.set_result(generation_ev)
-            if self._pending_generation_fut is pending_fut:
-                self._pending_generation_fut = None
 
         logger.debug(f"Started generation {response_id}")
 
