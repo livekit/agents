@@ -415,6 +415,32 @@ class ChatContext:
     def index_by_id(self, item_id: str) -> int | None:
         return next((i for i, item in enumerate(self.items) if item.id == item_id), None)
 
+    def remove(self, items: ChatItem | str | Sequence[ChatItem | str]) -> list[ChatItem]:
+        """Remove items from the chat context by ChatItem or item ID.
+        Args:
+            items: A single ChatItem, item ID string, or a sequence of either.
+
+        Returns:
+            List of removed ChatItem objects.
+        """
+        if isinstance(items, str) or not isinstance(items, Sequence):
+            items = [items]
+
+        ids_to_remove: set[str] = set()
+        for item in items:
+            ids_to_remove.add(item if isinstance(item, str) else item.id)
+
+        removed: list[ChatItem] = []
+        kept: list[ChatItem] = []
+        for item in self._items:
+            if item.id in ids_to_remove:
+                removed.append(item)
+            else:
+                kept.append(item)
+
+        self._items = kept
+        return removed
+
     def copy(
         self,
         *,
