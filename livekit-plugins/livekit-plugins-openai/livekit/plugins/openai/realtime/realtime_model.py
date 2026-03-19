@@ -80,7 +80,6 @@ from openai.types.realtime.realtime_truncation import RealtimeTruncation
 
 from ..log import logger
 from ..models import RealtimeModels
-from .realtime_model_beta import RealtimeModelBeta
 from .utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
     AZURE_DEFAULT_TURN_DETECTION,
@@ -400,10 +399,9 @@ class RealtimeModel(llm.RealtimeModel):
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
-    ) -> RealtimeModel | RealtimeModelBeta:
+    ) -> RealtimeModel:
         """
-        Create a RealtimeModelBeta configured for Azure OpenAI. Azure does not currently support the GA API,
-        so we return RealtimeModelBeta instead of RealtimeModel.
+        Create a RealtimeModel configured for Azure OpenAI.
 
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
@@ -423,7 +421,7 @@ class RealtimeModel(llm.RealtimeModel):
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
-            RealtimeModelBeta: Configured client for Azure OpenAI Realtime.
+            RealtimeModel: Configured client for Azure OpenAI Realtime.
 
         Raises:
             ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
@@ -511,32 +509,14 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        if is_given(input_audio_transcription) and not isinstance(
-            input_audio_transcription, InputAudioTranscription
-        ):
-            raise ValueError(
-                f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
-            )
-        if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
-            raise ValueError(
-                f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
-            )
-        if input_audio_noise_reduction is not None and not isinstance(
-            input_audio_noise_reduction, InputAudioNoiseReduction
-        ):
-            raise ValueError(
-                f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
-            )
-
-        return RealtimeModelBeta(
+        return RealtimeModel(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=input_audio_transcription,  # type: ignore
+            input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
-            temperature=temperature,
             speed=speed,
-            tracing=tracing,  # type: ignore
+            tracing=tracing,
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -1333,10 +1313,11 @@ class RealtimeSession(
         )
 
         def _on_timeout() -> None:
+            self._response_created_futures.pop(event_id, None)
             if fut and not fut.done():
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
-        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
         fut.add_done_callback(lambda _: handle.cancel())
         return fut
 

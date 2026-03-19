@@ -2336,6 +2336,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
+        tool_reply: bool = False,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
@@ -2361,9 +2362,18 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
-            generation_ev = await self._rt_session.generate_reply(
-                instructions=instructions or NOT_GIVEN
-            )
+            try:
+                generation_ev = await self._rt_session.generate_reply(
+                    instructions=instructions or NOT_GIVEN
+                )
+            except llm.RealtimeError as e:
+                logger.error(
+                    "failed to generate a reply%s: %s",
+                    " after tool execution" if tool_reply else "",
+                    str(e),
+                )
+                self._session._update_agent_state("listening")
+                return
 
             # _realtime_generation_task will clear the authorization
             await self._realtime_generation_task(
@@ -2826,6 +2836,7 @@ class AgentActivity(RecognitionHooks):
                             if draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
+                        tool_reply=True,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.realtime_reply",
