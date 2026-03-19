@@ -796,10 +796,14 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     return result
                 except Exception as e:
                     msg = await resp.text()
+                    status_code = (
+                        e.status if isinstance(e, aiohttp.ClientResponseError) else resp.status
+                    )
                     raise APIStatusError(
                         f"error during interruption prediction: {e}",
                         body=msg,
-                        status_code=resp.status,
+                        status_code=status_code,
+                        retryable=False if status_code == 429 else None,
                     ) from e
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             raise APIStatusError(

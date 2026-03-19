@@ -1270,6 +1270,7 @@ class AgentActivity(RecognitionHooks):
             self._session.emit("error", error_event)
 
             if not error.recoverable:
+                # redundant no op, but keeping it for clarity
                 self._session._on_error(error)
                 self._fallback_to_vad_interruption()
                 return
@@ -3205,7 +3206,7 @@ class AgentActivity(RecognitionHooks):
             and not os.getenv("LIVEKIT_REMOTE_EOT_URL")
             and not utils.is_dev_mode()
         ):
-            logger.warning("adaptive interruption is disabled by default in production mode")
+            logger.info("adaptive interruption is disabled by default in production mode")
             return None
 
         try:

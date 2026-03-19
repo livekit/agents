@@ -135,13 +135,14 @@ class TestHttpTimeout:
         assert len(unrecoverable_errors) == 1
 
 
-# there is no 429 in HTTP, so this is actually redundant
+# there is no 429 in HTTP when hosted on LiveKit Cloud, so this is actually redundant
 class TestHttp429:
     @pytest.mark.asyncio
     async def test_retries_then_emits_unrecoverable(self) -> None:
         mock_session = AsyncMock(spec=aiohttp.ClientSession)
 
         mock_resp = MagicMock()
+        mock_resp.status = 429
         mock_resp.raise_for_status = Mock(
             side_effect=aiohttp.ClientResponseError(
                 request_info=_mock_request_info(),
@@ -167,7 +168,7 @@ class TestHttp429:
 
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
-        assert len(recoverable_errors) == MAX_RETRY
+        assert len(recoverable_errors) == 0
         assert len(unrecoverable_errors) == 1
 
 
