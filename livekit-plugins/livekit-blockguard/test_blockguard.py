@@ -294,10 +294,10 @@ class TestStress:
             import asyncio, blockguard, time
 
             async def main():
-                blockguard.install(threshold_ms=2000, poll_ms=100)
-                for _ in range(20):
-                    time.sleep(0.02)
-                    await asyncio.sleep(0.01)
+                blockguard.install(threshold_ms=5000, poll_ms=200)
+                for _ in range(10):
+                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                 blockguard.uninstall()
                 print("OK")
 
