@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Awaitable, Callable
 
 from ...llm.tool_context import ToolError, Toolset
@@ -74,7 +73,6 @@ class SkillSelector(ToolSearchToolset):
         if not tools:
             raise ToolError(f"No tools found matching '{query}'.")
 
-        # Resolve matched sources to Skill objects
         matched_skills: list[Skill] = []
         for tool in tools:
             if isinstance(tool, Skill):
@@ -83,33 +81,22 @@ class SkillSelector(ToolSearchToolset):
                 matched_skills.append(self._source_to_skill[tool.id])
 
         if self._max_active_skills is None:
-            # Replacement mode: replace all active skills
             self._active_skills = matched_skills
         else:
-            # Accumulate mode: add new, move duplicates to end, evict oldest
             for skill in matched_skills:
                 if skill in self._active_skills:
                     self._active_skills.remove(skill)
                 self._active_skills.append(skill)
 
-            # Evict oldest if over limit
             while len(self._active_skills) > self._max_active_skills:
                 evicted = self._active_skills.pop(0)
                 logger.debug("Evicted skill: %s", evicted.name)
 
-        # Update loaded_tools for ToolSearchToolset
         self._loaded_tools = tools
 
-        # Fire callback if provided
         if self._on_change is not None:
-            result = self._on_change(list(self._active_skills))
-            if inspect.isawaitable(result):
-                await result
+            await self._on_change(list(self._active_skills))
 
-        # Build result string with skill names and instructions
-        parts: list[str] = []
-        for skill in matched_skills:
-            parts.append(f"[{skill.name}]: {skill.instructions}")
-
+        parts = [f"[{s.name}]: {s.instructions}" for s in matched_skills]
         skill_names = ", ".join(s.name for s in matched_skills)
         return f"Skills loaded: {skill_names}\n\n" + "\n\n".join(parts)
