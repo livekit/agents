@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.0.rc2",
-    "mistralai>=1.9.11",
+    "mistralai>=1.9.11,<2.0.0",
 ]
 
 [project.urls]
