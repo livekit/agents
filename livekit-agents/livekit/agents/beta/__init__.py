@@ -1,4 +1,4 @@
 from ..llm.chat_context import Instructions
-from . import toolsets, workflows
+from . import skills, toolsets, workflows
 
-__all__ = ["Instructions", "workflows", "toolsets"]
+__all__ = ["Instructions", "skills", "toolsets", "workflows"]
