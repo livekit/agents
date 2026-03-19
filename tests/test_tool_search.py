@@ -1,6 +1,10 @@
+import pytest
+
 from livekit.agents.beta.toolsets.tool_search import (
+    BM25SearchStrategy,
     KeywordSearchStrategy,
     SearchItem,
+    SearchStrategy,
     ToolSearchToolset,
     _get_tool_params,
 )
@@ -64,67 +68,137 @@ class AcademicToolset(Toolset):
         return [search_papers]
 
 
-class TestKeywordSearchStrategy:
-    def test_match_by_name(self):
-        strategy = KeywordSearchStrategy()
-        items = [
-            SearchItem(name="weather", description="Get current weather", source=weather_tool),
-            SearchItem(name="finance", description="Get stock price", source=stock_tool),
-        ]
+def _make_items() -> list[SearchItem]:
+    return [
+        SearchItem(
+            name="get_weather",
+            description="Get current weather for a city",
+            parameters={"city": "City name"},
+            source=weather_tool,
+        ),
+        SearchItem(
+            name="get_forecast",
+            description="Get weather forecast for upcoming days",
+            parameters={"city": "City name", "days": "Number of days"},
+            source=forecast_tool,
+        ),
+        SearchItem(
+            name="get_stock_price",
+            description="Get stock price for a symbol",
+            parameters={"symbol": "Stock ticker symbol"},
+            source=stock_tool,
+        ),
+        SearchItem(
+            name="search_papers",
+            description="Search academic papers on arxiv",
+            parameters={"query": "Search query"},
+            source=search_papers,
+        ),
+        SearchItem(
+            name="calculator",
+            description="Calculate a math expression",
+            parameters={"expression": "Math expression"},
+            source=calculator,
+        ),
+    ]
+
+
+STRATEGIES = [KeywordSearchStrategy(), BM25SearchStrategy()]
+
+
+class TestSearchStrategies:
+    """Tests that apply to all SearchStrategy implementations."""
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_name(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
         results = strategy.search("weather", items, 5)
         assert len(results) >= 1
-        assert results[0].name == "weather"
+        assert results[0].name in ("get_weather", "get_forecast")
 
-    def test_match_by_description(self):
-        strategy = KeywordSearchStrategy()
-        items = [
-            SearchItem(name="tool_a", description="Search academic papers", source=search_papers),
-            SearchItem(name="tool_b", description="Get stock price", source=stock_tool),
-        ]
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_description(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
         results = strategy.search("academic", items, 5)
         assert len(results) >= 1
-        assert results[0].name == "tool_a"
+        assert results[0].name == "search_papers"
 
-    def test_max_results_limit(self):
-        strategy = KeywordSearchStrategy()
-        items = [
-            SearchItem(name=f"tool_{i}", description="a tool", source=calculator) for i in range(10)
-        ]
-        results = strategy.search("tool", items, 3)
-        assert len(results) == 3
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_parameter(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
+        results = strategy.search("ticker symbol", items, 5)
+        assert len(results) >= 1
+        assert results[0].name == "get_stock_price"
 
-    def test_no_matches(self):
-        strategy = KeywordSearchStrategy()
-        items = [SearchItem(name="weather", description="Get weather", source=weather_tool)]
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_max_results_limit(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
+        results = strategy.search("get", items, 2)
+        assert len(results) == 2
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_no_matches(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
         results = strategy.search("xyznonexistent", items, 5)
         assert len(results) == 0
 
-    def test_empty_query(self):
-        strategy = KeywordSearchStrategy()
-        items = [SearchItem(name="weather", description="Get weather", source=weather_tool)]
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_empty_query(self, strategy: SearchStrategy):
+        items = _make_items()
+        strategy.build_index(items)
         results = strategy.search("", items, 5)
         assert len(results) == 0
 
-    def test_index_data_set_by_build_index(self):
-        """build_index should populate index_data for keyword search."""
-        strategy = KeywordSearchStrategy()
-        items = [
-            SearchItem(name="weather", description="Get weather", source=weather_tool),
-        ]
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_name_weighted_higher(self, strategy: SearchStrategy):
+        """Tool name matches should rank higher than description-only matches."""
+        items = _make_items()
+        strategy.build_index(items)
+        results = strategy.search("calculator", items, 5)
+        assert len(results) >= 1
+        assert results[0].name == "calculator"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_index_data_set_by_build_index(self, strategy: SearchStrategy):
+        items = _make_items()
         assert items[0].index_data is None
         strategy.build_index(items)
         assert items[0].index_data is not None
-        assert items[0].index_data["name"] == "weather"
 
-    def test_index_data_preserved_through_search(self):
-        """index_data should be preserved through search."""
-        strategy = KeywordSearchStrategy()
-        items = [
-            SearchItem(name="weather", description="Get weather", source=weather_tool),
-        ]
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_index_data_preserved_through_search(self, strategy: SearchStrategy):
+        items = _make_items()
         strategy.build_index(items)
         results = strategy.search("weather", items, 5)
         assert results[0].index_data is not None
+
+
+class TestBM25Specific:
+    """Tests specific to BM25 behavior."""
+
+    def test_specific_term_ranks_higher_than_common(self):
+        """Rare terms (high IDF) should rank higher than common ones."""
+        strategy = BM25SearchStrategy()
+        items = _make_items()
+        strategy.build_index(items)
+
+        results = strategy.search("academic papers arxiv", items, 5)
+        assert len(results) >= 1
+        assert results[0].name == "search_papers"
+
+    def test_cleanup_clears_state(self):
+        strategy = BM25SearchStrategy()
+        items = _make_items()
+        strategy.build_index(items)
+        assert len(strategy._idf) > 0
+
+        strategy.cleanup()
+        assert len(strategy._idf) == 0
 
 
 class TestToolSearchToolset:

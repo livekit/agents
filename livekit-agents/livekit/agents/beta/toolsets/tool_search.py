@@ -76,7 +76,7 @@ class ToolSearchToolset(Toolset):
         query_description: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         super().__init__(id=id, tools=tools)
-        self._strategy = search_strategy or KeywordSearchStrategy()
+        self._strategy = search_strategy or BM25SearchStrategy()
         self._max_results = max_results
         self._loaded_tools: list[Tool | Toolset] = []
 
@@ -201,7 +201,7 @@ def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
 
 
 class KeywordSearchStrategy:
-    """Zero-dependency keyword search using regex matching.
+    """Keyword search using regex matching.
 
     Scoring: name match = 3pts, description match = 2pts, parameter name/desc match = 1pt each.
     """
@@ -250,5 +250,113 @@ class KeywordSearchStrategy:
                 score += 2.0
             if pattern.search(idx["parameters"]):
                 score += 1.0
+
+        return score
+
+
+class BM25SearchStrategy:
+    """BM25-based search strategy.
+
+    BM25 ranks items by term frequency, inverse document frequency, and document
+    length normalization. Better than simple keyword matching for larger tool
+    collections because it down-weights common terms and rewards rare, specific matches.
+
+    Each SearchItem is treated as a document composed of its name (weighted 3x),
+    description (weighted 2x), and parameter names/descriptions (weighted 1x).
+
+    Args:
+        k1: Term frequency saturation parameter. Higher values give more weight to
+            repeated terms. Default 1.5.
+        b: Length normalization parameter (0-1). Higher values penalize longer
+            documents more. Default 0.75.
+    """
+
+    def __init__(self, *, k1: float = 1.5, b: float = 0.75) -> None:
+        self._k1 = k1
+        self._b = b
+        self._avg_dl: float = 0.0
+        self._idf: dict[str, float] = {}
+
+    def build_index(self, items: list[SearchItem]) -> None:
+        import math
+
+        for item in items:
+            tokens = self._tokenize(item)
+            # build term frequency map
+            tf: dict[str, float] = {}
+            for token in tokens:
+                tf[token] = tf.get(token, 0.0) + 1.0
+            item.index_data = {"tokens": tokens, "tf": tf, "dl": len(tokens)}
+
+        # compute average document length
+        total_dl = sum(item.index_data["dl"] for item in items)
+        self._avg_dl = total_dl / len(items) if items else 0.0
+
+        # compute IDF for all terms
+        n = len(items)
+        df: dict[str, int] = {}
+        for item in items:
+            seen: set[str] = set()
+            for token in item.index_data["tokens"]:
+                if token not in seen:
+                    df[token] = df.get(token, 0) + 1
+                    seen.add(token)
+
+        self._idf = {}
+        for term, freq in df.items():
+            # standard BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
+            self._idf[term] = math.log((n - freq + 0.5) / (freq + 0.5) + 1.0)
+
+    def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
+        query_terms = query.lower().split()
+        if not query_terms:
+            return []
+
+        scored: list[tuple[float, SearchItem]] = []
+        for item in items:
+            s = self._score(item, query_terms)
+            if s > 0:
+                scored.append((s, item))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [item for _, item in scored[:max_results]]
+
+    def cleanup(self) -> None:
+        self._idf.clear()
+        self._avg_dl = 0.0
+
+    def _tokenize(self, item: SearchItem) -> list[str]:
+        """Tokenize with field weighting: name 3x, description 2x, parameters 1x."""
+        name_tokens = item.name.lower().replace("_", " ").split()
+        desc_tokens = item.description.lower().split()
+        param_tokens = []
+        for k, v in item.parameters.items():
+            param_tokens.extend(k.lower().replace("_", " ").split())
+            param_tokens.extend(v.lower().split())
+
+        # weight by repeating tokens
+        return name_tokens * 3 + desc_tokens * 2 + param_tokens
+
+    def _score(self, item: SearchItem, query_terms: list[str]) -> float:
+        idx = item.index_data
+        if idx is None:
+            self.build_index([item])
+            idx = item.index_data
+
+        tf = idx["tf"]
+        dl = idx["dl"]
+        score = 0.0
+
+        for term in query_terms:
+            if term not in self._idf:
+                continue
+            idf = self._idf[term]
+            term_freq = tf.get(term, 0.0)
+            # BM25 scoring formula
+            numerator = term_freq * (self._k1 + 1.0)
+            denominator = term_freq + self._k1 * (
+                1.0 - self._b + self._b * dl / self._avg_dl if self._avg_dl > 0 else 1.0
+            )
+            score += idf * numerator / denominator
 
         return score
