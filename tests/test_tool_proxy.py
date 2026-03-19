@@ -102,7 +102,7 @@ class TestToolProxyToolset:
         await ts.setup()
 
         result = await ts._handle_search({"query": "weather"})
-        parsed = json.loads(result)
+        parsed = [json.loads(schema) for schema in result.split("\n")]
 
         assert isinstance(parsed, list)
         assert len(parsed) >= 1
@@ -128,7 +128,7 @@ class TestToolProxyToolset:
         await ts.setup()
 
         result = await ts._handle_search({"query": "search"})
-        parsed = json.loads(result)
+        parsed = [json.loads(schema) for schema in result.split("\n")]
 
         assert len(parsed) >= 1
         tool = parsed[0]
@@ -299,7 +299,7 @@ class TestToolProxyToolset:
 
         # Search should find tools from nested toolsets
         result = await ts._handle_search({"query": "weather stock"})
-        parsed = json.loads(result)
+        parsed = [json.loads(schema) for schema in result.split("\n")]
         names = [t["name"] for t in parsed]
         assert "weather_tool" in names or "stock_tool" in names
 

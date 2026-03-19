@@ -110,7 +110,7 @@ class ToolProxyToolset(ToolSearchToolset):
 
         tool_ctx = ToolContext(tools)
         schemas = [_build_tool_schema(tool) for tool in tool_ctx.function_tools.values()]
-        return json.dumps(schemas)
+        return "\n".join(json.dumps(schema) for schema in schemas)
 
     async def _handle_call(self, ctx: RunContext[Any], raw_arguments: dict[str, object]) -> Any:
         name = str(raw_arguments.get("name", ""))
