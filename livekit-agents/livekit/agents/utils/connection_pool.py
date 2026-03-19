@@ -17,11 +17,12 @@ class ConnectionResult(Generic[T]):
     """Result of getting a connection from the pool, including timing metadata."""
 
     connection: T
-    """The connection object."""
     connect_time: float
-    """Time in seconds taken to acquire or establish the connection."""
     from_pool: bool
-    """True if the connection was reused from the pool, False if newly created."""
+
+    @property
+    def status(self) -> str:
+        return "reused" if self.from_pool else "new"
 
 
 class ConnectionPool(Generic[T]):

@@ -357,7 +357,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             trace_types.record_ws_connection(conn_result.connect_time, reused=conn_result.from_pool)
             logger.debug(
                 "Deepgram TTS WebSocket connected (%s)",
-                "reused" if conn_result.from_pool else "new",
+                conn_result.status,
                 extra={"connection_time": conn_result.connect_time, "segment_id": segment_id},
             )
             tasks = [

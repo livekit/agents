@@ -832,7 +832,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                     logger.debug(
                         "Google STT connected (%s)",
-                        "reused" if conn_result.from_pool else "new",
+                        conn_result.status,
                         extra={"connection_time": conn_result.connect_time},
                     )
                     self._streaming_config = self._build_streaming_config()

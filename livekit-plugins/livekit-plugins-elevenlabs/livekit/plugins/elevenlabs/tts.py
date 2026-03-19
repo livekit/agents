@@ -413,15 +413,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts.current_connection(), self._conn_options.timeout
             )
             total_time = time.perf_counter() - start_time
-            # Use the actual WebSocket connection time if available (for new connections),
-            # otherwise use the time to acquire the connection (for reused connections)
-            ws_connection_time = (
-                connection._connect_time if connection._connect_time else total_time
-            )
+            ws_connection_time = connection._connect_time or total_time
+            status = "reused" if is_reused else "new"
             trace_types.record_ws_connection(ws_connection_time, reused=is_reused)
             logger.debug(
                 "ElevenLabs TTS WebSocket connected (%s)",
-                "reused" if is_reused else "new",
+                status,
                 extra={"connection_time": ws_connection_time, "context_id": self._context_id},
             )
         except asyncio.TimeoutError as e:

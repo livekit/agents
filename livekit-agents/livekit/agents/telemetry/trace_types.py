@@ -58,12 +58,7 @@ ATTR_WS_CONNECTION_REUSED = "lk.ws.connection_reused"
 
 
 def record_ws_connection(connect_time: float, reused: bool) -> None:
-    """Record WebSocket connection timing on the current OTEL span.
-
-    Args:
-        connect_time: Time in seconds to establish or acquire the connection.
-        reused: True if connection was reused from pool, False if newly established.
-    """
+    """Record WebSocket connection timing on the current OTEL span."""
     from opentelemetry import trace
 
     span = trace.get_current_span()
