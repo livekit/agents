@@ -13,7 +13,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, llm
-from livekit.agents.beta.toolsets import ToolSearchToolset
+from livekit.agents.beta.toolsets import ToolProxyToolset, ToolSearchToolset
 from livekit.plugins import silero
 
 logger = logging.getLogger("tool-search-example")
@@ -114,24 +114,25 @@ async def convert_currency(amount: float, from_currency: str, to_currency: str) 
 
 class TravelAgent(Agent):
     def __init__(self) -> None:
+
+        toolset = ToolProxyToolset(
+            id="travel_tools",
+            tools=[
+                WeatherToolset(id="weather"),
+                FlightToolset(id="flights"),
+                HotelToolset(id="hotels"),
+                convert_currency,
+            ],
+            max_results=3,
+        )
+
         super().__init__(
             instructions=(
                 "You are a travel assistant. You can help with weather, flights, "
                 "hotels, and currency conversion. Use tool_search to find the right "
                 "tools before trying to help the user."
             ),
-            tools=[
-                ToolSearchToolset(
-                    id="travel_tools",
-                    tools=[
-                        WeatherToolset(id="weather"),
-                        FlightToolset(id="flights"),
-                        HotelToolset(id="hotels"),
-                        convert_currency,
-                    ],
-                    max_results=3,
-                ),
-            ],
+            tools=[toolset],
         )
 
     async def on_enter(self):
