@@ -15,6 +15,7 @@ from ...llm.tool_context import (
     RawFunctionTool,
     Tool,
     ToolContext,
+    ToolError,
     Toolset,
     function_tool,
 )
@@ -37,6 +38,7 @@ class SearchStrategy(Protocol):
     def search(
         self, query: str, items: list[SearchItem], max_results: int
     ) -> list[SearchItem] | Awaitable[list[SearchItem]]: ...
+    def cleanup(self) -> None | Awaitable[None]: ...
 
 
 _DEFAULT_SEARCH_DESCRIPTION = (
@@ -146,18 +148,22 @@ class ToolSearchToolset(Toolset):
 
     async def _handle_search(self, raw_arguments: dict[str, object]) -> str:
         query = str(raw_arguments.get("query", ""))
+        tools = await self._search_tools(query)
+        if not tools:
+            raise ToolError(f"No tools found matching '{query}'.")
+
+        self._loaded_tools = tools
+        return "Tools loaded successfully."
+
+    async def _search_tools(self, query: str) -> list[Tool | Toolset]:
         if not query:
-            return "Please provide a search query."
+            raise ToolError("query cannot be empty")
 
         results = self._strategy.search(query, self._search_items, self._max_results)
         if inspect.isawaitable(results):
             results = await results
 
-        if not results:
-            return f"No tools found matching '{query}'."
-
-        self._loaded_tools = list({result.source for result in results})
-        return "Tools loaded successfully."
+        return list({result.source for result in results})
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -168,6 +174,10 @@ class ToolSearchToolset(Toolset):
         self._initialized = False
         self._search_items.clear()
         self._loaded_tools.clear()
+
+        result = self._strategy.cleanup()
+        if inspect.isawaitable(result):
+            await result
 
 
 def _get_tool_description(tool: FunctionTool | RawFunctionTool) -> str:
@@ -217,6 +227,9 @@ class KeywordSearchStrategy:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item for _, item in scored[:max_results]]
+
+    def cleanup(self) -> None:
+        pass
 
     def _score(self, item: SearchItem, keywords: list[str]) -> float:
         score = 0.0
