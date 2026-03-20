@@ -658,3 +658,47 @@ def test_instructions_as_modality():
     turn2_ctx = turn1_ctx.copy()
     apply_instructions_modality(turn2_ctx, modality="audio")
     assert str(turn2_ctx.items[0].content[0]) == "audio instructions"
+
+
+def test_responses_chat_ctx_excludes_function_calls_with_previous_response_id():
+    """When previous_response_id is set, function_call items from the previous
+    response are already known to the server. Sending them again causes
+    duplicated tool calls in the API logs (issue #5136)."""
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="What is the weather?")
+    chat_ctx.insert(
+        FunctionCall(
+            call_id="call_abc",
+            name="get_weather",
+            arguments='{"city": "SF"}',
+        )
+    )
+    chat_ctx.insert(
+        FunctionCallOutput(
+            call_id="call_abc",
+            name="get_weather",
+            output='{"temp": 72}',
+            is_error=False,
+        )
+    )
+
+    items, _ = chat_ctx.to_provider_format(format="openai.responses")
+
+    # Unfiltered output should contain a function_call item
+    fc_items = [i for i in items if isinstance(i, dict) and i.get("type") == "function_call"]
+    fco_items = [
+        i for i in items if isinstance(i, dict) and i.get("type") == "function_call_output"
+    ]
+    assert len(fc_items) == 1, "expected one function_call item in unfiltered output"
+    assert len(fco_items) == 1, "expected one function_call_output item"
+
+    # Simulate the filter applied in LLMStream._run_impl when
+    # previous_response_id is present
+    filtered = [i for i in items if not (isinstance(i, dict) and i.get("type") == "function_call")]
+
+    fc_after = [i for i in filtered if isinstance(i, dict) and i.get("type") == "function_call"]
+    fco_after = [
+        i for i in filtered if isinstance(i, dict) and i.get("type") == "function_call_output"
+    ]
+    assert len(fc_after) == 0, "function_call items should be removed"
+    assert len(fco_after) == 1, "function_call_output items should be preserved"
