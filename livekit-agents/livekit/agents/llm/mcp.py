@@ -58,7 +58,7 @@ MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     # TODO(theomonnom): handle images & binary messages
     if len(ctx.result.content) == 1:
-        return ctx.result.content[0].model_dump_json()
+        return str(ctx.result.content[0].model_dump_json())
     elif len(ctx.result.content) > 1:
         return json.dumps([item.model_dump() for item in ctx.result.content])
 

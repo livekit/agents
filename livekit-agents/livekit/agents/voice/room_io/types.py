@@ -31,8 +31,8 @@ DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
 @dataclass
 class TextInputEvent:
     text: str
-    info: rtc.TextStreamInfo
-    participant: rtc.RemoteParticipant
+    info: rtc.TextStreamInfo | None = None
+    participant: rtc.RemoteParticipant | None = None
 
 
 TextInputCallback = Callable[["AgentSession", TextInputEvent], Coroutine[None, None, None] | None]

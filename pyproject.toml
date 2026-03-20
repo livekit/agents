@@ -67,6 +67,7 @@ livekit-plugins-phonic = { workspace = true }
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
 ]
 
@@ -158,6 +159,11 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mistralai.*"
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
