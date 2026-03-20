@@ -313,18 +313,31 @@ class SpeechStream(stt.SpeechStream):
         }
         is_speaking = False
 
+        def _build_speech_data(
+            primary: _TokenAccumulator, original: _TokenAccumulator
+        ) -> stt.SpeechData:
+            sd = primary.to_speech_data(self.start_time_offset)
+            if primary is not original and original.text:
+                sd.input_text = original.text
+                sd.input_language = LanguageCode(original.language) if original.language else None
+            return sd
+
+        def _pick_primary(
+            accums: dict[str, _TokenAccumulator],
+        ) -> tuple[_TokenAccumulator, _TokenAccumulator]:
+            """Return (primary, original). Primary is translation if present, else original."""
+            if accums["translation"].text:
+                return accums["translation"], accums["original"]
+            return accums["original"], accums["original"]
+
         def flush_endpoint(audio_proc_ms: float) -> None:
             nonlocal is_speaking
-            alternatives = [
-                final[cat].to_speech_data(self.start_time_offset)
-                for cat in ("original", "translation")
-                if final[cat].text
-            ]
-            if alternatives:
+            primary, original = _pick_primary(final)
+            if primary.text:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=alternatives,
+                        alternatives=[_build_speech_data(primary, original)],
                     )
                 )
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
@@ -372,24 +385,21 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     non_final[cat].update(token)
 
-            has_content = any(
-                final[c].text or non_final[c].text for c in ("original", "translation")
-            )
-            if has_content:
+            merged = {
+                c: _TokenAccumulator.merge(final[c], non_final[c])
+                for c in ("original", "translation")
+            }
+            primary, original = _pick_primary(merged)
+            if primary.text:
                 if not is_speaking:
                     is_speaking = True
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                     )
-                alternatives = [
-                    final[c].merged_speech_data(non_final[c], self.start_time_offset)
-                    for c in ("original", "translation")
-                    if final[c].text or non_final[c].text
-                ]
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.INTERIM_TRANSCRIPT,
-                        alternatives=alternatives,
+                        alternatives=[_build_speech_data(primary, original)],
                     )
                 )
 
@@ -469,20 +479,18 @@ class _TokenAccumulator:
             confidence=self.confidence,
         )
 
-    def merged_speech_data(
-        self, other: _TokenAccumulator, start_time_offset: float = 0.0
-    ) -> stt.SpeechData:
-        """Build a SpeechData combining self (final) with other (non-final)."""
-        candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
-        start = min(candidates) if candidates else 0.0
-        end = max(self.end_time, other.end_time)
-        total_count = self._confidence_count + other._confidence_count
-        total_sum = self._confidence_sum + other._confidence_sum
-        return stt.SpeechData(
-            text=self.text + other.text,
-            language=LanguageCode(self.language if self.language else other.language),
-            speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
-            start_time=start / 1000 + start_time_offset,
-            end_time=end / 1000 + start_time_offset,
-            confidence=total_sum / total_count if total_count > 0 else 0.0,
-        )
+    @classmethod
+    def merge(cls, a: _TokenAccumulator, b: _TokenAccumulator) -> _TokenAccumulator:
+        """Combine two accumulators (e.g. final + non-final) into one."""
+        out = cls()
+        out.text = a.text + b.text
+        out.language = a.language or b.language
+        out.speaker_id = a.speaker_id if a.speaker_id is not None else b.speaker_id
+        candidates = [acc.start_time for acc in (a, b) if acc._has_start_time]
+        if candidates:
+            out.start_time = min(candidates)
+            out._has_start_time = True
+        out.end_time = max(a.end_time, b.end_time)
+        out._confidence_sum = a._confidence_sum + b._confidence_sum
+        out._confidence_count = a._confidence_count + b._confidence_count
+        return out
