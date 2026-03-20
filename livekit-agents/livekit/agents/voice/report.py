@@ -32,6 +32,7 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
 
