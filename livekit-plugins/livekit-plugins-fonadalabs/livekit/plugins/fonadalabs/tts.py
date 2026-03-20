@@ -12,10 +12,10 @@ from dataclasses import dataclass
 import aiohttp
 
 from livekit.agents import (
-    APIConnectOptions,
-    APIConnectionError,
-    APIStatusError,
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
     tts,
     utils,
 )
@@ -29,6 +29,7 @@ FONADALABS_SUPPORTED_VOICES_URL = "https://api.fonada.ai/supported-voices"
 @dataclass
 class _Catalog:
     """Everything we know about supported languages and voices, from the API."""
+
     # lang_code -> list of user-facing voice display names  e.g. {"hi": ["Vaanee", "Swara", ...]}
     voices: dict[str, list[str]]
     # lang_code -> display name                             e.g. {"hi": "Hindi"}
@@ -60,6 +61,7 @@ class _Catalog:
 
 
 _catalog_cache: _Catalog | None = None
+
 
 async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
     """
@@ -97,7 +99,7 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
         code_to_name: dict[str, str] = {}
         name_to_code: dict[str, str] = {}
         for code, display_name in asr_langs.items():
-            if code in voices:            # only care about TTS-supported languages
+            if code in voices:  # only care about TTS-supported languages
                 code_to_name[code] = display_name
                 name_to_code[display_name.lower()] = code
 
@@ -133,16 +135,18 @@ def _invalidate_catalog() -> None:
 # Connection state
 # ---------------------------------------------------------------------------
 
+
 class ConnectionState(enum.Enum):
     DISCONNECTED = "disconnected"
-    CONNECTING   = "connecting"
-    CONNECTED    = "connected"
-    FAILED       = "failed"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    FAILED = "failed"
 
 
 # ---------------------------------------------------------------------------
 # TTS class
 # ---------------------------------------------------------------------------
+
 
 class TTS(tts.TTS):
     """FonadaLabs Text-to-Speech plugin for LiveKit.
@@ -190,7 +194,7 @@ class TTS(tts.TTS):
 
         # Store as provided — resolved per-stream at _run() time against the live catalog
         self._language_input = (language or "").strip()
-        self._voice_input     = (voice or "").strip() or None
+        self._voice_input = (voice or "").strip() or None
 
         # WebSocket URL
         if api_url:
@@ -235,20 +239,20 @@ class TTS(tts.TTS):
 # SynthesizeStream
 # ---------------------------------------------------------------------------
 
-class SynthesizeStream(tts.SynthesizeStream):
 
+class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS                                         = tts
-        self._session_id                                       = f"fonadalabs_{id(self)}"
-        self._connection_state                                 = ConnectionState.DISCONNECTED
-        self._ws_conn:   aiohttp.ClientWebSocketResponse | None = None
-        self._send_task: asyncio.Task[None] | None              = None
-        self._recv_task: asyncio.Task[None] | None              = None
+        self._tts: TTS = tts
+        self._session_id = f"fonadalabs_{id(self)}"
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
+        self._send_task: asyncio.Task[None] | None = None
+        self._recv_task: asyncio.Task[None] | None = None
         # Resolved per-stream to avoid race conditions across concurrent streams
         self._resolved_lang_code: str = ""
         self._resolved_lang_name: str = ""
-        self._resolved_voice:     str = ""
+        self._resolved_voice: str = ""
 
     # ------------------------------------------------------------------
     # _run — called by the LiveKit framework when iteration starts
@@ -256,6 +260,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         import uuid
+
         request_id = str(uuid.uuid4())
         output_emitter.initialize(
             request_id=request_id,
@@ -287,16 +292,20 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 text = " ".join(segments)
                 payload = {
-                    "api_key":  self._tts._api_key,
-                    "text":     text,
+                    "api_key": self._tts._api_key,
+                    "text": text,
                     "voice_id": self._resolved_voice,
-                    "language": self._resolved_lang_name,   # display name, e.g. "Hindi"
+                    "language": self._resolved_lang_name,  # display name, e.g. "Hindi"
                 }
                 await ws.send_str(json.dumps(payload))
                 logger.debug(
                     "TTS request sent",
-                    extra={**self._log_ctx(), "text_len": len(text),
-                           "voice": self._resolved_voice, "language": self._resolved_lang_name},
+                    extra={
+                        **self._log_ctx(),
+                        "text_len": len(text),
+                        "voice": self._resolved_voice,
+                        "language": self._resolved_lang_name,
+                    },
                 )
             except Exception as exc:
                 logger.error(f"send_task error: {exc}", extra=self._log_ctx())
@@ -327,7 +336,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts._ws_url,
                 timeout=aiohttp.ClientWSTimeout(ws_close=self._conn_options.timeout),
             )
-            self._ws_conn          = ws
+            self._ws_conn = ws
             self._connection_state = ConnectionState.CONNECTED
             logger.info("WebSocket connected", extra=self._log_ctx())
 
@@ -354,7 +363,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(f"TTS session failed: {exc}") from exc
         finally:
             self._connection_state = ConnectionState.DISCONNECTED
-            self._ws_conn          = None
+            self._ws_conn = None
 
     # ------------------------------------------------------------------
     # Resolve language + voice against the live catalog
@@ -386,8 +395,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         message=(
                             f"Voice '{voice_input}' is not available for {lang_name}. "
                             f"Available ({len(available)}): "
-                            f"{', '.join(available[:8])}"
-                            + ("..." if len(available) > 8 else "")
+                            f"{', '.join(available[:8])}" + ("..." if len(available) > 8 else "")
                         ),
                         status_code=400,
                     )
@@ -399,7 +407,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Catalog unavailable — accept whatever the user passed, server will validate
             lang_code = lang_input
             lang_name = lang_input
-            voice     = self._tts._voice_input or "Vaanee"
+            voice = self._tts._voice_input or "Vaanee"
             logger.warning(
                 "Catalog unavailable — skipping client-side validation",
                 extra=self._log_ctx(),
@@ -407,7 +415,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         self._resolved_lang_code = lang_code
         self._resolved_lang_name = lang_name
-        self._resolved_voice     = voice
+        self._resolved_voice = voice
 
         logger.info(
             f"Resolved: language={lang_name!r} (code={lang_code!r}), voice={voice!r}",
@@ -418,9 +426,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     # Message handlers
     # ------------------------------------------------------------------
 
-    async def _handle_text_msg(
-        self, raw: str, output_emitter: tts.AudioEmitter
-    ) -> bool:
+    async def _handle_text_msg(self, raw: str, output_emitter: tts.AudioEmitter) -> bool:
         """Return True to keep going, False to stop."""
         try:
             resp = json.loads(raw)
@@ -428,15 +434,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.warning(f"Non-JSON WS message ignored: {raw[:120]}", extra=self._log_ctx())
             return True
 
-        status   = resp.get("status")
+        status = resp.get("status")
         msg_type = resp.get("type")
 
         if status == "complete" or msg_type in ("complete", "final"):
             output_emitter.end_input()
             return False
 
-        if (status == "error" or msg_type == "error"
-                or resp.get("error") or resp.get("error_message")):
+        if (
+            status == "error"
+            or msg_type == "error"
+            or resp.get("error")
+            or resp.get("error_message")
+        ):
             await self._handle_error(resp)
             return False
 
@@ -456,10 +466,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         _raw_data = resp.get("data")
         data: dict = _raw_data if isinstance(_raw_data, dict) else {}
         msg = str(
-            data.get("message") or data.get("error") or
-            resp.get("message") or resp.get("error") or
-            resp.get("error_message") or resp.get("detail") or
-            f"API error: {json.dumps(resp)}"
+            data.get("message")
+            or data.get("error")
+            or resp.get("message")
+            or resp.get("error")
+            or resp.get("error_message")
+            or resp.get("detail")
+            or f"API error: {json.dumps(resp)}"
         )
         err_type = data.get("error") or data.get("type") or resp.get("error_type", "")
 
@@ -488,10 +501,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def _log_ctx(self) -> dict:
         return {
-            "session_id":        self._session_id,
-            "connection_state":  self._connection_state.value,
-            "language":          self._resolved_lang_name or self._tts._language_input,
-            "voice":             self._resolved_voice or (self._tts._voice_input or ""),
+            "session_id": self._session_id,
+            "connection_state": self._connection_state.value,
+            "language": self._resolved_lang_name or self._tts._language_input,
+            "voice": self._resolved_voice or (self._tts._voice_input or ""),
         }
 
     async def aclose(self) -> None:
