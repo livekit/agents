@@ -31,6 +31,7 @@ from ..metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from ..types import TOPIC_CHAT
 from .events import (
     AgentState,
     AgentStateChangedEvent,
@@ -350,6 +351,7 @@ class SessionHost:
         self._session: AgentSession | None = None
         self._events_registered = False
         self._text_input_cb: TextInputCallback | None = None
+        self._chat_handler_registered = False
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -366,6 +368,16 @@ class SessionHost:
 
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
         self._text_input_cb = text_input_cb
+
+        if isinstance(self._transport, RoomSessionTransport):
+            room = self._transport._room
+            try:
+                room.register_text_stream_handler(TOPIC_CHAT, self._on_chat_text_stream)
+                self._chat_handler_registered = True
+            except ValueError:
+                logger.warning(
+                    f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
+                )
 
     async def start(self) -> None:
         if self._started:
@@ -389,6 +401,13 @@ class SessionHost:
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
+
+        if self._chat_handler_registered and isinstance(self._transport, RoomSessionTransport):
+            self._chat_handler_registered = False
+            try:
+                self._transport._room.unregister_text_stream_handler(TOPIC_CHAT)
+            except ValueError:
+                pass
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -540,6 +559,40 @@ class SessionHost:
                 )
             )
         )
+
+    def _on_chat_text_stream(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        assert isinstance(self._transport, RoomSessionTransport)
+        room = self._transport._room
+        remote_identity = self._transport.remote_identity
+        if remote_identity and participant_identity != remote_identity:
+            return
+
+        participant = room.remote_participants.get(participant_identity)
+        if not participant:
+            logger.warning("participant not found, ignoring text input")
+            return
+
+        if self._text_input_cb is None or self._session is None:
+            logger.error("text input callback or session is not set, ignoring text input")
+            return
+
+        session = self._session
+        text_input_cb = self._text_input_cb
+
+        async def _read_text() -> None:
+            from .room_io.types import TextInputEvent
+
+            text = await reader.read_all()
+            result = text_input_cb(
+                session,
+                TextInputEvent(text=text, info=reader.info, participant=participant),
+            )
+            if asyncio.iscoroutine(result):
+                await result
+
+        self._tasks.create_task(_read_text())
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
