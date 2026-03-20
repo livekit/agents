@@ -689,7 +689,6 @@ class AgentActivity(RecognitionHooks):
         self._agent._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
-
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
