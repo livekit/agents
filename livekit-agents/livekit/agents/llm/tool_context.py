@@ -61,7 +61,7 @@ class Toolset:
 
     def __init__(self, *, id: str, tools: list[Tool | Toolset] | None = None) -> None:
         self._id = id
-        self._tools: Sequence[Tool | Toolset] = tools or []
+        self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
         self._tools.extend(find_function_tools(self))
 
     @property

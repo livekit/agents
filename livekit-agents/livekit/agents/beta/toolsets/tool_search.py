@@ -335,9 +335,7 @@ class BM25SearchStrategy:
 
     def _score(self, item: SearchItem, query_terms: list[str]) -> float:
         idx = item.index_data
-        if idx is None:
-            self.build_index([item])
-            idx = item.index_data
+        assert idx is not None, "index data must be built before scoring"
 
         tf = idx["tf"]
         dl = idx["dl"]
