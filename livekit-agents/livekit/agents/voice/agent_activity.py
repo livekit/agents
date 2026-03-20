@@ -693,11 +693,15 @@ class AgentActivity(RecognitionHooks):
         if reuse_audio_recognition is not None:
             logger.debug("reusing audio recognition from previous activity")
             self._audio_recognition = reuse_audio_recognition
-            self._audio_recognition.update_hooks(self, stt_node=stt_node, vad=self.vad)
+            self._audio_recognition.update_hooks(
+                self,
+                stt_node=stt_node,
+                vad=self.vad,
+                interruption_detection=self._interruption_detector,
+            )
             self._audio_recognition.update_options(
                 endpointing=endpointing, turn_detection=self._turn_detection
             )
-            self._audio_recognition.update_interruption_detection(self._interruption_detector)
         else:
             self._audio_recognition = AudioRecognition(
                 self._session,

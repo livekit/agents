@@ -175,10 +175,13 @@ class AudioRecognition:
         *,
         stt_node: io.STTNode | None,
         vad: vad.VAD | None,
+        interruption_detection: inference.AdaptiveInterruptionDetector | None,
     ) -> None:
         """Redirect event callbacks and update stt_node/vad for handoff reuse."""
         self._hooks = hooks
         self._stt = stt_node
+        if interruption_detection is not self._interruption_detection:
+            self.update_interruption_detection(interruption_detection)
 
         # always reset vad
         self.update_vad(vad)
