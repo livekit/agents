@@ -458,11 +458,13 @@ class LLMStream(llm.LLMStream):
                     return call_chunk
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
+            finish_extra = getattr(delta, "extra_content", None)
             call_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     content=delta.content,
+                    extra=finish_extra,
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=self._fnc_raw_arguments or "",
