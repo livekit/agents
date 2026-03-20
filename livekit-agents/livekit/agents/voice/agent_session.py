@@ -691,6 +691,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
+                    self._room_io.register_text_input(text_input_opts.text_input_cb)
                     self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
