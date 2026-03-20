@@ -187,14 +187,9 @@ class TTS(tts.TTS):
                 "Pass it directly or set the FONADALABS_API_KEY environment variable."
             )
 
-        # Store as provided — validated at _run() time against the live catalog
+        # Store as provided — resolved per-stream at _run() time against the live catalog
         self._language_input = (language or "").strip()
         self._voice_input     = (voice or "").strip() or None
-
-        # Resolved at _run() time
-        self._lang_code:    str = ""
-        self._lang_name:    str = ""
-        self._voice:        str = ""
 
         # WebSocket URL
         if api_url:
@@ -210,16 +205,13 @@ class TTS(tts.TTS):
         if self._own_session:
             self._http_session = aiohttp.ClientSession()
 
-    async def synthesize(
+    def synthesize(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
-    ) -> SynthesizeStream:
-        stream = self.stream(conn_options=conn_options)
-        stream.push_text(text)
-        stream.end_input()
-        return stream
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> tts.ChunkedStream:
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self,
@@ -251,6 +243,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn          = None
         self._send_task        = None
         self._recv_task        = None
+        # Resolved per-stream to avoid race conditions across concurrent streams
+        self._resolved_lang_code: str = ""
+        self._resolved_lang_name: str = ""
+        self._resolved_voice:     str = ""
 
     # ------------------------------------------------------------------
     # _run — called by the LiveKit framework when iteration starts
@@ -291,14 +287,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 payload = {
                     "api_key":  self._tts._api_key,
                     "text":     text,
-                    "voice_id": self._tts._voice,
-                    "language": self._tts._lang_name,   # display name, e.g. "Hindi"
+                    "voice_id": self._resolved_voice,
+                    "language": self._resolved_lang_name,   # display name, e.g. "Hindi"
                 }
                 await ws.send_str(json.dumps(payload))
                 logger.debug(
                     "TTS request sent",
                     extra={**self._log_ctx(), "text_len": len(text),
-                           "voice": self._tts._voice, "language": self._tts._lang_name},
+                           "voice": self._resolved_voice, "language": self._resolved_lang_name},
                 )
             except Exception as exc:
                 logger.error(f"send_task error: {exc}", extra=self._log_ctx())
@@ -407,9 +403,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 extra=self._log_ctx(),
             )
 
-        self._tts._lang_code = lang_code
-        self._tts._lang_name = lang_name
-        self._tts._voice     = voice
+        self._resolved_lang_code = lang_code
+        self._resolved_lang_name = lang_name
+        self._resolved_voice     = voice
 
         logger.info(
             f"Resolved: language={lang_name!r} (code={lang_code!r}), voice={voice!r}",
@@ -491,8 +487,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         return {
             "session_id":        self._session_id,
             "connection_state":  self._connection_state.value,
-            "language":          getattr(self._tts, "_lang_name", self._tts._language_input),
-            "voice":             getattr(self._tts, "_voice", self._tts._voice_input),
+            "language":          self._resolved_lang_name or self._tts._language_input,
+            "voice":             self._resolved_voice or (self._tts._voice_input or ""),
         }
 
     async def aclose(self) -> None:
