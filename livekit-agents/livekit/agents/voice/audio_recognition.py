@@ -182,6 +182,8 @@ class AudioRecognition:
         self._stt = stt_node
         if interruption_detection is not self._interruption_detection:
             self.update_interruption_detection(interruption_detection)
+        else:
+            self._reset_interruption_detection()
 
         # always reset vad
         self.update_vad(vad)
@@ -482,6 +484,9 @@ class AudioRecognition:
         self._final_transcript_confidence = []
         self._user_turn_committed = False
         self._final_transcript_received.clear()
+        self._agent_speaking = False
+        self._speaking = False
+        self._vad_speech_started = False
         if self._user_turn_span is not None:
             self._user_turn_span.end()
             self._user_turn_span = None
