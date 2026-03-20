@@ -194,7 +194,8 @@ class TTS(tts.TTS):
         # WebSocket URL
         if api_url:
             ws = api_url.replace("http://", "ws://").replace("https://", "wss://")
-            self._ws_url = ws.rstrip("/") + (
+            ws = ws.rstrip("/")
+            self._ws_url = ws + (
                 "" if ws.endswith("/tts/generate-audio-ws") else "/tts/generate-audio-ws"
             )
         else:

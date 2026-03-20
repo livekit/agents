@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-fonadalabs"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Agent Framework plugin for FonadaLabs TTS — high-quality Indian language voices."
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,6 +29,9 @@ dependencies = [
 Documentation = "https://docs.livekit.io"
 Website = "https://fonada.in/"
 Source = "https://github.com/Pragyanshu-Fonada/Fonada_Livekit_agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/fonadalabs/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
