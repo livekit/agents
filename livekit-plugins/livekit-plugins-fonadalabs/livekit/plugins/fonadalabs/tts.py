@@ -202,10 +202,12 @@ class TTS(tts.TTS):
         else:
             self._ws_url = FONADALABS_TTS_WS_URL
 
-        self._http_session = http_session
-        self._own_session  = http_session is None
-        if self._own_session:
-            self._http_session = aiohttp.ClientSession()
+        self._session = http_session  # None means use the framework shared session
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = utils.http_context.http_session()
+        return self._session
 
     def synthesize(
         self,
@@ -226,8 +228,6 @@ class TTS(tts.TTS):
         )
 
     async def aclose(self) -> None:
-        if self._own_session and self._http_session and not self._http_session.closed:
-            await self._http_session.close()
         await super().aclose()
 
 
@@ -239,12 +239,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts              = tts
-        self._session_id       = f"fonadalabs_{id(self)}"
-        self._connection_state = ConnectionState.DISCONNECTED
-        self._ws_conn          = None
-        self._send_task        = None
-        self._recv_task        = None
+        self._tts: TTS                                         = tts
+        self._session_id                                       = f"fonadalabs_{id(self)}"
+        self._connection_state                                 = ConnectionState.DISCONNECTED
+        self._ws_conn:   aiohttp.ClientWebSocketResponse | None = None
+        self._send_task: asyncio.Task[None] | None              = None
+        self._recv_task: asyncio.Task[None] | None              = None
         # Resolved per-stream to avoid race conditions across concurrent streams
         self._resolved_lang_code: str = ""
         self._resolved_lang_name: str = ""
@@ -265,7 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         # ── Resolve language & voice from live catalog ─────────────────
-        catalog = await _load_catalog(self._tts._http_session)
+        catalog = await _load_catalog(self._tts._ensure_session())
         await self._resolve_language_and_voice(catalog)
         # ──────────────────────────────────────────────────────────────
 
@@ -323,9 +323,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             self._connection_state = ConnectionState.CONNECTING
-            ws = await self._tts._http_session.ws_connect(
+            ws = await self._tts._ensure_session().ws_connect(
                 self._tts._ws_url,
-                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                timeout=aiohttp.ClientWSTimeout(ws_close=self._conn_options.timeout),
             )
             self._ws_conn          = ws
             self._connection_state = ConnectionState.CONNECTED
@@ -453,8 +453,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         return True
 
     async def _handle_error(self, resp: dict) -> None:
-        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-        msg  = (
+        _raw_data = resp.get("data")
+        data: dict = _raw_data if isinstance(_raw_data, dict) else {}
+        msg = str(
             data.get("message") or data.get("error") or
             resp.get("message") or resp.get("error") or
             resp.get("error_message") or resp.get("detail") or
