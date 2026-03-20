@@ -1,26 +1,37 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-fonadalabs"
 version = "1.0.0"
-description = "FonadaLabs TTS plugin for LiveKit agents"
+description = "Agent Framework plugin for FonadaLabs TTS — high-quality Indian language voices."
 readme = "README.md"
-requires-python = ">=3.9"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "Fonada", email = "support@fonada.in" }]
+keywords = ["voice", "ai", "tts", "livekit", "fonadalabs", "indian-languages", "hindi"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
 dependencies = [
-    "livekit>=0.11.0",
-    "livekit-agents>=0.11.0",
+    "livekit-agents>=1.5.0",
     "aiohttp>=3.9.0",
 ]
 
-[project.optional-dependencies]
-scipy = ["scipy>=1.9.0"]
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://fonada.in/"
+Source = "https://github.com/Pragyanshu-Fonada/Fonada_Livekit_agents"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["livekit.plugins.*"]
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
 
-
-
-
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
