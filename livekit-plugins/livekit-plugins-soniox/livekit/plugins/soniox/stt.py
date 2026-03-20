@@ -407,12 +407,18 @@ class SpeechStream(stt.SpeechStream):
         def send_endpoint_transcript() -> None:
             nonlocal is_speaking
             if final.text:
-                input_text = final_original.text or None
+                src_segs = final_original._lang_segments
+                source_languages = [LanguageCode(lang) for lang, _ in src_segs] or None
+                source_texts = [t for _, t in src_segs] or None
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
                         alternatives=[
-                            final.to_speech_data(self.start_time_offset, input_text=input_text)
+                            final.to_speech_data(
+                                self.start_time_offset,
+                                source_languages=source_languages,
+                                source_texts=source_texts,
+                            )
                         ],
                     )
                 )
@@ -466,7 +472,7 @@ class SpeechStream(stt.SpeechStream):
                                 and not is_end_token(token)
                                 and not is_translated
                             ):
-                                # Original-language token: capture text for input_text only.
+                                # Original-language token: capture text for source_text only.
                                 if token["is_final"]:
                                     final_original.update(token)
                                 else:
@@ -490,7 +496,13 @@ class SpeechStream(stt.SpeechStream):
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                                 )
-                            input_text = (final_original.text + non_final_original.text) or None
+                            interim_segs = _merge_lang_segments(
+                                final_original._lang_segments, non_final_original._lang_segments
+                            )
+                            interim_src_langs = [
+                                LanguageCode(lang) for lang, _ in interim_segs
+                            ] or None
+                            interim_src_texts = [t for _, t in interim_segs] or None
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=SpeechEventType.INTERIM_TRANSCRIPT,
@@ -498,7 +510,8 @@ class SpeechStream(stt.SpeechStream):
                                         final.merged_speech_data(
                                             non_final,
                                             self.start_time_offset,
-                                            input_text=input_text,
+                                            source_languages=interim_src_langs,
+                                            source_texts=interim_src_texts,
                                         )
                                     ],
                                 )
@@ -531,6 +544,20 @@ class SpeechStream(stt.SpeechStream):
                 logger.error(f"Unexpected error while receiving messages: {e}")
 
 
+def _merge_lang_segments(
+    a: list[tuple[str, str]], b: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Merge two (language, text) segment lists, combining adjacent segments of the same language."""
+    result = list(a)
+    for lang, text in b:
+        if result and result[-1][0] == lang:
+            lang, t = result[-1]
+            result[-1] = (lang, t + text)
+        else:
+            result.append((lang, text))
+    return result
+
+
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
@@ -541,20 +568,20 @@ class _TokenAccumulator:
     def __init__(self) -> None:
         self.text: str = ""
         self.language: str = ""
-        self.source_language: str = ""
         self.speaker_id: str | None = None
         self.start_time: float = 0.0
         self.end_time: float = 0.0
         self._confidence_sum: float = 0.0
         self._confidence_count: int = 0
         self._has_start_time: bool = False
+        self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
 
     def update(self, token: dict[str, Any]) -> None:
-        self.text += token["text"]
-        if token.get("language") and not self.language:
-            self.language = token["language"]
-        if token.get("source_language") and not self.source_language:
-            self.source_language = token["source_language"]
+        text = token["text"]
+        lang = token.get("language", "")
+        self.text += text
+        if lang and not self.language:
+            self.language = lang
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
         if "start_ms" in token and not self._has_start_time:
@@ -565,6 +592,12 @@ class _TokenAccumulator:
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1
+        if text:
+            if self._lang_segments and self._lang_segments[-1][0] == lang:
+                lang, t = self._lang_segments[-1]
+                self._lang_segments[-1] = (lang, t + text)
+            else:
+                self._lang_segments.append((lang, text))
 
     @property
     def confidence(self) -> float:
@@ -575,22 +608,25 @@ class _TokenAccumulator:
     def reset(self) -> None:
         self.text = ""
         self.language = ""
-        self.source_language = ""
         self.speaker_id = None
         self.start_time = 0.0
         self.end_time = 0.0
         self._confidence_sum = 0.0
         self._confidence_count = 0
         self._has_start_time = False
+        self._lang_segments = []
 
     def to_speech_data(
-        self, start_time_offset: float = 0.0, input_text: str | None = None
+        self,
+        start_time_offset: float = 0.0,
+        source_languages: list[LanguageCode] | None = None,
+        source_texts: list[str] | None = None,
     ) -> stt.SpeechData:
         return stt.SpeechData(
             text=self.text,
             language=LanguageCode(self.language),
-            input_language=LanguageCode(self.source_language) if self.source_language else None,
-            input_text=input_text,
+            source_languages=source_languages,
+            source_texts=source_texts,
             speaker_id=self.speaker_id,
             start_time=self.start_time / 1000 + start_time_offset,
             end_time=self.end_time / 1000 + start_time_offset,
@@ -601,7 +637,8 @@ class _TokenAccumulator:
         self,
         other: _TokenAccumulator,
         start_time_offset: float = 0.0,
-        input_text: str | None = None,
+        source_languages: list[LanguageCode] | None = None,
+        source_texts: list[str] | None = None,
     ) -> stt.SpeechData:
         """Build a SpeechData combining self (final) with other (non-final)."""
         candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
@@ -609,12 +646,11 @@ class _TokenAccumulator:
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
         total_sum = self._confidence_sum + other._confidence_sum
-        source_lang = self.source_language if self.source_language else other.source_language
         return stt.SpeechData(
             text=self.text + other.text,
             language=LanguageCode(self.language if self.language else other.language),
-            input_language=LanguageCode(source_lang) if source_lang else None,
-            input_text=input_text,
+            source_languages=source_languages,
+            source_texts=source_texts,
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,

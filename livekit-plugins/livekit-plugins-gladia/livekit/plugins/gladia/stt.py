@@ -1116,10 +1116,10 @@ class SpeechStream(stt.SpeechStream):
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
                         language=LanguageCode(language),  # Use the target language
-                        input_language=LanguageCode(original_language)
+                        source_languages=[LanguageCode(original_language)]
                         if original_language
                         else None,
-                        input_text=original_text,
+                        source_texts=[original_text] if original_text else None,
                         start_time=translated_utterance.get("start", 0) + self.start_time_offset,
                         end_time=translated_utterance.get("end", 0) + self.start_time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),
