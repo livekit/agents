@@ -440,9 +440,7 @@ class RoomIO:
 
         self._update_state_atask = asyncio.create_task(_set_state())
 
-    def _on_chat_text_stream(
-        self, reader: rtc.TextStreamReader, participant_identity: str
-    ) -> None:
+    def _on_chat_text_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         linked = self.linked_participant
         if linked and participant_identity != linked.identity:
             return
