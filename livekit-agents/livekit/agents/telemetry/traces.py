@@ -412,6 +412,7 @@ async def _upload_session_report(
                 "session.options": vars(report.options),
                 "session.report_timestamp": report.timestamp,
                 "agent_name": agent_name,
+                "sdk_version": report.sdk_version,
                 "usage": [
                     {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
                     for u in report.model_usage

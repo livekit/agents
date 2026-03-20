@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..llm import ChatContext
 from ..metrics import ModelUsage
+from ..version import __version__
 from .agent_session import AgentSessionOptions, RecordingOptions
 from .events import AgentEvent
 
@@ -29,7 +30,8 @@ class SessionReport:
     """Timestamp when the session report was created, typically at the end of the session"""
     model_usage: list[ModelUsage] | None = None
     """Usage summaries for the session, one per model/provider combination"""
-
+    sdk_version: str = field(default_factory=lambda: __version__)
+    """Version of the agents SDK"""
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
 
@@ -65,6 +67,7 @@ class SessionReport:
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,
+            "sdk_version": self.sdk_version,
         }
 
     def _usage_to_dict(self) -> list[dict] | None:
