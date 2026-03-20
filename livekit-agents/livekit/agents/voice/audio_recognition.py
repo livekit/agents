@@ -522,7 +522,7 @@ class AudioRecognition:
 
         Returns the pipeline (pump task + channels) without stopping it.
         The caller is responsible for passing it to the new AudioRecognition
-        via update_stt(..., pipeline=pipeline).
+        via start(..., stt_pipeline=pipeline).
         """
         pipeline = self._stt_pipeline
         self._stt_pipeline = None
