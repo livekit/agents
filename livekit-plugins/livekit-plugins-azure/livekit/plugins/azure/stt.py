@@ -18,7 +18,7 @@ import os
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
@@ -26,6 +26,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    LanguageCode,
     stt,
     utils,
 )
@@ -58,6 +59,7 @@ class STTOptions:
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
+    true_text_post_processing: bool = False
 
 
 class STT(stt.STT):
@@ -79,6 +81,7 @@ class STT(stt.STT):
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
+        true_text_post_processing: bool = False,
     ):
         """
         Create a new instance of Azure STT.
@@ -97,14 +100,24 @@ class STT(stt.STT):
             explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
+            true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
         """
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="chunk",
+                offline_recognize=False,
+            )
+        )
         if not language or not is_given(language):
             language = ["en-US"]
 
         if isinstance(language, str):
-            language = [language]
+            language = [LanguageCode(language)]
+        else:
+            language = [LanguageCode(lg) for lg in language]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST") or NOT_GIVEN
@@ -144,6 +157,7 @@ class STT(stt.STT):
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
+            true_text_post_processing=true_text_post_processing,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -172,7 +186,7 @@ class STT(stt.STT):
     ) -> SpeechStream:
         config = deepcopy(self._config)
         if is_given(language):
-            config.language = [language]
+            config.language = [LanguageCode(language)]
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -180,8 +194,9 @@ class STT(stt.STT):
     def update_options(self, *, language: NotGivenOr[list[str] | str] = NOT_GIVEN) -> None:
         if is_given(language):
             if isinstance(language, str):
-                language = [language]
-            language = cast(list[str], language)
+                language = [LanguageCode(language)]
+            else:
+                language = [LanguageCode(lg) for lg in language]
             self._config.language = language
             for stream in self._streams:
                 stream.update_options(language=language)
@@ -267,15 +282,23 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
+        detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
 
         if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
+            detected_lg = LanguageCode(self._opts.language[0])
 
-        final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
+        # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
+        final_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=1.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -286,15 +309,22 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
+        detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
         if not text:
             return
 
         if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
+            detected_lg = LanguageCode(self._opts.language[0])
 
-        interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
+        interim_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=0.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -386,9 +416,18 @@ def _create_speech_recognizer(
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
+    if config.true_text_post_processing:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.SpeechServiceResponse_PostProcessingOption, "TrueText"
+        )
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:
+        # Enable Continuous LanguageCode ID for multiple languages
+        # This ensures language detection updates throughout the streaming session
+        speech_config.set_property(
+            speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
+        )
         kwargs["auto_detect_source_language_config"] = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )

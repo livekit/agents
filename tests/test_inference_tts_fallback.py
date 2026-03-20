@@ -50,7 +50,7 @@ class TestParseModelString:
         [
             ("elevenlabs/eleven_flash_v2:voice123", "elevenlabs/eleven_flash_v2", "voice123"),
             ("rime:speaker-a", "rime", "speaker-a"),
-            ("rime/mist:narrator", "rime/mist", "narrator"),
+            ("rime/mistv2:narrator", "rime/mistv2", "narrator"),
             ("inworld/inworld-tts-1:character", "inworld/inworld-tts-1", "character"),
             ("cartesia/sonic-turbo:deep-voice", "cartesia/sonic-turbo", "deep-voice"),
         ],

@@ -13,10 +13,11 @@ from livekit.agents import (
     MetricsCollectedEvent,
     RunContext,
     cli,
+    inference,
     metrics,
 )
 from livekit.agents.llm.tool_context import function_tool
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("phone-tree-agent")
 
@@ -91,9 +92,9 @@ async def dtmf_session(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-5"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        llm=inference.LLM("openai/gpt-4.1"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("rime/arcana"),
         # This flag does two things:
         # 1. Helps agent avoid getting stuck listening to repeating IVR loops by actively responding when a loop is detected.
         # 2. Automatically gives the agent the `send_dtmf_events` tool to allow it to dial DTMF digits.
@@ -108,16 +109,12 @@ async def dtmf_session(ctx: JobContext) -> None:
     )
     logger.info(f"==> User request: {user_request}")
 
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
     async def log_usage() -> None:
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        logger.info(f"Usage: {session.usage}")
 
     ctx.add_shutdown_callback(log_usage)
 

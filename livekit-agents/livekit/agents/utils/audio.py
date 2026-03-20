@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import ctypes
 from collections.abc import AsyncGenerator
-from typing import Union
 
 import aiofiles
+import numpy as np
+from numpy.typing import DTypeLike
 
 from livekit import rtc
 
@@ -13,7 +14,7 @@ from ..log import logger
 from .aio.utils import cancel_and_wait
 
 # deprecated aliases
-AudioBuffer = Union[list[rtc.AudioFrame], rtc.AudioFrame]
+AudioBuffer = list[rtc.AudioFrame] | rtc.AudioFrame
 
 combine_frames = rtc.combine_audio_frames
 merge_frames = rtc.combine_audio_frames
@@ -104,7 +105,7 @@ class AudioByteStream:
         frames = []
         while len(self._buf) >= self._bytes_per_frame:
             frame_data = self._buf[: self._bytes_per_frame]
-            self._buf = self._buf[self._bytes_per_frame :]
+            del self._buf[: self._bytes_per_frame]
 
             frames.append(
                 rtc.AudioFrame(
@@ -138,7 +139,7 @@ class AudioByteStream:
         if len(self._buf) == 0:
             return []
 
-        if len(self._buf) % (2 * self._num_channels) != 0:
+        if len(self._buf) % self._bytes_per_sample != 0:
             logger.warning("AudioByteStream: incomplete frame during flush, dropping")
             return []
 
@@ -147,7 +148,7 @@ class AudioByteStream:
                 data=self._buf.copy(),
                 sample_rate=self._sample_rate,
                 num_channels=self._num_channels,
-                samples_per_channel=len(self._buf) // 2,
+                samples_per_channel=len(self._buf) // self._bytes_per_sample,
             )
         ]
         self._buf.clear()
@@ -193,3 +194,88 @@ async def audio_frames_from_file(
     finally:
         await cancel_and_wait(reader_task)
         await decoder.aclose()
+
+
+class AudioArrayBuffer:
+    def __init__(self, *, buffer_size: int, dtype: DTypeLike = np.int16, sample_rate: int = 16000):
+        """Create a fixed-size buffer for audio array data.
+
+        Args:
+            buffer_size: The size of the buffer in samples.
+            dtype: The dtype of the buffer.
+            sample_rate: The sample rate of the buffer.
+        """
+        self._buffer_size = buffer_size
+        self._dtype = dtype
+        self._buffer = np.zeros(buffer_size, dtype=dtype)
+        self._start_idx = 0
+        self._resampler: rtc.AudioResampler | None = None
+        self._sample_rate = sample_rate
+
+    def push_frame(self, frame: rtc.AudioFrame) -> int:
+        """Push an audio frame to the buffer.
+
+        Args:
+            frame: The audio frame to push.
+
+        Returns:
+            The number of samples written to the buffer.
+
+        Raises:
+            ValueError: If the frame samples are greater than the buffer size.
+        """
+        if frame.samples_per_channel > self._buffer_size:
+            raise ValueError("frame samples are greater than the buffer size")
+
+        frames: list[rtc.AudioFrame] = []
+        if self._resampler is None and frame.sample_rate != self._sample_rate:
+            self._resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=self._sample_rate,
+                num_channels=frame.num_channels,
+                quality=rtc.AudioResamplerQuality.QUICK,
+            )
+
+        if self._resampler:
+            if frame.sample_rate != self._resampler._input_rate:
+                raise ValueError("frame sample rates are inconsistent")
+            frames.extend(self._resampler.push(frame))
+        else:
+            frames.append(frame)
+
+        frame = merge_frames(frames)
+
+        if (shift_size := self._start_idx + frame.samples_per_channel - self._buffer_size) > 0:
+            self.shift(shift_size)
+        ptr = self._buffer[self._start_idx : self._start_idx + frame.samples_per_channel]
+        if frame.num_channels > 1:
+            arr_i16 = np.frombuffer(
+                frame.data, dtype=np.int16, count=frame.samples_per_channel * frame.num_channels
+            ).reshape(-1, frame.num_channels)
+            ptr[:] = (np.sum(arr_i16, axis=1, dtype=np.int32) // frame.num_channels).astype(
+                np.int16
+            )
+        else:
+            ptr[:] = np.frombuffer(frame.data, dtype=np.int16, count=frame.samples_per_channel)
+        self._start_idx += frame.samples_per_channel
+        return frame.samples_per_channel
+
+    def shift(self, size: int) -> None:
+        """Shift the buffer to the left by the given size.
+
+        Args:
+            size: The size to shift the buffer by.
+        """
+        size = min(size, self._start_idx)
+        self._buffer[: self._start_idx - size] = self._buffer[size : self._start_idx].copy()
+        self._start_idx -= size
+
+    def read(self) -> np.ndarray:
+        return self._buffer[: self._start_idx].copy()
+
+    def reset(self) -> None:
+        self._start_idx = 0
+        self._buffer.fill(0)
+
+    def __len__(self) -> int:
+        return self._start_idx

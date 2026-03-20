@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
@@ -5,7 +7,6 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 
@@ -29,8 +30,8 @@ logger = logging.getLogger("avatar-example")
 class AudioWaveGenerator(VideoGenerator):
     def __init__(self, options: AvatarOptions):
         self._options = options
-        self._audio_queue = asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]]()
-        self._audio_resampler: Optional[rtc.AudioResampler] = None
+        self._audio_queue = asyncio.Queue[rtc.AudioFrame | AudioSegmentEnd]()
+        self._audio_resampler: rtc.AudioResampler | None = None
 
         self._canvas = np.zeros((options.video_height, options.video_width, 4), dtype=np.uint8)
         self._canvas.fill(255)

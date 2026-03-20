@@ -29,11 +29,13 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .constants import API_VERSION, REQUEST_ID_HEADER, USER_AGENT
 from .log import logger
@@ -43,7 +45,7 @@ from .models import STTEncoding, STTLanguages, STTModels
 @dataclass
 class STTOptions:
     model: STTModels | str
-    language: STTLanguages | str | None
+    language: LanguageCode | None
     encoding: STTEncoding
     sample_rate: int
     api_key: str
@@ -89,15 +91,25 @@ class STT(stt.STT):
         Raises:
             ValueError: If no API key is provided or found in environment variables.
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=False))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=False,
+                aligned_transcript="word",
+                offline_recognize=False,
+            )
+        )
 
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
-            raise ValueError("CARTESIA_API_KEY must be set")
+            raise ValueError(
+                "Cartesia API key is required, either as argument or set"
+                " CARTESIA_API_KEY environment variable"
+            )
 
         self._opts = STTOptions(
             model=model,
-            language=language,
+            language=LanguageCode(language),
             encoding=encoding,
             sample_rate=sample_rate,
             api_key=cartesia_api_key,
@@ -156,7 +168,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
 
         # Update all active streams
         for stream in self._streams:
@@ -179,7 +191,7 @@ class STT(stt.STT):
         )
 
         if is_given(language):
-            config.language = language
+            config.language = LanguageCode(language)
 
         return config
 
@@ -199,6 +211,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._last_speech_end_time: float = 0
 
     def update_options(
         self,
@@ -210,7 +223,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
 
         self._reconnect_event.set()
 
@@ -349,8 +362,24 @@ class SpeechStream(stt.SpeechStream):
         if message_type == "transcript":
             request_id = data.get("request_id", self._request_id)
             text = data.get("text", "")
+            words = data.get("words", [])
+            timed_words: list[TimedString] = [
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                )
+                for word in words
+            ]
+            # word timestamps are often within the audio window, so we track time separately
+            if self._last_speech_end_time == 0.0:
+                self._last_speech_end_time = self.start_time_offset
+            start_time = self._last_speech_end_time
+            end_time = start_time + data.get("duration", 0)
+            self._last_speech_end_time = end_time
             is_final = data.get("is_final", False)
-            language = data.get("language", self._opts.language or "en")
+            language = LanguageCode(data.get("language", self._opts.language or "en"))
 
             if not text and not is_final:
                 return
@@ -365,10 +394,11 @@ class SpeechStream(stt.SpeechStream):
 
             speech_data = stt.SpeechData(
                 language=language,
-                start_time=0,  # Cartesia doesn't provide word-level timestamps in this version
-                end_time=data.get("duration", 0),  # This is the duration transcribed so far
+                start_time=start_time,
+                end_time=end_time,
                 confidence=data.get("probability", 1.0),
                 text=text,
+                words=timed_words,
             )
 
             if is_final:

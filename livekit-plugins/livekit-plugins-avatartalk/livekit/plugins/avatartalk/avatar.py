@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context
@@ -44,15 +43,13 @@ class AvatarSession:
         participant_identity: str,
         participant_name: str,
         as_agent: bool = True,
-        local_participant_identity: Optional[str] = None,
-    ):
-        token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_identity(participant_identity)
-            .with_name(participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-        )
+        local_participant_identity: str | None = None,
+    ) -> str:
+        token = api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
+        token = token.with_identity(participant_identity)
+        token = token.with_name(participant_name)
+        token = token.with_grants(api.VideoGrants(room_join=True, room=room.name))
+
         if as_agent:
             token = token.with_kind("agent")
 
@@ -69,7 +66,7 @@ class AvatarSession:
         livekit_url: NotGivenOr[str | None] = NOT_GIVEN,
         livekit_api_key: NotGivenOr[str | None] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str | None] = NOT_GIVEN,
-    ):
+    ) -> None:
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -78,11 +75,11 @@ class AvatarSession:
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set by arguments or environment variables"
             )
 
-        session_task_mapping = {}
+        session_task_mapping: dict[str, str] = {}
 
         job_ctx = get_job_context()
 
-        async def _shutdown_session():
+        async def _shutdown_session() -> None:
             if room.name not in session_task_mapping:
                 return
             await self._avatartalk_api.stop_session(session_task_mapping[room.name])

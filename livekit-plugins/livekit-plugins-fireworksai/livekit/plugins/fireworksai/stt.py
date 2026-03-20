@@ -19,8 +19,8 @@ import dataclasses
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlencode
 
 import aiohttp
@@ -29,6 +29,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -80,7 +81,7 @@ class _PeriodicCollector:
 class STTOptions:
     model: NotGivenOr[str]
     sample_rate: int
-    language: NotGivenOr[str] = NOT_GIVEN
+    language: NotGivenOr[LanguageCode] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     skip_vad: NotGivenOr[bool] = NOT_GIVEN
@@ -135,7 +136,12 @@ class STT(stt.STT):
             ValueError: If no API key is provided, found in environment variables, or if a parameter is invalid.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
+            ),
         )
         if sample_rate != 16000:
             raise ValueError("FireworksAI STT only supports a sample rate of 16000")
@@ -154,7 +160,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             prompt=prompt,
             temperature=temperature,
             skip_vad=skip_vad,
@@ -166,6 +172,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "FireworksAI"
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -216,7 +230,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(temperature):
@@ -287,7 +301,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(temperature):
@@ -354,6 +368,8 @@ class SpeechStream(stt.SpeechStream):
 
                     raise APIStatusError(
                         "Fireworks connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -481,7 +497,9 @@ class SpeechStream(stt.SpeechStream):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
-                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
+                        stt.SpeechData(
+                            language=LanguageCode(self._opts.language or ""), text=full_transcript
+                        )
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
@@ -494,7 +512,9 @@ class SpeechStream(stt.SpeechStream):
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[
-                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
+                        stt.SpeechData(
+                            language=LanguageCode(self._opts.language or ""), text=full_transcript
+                        )
                     ],
                 )
                 self._event_ch.send_nowait(interim_event)

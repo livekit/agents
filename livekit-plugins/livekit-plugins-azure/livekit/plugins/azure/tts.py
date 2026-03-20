@@ -19,7 +19,14 @@ from typing import Literal
 
 import aiohttp
 
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    LanguageCode,
+    tts,
+    utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -106,11 +113,12 @@ class _TTSOptions:
     subscription_key: str | None
     region: str | None
     voice: str
-    language: str | None
+    language: LanguageCode | None
     speech_endpoint: str | None
     deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
     style: NotGivenOr[StyleConfig]
+    lexicon_uri: NotGivenOr[str]
     auth_token: str | None = None
 
     def get_endpoint_url(self) -> str:
@@ -132,6 +140,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
         style: NotGivenOr[StyleConfig] = NOT_GIVEN,
+        lexicon_uri: NotGivenOr[str] = NOT_GIVEN,
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_endpoint: str | None = None,
@@ -181,9 +190,10 @@ class TTS(tts.TTS):
             speech_endpoint=speech_endpoint,
             voice=voice,
             deployment_id=deployment_id,
-            language=language,
+            language=LanguageCode(language) if language else None,
             prosody=prosody,
             style=style,
+            lexicon_uri=lexicon_uri,
             auth_token=speech_auth_token,
         )
 
@@ -202,17 +212,20 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
         style: NotGivenOr[StyleConfig] = NOT_GIVEN,
+        lexicon_uri: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(prosody):
             prosody.validate()
             self._opts.prosody = prosody
         if is_given(style):
             style.validate()
             self._opts.style = style
+        if is_given(lexicon_uri):
+            self._opts.lexicon_uri = lexicon_uri
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -243,6 +256,10 @@ class ChunkedStream(tts.ChunkedStream):
             f'xml:lang="{lang}">'
         )
         ssml += f'<voice name="{self._opts.voice}">'
+
+        if is_given(self._opts.lexicon_uri):
+            ssml += f'<lexicon uri="{self._opts.lexicon_uri}"/>'
+
         if is_given(self._opts.style):
             degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ""
             ssml += f'<mstts:express-as style="{self._opts.style.style}"{degree}>'

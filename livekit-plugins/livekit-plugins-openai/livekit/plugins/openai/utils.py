@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable
-from typing import Callable, Union
+from collections.abc import Awaitable, Callable
 
-from livekit.agents.inference.llm import to_fnc_ctx
-
-AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
+AsyncAzureADTokenProvider = Callable[[], str | Awaitable[str]]
 
 
 def get_base_url(base_url: str | None) -> str:
@@ -15,4 +12,4 @@ def get_base_url(base_url: str | None) -> str:
     return base_url
 
 
-__all__ = ["get_base_url", "to_fnc_ctx", "AsyncAzureADTokenProvider"]
+__all__ = ["get_base_url", "AsyncAzureADTokenProvider"]

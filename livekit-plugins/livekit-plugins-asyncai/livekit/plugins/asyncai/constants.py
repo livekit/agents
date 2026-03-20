@@ -1,0 +1,3 @@
+API_AUTH_HEADER = "api_key"
+API_VERSION_HEADER = "version"
+API_VERSION = "v1"

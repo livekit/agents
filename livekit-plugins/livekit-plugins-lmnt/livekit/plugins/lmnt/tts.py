@@ -23,8 +23,8 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
     tts,
     utils,
 )
@@ -113,8 +113,8 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("LMNT_API_KEY")
         if not api_key:
             raise ValueError(
-                "LMNT API key is required. "
-                "Set it via environment variable or pass it as an argument."
+                "LMNT API key is required, either as argument or set"
+                " LMNT_API_KEY environment variable"
             )
 
         if not language:
@@ -211,7 +211,7 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -246,18 +246,13 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=NUM_CHANNELS,
                     mime_type=MIME_TYPE[self._opts.format],
                 )
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
         except Exception as e:
             raise APIConnectionError() from e

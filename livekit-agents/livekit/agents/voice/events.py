@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import time
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
+from ..inference.interruption import (
+    AdaptiveInterruptionDetector,
+    InterruptionDetectionError,
+    OverlappingSpeechEvent,
+)
+from ..language import LanguageCode
 from ..llm import (
     LLM,
     ChatMessage,
@@ -17,7 +23,7 @@ from ..llm import (
     RealtimeModelError,
 )
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
@@ -87,8 +93,10 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
+    "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
+    "session_usage_updated",
     "speech_created",
     "error",
     "close",
@@ -117,7 +125,7 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
-    language: str | None = None
+    language: LanguageCode | None = None
     created_at: float = Field(default_factory=time.time)
 
 
@@ -140,8 +148,17 @@ class AgentFalseInterruptionEvent(BaseModel):
 
 
 class MetricsCollectedEvent(BaseModel):
+    """Deprecated: use session_usage_updated for usage tracking.
+    Per-turn latency metrics are available on ChatMessage.metrics."""
+
     type: Literal["metrics_collected"] = "metrics_collected"
     metrics: AgentMetrics
+    created_at: float = Field(default_factory=time.time)
+
+
+class SessionUsageUpdatedEvent(BaseModel):
+    type: Literal["session_usage_updated"] = "session_usage_updated"
+    usage: AgentSessionUsage
     created_at: float = Field(default_factory=time.time)
 
 
@@ -164,7 +181,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
-        return list(zip(self.function_calls, self.function_call_outputs))
+        return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
         self._reply_required = False
@@ -204,8 +221,8 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | Any
-    source: LLM | STT | TTS | RealtimeModel | Any
+    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 
 
@@ -220,23 +237,25 @@ class CloseReason(str, Enum):
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | RealtimeModelError | None = None
+    error: (
+        LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None
+    ) = None
     reason: CloseReason
     created_at: float = Field(default_factory=time.time)
 
 
 AgentEvent = Annotated[
-    Union[
-        UserInputTranscribedEvent,
-        UserStateChangedEvent,
-        AgentStateChangedEvent,
-        AgentFalseInterruptionEvent,
-        MetricsCollectedEvent,
-        ConversationItemAddedEvent,
-        FunctionToolsExecutedEvent,
-        SpeechCreatedEvent,
-        ErrorEvent,
-        CloseEvent,
-    ],
+    UserInputTranscribedEvent
+    | UserStateChangedEvent
+    | AgentStateChangedEvent
+    | AgentFalseInterruptionEvent
+    | MetricsCollectedEvent
+    | SessionUsageUpdatedEvent
+    | ConversationItemAddedEvent
+    | FunctionToolsExecutedEvent
+    | SpeechCreatedEvent
+    | ErrorEvent
+    | CloseEvent
+    | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]

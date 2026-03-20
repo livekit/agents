@@ -16,7 +16,10 @@ class AnthropicFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -61,11 +64,18 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
+            result_content: list[Any] | str = msg.output
+            try:
+                parsed = json.loads(msg.output)
+                if isinstance(parsed, list):
+                    result_content = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
             content.append(
                 {
                     "tool_use_id": msg.call_id,
                     "type": "tool_result",
-                    "content": msg.output,
+                    "content": result_content,
                     "is_error": msg.is_error,
                 }
             )
@@ -82,6 +92,11 @@ def to_chat_ctx(
                 "content": [{"text": "(empty)", "type": "text"}],
             },
         )
+
+    # Claude 4.6+ does not support prefilling (trailing assistant messages).
+    # Append a dummy user message so the request ends with a user turn.
+    if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+        messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
 
@@ -108,3 +123,28 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "media_type": img.mime_type,
         },
     }
+
+
+def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.FunctionTool):
+            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            schemas.append(
+                {
+                    "name": fnc["name"],
+                    "description": fnc["description"] or "",
+                    "input_schema": fnc["parameters"],
+                }
+            )
+        elif isinstance(tool, llm.RawFunctionTool):
+            info = tool.info
+            schemas.append(
+                {
+                    "name": info.name,
+                    "description": info.raw_schema.get("description", ""),
+                    "input_schema": info.raw_schema.get("parameters", {}),
+                }
+            )
+
+    return schemas

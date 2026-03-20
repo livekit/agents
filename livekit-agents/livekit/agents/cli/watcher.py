@@ -7,8 +7,9 @@ import pathlib
 import socket
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from importlib.metadata import Distribution, PackageNotFoundError
-from typing import Any, Callable
+from typing import Any
 
 import watchfiles
 

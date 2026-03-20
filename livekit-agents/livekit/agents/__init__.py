@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    create_api_error_from_http,
 )
 from .job import (
     AutoSubscribe,
@@ -36,7 +37,10 @@ from .job import (
     JobRequest,
     get_job_context,
 )
+from .language import LanguageCode
 from .llm.chat_context import (
+    AgentConfigUpdate,
+    AgentHandoff,
     ChatContent,
     ChatContext,
     ChatItem,
@@ -45,7 +49,14 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, StopResponse, ToolError, function_tool
+from .llm.tool_context import (
+    FunctionTool,
+    ProviderTool,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    function_tool,
+)
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -70,6 +81,7 @@ from .voice import (
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    RecordingOptions,
     RunContext,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -77,6 +89,7 @@ from .voice import (
     avatar,
     io,
     room_io,
+    text_transforms,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -92,6 +105,7 @@ from .voice.run_result import (
     RunResult,
     mock_tools,
 )
+from .voice.turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 from .worker import (
     AgentServer,
     WorkerOptions,
@@ -126,6 +140,7 @@ __all__ = [
     "AutoSubscribe",
     "FunctionTool",
     "function_tool",
+    "ProviderTool",
     "ChatContext",
     "ChatItem",
     "room_io",
@@ -148,11 +163,16 @@ __all__ = [
     "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
+    "AgentConfigUpdate",
+    "AgentHandoff",
     "StopResponse",
+    "ToolContext",
     "ToolError",
     "RunContext",
     "Plugin",
     "AgentSession",
+    "RecordingOptions",
+    "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",
@@ -162,6 +182,7 @@ __all__ = [
     "APIError",
     "APIStatusError",
     "APITimeoutError",
+    "create_api_error_from_http",
     "APIConnectOptions",
     "NotGiven",
     "NOT_GIVEN",
@@ -172,6 +193,7 @@ __all__ = [
     "AudioConfig",
     "PlayHandle",
     "FlushSentinel",
+    "LanguageCode",
     "io",
     "avatar",
     "cli",
@@ -196,6 +218,9 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "TurnHandlingOptions",
+    "EndpointingOptions",
+    "InterruptionOptions",
 ]
 
 # Cleanup docs of unexported modules

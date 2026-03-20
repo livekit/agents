@@ -1,6 +1,5 @@
 import time
 from collections import deque
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -33,7 +32,7 @@ class WaveformVisualizer:
 
         self.start_time = time.time()
 
-    def draw_timestamp(self, canvas: np.ndarray, fps: Optional[float] = None):
+    def draw_timestamp(self, canvas: np.ndarray, fps: float | None = None):
         height, width = canvas.shape[:2]
         text = f"{time.time() - self.start_time:.1f}s"
         if fps is not None:
@@ -148,7 +147,7 @@ class WaveformVisualizer:
         self,
         canvas: np.ndarray,
         audio_samples: np.ndarray,
-        fps: Optional[float] = None,
+        fps: float | None = None,
     ):
         self.draw_timestamp(canvas, fps)
         volume = self.draw_current_wave(canvas, audio_samples)

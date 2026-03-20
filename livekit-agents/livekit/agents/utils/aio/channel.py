@@ -88,11 +88,11 @@ class Chan(Generic[T]):
         self.send_nowait(value)
 
     def send_nowait(self, value: T) -> None:
-        if self.full():
-            raise ChanFull
-
         if self._close_ev.is_set():
             raise ChanClosed
+
+        if self.full():
+            raise ChanFull
 
         self._queue.append(value)
         self._wakeup_next(self._gets)
@@ -106,7 +106,7 @@ class Chan(Generic[T]):
                 await g
             except ChanClosed:
                 raise
-            except Exception:
+            except BaseException:
                 g.cancel()
                 with contextlib.suppress(ValueError):
                     self._gets.remove(g)

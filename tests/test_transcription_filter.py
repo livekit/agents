@@ -1,6 +1,7 @@
 import pytest
 
 from livekit.agents.voice.transcription.filters import filter_emoji, filter_markdown
+from livekit.agents.voice.transcription.text_transforms import _apply_text_transforms, replace
 
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
 
@@ -139,7 +140,7 @@ async def test_markdown_filter(chunk_size: int):
         result_lines = result.strip().split("\n")
 
         print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines)):
+        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
             if exp != got:
                 print(f"Line {i + 1}:")
                 print(f"  Expected: {repr(exp)}")
@@ -232,7 +233,7 @@ async def test_emoji_filter(chunk_size: int):
         result_lines = result.split("\n")
 
         print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines)):
+        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
             if exp != got:
                 print(f"Line {i + 1}:")
                 print(f"  Expected: {repr(exp)}")
@@ -240,3 +241,83 @@ async def test_emoji_filter(chunk_size: int):
     assert result == EMOJI_EXPECTED_OUTPUT
 
     print("\n=== EMOJI TEST COMPLETE ===")
+
+
+# --- text_transforms.replace tests ---
+
+
+async def _stream_text(text: str, chunk_size: int):
+    for i in range(0, len(text), chunk_size):
+        yield text[i : i + chunk_size]
+
+
+async def _collect(stream) -> str:
+    result = ""
+    async for chunk in stream:
+        result += chunk
+    return result
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 5, 11, 50])
+async def test_replace_across_chunk_sizes(chunk_size: int):
+    """Test replacement with multiple keys, case insensitivity, and boundary spanning."""
+    transform = replace({"LiveKit": "Lyve Kit", "SQL": "sequel", "boundary": "EDGE"})
+    text = "LiveKit uses SQL. livekit boundary test."
+    result = await _collect(transform(_stream_text(text, chunk_size)))
+    assert result == "Lyve Kit uses sequel. Lyve Kit EDGE test."
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7])
+async def test_replace_case_sensitive(chunk_size: int):
+    """Test case-sensitive mode only replaces exact matches."""
+    transform = replace({"LiveKit": "Lyve Kit"}, case_sensitive=True)
+    result = await _collect(
+        transform(_stream_text("LiveKit is great. livekit should stay.", chunk_size))
+    )
+    assert result == "Lyve Kit is great. livekit should stay."
+
+
+async def test_replace_edge_cases():
+    """Test empty replacements, empty input, no matches, and regex special chars."""
+    # empty replacements = passthrough
+    text = "Hello world."
+    assert await _collect(replace({})(_stream_text(text, 3))) == text
+
+    # empty input
+    assert await _collect(replace({"foo": "bar"})(_stream_text("", 1))) == ""
+
+    # no matches
+    assert await _collect(replace({"xyz": "abc"})(_stream_text(text, 4))) == text
+
+    # regex special characters in keys
+    transform = replace({"C++": "cpp", "file.txt": "file_txt"})
+    assert (
+        await _collect(transform(_stream_text("Use C++ to read file.txt", 2)))
+        == "Use cpp to read file_txt"
+    )
+
+    # backslashes in replacement values are treated literally
+    transform = replace({"word": r"\1 \n \t"})
+    assert await _collect(transform(_stream_text("a word here", 2))) == r"a \1 \n \t here"
+
+
+async def test_apply_text_transforms_with_callable():
+    """Test _apply_text_transforms with callable, mixed transforms, and invalid input."""
+    # callable only
+    result = await _collect(
+        _apply_text_transforms(_stream_text("Hello world!", 3), [replace({"world": "planet"})])
+    )
+    assert result == "Hello planet!"
+
+    # mixed: builtin string + callable + builtin string
+    result = await _collect(
+        _apply_text_transforms(
+            _stream_text("**hello** world! 😀", 3),
+            ["filter_markdown", replace({"hello": "hi"}), "filter_emoji"],
+        )
+    )
+    assert result == "hi world! "
+
+    # invalid string transform
+    with pytest.raises(ValueError, match="Invalid transform"):
+        await _collect(_apply_text_transforms(_stream_text("text", 4), ["nonexistent"]))

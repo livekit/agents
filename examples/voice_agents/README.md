@@ -2,11 +2,27 @@
 
 This directory contains a comprehensive collection of voice-based agent examples demonstrating various capabilities and integrations with the LiveKit Agents framework.
 
+## Model Configuration
+
+Most pipeline examples use **LiveKit Inference** by default, which provides a unified API for accessing STT, LLM, and TTS models:
+
+```python
+from livekit.agents import inference
+
+session = AgentSession(
+    stt=inference.STT("deepgram/nova-3"),
+    llm=inference.LLM("openai/gpt-4.1-mini"),
+    tts=inference.TTS("cartesia/sonic-3"),
+)
+```
+
+**Note:** Realtime models (OpenAI, AWS, Google, etc.) are not supported by LiveKit Inference and must use the plugin directly. See the [Real-time Models](#-real-time-models) section below.
+
 ## 📋 Table of Contents
 
 ### 🚀 Getting Started
 
-- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with metrics collection
+- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent using LiveKit Inference with metrics collection
 
 ### 🛠️ Tool Integration & Function Calling
 
@@ -18,6 +34,9 @@ This directory contains a comprehensive collection of voice-based agent examples
 
 ### ⚡ Real-time Models
 
+> **Note:** Realtime models use provider plugins directly as they are not supported by LiveKit Inference. These examples require provider-specific API keys (e.g., `OPENAI_API_KEY`).
+
+- [`getting_started.py`](./getting_started.py) - OpenAI Realtime model with noise cancellation
 - [`weather_agent.py`](./weather_agent.py) - OpenAI Realtime API with function calls for weather information
 - [`realtime_video_agent.py`](./realtime_video_agent.py) - Google Gemini with multimodal video and voice capabilities
 - [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic real-time model with function calls

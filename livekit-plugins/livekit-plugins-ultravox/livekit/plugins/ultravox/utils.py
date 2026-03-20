@@ -3,12 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from livekit.agents import llm
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.llm.utils import function_arguments_to_pydantic_model
 
 
@@ -17,13 +11,13 @@ def parse_tools(tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> list[dic
 
     results: list[dict[str, Any]] = []
     for tool in tools:
-        if is_raw_function_tool(tool):
-            raw_fnc_info = get_raw_function_info(tool)
+        if isinstance(tool, llm.RawFunctionTool):
+            raw_fnc_info = tool.info
             name = raw_fnc_info.name
             description = raw_fnc_info.raw_schema.get("description", None)
             parameters = raw_fnc_info.raw_schema.get("parameters", {})
-        elif is_function_tool(tool):
-            fnc_info = get_function_info(tool)
+        elif isinstance(tool, llm.FunctionTool):
+            fnc_info = tool.info
             model = function_arguments_to_pydantic_model(tool)
             name = fnc_info.name
             description = fnc_info.description

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
-from typing import Any, Generic, TypeVar, Union, cast
+from typing import Any, Generic, TypeVar, cast
 
 from typing_extensions import override
 
@@ -16,7 +16,7 @@ from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
 
-T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
+T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
 
 class _ParticipantInputStream(Generic[T], ABC):
@@ -30,6 +30,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         room: rtc.Room,
         *,
         track_source: rtc.TrackSource.ValueType | list[rtc.TrackSource.ValueType],
+        processor: rtc.FrameProcessor[T] | None = None,
     ) -> None:
         self._room = room
         self._accepted_sources = (
@@ -49,6 +50,9 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unpublished", self._on_track_unavailable)
+        self._room.on("token_refreshed", self._on_token_refreshed)
+
+        self._processor = processor
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -122,6 +126,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             await aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
+        self._room.off("token_refreshed", self._on_token_refreshed)
         self._data_ch.close()
 
     @log_exceptions(logger=logger)
@@ -160,6 +165,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._tasks.add(task)
             self._stream = None
             self._publication = None
+        if self._processor:
+            self._processor._close()
 
     def _on_track_available(
         self,
@@ -177,6 +184,16 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
+        if self._processor:
+            self._processor._on_stream_info_updated(
+                room_name=self._room.name,
+                participant_identity=participant.identity,
+                publication_sid=publication.sid,
+            )
+            if self._room._token is not None and self._room._server_url is not None:
+                self._processor._on_credentials_updated(
+                    token=self._room._token, url=self._room._server_url
+                )
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
@@ -201,6 +218,16 @@ class _ParticipantInputStream(Generic[T], ABC):
             if self._on_track_available(publication.track, publication, participant):
                 return
 
+    def _on_token_refreshed(self) -> None:
+        if (
+            self._processor is not None
+            and self._room._token is not None
+            and self._room._server_url is not None
+        ):
+            self._processor._on_credentials_updated(
+                token=self._room._token, url=self._room._server_url
+            )
+
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
     def __init__(
@@ -209,12 +236,22 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         *,
         sample_rate: int,
         num_channels: int,
-        noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None,
+        noise_cancellation: rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
+        audio_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
+        if isinstance(noise_cancellation, rtc.FrameProcessor):
+            audio_processor = noise_cancellation
+
         _ParticipantInputStream.__init__(
-            self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
+            self,
+            room=room,
+            track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+            processor=audio_processor,
         )
         AudioInput.__init__(self, label="RoomIO")
         if frame_size_ms <= 0:
@@ -265,7 +302,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             try:
                 duration: float = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
-                for frame in self._resample_frames(frames):
+                for frame in self._resample_frames(self._apply_audio_processor(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
                         duration += frame.duration
@@ -318,6 +355,20 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         if resampler:
             yield from resampler.flush()
+
+    def _apply_audio_processor(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
+        for frame in frames:
+            if self._processor is not None:
+                try:
+                    yield self._processor._process(frame)
+                except Exception as e:
+                    logger.warning(
+                        "error pre-processing audio frame",
+                        exc_info=e,
+                    )
+                    yield frame
+            else:
+                yield frame
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):

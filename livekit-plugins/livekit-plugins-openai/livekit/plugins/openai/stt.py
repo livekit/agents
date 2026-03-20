@@ -35,6 +35,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -64,7 +65,7 @@ NUM_CHANNELS = 1
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str
+    language: LanguageCode
     detect_language: bool
     turn_detection: SessionTurnDetection
     prompt: NotGivenOr[str] = NOT_GIVEN
@@ -105,7 +106,9 @@ class STT(stt.STT):
         """  # noqa: E501
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
+            capabilities=stt.STTCapabilities(
+                streaming=use_realtime, interim_results=use_realtime, aligned_transcript=False
+            )
         )
         if detect_language:
             language = ""
@@ -119,7 +122,7 @@ class STT(stt.STT):
             }
 
         self._opts = _STTOptions(
-            language=language,
+            language=LanguageCode(language),
             detect_language=detect_language,
             model=model,
             prompt=prompt,
@@ -127,6 +130,12 @@ class STT(stt.STT):
         )
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+
+        if is_given(api_key) and not api_key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
 
         self._client = client or openai.AsyncClient(
             max_retries=0,
@@ -293,7 +302,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -327,10 +336,10 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(detect_language):
             self._opts.detect_language = detect_language
-            self._opts.language = ""
+            self._opts.language = LanguageCode("")
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
@@ -344,26 +353,35 @@ class STT(stt.STT):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         prompt = self._opts.prompt if is_given(self._opts.prompt) else ""
-        realtime_config: dict[str, Any] = {
-            "type": "transcription_session.update",
-            "session": {
-                "input_audio_format": "pcm16",
-                "input_audio_transcription": {
-                    "model": self._opts.model,
-                    "prompt": prompt,
-                },
-                "turn_detection": self._opts.turn_detection,
-            },
+        transcription_config: dict[str, Any] = {
+            "model": self._opts.model,
         }
+        if prompt:
+            transcription_config["prompt"] = prompt
         if self._opts.language:
-            realtime_config["session"]["input_audio_transcription"]["language"] = (
-                self._opts.language
-            )
+            transcription_config["language"] = self._opts.language.language
+
+        input_config: dict[str, Any] = {
+            "format": {
+                "type": "audio/pcm",
+                "rate": SAMPLE_RATE,
+            },
+            "transcription": transcription_config,
+            "turn_detection": self._opts.turn_detection,
+        }
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_noise_reduction"] = {
-                "type": self._opts.noise_reduction_type
-            }
+            input_config["noise_reduction"] = {"type": self._opts.noise_reduction_type}
+
+        realtime_config: dict[str, Any] = {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": input_config,
+                },
+            },
+        }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
@@ -371,7 +389,6 @@ class STT(stt.STT):
         headers = {
             "User-Agent": "LiveKit Agents",
             "Authorization": f"Bearer {self._client.api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
         url = f"{str(self._client.base_url).rstrip('/')}/realtime?{urlencode(query_params)}"
         if url.startswith("http"):
@@ -400,9 +417,9 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = language
+                self._opts.language = LanguageCode(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
-            prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.NOT_GIVEN
+            prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.omit
 
             format = "json"
             if self._opts.model == "whisper-1":
@@ -416,7 +433,7 @@ class STT(stt.STT):
                     "audio/wav",
                 ),
                 model=self._opts.model,  # type: ignore
-                language=self._opts.language,
+                language=self._opts.language.language if self._opts.language else "",
                 prompt=prompt,
                 response_format=format,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
@@ -424,7 +441,7 @@ class STT(stt.STT):
 
             sd = stt.SpeechData(text=resp.text, language=self._opts.language)
             if isinstance(resp, TranscriptionVerbose) and resp.language:
-                sd.language = resp.language
+                sd.language = LanguageCode(resp.language)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -461,7 +478,7 @@ class SpeechStream(stt.SpeechStream):
         *,
         language: str,
     ) -> None:
-        self._language = language
+        self._language = LanguageCode(language)
         self._pool.invalidate()
         self._reconnect_event.set()
 
@@ -502,6 +519,7 @@ class SpeechStream(stt.SpeechStream):
             current_text = ""
             last_interim_at: float = 0
             connected_at = time.time()
+            item_audio_timing: dict[str, dict[str, int]] = {}
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -514,7 +532,9 @@ class SpeechStream(stt.SpeechStream):
 
                     # this will trigger a reconnection, see the _run loop
                     raise APIStatusError(
-                        message="OpenAI Realtime STT connection closed unexpectedly"
+                        message="OpenAI Realtime STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -524,7 +544,18 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get("type")
-                    if msg_type == "conversation.item.input_audio_transcription.delta":
+                    if msg_type == "input_audio_buffer.speech_started":
+                        item_id = data.get("item_id", "")
+                        audio_start_ms = data.get("audio_start_ms", 0)
+                        item_audio_timing[item_id] = {"start_ms": audio_start_ms}
+
+                    elif msg_type == "input_audio_buffer.speech_stopped":
+                        item_id = data.get("item_id", "")
+                        audio_end_ms = data.get("audio_end_ms", 0)
+                        if item_id in item_audio_timing:
+                            item_audio_timing[item_id]["end_ms"] = audio_end_ms
+
+                    elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
                         if delta:
                             current_text += delta
@@ -541,9 +572,12 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 )
                                 last_interim_at = time.time()
+
                     elif msg_type == "conversation.item.input_audio_transcription.completed":
                         current_text = ""
                         transcript = data.get("transcript", "")
+                        item_id = data.get("item_id", "")
+
                         if transcript:
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
@@ -556,6 +590,33 @@ class SpeechStream(stt.SpeechStream):
                                     ],
                                 )
                             )
+
+                        audio_duration = 0.0
+                        if item_id in item_audio_timing:
+                            timing = item_audio_timing[item_id]
+                            start_ms = timing.get("start_ms", 0)
+                            end_ms = timing.get("end_ms", 0)
+                            if end_ms > start_ms:
+                                audio_duration = (end_ms - start_ms) / 1000.0
+                            del item_audio_timing[item_id]
+
+                        # extract token usage if available
+                        usage = data.get("usage", {})
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                alternatives=[],
+                                recognition_usage=stt.RecognitionUsage(
+                                    audio_duration=audio_duration,
+                                    input_tokens=input_tokens,
+                                    output_tokens=output_tokens,
+                                ),
+                            )
+                        )
+
                         # restart session if needed
                         if time.time() - connected_at > _max_session_duration:
                             logger.info("resetting Realtime STT session due to timeout")

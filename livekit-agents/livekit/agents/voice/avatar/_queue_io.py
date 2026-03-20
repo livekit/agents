@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
-from typing import Literal, Union
+from typing import Literal
 
 from livekit import rtc
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class QueueAudioOutput(
     AudioOutput,
     AudioReceiver,
-    rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]],
+    rtc.EventEmitter[Literal["clear_buffer"]],
 ):
     """
     AudioOutput implementation that sends audio frames through a queue.
@@ -29,7 +30,7 @@ class QueueAudioOutput(
             sample_rate=sample_rate,
             capabilities=AudioOutputCapabilities(pause=False),
         )
-        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
+        self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -37,6 +38,9 @@ class QueueAudioOutput(
         await super().capture_frame(frame)
         if not self._capturing:
             self._capturing = True
+            # Not ideal since frame isn't actually playing yet
+            # potentially we need another RPC/hook for this
+            self.on_playback_started(created_at=time.time())
 
         await self._data_ch.send(frame)
 

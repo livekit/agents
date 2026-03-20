@@ -217,11 +217,11 @@ class TTS(tts.TTS):
         if is_given(speed):
             self._opts.speed = speed
         if is_given(voice):
-            self._opts.voice = voice  # type: ignore
+            self._opts.voice = voice
         if is_given(trailing_silence):
             self._opts.trailing_silence = trailing_silence
         if is_given(context):
-            self._opts.context = context  # type: ignore
+            self._opts.context = context
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
         if is_given(audio_format):

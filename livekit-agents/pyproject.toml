@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9,<3.14"
+requires-python = ">=3.10,<3.15"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
@@ -18,21 +18,21 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
     "typer>=0.15.1",
     "click~=8.1",
     "certifi>=2025.6.15",
-    "livekit>=1.0.19,<2",
+    "livekit==1.0.25",
     "livekit-api>=1.0.7,<2",
-    "livekit-protocol>=1.1,<2",
-    "livekit-blingfire~=1.0",
+    "livekit-protocol>=1.1.3,<2",
+    "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4",
@@ -52,57 +52,70 @@ dependencies = [
     "opentelemetry-sdk~=1.39.0",
     "opentelemetry-exporter-otlp~=1.39.0",
     "prometheus-client>=0.22",
-    "openai>=1.99.2",
+    "openai>=2",
     "aiofiles>=24",
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.10.0, <2; python_version >= '3.10'"]
+mcp = ["mcp>=1.10.0, <2"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
-anam = ["livekit-plugins-anam>=1.3.6"]
-anthropic = ["livekit-plugins-anthropic>=1.3.6"]
-assemblyai = ["livekit-plugins-assemblyai>=1.3.6"]
-aws = ["livekit-plugins-aws>=1.3.6"]
-azure = ["livekit-plugins-azure>=1.3.6"]
-baseten = ["livekit-plugins-baseten>=1.3.6"]
-bey = ["livekit-plugins-bey>=1.3.6"]
-bithuman = ["livekit-plugins-bithuman>=1.3.6"]
-cartesia = ["livekit-plugins-cartesia>=1.3.6"]
-clova = ["livekit-plugins-clova>=1.3.6"]
-deepgram = ["livekit-plugins-deepgram>=1.3.6"]
-elevenlabs = ["livekit-plugins-elevenlabs>=1.3.6"]
-fal = ["livekit-plugins-fal>=1.3.6"]
-fishaudio = ["livekit-plugins-fishaudio>=1.2.17; python_version >= '3.10'"]
-fireworksai = ["livekit-plugins-fireworksai>=1.3.6"]
-gladia = ["livekit-plugins-gladia>=1.3.6"]
-google = ["livekit-plugins-google>=1.3.6"]
-groq = ["livekit-plugins-groq>=1.3.6"]
-hedra = ["livekit-plugins-hedra>=1.3.6"]
-hume = ["livekit-plugins-hume>=1.3.6"]
-inworld = ["livekit-plugins-inworld>=1.3.6"]
-langchain = ["livekit-plugins-langchain>=1.3.6"]
-lmnt = ["livekit-plugins-lmnt>=1.3.6"]
+anam = ["livekit-plugins-anam>=1.5.0"]
+anthropic = ["livekit-plugins-anthropic>=1.5.0"]
+assemblyai = ["livekit-plugins-assemblyai>=1.5.0"]
+asyncai = ["livekit-plugins-asyncai>=1.5.0"]
+avatario = ["livekit-plugins-avatario>=1.5.0"]
+aws = ["livekit-plugins-aws>=1.5.0"]
+azure = ["livekit-plugins-azure>=1.5.0"]
+baseten = ["livekit-plugins-baseten>=1.5.0"]
+bey = ["livekit-plugins-bey>=1.5.0"]
+bithuman = ["livekit-plugins-bithuman>=1.5.0"]
+browser = ["livekit-plugins-browser>=0.1.5"]
+cambai = ["livekit-plugins-cambai>=1.5.0"]
+cartesia = ["livekit-plugins-cartesia>=1.5.0"]
+clova = ["livekit-plugins-clova>=1.5.0"]
+deepgram = ["livekit-plugins-deepgram>=1.5.0"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.5.0"]
+fal = ["livekit-plugins-fal>=1.5.0"]
+fishaudio = ["livekit-plugins-fishaudio>=1.5.0"]
+fireworksai = ["livekit-plugins-fireworksai>=1.5.0"]
+gladia = ["livekit-plugins-gladia>=1.5.0"]
+google = ["livekit-plugins-google>=1.5.0"]
+groq = ["livekit-plugins-groq>=1.5.0"]
+hedra = ["livekit-plugins-hedra>=1.5.0"]
+hume = ["livekit-plugins-hume>=1.5.0"]
+inworld = ["livekit-plugins-inworld>=1.5.0"]
+keyframe = ["livekit-plugins-keyframe>=1.5.0"]
+langchain = ["livekit-plugins-langchain>=1.5.0"]
+lemonslice = ["livekit-plugins-lemonslice>=1.5.0"]
+liveavatar = ["livekit-plugins-liveavatar>=1.5.0"]
+lmnt = ["livekit-plugins-lmnt>=1.5.0"]
 minimax = ["livekit-plugins-minimax-ai>=1.2.15"]
-mistralai = ["livekit-plugins-mistralai>=1.3.6"]
-neuphonic = ["livekit-plugins-neuphonic>=1.3.6"]
-nltk = ["livekit-plugins-nltk>=1.3.6"]
-openai = ["livekit-plugins-openai>=1.3.6"]
-resemble = ["livekit-plugins-resemble>=1.3.6"]
-rime = ["livekit-plugins-rime>=1.3.6"]
-sarvam = ["livekit-plugins-sarvam>=1.3.6"]
-silero = ["livekit-plugins-silero>=1.3.6"]
-simli = ["livekit-plugins-simli>=1.3.6"]
-smallestai = ["livekit-plugins-smallestai>=1.3.6"]
-soniox = ["livekit-plugins-soniox>=1.3.6"]
-speechify = ["livekit-plugins-speechify>=1.3.6"]
-speechmatics = ["livekit-plugins-speechmatics>=1.3.6"]
-spitch = ["livekit-plugins-spitch>=1.3.6"]
-tavus = ["livekit-plugins-tavus>=1.3.6"]
-turn-detector = ["livekit-plugins-turn-detector>=1.3.6"]
-ultravox = ["livekit-plugins-ultravox>=1.3.6"]
-upliftai = ["livekit-plugins-upliftai>=1.3.6"]
-gradium = ["livekit-plugins-gradium>=1.3.6"]
+mistralai = ["livekit-plugins-mistralai>=1.5.0"]
+neuphonic = ["livekit-plugins-neuphonic>=1.5.0"]
+nltk = ["livekit-plugins-nltk>=1.5.0"]
+nvidia = ["livekit-plugins-nvidia>=1.5.0"]
+openai = ["livekit-plugins-openai>=1.5.0"]
+resemble = ["livekit-plugins-resemble>=1.5.0"]
+rime = ["livekit-plugins-rime>=1.5.0"]
+rtzr = ["livekit-plugins-rtzr>=1.5.0"]
+sarvam = ["livekit-plugins-sarvam>=1.5.0"]
+silero = ["livekit-plugins-silero>=1.5.0"]
+simli = ["livekit-plugins-simli>=1.5.0"]
+smallestai = ["livekit-plugins-smallestai>=1.5.0"]
+simplismart = ["livekit-plugins-simplismart>=1.5.0"]
+soniox = ["livekit-plugins-soniox>=1.5.0"]
+speechify = ["livekit-plugins-speechify>=1.5.0"]
+speechmatics = ["livekit-plugins-speechmatics>=1.5.0"]
+spitch = ["livekit-plugins-spitch>=1.5.0"]
+tavus = ["livekit-plugins-tavus>=1.5.0"]
+trugen = ["livekit-plugins-trugen>=1.5.0"]
+turn-detector = ["livekit-plugins-turn-detector>=1.5.0"]
+ultravox = ["livekit-plugins-ultravox>=1.5.0"]
+upliftai = ["livekit-plugins-upliftai>=1.5.0"]
+gradium = ["livekit-plugins-gradium>=1.5.0"]
+xai = ["livekit-plugins-xai>=1.5.0"]
+phonic = ["livekit-plugins-phonic>=1.5.0"]
 
 
 [project.urls]

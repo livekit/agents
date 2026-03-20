@@ -3,8 +3,8 @@ import os
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
-from livekit.plugins import deepgram, liveavatar, openai
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.plugins import liveavatar
 
 logger = logging.getLogger("liveavatar-avatar-example")
 logger.setLevel(logging.INFO)
@@ -12,15 +12,19 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=openai.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        tts=inference.TTS("cartesia/sonic-3"),
         resume_false_interruption=False,
     )
 
-    liveavatar_avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID")
+    liveavatar_avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a")
     avatar = liveavatar.AvatarSession(avatar_id=liveavatar_avatar_id)
     await avatar.start(session, room=ctx.room)
 
@@ -35,4 +39,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

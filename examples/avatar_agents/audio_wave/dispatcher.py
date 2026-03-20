@@ -6,7 +6,6 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -34,7 +33,7 @@ class WorkerLauncher:
 
     def __init__(self):
         self.workers: dict[str, WorkerLauncher.WorkerInfo] = {}
-        self._monitor_task: Optional[asyncio.Task] = None
+        self._monitor_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         self._monitor_task = asyncio.create_task(self._monitor())

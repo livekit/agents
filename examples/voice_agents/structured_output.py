@@ -1,6 +1,6 @@
 import logging
-from collections.abc import AsyncIterable
-from typing import Annotated, Callable, Optional, cast
+from collections.abc import AsyncIterable, Callable
+from typing import Annotated, cast
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -39,7 +39,7 @@ class ResponseEmotion(TypedDict):
 
 async def process_structured_output(
     text: AsyncIterable[str],
-    callback: Optional[Callable[[ResponseEmotion], None]] = None,
+    callback: Callable[[ResponseEmotion], None] | None = None,
 ) -> AsyncIterable[str]:
     last_response = ""
     acc_text = ""

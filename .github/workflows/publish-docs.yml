@@ -31,20 +31,18 @@ jobs:
         run: |
           uv sync --all-extras --group docs
 
-      - name: Build Docs
+      - name: Build HTML Docs
         run: |
           uv run --active pdoc --skip-errors --html --output-dir=docs livekit
 
+      - name: Build Markdown Docs
+        run: |
+          uv run --active python .github/convert_html_docs.py docs/ docs-md -v --check-links
+
       - name: S3 Upload
         run: |
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          # If branch is not 0.x, upload to /v1
-          if [[ $BRANCH != "0.x" ]]; then
-            aws s3 cp docs/ s3://livekit-docs/python/v1 --recursive
-          # Else, upload to root, preserving the v1 directory
-          else
-            aws s3 sync docs/ s3://livekit-docs/python --exclude "v1/*" --delete
-          fi
+          aws s3 sync --delete docs/ s3://livekit-docs/python
+          aws s3 sync --delete docs-md/ s3://livekit-docs/python-md
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
@@ -52,7 +50,7 @@ jobs:
 
       - name: Expire cloudfront cache
         run: |
-          aws cloudfront create-invalidation --distribution-id EJJ40KLJ3TRY9 --paths "/python/*"
+          aws cloudfront create-invalidation --distribution-id EJJ40KLJ3TRY9 --paths "/python/*" "/python-md/*"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
