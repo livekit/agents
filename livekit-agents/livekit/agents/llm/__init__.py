@@ -1,4 +1,4 @@
-from . import remote_chat_context, utils
+from . import remote_chat_context, toolsets, utils
 from .chat_context import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -108,6 +108,7 @@ __all__ = [
     "RealtimeSessionRestoredEvent",
     "LLMError",
     "RemoteItemAddedEvent",
+    "toolsets",
 ]
 
 # Cleanup docs of unexported modules

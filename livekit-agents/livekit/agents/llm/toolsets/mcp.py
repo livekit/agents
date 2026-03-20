@@ -3,8 +3,8 @@ from collections.abc import Callable
 
 from typing_extensions import Self
 
-from ...llm.mcp import MCPServer, MCPTool
-from ...llm.tool_context import Toolset
+from ..mcp import MCPServer, MCPTool
+from ..tool_context import Toolset
 
 
 class MCPToolset(Toolset):

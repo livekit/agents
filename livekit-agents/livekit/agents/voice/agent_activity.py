@@ -78,8 +78,8 @@ from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
-    from ..beta.toolsets.mcp import MCPToolset
     from ..llm import mcp
+    from ..llm.toolsets.mcp import MCPToolset
     from .agent_session import AgentSession
 
 
@@ -584,7 +584,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
-            from ..beta.toolsets.mcp import MCPToolset
+            from ..llm.toolsets.mcp import MCPToolset
 
             logger.warning(
                 "passing MCP servers to AgentSession or Agent is deprecated "
