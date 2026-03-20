@@ -2467,7 +2467,8 @@ class AgentActivity(RecognitionHooks):
                     ignore_task_switch = True
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -2480,7 +2481,7 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            if fnc_executed_ev._reply_required:
+            if fnc_executed_ev._reply_required and not fnc_executed_ev._handoff_required:
                 chat_ctx.items.extend(tool_messages)
 
                 # refresh instructions in chat_ctx so that any update_instructions()
@@ -2992,7 +2993,8 @@ class AgentActivity(RecognitionHooks):
                     )
                     ignore_task_switch = True
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -3029,6 +3031,7 @@ class AgentActivity(RecognitionHooks):
 
             if (
                 fnc_executed_ev._reply_required
+                and not fnc_executed_ev._handoff_required
                 and not self.llm.capabilities.auto_tool_reply_generation
             ):
                 self._rt_session.interrupt()

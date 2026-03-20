@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest import mock
 
 import pytest
 
@@ -63,6 +64,29 @@ class MyAgent(Agent):
 
         if self.on_user_turn_completed_delay > 0.0:
             await asyncio.sleep(self.on_user_turn_completed_delay)
+
+
+class HandoffTargetAgent(Agent):
+    def __init__(self, entered_event: asyncio.Event) -> None:
+        super().__init__(instructions=("You are the target handoff agent."))
+        self._entered_event = entered_event
+
+    async def on_enter(self) -> None:
+        self._entered_event.set()
+
+
+class HandoffSourceAgent(Agent):
+    def __init__(self, entered_event: asyncio.Event) -> None:
+        super().__init__(instructions=("You are a source agent that can hand off."))
+        self._entered_event = entered_event
+
+    @function_tool
+    async def switch_to_secondary(self) -> Agent:
+        return HandoffTargetAgent(self._entered_event)
+
+    @function_tool
+    async def save_data(self, value: str) -> str:
+        return f"saved:{value}"
 
 
 SESSION_TIMEOUT = 60.0
@@ -213,6 +237,36 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_handoff_and_reply_required_no_extra_old_agent_reply() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "switch")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="save_data", arguments='{"value": "x"}', call_id="1"),
+            FunctionToolCall(name="switch_to_secondary", arguments="{}", call_id="2"),
+        ],
+    )
+
+    handoff_entered = asyncio.Event()
+    session = create_session(actions, speed_factor=speed)
+    agent = HandoffSourceAgent(handoff_entered)
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    with mock.patch.object(session.llm, "chat", wraps=session.llm.chat) as mock_chat:
+        await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert handoff_entered.is_set()
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].has_agent_handoff is True
+    assert tool_executed_events[0].has_tool_reply is True
+    # No extra old-agent reply generation after handoff.
+    assert mock_chat.call_count == 1
 
 
 @pytest.mark.parametrize(
