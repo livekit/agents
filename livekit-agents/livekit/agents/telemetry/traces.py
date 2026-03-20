@@ -145,7 +145,7 @@ def _setup_cloud_tracer(
     *,
     room_id: str,
     job_id: str,
-    cloud_hostname: str,
+    observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
 ) -> None:
@@ -216,7 +216,7 @@ def _setup_cloud_tracer(
                 tracer_provider.resource.merge(resource)
 
         span_exporter = OTLPSpanExporter(
-            endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
+            endpoint=f"{observability_url}/observability/traces/otlp/v0",
             compression=otlp_compression,
             session=session,
         )
@@ -234,7 +234,7 @@ def _setup_cloud_tracer(
 
     if enable_logs:
         log_exporter = OTLPLogExporter(
-            endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
+            endpoint=f"{observability_url}/observability/logs/otlp/v0",
             compression=otlp_compression,
             session=session,
         )
@@ -369,7 +369,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
 async def _upload_session_report(
     *,
     agent_name: str,
-    cloud_hostname: str,
+    observability_url: str,
     report: SessionReport,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
@@ -516,7 +516,7 @@ async def _upload_session_report(
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 
-    url = f"https://{cloud_hostname}/observability/recordings/v0"
+    url = f"{observability_url}/observability/recordings/v0"
     headers = {
         "Authorization": f"Bearer {jwt}",
         "Content-Type": mp.content_type,
