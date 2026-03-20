@@ -70,6 +70,8 @@ class SpeechData:
 class RecognitionUsage:
     audio_duration: float
     """Incremental audio duration/usage in seconds"""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -375,6 +377,8 @@ class RecognizeStream(ABC):
                     duration=0.0,
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
+                    input_tokens=ev.recognition_usage.input_tokens,
+                    output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider

@@ -34,6 +34,7 @@ livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
+livekit-plugins-murf = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
@@ -66,6 +67,7 @@ livekit-plugins-phonic = { workspace = true }
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
 ]
 
@@ -157,6 +159,11 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mistralai.*"
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
