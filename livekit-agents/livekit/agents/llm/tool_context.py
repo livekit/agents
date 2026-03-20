@@ -90,7 +90,7 @@ class Toolset:
         toolsets (passed to ``AgentSession(tools=...)``) are closed only when the
         ``AgentSession`` shuts down.
         """
-        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
 
