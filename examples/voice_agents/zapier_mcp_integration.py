@@ -61,12 +61,9 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"starting voice assistant for participant {participant.identity}")
 
-    usage_collector = metrics.UsageCollector()
-
-    # Log metrics and collect usage data
+    # Log metrics as they are collected
     def on_metrics_collected(agent_metrics: metrics.AgentMetrics):
         metrics.log_metrics(agent_metrics)
-        usage_collector.collect(agent_metrics)
 
     # Get MCP server URL from environment variable
     zapier_mcp_server = os.getenv("ZAPIER_MCP_SERVER")
