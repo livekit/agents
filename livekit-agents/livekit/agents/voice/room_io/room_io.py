@@ -458,8 +458,6 @@ class RoomIO:
         session = self._agent_session
 
         async def _read_text() -> None:
-            text = await reader.read_all()
-        async def _read_text() -> None:
             try:
                 text = await reader.read_all()
                 result = text_input_cb(
@@ -470,6 +468,8 @@ class RoomIO:
                     await result
             except Exception:
                 logger.warning("failed to handle chat text stream", exc_info=True)
+
+        task = asyncio.create_task(_read_text())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
