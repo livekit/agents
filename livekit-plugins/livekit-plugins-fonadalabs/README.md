@@ -49,7 +49,7 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 ---
 
-### 🎵 Tamil — 14 voices
+### 🎵 Tamil — 16 voices
 
 | | | | | |
 |---|---|---|---|---|
@@ -105,8 +105,9 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 You can specify the language either by **display name**:
 
-| Display Name
-| Hindi 
-| English
-| Tamil 
-| Telugu
+| Display Name |
+|---|
+| Hindi |
+| English |
+| Tamil |
+| Telugu |
