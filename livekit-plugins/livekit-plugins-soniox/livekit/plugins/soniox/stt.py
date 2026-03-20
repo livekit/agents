@@ -340,10 +340,11 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=[_build_speech_data(primary, original)],
                     )
                 )
+            if is_speaking:
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                is_speaking = False
             for acc in final.values():
                 acc.reset()
-            is_speaking = False
             self._report_processed_audio_duration(audio_proc_ms)
 
         async for msg in ws:
