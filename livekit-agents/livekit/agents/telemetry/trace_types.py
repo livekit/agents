@@ -29,6 +29,7 @@ ATTR_PROVIDER_TOOLS = "lk.provider_tools"
 ATTR_TOOL_SETS = "lk.tool_sets"
 ATTR_RESPONSE_TEXT = "lk.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.response.function_calls"
+ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
@@ -41,6 +42,7 @@ ATTR_FUNCTION_TOOL_OUTPUT = "lk.function_tool.output"
 ATTR_TTS_INPUT_TEXT = "lk.input_text"
 ATTR_TTS_STREAMING = "lk.tts.streaming"
 ATTR_TTS_LABEL = "lk.tts.label"
+ATTR_RESPONSE_TTFB = "lk.response.ttfb"
 
 # eou detection
 ATTR_EOU_PROBABILITY = "lk.eou.probability"
@@ -56,6 +58,9 @@ ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
 ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
+
+# latency span attributes
+ATTR_E2E_LATENCY = "lk.e2e_latency"
 
 # OpenTelemetry GenAI attributes
 # OpenTelemetry specification: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
@@ -88,3 +93,10 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+
+# Adaptive Interruption attributes
+ATTR_IS_INTERRUPTION = "lk.is_interruption"
+ATTR_INTERRUPTION_PROBABILITY = "lk.interruption.probability"
+ATTR_INTERRUPTION_TOTAL_DURATION = "lk.interruption.total_duration"
+ATTR_INTERRUPTION_PREDICTION_DURATION = "lk.interruption.prediction_duration"
+ATTR_INTERRUPTION_DETECTION_DELAY = "lk.interruption.detection_delay"

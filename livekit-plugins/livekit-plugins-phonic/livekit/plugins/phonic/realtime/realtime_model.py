@@ -225,6 +225,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
 
         self._generate_reply_task: asyncio.Task[None] | None = None
+        self._pending_generate_reply_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._instructions_ready = asyncio.Event()
         self._tools_ready = asyncio.Event()
         self._ready_to_start = asyncio.Event()
@@ -385,9 +386,19 @@ class RealtimeSession(llm.RealtimeSession):
         self._generate_reply_task = asyncio.create_task(self._send_generate_reply(payload))
 
         self._close_current_generation(interrupted=False)
-        generation_ev = self._start_new_assistant_turn(user_initiated=True)
+
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
-        fut.set_result(generation_ev)
+        self._pending_generate_reply_fut = fut
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+
+        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
         return fut
 
     async def _send_generate_reply(self, payload: GenerateReplyPayload) -> None:
@@ -431,6 +442,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._ready_to_start.set()
 
         self._close_current_generation(interrupted=False)
+
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+            self._pending_generate_reply_fut = None
 
         if self._generate_reply_task and not self._generate_reply_task.done():
             await utils.aio.cancel_and_wait(self._generate_reply_task)
@@ -606,6 +621,15 @@ class RealtimeSession(llm.RealtimeSession):
             user_initiated=user_initiated,
             response_id=response_id,
         )
+
+        if (
+            self._pending_generate_reply_fut is not None
+            and not self._pending_generate_reply_fut.done()
+        ):
+            generation_ev.user_initiated = True
+            self._pending_generate_reply_fut.set_result(generation_ev)
+            self._pending_generate_reply_fut = None
+
         self.emit("generation_created", generation_ev)
         return generation_ev
 
