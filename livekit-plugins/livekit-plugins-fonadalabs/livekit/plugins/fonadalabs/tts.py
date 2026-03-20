@@ -215,7 +215,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions | None = None,
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         stream = self.stream(conn_options=conn_options)
         stream.push_text(text)
         stream.end_input()
@@ -225,7 +225,7 @@ class TTS(tts.TTS):
         self,
         *,
         conn_options: APIConnectOptions | None = None,
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS,
