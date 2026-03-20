@@ -163,7 +163,7 @@ class ToolSearchToolset(Toolset):
         if inspect.isawaitable(results):
             results = await results
 
-        return list({result.source for result in results})
+        return list(dict.fromkeys(result.source for result in results))
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -304,7 +304,7 @@ class BM25SearchStrategy:
             self._idf[term] = math.log((n - freq + 0.5) / (freq + 0.5) + 1.0)
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        query_terms = query.lower().split()
+        query_terms = query.lower().replace("_", " ").split()
         if not query_terms:
             return []
 
