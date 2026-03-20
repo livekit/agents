@@ -43,7 +43,6 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
-from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
     AgentState,
@@ -1204,18 +1203,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
-            # extract AudioRecognition from the old activity for potential reuse.
-            # clears the reference (so pause()/aclose() won't close it), and resets per-turn state.
-            _reuse_ar: AudioRecognition | None = None
-            if (
-                self._activity is not None
-                and self._next_activity is not None
-                and self._activity._audio_recognition_reusable(self._next_activity)
-            ):
-                _reuse_ar = self._activity._audio_recognition
-                self._activity._audio_recognition = None
-                if _reuse_ar is not None:
-                    _reuse_ar.reset_turn_state()
+            # detach STT pipeline from old activity for potential reuse in the new one
+            _reuse_pipeline = (
+                await self._activity._detach_stt_pipeline_if_reusable(self._next_activity)
+                if self._activity is not None
+                else None
+            )
 
             previous_activity_v = self._activity
             if (activity := self._activity) is not None:
@@ -1230,8 +1223,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.warning(
                     f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
                 )
-                if _reuse_ar is not None:
-                    await _reuse_ar.aclose()
+                if _reuse_pipeline is not None:
+                    await _reuse_pipeline.aclose()
+                    _reuse_pipeline = None
                 self._next_activity = None
                 self._activity = None
                 return
@@ -1253,9 +1247,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
-                await self._activity.start(reuse_audio_recognition=_reuse_ar)
+                await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
             elif new_activity == "resume":
-                await self._activity.resume(reuse_audio_recognition=_reuse_ar)
+                await self._activity.resume(reuse_stt_pipeline=_reuse_pipeline)
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:

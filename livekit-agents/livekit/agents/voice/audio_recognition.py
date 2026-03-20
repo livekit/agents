@@ -74,6 +74,55 @@ class RecognitionHooks(Protocol):
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
+class _STTPipeline:
+    """Transferable STT pipeline that survives agent handoff.
+
+    The pump task iterates the STT generator and forwards events into event_ch.
+    It is never cancelled during handoff — only the consumer is swapped.
+    """
+
+    def __init__(self, stt_node: io.STTNode) -> None:
+        self._stt_node = stt_node
+        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        self._event_ch = aio.Chan[stt.SpeechEvent]()
+        self._pump_task = asyncio.create_task(self._stt_pump())
+        self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
+        return self._audio_ch
+
+    @property
+    def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
+        return self._event_ch
+
+    @utils.log_exceptions(logger=logger)
+    async def _stt_pump(self) -> None:
+        """Iterate the STT generator and forward events into *event_ch*.
+
+        This task owns the generator lifecycle and is never cancelled during
+        handoff — only the consumer is swapped.
+        """
+        from .agent import ModelSettings
+
+        node = self._stt_node(self._audio_ch, ModelSettings())
+        if asyncio.iscoroutine(node):
+            node = await node
+
+        if node is None:
+            return
+
+        if isinstance(node, AsyncIterable):
+            async for ev in node:
+                assert isinstance(ev, stt.SpeechEvent), (
+                    f"STT node must yield SpeechEvent, got: {type(ev)}"
+                )
+                self._event_ch.send_nowait(ev)
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._pump_task)
+
+
 class AudioRecognition:
     def __init__(
         self,
@@ -92,7 +141,7 @@ class AudioRecognition:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
-        self._stt_atask: asyncio.Task[None] | None = None
+        self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._endpointing: BaseEndpointing = endpointing
@@ -121,7 +170,7 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
 
-        self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
 
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -169,27 +218,8 @@ class AudioRecognition:
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
 
-    def update_hooks(
-        self,
-        hooks: RecognitionHooks,
-        *,
-        stt_node: io.STTNode | None,
-        vad: vad.VAD | None,
-        interruption_detection: inference.AdaptiveInterruptionDetector | None,
-    ) -> None:
-        """Redirect event callbacks and update stt_node/vad for handoff reuse."""
-        self._hooks = hooks
-        self._stt = stt_node
-        if interruption_detection is not self._interruption_detection:
-            self.update_interruption_detection(interruption_detection)
-        else:
-            self._reset_interruption_detection()
-
-        # always reset vad
-        self.update_vad(vad)
-
-    def start(self) -> None:
-        self.update_stt(self._stt)
+    def start(self, *, stt_pipeline: _STTPipeline | None = None) -> None:
+        self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
 
@@ -405,8 +435,8 @@ class AudioRecognition:
             self._input_started_at = time.time() - frame.duration
 
         self._sample_rate = frame.sample_rate
-        if not skip_stt and self._stt_ch is not None:
-            self._stt_ch.send_nowait(frame)
+        if not skip_stt and self._stt_pipeline is not None:
+            self._stt_pipeline.audio_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
@@ -420,10 +450,14 @@ class AudioRecognition:
         if self._commit_user_turn_atask is not None:
             await self._commit_user_turn_atask
 
+        if self._stt_pipeline is not None:
+            await self._stt_pipeline.aclose()
+            self._stt_pipeline = None
+
         await aio.cancel_and_wait(*self._tasks)
 
-        if self._stt_atask is not None:
-            await aio.cancel_and_wait(self._stt_atask)
+        if self._stt_consumer_atask is not None:
+            await aio.cancel_and_wait(self._stt_consumer_atask)
 
         if self._vad_atask is not None:
             await aio.cancel_and_wait(self._vad_atask)
@@ -434,23 +468,33 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
 
-    def update_stt(self, stt: io.STTNode | None) -> None:
+    def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
-        if stt:
-            self._stt_ch = aio.Chan[rtc.AudioFrame]()
-            self._stt_atask = asyncio.create_task(
-                self._stt_task(stt, self._stt_ch, self._stt_atask)
+        if pipeline is None and stt is not None:
+            pipeline = _STTPipeline(stt)
+
+        if pipeline is not None:
+            self._stt_consumer_atask = asyncio.create_task(
+                self._stt_consumer(
+                    event_ch=pipeline.event_ch,
+                    old_pipeline=self._stt_pipeline,
+                    old_consumer=self._stt_consumer_atask,
+                )
             )
-            # reset interruption handling related state
-            self._transcript_buffer.clear()
-            self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
-        elif self._stt_atask is not None:
-            task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
-            task.add_done_callback(lambda _: self._tasks.discard(task))
-            self._tasks.add(task)
-            self._stt_atask = None
-            self._stt_ch = None
+            self._stt_pipeline = pipeline
+
+        else:
+            if self._stt_consumer_atask is not None:
+                task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_consumer_atask = None
+
+            if self._stt_pipeline is not None:
+                task = asyncio.create_task(self._stt_pipeline.aclose())
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_pipeline = None
 
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
@@ -470,26 +514,22 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
-    def reset_turn_state(self) -> None:
-        """Reset per-turn accumulated state without restarting the STT stream.
+    async def detach_stt(self) -> _STTPipeline | None:
+        """Detach the STT pipeline for handoff to another AudioRecognition.
 
-        Used during agent handoff when reusing the AudioRecognition instance.
+        Returns the pipeline (pump task + channels) without stopping it.
+        The caller is responsible for passing it to the new AudioRecognition
+        via update_stt(..., pipeline=pipeline).
         """
-        if self._end_of_turn_task is not None:
-            self._end_of_turn_task.cancel()
-            self._end_of_turn_task = None
-        self._audio_transcript = ""
-        self._audio_interim_transcript = ""
-        self._audio_preflight_transcript = ""
-        self._final_transcript_confidence = []
-        self._user_turn_committed = False
-        self._final_transcript_received.clear()
-        self._agent_speaking = False
-        self._speaking = False
-        self._vad_speech_started = False
-        if self._user_turn_span is not None:
-            self._user_turn_span.end()
-            self._user_turn_span = None
+        pipeline = self._stt_pipeline
+        self._stt_pipeline = None
+
+        # stop the consumer — the new AudioRecognition will start its own
+        if self._stt_consumer_atask is not None:
+            await aio.cancel_and_wait(self._stt_consumer_atask)
+            self._stt_consumer_atask = None
+
+        return pipeline
 
     def update_interruption_detection(
         self, interruption_detection: inference.AdaptiveInterruptionDetector | None
@@ -1001,30 +1041,22 @@ class AudioRecognition:
         )
 
     @utils.log_exceptions(logger=logger)
-    async def _stt_task(
+    async def _stt_consumer(
         self,
-        stt_node: io.STTNode,
-        audio_input: AsyncIterable[rtc.AudioFrame],
-        task: asyncio.Task[None] | None,
+        event_ch: aio.Chan[stt.SpeechEvent],
+        old_pipeline: _STTPipeline | None,
+        old_consumer: asyncio.Task[None] | None,
     ) -> None:
-        from .agent import ModelSettings
+        """Consume STT events from the pump. Swapped on handoff."""
 
-        if task is not None:
-            await aio.cancel_and_wait(task)
+        if old_pipeline is not None:
+            await old_pipeline.aclose()
 
-        node = stt_node(audio_input, ModelSettings())
-        if asyncio.iscoroutine(node):
-            node = await node
+        if old_consumer is not None:
+            await aio.cancel_and_wait(old_consumer)
 
-        if node is None:
-            return
-
-        if isinstance(node, AsyncIterable):
-            async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    f"STT node must yield SpeechEvent, got: {type(ev)}"
-                )
-                await self._on_stt_event(ev)
+        async for ev in event_ch:
+            await self._on_stt_event(ev)
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
