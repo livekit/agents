@@ -482,7 +482,10 @@ class AudioRecognition:
                 )
             )
             self._stt_pipeline = pipeline
-
+            # reset interruption handling related state
+            self._transcript_buffer.clear()
+            self._ignore_user_transcript_until = NOT_GIVEN
+            self._input_started_at = None
         else:
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
