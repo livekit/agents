@@ -1119,7 +1119,7 @@ class SpeechStream(stt.SpeechStream):
                         source_languages=[LanguageCode(original_language)]
                         if original_language
                         else None,
-                        source_texts=[original_text] if original_text else None,
+                        source_texts=[original_text or ""] if original_language else None,
                         start_time=translated_utterance.get("start", 0) + self.start_time_offset,
                         end_time=translated_utterance.get("end", 0) + self.start_time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),
