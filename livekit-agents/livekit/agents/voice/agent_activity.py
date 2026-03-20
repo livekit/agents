@@ -79,7 +79,6 @@ from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from ..llm.toolsets.mcp import MCPToolset
     from .agent_session import AgentSession
 
 
@@ -144,7 +143,7 @@ class AgentActivity(RecognitionHooks):
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
-        self._mcp_tools: list[MCPToolset] = []
+        self._mcp_tools: list[mcp.MCPToolset] = []
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -584,7 +583,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
-            from ..llm.toolsets.mcp import MCPToolset
+            from ..llm.mcp import MCPToolset
 
             logger.warning(
                 "passing MCP servers to AgentSession or Agent is deprecated "

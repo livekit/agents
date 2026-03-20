@@ -3,7 +3,6 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
-from livekit.agents.beta.toolsets.mcp import MCPToolset
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -39,7 +38,7 @@ async def entrypoint(ctx: JobContext):
         tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
         tools=[
-            MCPToolset(
+            mcp.MCPToolset(
                 id="mcp_toolset_1", mcp_server=mcp.MCPServerHTTP(url="http://localhost:8000/sse")
             )
         ],
