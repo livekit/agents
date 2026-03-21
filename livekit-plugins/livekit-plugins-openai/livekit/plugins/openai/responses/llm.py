@@ -381,6 +381,16 @@ class LLMStream(llm.LLMStream):
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
 
+        # When using previous_response_id, the server already has the
+        # function_call items from that response.  Sending them again
+        # causes each tool call to appear twice in the API logs.
+        if "previous_response_id" in self._extra_kwargs:
+            chat_ctx = [
+                item
+                for item in chat_ctx
+                if not (isinstance(item, dict) and item.get("type") == "function_call")
+            ]
+
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
