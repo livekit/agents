@@ -7,6 +7,7 @@ import base64
 import enum
 import json
 import os
+import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -21,6 +22,7 @@ from livekit.agents import (
 )
 
 from .log import logger
+from .models import TTSLanguages, TTSVoice
 
 FONADALABS_TTS_WS_URL = "wss://api.fonada.ai/tts/generate-audio-ws"
 FONADALABS_SUPPORTED_VOICES_URL = "https://api.fonada.ai/supported-voices"
@@ -61,6 +63,10 @@ class _Catalog:
 
 
 _catalog_cache: _Catalog | None = None
+# Monotonic timestamp of the last failed catalog fetch; None if no failure has occurred.
+_catalog_failed_at: float | None = None
+# How long (seconds) to wait before retrying after a failed catalog fetch.
+_CATALOG_RETRY_AFTER: float = 30.0
 
 
 async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
@@ -71,11 +77,22 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
     Response shape used:
       tts_languages.fonadalabs -> {lang_code: {voices: {internal_id: display_name}}}
       asr_languages.fonadalabs -> {lang_code: display_name}
+
+    On success the result is cached indefinitely (use _invalidate_catalog() to reset).
+    On failure the result is NOT cached so the next call can retry, but a short
+    backoff (_CATALOG_RETRY_AFTER seconds) prevents hammering the API during an
+    outage.
     """
-    global _catalog_cache
+    global _catalog_cache, _catalog_failed_at
 
     if _catalog_cache is not None:
         return _catalog_cache
+
+    # Backoff: if the last fetch failed recently, return an empty catalog without
+    # making another network request so we don't spam the API during an outage.
+    if _catalog_failed_at is not None:
+        if time.monotonic() - _catalog_failed_at < _CATALOG_RETRY_AFTER:
+            return _Catalog(voices={}, code_to_name={}, name_to_code={})
 
     try:
         async with session.get(
@@ -108,6 +125,7 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
             code_to_name=code_to_name,
             name_to_code=name_to_code,
         )
+        _catalog_failed_at = None  # clear any previous failure on success
 
         logger.info(
             f"[FonadaLabs] Catalog loaded — "
@@ -118,17 +136,22 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
     except Exception as exc:
         logger.warning(
             f"[FonadaLabs] Could not load catalog from {FONADALABS_SUPPORTED_VOICES_URL}: {exc}. "
+            f"Will retry in {_CATALOG_RETRY_AFTER:.0f}s. "
             "Language/voice validation will be skipped — server will validate instead."
         )
-        _catalog_cache = _Catalog(voices={}, code_to_name={}, name_to_code={})
+        # Record the failure time but do NOT cache the empty catalog so the next
+        # call (after the backoff) can attempt a fresh fetch.
+        _catalog_failed_at = time.monotonic()
+        return _Catalog(voices={}, code_to_name={}, name_to_code={})
 
     return _catalog_cache
 
 
 def _invalidate_catalog() -> None:
     """Force re-fetch on next TTS call (e.g. after an unsupported_voice error)."""
-    global _catalog_cache
+    global _catalog_cache, _catalog_failed_at
     _catalog_cache = None
+    _catalog_failed_at = None  # allow an immediate retry, not a backoff retry
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +195,8 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        language: str = "Hindi",
-        voice: str | None = None,
+        language: TTSLanguages | str = "Hindi",
+        voice: TTSVoice | str | None = None,
         api_url: str | None = None,
         sample_rate: int = 24000,
         num_channels: int = 1,

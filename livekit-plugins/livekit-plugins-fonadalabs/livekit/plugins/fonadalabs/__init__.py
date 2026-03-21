@@ -4,10 +4,27 @@ Provides high-quality Text-to-Speech for Indian languages via the FonadaLabs API
 See https://fonada.in for more information.
 """
 
+from .models import (
+    TTSEnglishVoice,
+    TTSHindiVoice,
+    TTSLanguages,
+    TTSTamilVoice,
+    TTSTeluguVoice,
+    TTSVoice,
+)
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["TTS", "__version__"]
+__all__ = [
+    "TTS",
+    "TTSLanguages",
+    "TTSVoice",
+    "TTSHindiVoice",
+    "TTSTamilVoice",
+    "TTSTeluguVoice",
+    "TTSEnglishVoice",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
