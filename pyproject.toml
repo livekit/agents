@@ -123,6 +123,7 @@ pythonpath = ["."]
 strict = true
 disallow_any_generics = false
 plugins = ["pydantic.mypy"]
+cache_fine_grained = true
 
 [[tool.mypy.overrides]]
 module = "mcp.*"

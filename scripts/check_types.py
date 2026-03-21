@@ -2,6 +2,7 @@
 """Run mypy type checking on all livekit packages.
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
+Uses the mypy daemon (dmypy) for fast incremental checks after the first run.
 """
 
 import subprocess
@@ -19,6 +20,8 @@ EXCLUDED_PLUGINS = [
 EXCLUDED_STUBS = [
     "scipy-stubs",
 ]
+
+_TYPES_MARKER = ".mypy_cache/.types_installed"
 
 
 def get_packages(repo_root: Path) -> list[str]:
@@ -38,13 +41,16 @@ def get_packages(repo_root: Path) -> list[str]:
     return packages
 
 
-def main() -> int:
-    repo_root = Path(__file__).parent.parent
-    packages = get_packages(repo_root)
+def ensure_types_installed(repo_root: Path, pkg_args: list[str]) -> None:
+    """Install missing type stubs, re-running only when uv.lock has changed."""
+    marker = repo_root / _TYPES_MARKER
+    lock_file = repo_root / "uv.lock"
 
-    pkg_args: list[str] = []
-    for pkg in packages:
-        pkg_args.extend(["-p", pkg])
+    marker_mtime = marker.stat().st_mtime if marker.exists() else 0.0
+    lock_mtime = lock_file.stat().st_mtime if lock_file.exists() else 0.0
+
+    if marker_mtime >= lock_mtime:
+        return
 
     # Ensure pip is available (required for mypy --install-types)
     subprocess.run(
@@ -53,7 +59,6 @@ def main() -> int:
         cwd=repo_root,
     )
 
-    # First pass: let mypy install missing type stubs
     subprocess.run(
         ["uv", "run", "mypy", "--install-types", "--non-interactive", *pkg_args],
         capture_output=True,
@@ -67,9 +72,32 @@ def main() -> int:
         cwd=repo_root,
     )
 
-    # Second pass: actual type check
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+
+def main() -> int:
+    repo_root = Path(__file__).parent.parent
+    packages = get_packages(repo_root)
+
+    pkg_args: list[str] = []
+    for pkg in packages:
+        pkg_args.extend(["-p", pkg])
+
+    ensure_types_installed(repo_root, pkg_args)
+
+    # Use the mypy daemon for fast incremental checks. The daemon keeps parsed
+    # modules in memory, so the second and subsequent runs are much faster.
     result = subprocess.run(
-        ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
+        [
+            "uv",
+            "run",
+            "dmypy",
+            "run",
+            "--",
+            "--untyped-calls-exclude=smithy_aws_core",
+            *pkg_args,
+        ],
         cwd=repo_root,
     )
     return result.returncode
