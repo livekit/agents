@@ -2,7 +2,7 @@
 """Run mypy type checking on all livekit packages.
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
-Uses the mypy daemon (dmypy) for fast incremental checks after the first run.
+Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
 """
 
 import subprocess
@@ -86,18 +86,10 @@ def main() -> int:
 
     ensure_types_installed(repo_root, pkg_args)
 
-    # Use the mypy daemon for fast incremental checks. The daemon keeps parsed
-    # modules in memory, so the second and subsequent runs are much faster.
+    # mypy's incremental mode reads/writes .mypy_cache and skips unchanged
+    # modules, making the second and subsequent runs much faster (~1s vs 30s+).
     result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "dmypy",
-            "run",
-            "--",
-            "--untyped-calls-exclude=smithy_aws_core",
-            *pkg_args,
-        ],
+        ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
         cwd=repo_root,
     )
     return result.returncode
