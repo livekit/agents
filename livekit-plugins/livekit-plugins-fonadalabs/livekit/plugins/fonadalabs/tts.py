@@ -9,6 +9,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -26,6 +27,16 @@ from .models import TTSLanguages, TTSVoice
 
 FONADALABS_TTS_WS_URL = "wss://api.fonada.ai/tts/generate-audio-ws"
 FONADALABS_SUPPORTED_VOICES_URL = "https://api.fonada.ai/supported-voices"
+
+# Maps lang codes returned by the TTS API to human-readable display names.
+# If the API ever adds a new language whose code isn't listed here the code
+# itself will be used as a fallback (e.g. "mr" stays "mr").
+_LANG_CODE_TO_NAME: dict[str, str] = {
+    "en": "English",
+    "hi": "Hindi",
+    "ta": "Tamil",
+    "te": "Telugu",
+}
 
 
 @dataclass
@@ -103,22 +114,22 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
             data = await resp.json()
 
         # ── TTS voices (keyed by lang code) ──────────────────────────────
-        tts_langs: dict = data.get("tts_languages", {}).get("fonadalabs", {})
+        tts_langs: dict[str, Any] = data.get("tts_languages", {}).get("fonadalabs", {})
         voices: dict[str, list[str]] = {}
         for code, info in tts_langs.items():
             voice_map = info.get("voices", {})
             # API format: {internal_id: display_name} — we want display names
             voices[code] = list(voice_map.values())
 
-        # ── Language name mapping (from same response) ────────────────────
-        # asr_languages.fonadalabs has {code: display_name} for ALL languages
-        asr_langs: dict = data.get("asr_languages", {}).get("fonadalabs", {})
+        # ── Language name mapping ─────────────────────────────────────────
+        # Derive display names from the known code→name map; fall back to the
+        # code itself for any language the API adds in the future.
         code_to_name: dict[str, str] = {}
         name_to_code: dict[str, str] = {}
-        for code, display_name in asr_langs.items():
-            if code in voices:  # only care about TTS-supported languages
-                code_to_name[code] = display_name
-                name_to_code[display_name.lower()] = code
+        for code in voices:
+            display_name = _LANG_CODE_TO_NAME.get(code, code)
+            code_to_name[code] = display_name
+            name_to_code[display_name.lower()] = code
 
         _catalog_cache = _Catalog(
             voices=voices,
@@ -171,7 +182,7 @@ class ConnectionState(enum.Enum):
 # ---------------------------------------------------------------------------
 
 
-class TTS(tts.TTS):
+class TTS(tts.TTS[Any]):
     """FonadaLabs Text-to-Speech plugin for LiveKit.
 
     Languages and voices are resolved at runtime from:
@@ -485,9 +496,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         logger.debug(f"Unhandled WS message: {resp}", extra=self._log_ctx())
         return True
 
-    async def _handle_error(self, resp: dict) -> None:
+    async def _handle_error(self, resp: dict[str, Any]) -> None:
         _raw_data = resp.get("data")
-        data: dict = _raw_data if isinstance(_raw_data, dict) else {}
+        data: dict[str, Any] = _raw_data if isinstance(_raw_data, dict) else {}
         msg = str(
             data.get("message")
             or data.get("error")
@@ -522,7 +533,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _log_ctx(self) -> dict:
+    def _log_ctx(self) -> dict[str, Any]:
         return {
             "session_id": self._session_id,
             "connection_state": self._connection_state.value,
