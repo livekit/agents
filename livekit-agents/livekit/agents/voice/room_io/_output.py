@@ -332,7 +332,7 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         self._track_id = track.sid
-        self._represented_by = participant.identity
+        self._represented_by = self._room.local_participant.identity
 
     def _is_local_proxy_participant(self, participant: rtc.Participant) -> bool:
         if not self._participant_identity:
