@@ -55,13 +55,16 @@ class LLM(llm.LLM):
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
         )
-        mistral_api_key = api_key or os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
-            raise ValueError(
-                "Mistral API key is required, either as argument or set"
-                " MISTRAL_API_KEY environment variable"
-            )
-        self._client = Mistral(api_key=mistral_api_key)
+        if client is not None:
+            self._client = client
+        else:
+            mistral_api_key = api_key or os.environ.get("MISTRAL_API_KEY")
+            if not mistral_api_key:
+                raise ValueError(
+                    "Mistral API key is required, either as argument or set"
+                    " MISTRAL_API_KEY environment variable"
+                )
+            self._client = Mistral(api_key=mistral_api_key)
 
     @property
     def model(self) -> str:
