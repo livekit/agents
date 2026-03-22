@@ -97,8 +97,6 @@ lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
 
 # Shared credentials resolver instance to preserve cache across all sessions
 _shared_credentials_resolver: Boto3CredentialsResolver | None = None
-
-
 def _get_credentials_resolver() -> Boto3CredentialsResolver:
     """Get or create the shared credentials resolver instance.
 
@@ -108,8 +106,6 @@ def _get_credentials_resolver() -> Boto3CredentialsResolver:
     if _shared_credentials_resolver is None:
         _shared_credentials_resolver = Boto3CredentialsResolver()
     return _shared_credentials_resolver
-
-
 @dataclass
 class _RealtimeOptions:
     """Configuration container for a Sonic realtime session.
@@ -133,8 +129,6 @@ class _RealtimeOptions:
     region: str
     turn_detection: TURN_DETECTION
     modalities: MODALITIES
-
-
 @dataclass
 class _MessageGeneration:
     """Grouping of streams that together represent one assistant message.
@@ -148,8 +142,6 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
-
-
 @dataclass
 class _ResponseGeneration:
     """Book-keeping dataclass tracking the lifecycle of a Nova Sonic completion.
@@ -183,8 +175,6 @@ class _ResponseGeneration:
     _restart_attempts: int = 0
     _done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
     _emitted: bool = False  # Track if generation_created event was emitted
-
-
 class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
     """IdentityResolver implementation that sources AWS credentials from boto3.
 
@@ -287,8 +277,6 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
         except Exception as e:
             logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
             return None
-
-
 class RealtimeModel(llm.RealtimeModel):
     """High-level entry point that conforms to the LiveKit RealtimeModel interface.
 
@@ -463,8 +451,6 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None:
         """Close all active sessions."""
         pass
-
-
 class RealtimeSession(  # noqa: F811
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
 ):
@@ -1089,23 +1075,14 @@ class RealtimeSession(  # noqa: F811
 
         role = event_data["event"]["contentStart"]["role"]
 
-        # CRITICAL: Create NEW generation for each ASSISTANT SPECULATIVE response
-        # Nova Sonic sends ASSISTANT SPECULATIVE for each new assistant turn, including after tool calls.
-        # Without this, audio frames get routed to the wrong generation and don't play.
+        # SPECULATIVE text blocks are incremental previews within the same response.
+        # Don't close the generation here — keep one generation open per response.
+        # Close happens on END_TURN, barge-in, tool call, or completionEnd.
         if role == "ASSISTANT":
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
-                # This is a new assistant response - close previous and create new
                 logger.debug("[GEN] ASSISTANT SPECULATIVE text received")
-                if self._current_generation is not None:
-                    logger.debug(
-                        f"[GEN] Closing previous generation (response_id={self._current_generation.response_id}) for new SPECULATIVE"
-                    )
-                    self._close_current_generation()
-                self._create_response_generation()
-        else:
-            # For USER and FINAL, just ensure generation exists
-            self._create_response_generation()
+                self._create_response_generation()  # reuses existing if present
 
         # CRITICAL: Check if generation exists before accessing
         # Barge-in can set _current_generation to None between the creation above and here.
@@ -1131,7 +1108,17 @@ class RealtimeSession(  # noqa: F811
         log_event_data(event_data)
 
         if self._current_generation is None:
-            logger.debug("No generation exists - ignoring text_output event")
+            # No active generation. This happens for USER ASR text arriving
+            # between turns. Handle barge-in and chat context updates directly
+            # without creating a generation.
+            content_id = event_data["event"]["textOutput"]["contentId"]
+            text_content = event_data["event"]["textOutput"]["content"]
+
+            if text_content == BARGE_IN_SIGNAL:
+                return
+
+            # USER ASR text — just update chat context
+            self._update_chat_ctx(role="user", text_content=text_content)
             return
 
         content_id = event_data["event"]["textOutput"]["contentId"]
@@ -1286,9 +1273,7 @@ class RealtimeSession(  # noqa: F811
         if stop_reason == "END_TURN":
             self._audio_end_turn_received = True
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
-
-        # Nova Sonic uses one completion for entire session
-        # Don't close generation here - wait for new completionStart or session end
+            self._close_current_generation()
 
     def _close_current_generation(self) -> None:
         """Helper that closes all channels of the active generation."""
