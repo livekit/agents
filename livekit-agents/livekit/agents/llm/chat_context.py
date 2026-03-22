@@ -406,6 +406,10 @@ class ChatContext:
         items = list(item) if isinstance(item, Sequence) else [item]
 
         for _item in items:
+            if self.get_by_id(_item.id) is not None:
+                logger.warning(f"ChatItem with ID {_item.id} already exists, skipping insertion")
+                continue
+
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
 
@@ -820,7 +824,15 @@ class ChatContext:
     def readonly(self) -> bool:
         return False
 
-    def is_equivalent(self, other: ChatContext) -> bool:
+    def is_equivalent(
+        self,
+        other: ChatContext,
+        *,
+        exclude_instructions: bool = False,
+        exclude_empty_message: bool = False,
+        exclude_handoff: bool = True,
+        exclude_config_update: bool = True,
+    ) -> bool:
         """
         Return True if `other` has the same sequence of items with matching
         essential fields (IDs, types, and payload) as this context.
@@ -835,10 +847,28 @@ class ChatContext:
         if self is other:
             return True
 
-        if len(self.items) != len(other.items):
+        if any(
+            (exclude_instructions, exclude_handoff, exclude_config_update, exclude_empty_message)
+        ):
+            self_items = self.copy(
+                exclude_instructions=exclude_instructions,
+                exclude_handoff=exclude_handoff,
+                exclude_config_update=exclude_config_update,
+                exclude_empty_message=exclude_empty_message,
+            ).items
+            other = other.copy(
+                exclude_instructions=exclude_instructions,
+                exclude_handoff=exclude_handoff,
+                exclude_config_update=exclude_config_update,
+                exclude_empty_message=exclude_empty_message,
+            )
+        else:
+            self_items = self.items
+
+        if len(self_items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items, strict=False):
+        for a, b in zip(self_items, other.items, strict=False):
             if a.id != b.id or a.type != b.type:
                 return False
 

@@ -1058,7 +1058,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-        merge_chat_ctx: bool = False,
         input_modality: Literal["text", "audio"] = "text",
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
@@ -1072,9 +1071,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
             chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
                 Defaults to the chat context of the current agent if not provided.
-            merge_chat_ctx (bool): When True, the items in ``chat_ctx`` are merged into the
-                agent's global chat context (persisted for future turns). When False (default),
-                ``chat_ctx`` is used as-is for this turn only.
             input_modality (Literal["text", "audio"], optional): The input mode to use for generating the reply.
 
         Returns:
@@ -1107,7 +1103,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
-                merge_chat_ctx=merge_chat_ctx,
                 input_details=InputDetails(modality=input_modality),
             )
             if run_state:
@@ -1182,6 +1177,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # don't mark the RunResult as done, if there is currently an agent transition happening.  # noqa: E501
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
+
+    def _get_activity(self) -> AgentActivity:
+        activity = (
+            self._next_activity
+            if self._activity is None or self._activity.scheduling_paused
+            else self._activity
+        )
+
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot get activity")
+        return activity
 
     async def _update_activity(
         self,

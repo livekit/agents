@@ -2,7 +2,7 @@ import inspect
 from typing import get_type_hints
 
 from livekit.agents.llm import FunctionTool, RawFunctionTool, ToolContext, function_tool
-from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
+from livekit.agents.llm.async_toolset import AsyncResult, AsyncRunContext, AsyncToolset
 from livekit.agents.llm.utils import function_arguments_to_pydantic_model
 from livekit.agents.voice.events import RunContext
 
@@ -54,6 +54,33 @@ async def raw_async_tool(ctx: AsyncRunContext, raw_arguments: dict[str, object])
     """A raw async tool."""
     ctx.pending("Processing...")
     return str(raw_arguments)
+
+
+class TestAsyncResult:
+    def test_default_scheduling(self):
+        result = AsyncResult(output={"key": "value"})
+        assert result.output == {"key": "value"}
+        assert result.scheduling == "when_idle"
+
+    def test_custom_scheduling(self):
+        result = AsyncResult(output="done", scheduling="interrupt")
+        assert result.scheduling == "interrupt"
+
+    def test_silent_scheduling(self):
+        result = AsyncResult(output="done", scheduling="silent")
+        assert result.scheduling == "silent"
+
+
+class TestUpdateScheduling:
+    def test_update_default_scheduling_is_when_idle(self):
+        """update() should accept a scheduling parameter, defaulting to when_idle."""
+        sig = inspect.signature(AsyncRunContext.update)
+        param = sig.parameters["scheduling"]
+        assert param.default == "when_idle"
+
+    def test_update_accepts_scheduling_param(self):
+        sig = inspect.signature(AsyncRunContext.update)
+        assert "scheduling" in sig.parameters
 
 
 class TestAsyncToolsetCreation:
@@ -184,3 +211,39 @@ class TestAsyncToolWrapping:
         ctx = ToolContext([ts])
         assert "async_tool" in ctx.function_tools
         assert "regular_tool" in ctx.function_tools
+
+
+class TestDuplicateHandling:
+    def test_default_on_duplicate_is_confirm(self):
+        toolset = AsyncToolset(id="test")
+        assert toolset._on_duplicate == "confirm"
+
+    def test_on_duplicate_allow(self):
+        toolset = AsyncToolset(id="test", on_duplicate="allow")
+        assert toolset._on_duplicate == "allow"
+
+    def test_on_duplicate_replace(self):
+        toolset = AsyncToolset(id="test", on_duplicate="replace")
+        assert toolset._on_duplicate == "replace"
+
+    def test_on_duplicate_reject(self):
+        toolset = AsyncToolset(id="test", on_duplicate="reject")
+        assert toolset._on_duplicate == "reject"
+
+    def test_confirm_mode_adds_confirm_param(self):
+        """In confirm mode, wrapped async tools should have confirm_duplicate parameter."""
+        toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate="confirm")
+        # Find the wrapped async_tool (not get_running_tasks or cancel_task)
+        tool = next(t for t in toolset.tools if t.id == "async_tool")
+        sig = inspect.signature(tool)
+        assert "confirm_duplicate" in sig.parameters
+
+    def test_non_confirm_mode_no_confirm_param(self):
+        """In non-confirm modes, wrapped async tools should NOT have confirm_duplicate."""
+        for mode in ["allow", "replace", "reject"]:
+            toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate=mode)
+            tool = next(t for t in toolset.tools if t.id == "async_tool")
+            sig = inspect.signature(tool)
+            assert "confirm_duplicate" not in sig.parameters, (
+                f"mode={mode} should not have confirm_duplicate"
+            )

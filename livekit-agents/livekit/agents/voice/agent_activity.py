@@ -63,6 +63,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -103,6 +104,16 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
+
+
+@dataclass
+class _PipelineGeneration:
+    origin_chat_ctx: llm.ChatContext
+    chat_ctx: llm.ChatContext
+    llm_gen_data: _LLMGenerationData
+    tts_gen_data: _TTSGenerationData | None
+    tasks: list[asyncio.Task[Any]]
+    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -392,8 +403,10 @@ class AgentActivity(RecognitionHooks):
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
-        chat_ctx = chat_ctx.copy(tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN)
-        self._agent._chat_ctx = chat_ctx
+        self._agent._chat_ctx.items = chat_ctx.copy(
+            tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN
+        ).items  # keep the original reference
+        chat_ctx = self._agent._chat_ctx
 
         if self._rt_session is not None:
             remove_instructions(chat_ctx)
@@ -942,9 +955,9 @@ class AgentActivity(RecognitionHooks):
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        new_messages: list[llm.ChatItem] | None = None,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        merge_chat_ctx: bool = False,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
@@ -999,19 +1012,19 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
 
-        extra_chat_ctx: llm.ChatContext | None = None
-        if chat_ctx and merge_chat_ctx:
-            extra_chat_ctx = chat_ctx  # merge the chat_ctx into the agent's chat context
-            chat_ctx = None
-
         if isinstance(self.llm, llm.RealtimeModel):
+            if new_messages or chat_ctx:
+                logger.warning(
+                    "`new_messages` and `chat_ctx` are not supported for the realtime model, "
+                    "use `update_chat_ctx` instead before calling generate_reply instead"
+                )
+
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
-                    extra_chat_ctx=extra_chat_ctx,
                     # TODO(theomonnom): the list of tools should always be passed here
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
@@ -1026,13 +1039,15 @@ class AgentActivity(RecognitionHooks):
             if instructions:
                 instructions = self._agent.instructions + "\n" + instructions
 
+            if new_messages and user_message:
+                new_messages.append(user_message)
+
             task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=tools,
-                    new_message=user_message if is_given(user_message) else None,
-                    extra_chat_ctx=extra_chat_ctx,
+                    new_message=new_messages or (user_message if is_given(user_message) else None),
                     instructions=instructions or None,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
@@ -2101,8 +2116,7 @@ class AgentActivity(RecognitionHooks):
         chat_ctx: llm.ChatContext,
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
-        new_message: llm.ChatMessage | None = None,
-        extra_chat_ctx: llm.ChatContext | None = None,
+        new_message: llm.ChatMessage | list[llm.ChatItem] | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
@@ -2121,7 +2135,6 @@ class AgentActivity(RecognitionHooks):
                 tools=tools,
                 model_settings=model_settings,
                 new_message=new_message,
-                extra_chat_ctx=extra_chat_ctx,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
                 _previous_tools_messages=_previous_tools_messages,
@@ -2134,8 +2147,7 @@ class AgentActivity(RecognitionHooks):
         chat_ctx: llm.ChatContext,
         tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
-        new_message: llm.ChatMessage | None = None,
-        extra_chat_ctx: llm.ChatContext | None = None,
+        new_message: llm.ChatMessage | list[llm.ChatItem] | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
@@ -2146,7 +2158,7 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
-        if new_message:
+        if isinstance(new_message, llm.ChatMessage):
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
         if (room_io := self._session._room_io) and room_io.room.isconnected():
@@ -2158,84 +2170,76 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
-        chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
 
-        if extra_chat_ctx is not None:
-            chat_ctx.merge(extra_chat_ctx)
+        async def _pipeline_generation(chat_ctx: llm.ChatContext) -> _PipelineGeneration:
+            if new_message is not None:
+                chat_ctx.insert(new_message)
+            origin_chat_ctx = chat_ctx.copy()
 
-        if new_message is not None:
-            chat_ctx.insert(new_message)
+            if instructions is not None:
+                try:
+                    update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
+                except ValueError:
+                    logger.exception("failed to update the instructions")
 
-        if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            # apply the correct variant of the instructions for the turn's input modality
+            apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
-        # apply the correct variant of the instructions for the turn's input modality
-        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
+            # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
+            # I should implement a retry mechanism?
 
-        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
-        # I should implement a retry mechanism?
-
-        tasks: list[asyncio.Task[Any]] = []
-        llm_task, llm_gen_data = perform_llm_inference(
-            node=self._agent.llm_node,
-            chat_ctx=chat_ctx,
-            tool_ctx=tool_ctx,
-            model_settings=model_settings,
-            model=self.llm.model if self.llm else None,
-            provider=self.llm.provider if self.llm else None,
-        )
-        tasks.append(llm_task)
-
-        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = text_tee
-
-        tts_task: asyncio.Task[bool] | None = None
-        tts_gen_data: _TTSGenerationData | None = None
-        read_transcript_from_tts = False
-        if audio_output is not None:
-            await llm_gen_data.started_fut  # make sure tts span starts after llm span
-            tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node,
-                input=tts_text_input,
+            tasks: list[asyncio.Task[Any]] = []
+            llm_task, llm_gen_data = perform_llm_inference(
+                node=self._agent.llm_node,
+                chat_ctx=chat_ctx,
+                tool_ctx=tool_ctx,
                 model_settings=model_settings,
-                text_transforms=self._session.options.tts_text_transforms,
-                model=self.tts.model if self.tts else None,
-                provider=self.tts.provider if self.tts else None,
+                model=self.llm.model if self.llm else None,
+                provider=self.llm.provider if self.llm else None,
             )
-            tasks.append(tts_task)
-            if (
-                self.use_tts_aligned_transcript
-                and (tts := self.tts)
-                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-                and (timed_texts := await tts_gen_data.timed_texts_fut)
-            ):
-                tr_input = timed_texts
-                read_transcript_from_tts = True
+            tasks.append(llm_task)
+
+            llm_output_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
+            tts_gen_data: _TTSGenerationData | None = None
+            if audio_output is not None:
+                await llm_gen_data.started_fut  # make sure tts span starts after llm span
+                tts_task, tts_gen_data = perform_tts_inference(
+                    node=self._agent.tts_node,
+                    input=llm_output_tee[0],
+                    model_settings=model_settings,
+                    text_transforms=self._session.options.tts_text_transforms,
+                    model=self.tts.model if self.tts else None,
+                    provider=self.tts.provider if self.tts else None,
+                )
+                tasks.append(tts_task)
+
+            return _PipelineGeneration(
+                origin_chat_ctx=origin_chat_ctx,
+                chat_ctx=chat_ctx,
+                llm_gen_data=llm_gen_data,
+                tts_gen_data=tts_gen_data,
+                tasks=tasks,
+                llm_output_tee=llm_output_tee,
+            )
+
+        pipeline_gen = await _pipeline_generation(chat_ctx.copy())
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
 
         # add new message to chat context if the speech is scheduled
-
         user_metrics: llm.MetricsReport | None = _previous_user_metrics
-
-        if speech_handle.scheduled:
-            if extra_chat_ctx is not None:
-                self._agent._chat_ctx.merge(extra_chat_ctx)
-
-            if new_message is not None:
-                self._agent._chat_ctx.insert(new_message)
+        if new_message is not None and speech_handle.scheduled:
+            self._agent._chat_ctx.insert(new_message)
+            if isinstance(new_message, llm.ChatMessage):
                 self._session._conversation_item_added(new_message)
                 user_metrics = new_message.metrics
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
-            await text_tee.aclose()
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks, wait_for_scheduled)
+            await pipeline_gen.llm_output_tee.aclose()
             return
 
         self._session._update_agent_state("thinking")
@@ -2250,9 +2254,39 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
-            await text_tee.aclose()
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks, *authorization_tasks)
+            await pipeline_gen.llm_output_tee.aclose()
             return
+
+        # when the chat_ctx is agent's chat context, check if the chat context has changed since the generation
+        # e.g. a higher priority speech was added before this speech was authorized
+        if chat_ctx is self._agent._chat_ctx and not chat_ctx.is_equivalent(
+            pipeline_gen.origin_chat_ctx, exclude_instructions=True, exclude_empty_message=True
+        ):
+            logger.debug(
+                "chat context changed since speech was created, re-generating",
+                extra={"speech_id": speech_handle.id},
+            )
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks)
+            await pipeline_gen.llm_output_tee.aclose()
+            pipeline_gen = await _pipeline_generation(chat_ctx.copy())
+
+        tasks = pipeline_gen.tasks
+        chat_ctx = pipeline_gen.chat_ctx  # the copy that was used for the pipeline generation
+        llm_gen_data = pipeline_gen.llm_gen_data
+
+        read_transcript_from_tts = False
+        if (
+            (tts_gen_data := pipeline_gen.tts_gen_data)
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+            and (timed_texts := await tts_gen_data.timed_texts_fut)
+        ):
+            tr_input: AsyncIterable[str | FlushSentinel] = timed_texts
+            read_transcript_from_tts = True
+        else:
+            tr_input = pipeline_gen.llm_output_tee[1]
 
         reply_started_at = time.time()
 
@@ -2434,7 +2468,7 @@ class AgentActivity(RecognitionHooks):
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
 
-        await text_tee.aclose()
+        await pipeline_gen.llm_output_tee.aclose()
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
@@ -2550,7 +2584,6 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
-        extra_chat_ctx: llm.ChatContext | None = None,
         tool_reply: bool = False,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
@@ -2565,23 +2598,12 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
 
-        user_message = (
-            llm.ChatMessage(role="user", content=user_input) if user_input is not None else None
-        )
-        if extra_chat_ctx or user_message:
+        if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
-            if extra_chat_ctx:
-                chat_ctx.merge(extra_chat_ctx)
-            if user_message:
-                chat_ctx.items.append(user_message)
-
+            msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
-
-            if extra_chat_ctx:
-                self._agent._chat_ctx.merge(extra_chat_ctx)
-            if user_message:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+            self._agent._chat_ctx._upsert_item(msg)
+            self._session._conversation_item_added(msg)
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):

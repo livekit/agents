@@ -9,7 +9,7 @@ from attr import dataclass
 from typing_extensions import TypeVar
 
 from .. import utils
-from ..llm.chat_context import ChatContext, ChatRole, FunctionCall
+from ..llm.chat_context import ChatContext, ChatItem, ChatRole, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
@@ -28,6 +28,20 @@ if TYPE_CHECKING:
 
 
 Userdata_T = TypeVar("Userdata_T")
+
+SchedulingMode = Literal["when_idle", "interrupt", "silent"]
+
+
+@dataclass
+class AsyncResult:
+    """Controls how the final result of an async tool is delivered.
+
+    Return this from an async tool function to specify scheduling.
+    Plain ``return value`` is equivalent to ``AsyncResult(output=value)``.
+    """
+
+    output: Any
+    scheduling: SchedulingMode = "when_idle"
 
 
 class AsyncRunContext(RunContext[Userdata_T]):
@@ -66,7 +80,9 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self,
         message: str | Any,
         *,
-        template: str = "Tool {function_name} (call_id: {call_id}) is running in background: {message}.",
+        template: str = (
+            "Tool {function_name} (call_id: {call_id}) is running in background: {message}."
+        ),
     ) -> SpeechHandle:
         """Set the message returned to the LLM when the tool is first called.
 
@@ -94,83 +110,146 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self,
         message: str,
         *,
-        role: ChatRole | Literal["instructions", "tool_output"] = "instructions",
+        scheduling: SchedulingMode = "when_idle",
+        role: ChatRole | Literal["tool_output"] = "system",
         template: str = (
-            "This is an update for background tool call {function_name} (call_id: {call_id}): {message}. "
-            "The task is still running, DO NOT provide any information not from the updating message."
+            "This is an update for background tool call {function_name}"
+            " (call_id: {call_id}): {message}."
+            " The task is still running,"
+            " DO NOT provide any information not from the updating message."
         ),
-        cancel_when_completed: bool = True,
+        interrupt_on_completion: bool = True,
     ) -> asyncio.Task[None]:
         """Push an intermediate progress update into the conversation.
 
-        Triggers a new LLM turn with the update injected as instructions,
+        Adds the update to the chat context and optionally triggers an LLM turn
         so the agent can narrate progress to the user.
 
         Args:
             message: Progress update (e.g. "Found 3 flights, selecting best...").
-            role: The role of the message. Defaults to "instructions".
+            scheduling: When to deliver the update. ``"when_idle"`` waits for the
+                current speech to finish, ``"interrupt"`` interrupts immediately,
+                ``"silent"`` adds to chat context without generating speech.
+            role: The role of the message in the chat context.
+                Defaults to ``"system"``.
+            interrupt_on_completion: If True (default), interrupt the update speech
+                when the tool completes so the final result can be delivered.
 
         Returns:
-            asyncio.Task: A task that will be completed when the update is done.
+            asyncio.Task: A task that completes when the update speech finishes.
         """
 
         step = len(self._update_tasks) + 1
 
-        async def _update() -> None:
+        async def _do_update() -> None:
             await self.speech_handle
-            while current_speech := self.session.current_speech:
-                if current_speech._generations:
-                    await current_speech._wait_for_generation()
 
             formatted_message = template.format(
                 function_name=self.function_call.name,
                 call_id=self.function_call.call_id,
                 message=message,
             )
-            if role == "instructions":
-                speech_handle = self.session.generate_reply(
-                    instructions=formatted_message, tool_choice="none"
-                )
-            else:
-                chat_ctx = ChatContext.empty()
-                if role == "tool_output":
-                    result = self._make_tool_output(formatted_message, suffix=f"update_{step}")
-                    assert result.fnc_call_out is not None
-                    chat_ctx.items.extend([result.fnc_call, result.fnc_call_out])
-                else:
-                    chat_ctx.add_message(role=role, content=formatted_message)
 
-                speech_handle = self.session.generate_reply(
-                    chat_ctx=chat_ctx, merge_chat_ctx=True, tool_choice="none"
-                )
+            items = _build_chat_items(self, formatted_message, role=role, suffix=f"update_{step}")
+            await self._push_update(
+                items,
+                scheduling=scheduling,
+                interrupt_on_completion=interrupt_on_completion,
+            )
 
-            wait_for_playout = asyncio.create_task(speech_handle.wait_for_playout())
-            try:
-                if cancel_when_completed:
-                    await asyncio.wait(
-                        [wait_for_playout, self._completed_fut], return_when=asyncio.FIRST_COMPLETED
-                    )
-                    if self._completed_fut.done():
-                        raise asyncio.CancelledError()
-                else:
-                    await wait_for_playout
-
-            except asyncio.CancelledError:
-                logger.debug(
-                    "update cancelled",
-                    extra={
-                        "call_id": self.function_call.call_id,
-                        "function": self.function_call.name,
-                    },
-                )
-                await speech_handle.interrupt()
-            finally:
-                if not wait_for_playout.done():
-                    wait_for_playout.cancel()
-
-        task = asyncio.create_task(_update(), name=f"update_{self.function_call.name}_step_{step}")
+        task = asyncio.create_task(
+            _do_update(), name=f"update_{self.function_call.name}_step_{step}"
+        )
         self._update_tasks.append(task)
         return task
+
+    async def _complete(self, output: Any, *, scheduling: SchedulingMode) -> None:
+        """Deliver the final tool result into the conversation.
+
+        Called by ``_execute_tool`` after the user function returns.
+        Builds tool output items and pushes them through the same delivery
+        path as ``update()``.
+        """
+        if isinstance(output, BaseException):
+            logger.error(f"Error in async tool {self.function_call.name}", exc_info=output)
+
+        result = self._make_tool_output(output, suffix="completed")
+        if result.agent_task is not None:
+            raise RuntimeError("returning Agent from async tool function is not supported")
+
+        if result.fnc_call_out is None:
+            return
+
+        items: list[ChatItem] = [result.fnc_call, result.fnc_call_out]
+        await self._push_update(items, scheduling=scheduling)
+
+    async def _push_update(
+        self,
+        items: list[ChatItem],
+        *,
+        scheduling: SchedulingMode,
+        interrupt_on_completion: bool = False,
+    ) -> None:
+        """Add items to the chat context and optionally generate a reply.
+
+        This is the single delivery path used by both ``update()`` and
+        ``_complete()``.  It always updates the chat context first,
+        then — unless *scheduling* is ``"silent"`` — triggers a new LLM turn.
+        """
+        from ..voice.speech_handle import SpeechHandle
+
+        activity = self.session._get_activity()
+
+        # 2. If silent, we're done
+        if scheduling == "silent":
+            new_ctx = activity._agent._chat_ctx.copy()
+            new_ctx.insert(items)
+            await activity.update_chat_ctx(new_ctx)
+            return
+
+        # 3. Wait for current speech or interrupt
+        if scheduling == "interrupt":
+            await self.session.interrupt()
+        else:
+            while current_speech := self.session.current_speech:
+                if current_speech._generations:
+                    await current_speech._wait_for_generation()
+
+        # 4. Generate reply and schedule
+        priority = (
+            SpeechHandle.SPEECH_PRIORITY_HIGH
+            if scheduling == "interrupt"
+            else SpeechHandle.SPEECH_PRIORITY_NORMAL
+        )
+        speech_handle = activity._generate_reply(
+            new_messages=items, tool_choice="none", schedule_speech=False
+        )
+        activity._schedule_speech(speech_handle, priority=priority)
+
+        # 5. Wait for playout, with optional early cancellation
+        wait_for_playout = asyncio.create_task(speech_handle.wait_for_playout())
+        try:
+            if interrupt_on_completion:
+                await asyncio.wait(
+                    [wait_for_playout, self._completed_fut],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if self._completed_fut.done():
+                    raise asyncio.CancelledError()
+            else:
+                await wait_for_playout
+        except asyncio.CancelledError:
+            logger.debug(
+                "update cancelled",
+                extra={
+                    "call_id": self.function_call.call_id,
+                    "function": self.function_call.name,
+                },
+            )
+            await speech_handle.interrupt()
+        finally:
+            if not wait_for_playout.done():
+                wait_for_playout.cancel()
 
     def _make_tool_output(self, output: Any | BaseException, *, suffix: str) -> ToolExecutionOutput:
         exception: BaseException | None = None
@@ -185,6 +264,24 @@ class AsyncRunContext(RunContext[Userdata_T]):
             extra=self.function_call.extra,
         )
         return make_tool_output(fnc_call=fnc_call, output=output, exception=exception)
+
+
+def _build_chat_items(
+    ctx: AsyncRunContext,
+    message: str,
+    *,
+    role: ChatRole | Literal["tool_output"],
+    suffix: str,
+) -> list[ChatItem]:
+    """Build chat items for an update or completion message."""
+    if role == "tool_output":
+        result = ctx._make_tool_output(message, suffix=suffix)
+        assert result.fnc_call_out is not None
+        return [result.fnc_call, result.fnc_call_out]
+
+    chat_ctx = ChatContext.empty()
+    msg = chat_ctx.add_message(role=role, content=message)
+    return [msg]
 
 
 @dataclass
@@ -230,8 +327,17 @@ class AsyncToolset(Toolset):
     5. Function returns -> LLM says "Your flight is booked! Confirmation: ABC123"
     """
 
-    def __init__(self, *, id: str, tools: list[Tool] | None = None) -> None:
+    DuplicateMode = Literal["allow", "replace", "reject", "confirm"]
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        tools: list[Tool] | None = None,
+        on_duplicate: DuplicateMode = "confirm",
+    ) -> None:
         super().__init__(id=id)
+        self._on_duplicate = on_duplicate
         all_tools: list[Tool] = list(tools or [])
         all_tools.extend(find_function_tools(self))
         self._tools = [self._wrap_tool(t) for t in all_tools]
@@ -243,7 +349,7 @@ class AsyncToolset(Toolset):
 
     @function_tool
     async def get_running_tasks(self) -> list[dict]:
-        """Get the list of running async tool calls. Use this to check if there is any running task for the same topic."""
+        """Get the list of running async tool calls. Use this to check if there is any running task for the same topic."""  # noqa: E501
         return [task.async_ctx.function_call.model_dump() for task in self._tasks.values()]
 
     @function_tool
@@ -277,17 +383,70 @@ class AsyncToolset(Toolset):
         if ctx_param_name is None:
             return tool
 
+        # build the new signature before the wrapper so bind() accepts
+        # injected params like confirm_duplicate
+        new_params = [
+            p.replace(annotation=RunContext) if p.name == ctx_param_name else p
+            for p in sig.parameters.values()
+        ]
+        if self._on_duplicate == "confirm":
+            new_params.append(
+                inspect.Parameter(
+                    "confirm_duplicate",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                    annotation=str | None,
+                )
+            )
+        wrapper_sig = sig.replace(parameters=new_params)
+
         # build wrapper that receives RunContext from the framework,
         # converts to AsyncRunContext, and dispatches as a background task.
         @functools.wraps(tool)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            bound = sig.bind(*args, **kwargs)
+            bound = wrapper_sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = dict(bound.arguments)
             run_ctx = arguments.pop(ctx_param_name)
             assert isinstance(run_ctx, RunContext)
 
             call_id = run_ctx.function_call.call_id
+            fnc_name = run_ctx.function_call.name
+
+            # --- Duplicate detection ---
+            if self._on_duplicate != "allow":
+                existing = next(
+                    (t for t in self._tasks.values() if t.async_ctx.function_call.name == fnc_name),
+                    None,
+                )
+                if existing is not None:
+                    existing_call = existing.async_ctx.function_call
+
+                    if self._on_duplicate == "replace":
+                        await self.cancel(existing_call.call_id)
+                    elif self._on_duplicate == "reject":
+                        return (
+                            f"Tool `{fnc_name}` is already running "
+                            f"(call_id: {existing_call.call_id}, "
+                            f"args: {existing_call.arguments}). "
+                            f"Use `cancel_task('{existing_call.call_id}')` to cancel it."
+                        )
+                    elif self._on_duplicate == "confirm":
+                        confirm_value = arguments.pop("confirm_duplicate", None)
+                        if confirm_value != existing_call.call_id:
+                            return (
+                                f"Tool `{fnc_name}` is already running "
+                                f"(call_id: {existing_call.call_id}, "
+                                f"args: {existing_call.arguments}). "
+                                f"Re-call with `confirm_duplicate="
+                                f"'{existing_call.call_id}'` to run anyway, "
+                                f"or use `cancel_task('{existing_call.call_id}')` "
+                                f"to cancel the existing task."
+                            )
+                elif self._on_duplicate == "confirm":
+                    # No duplicate found — clean up confirm_duplicate from arguments
+                    arguments.pop("confirm_duplicate", None)
+
             if call_id in self._tasks:
                 raise ValueError(f"Task already running for call_id: {call_id}")
 
@@ -298,93 +457,61 @@ class AsyncToolset(Toolset):
             arguments[ctx_param_name] = async_ctx
 
             async def _execute_tool() -> Any:
+                scheduling: SchedulingMode = "when_idle"
                 try:
                     output = await tool(**arguments)
-                finally:
-                    async_ctx._completed_fut.set_result(None)
 
-                # await ongoing speeches
-                while current_speech := async_ctx.session.current_speech:
-                    if current_speech._generations:
-                        await current_speech._wait_for_generation()
-
-                if isinstance(output, str):
-                    return (
-                        f"Background tool call {async_ctx.function_call.name} "
-                        f"(call_id: {async_ctx.function_call.call_id}) completed: {output}"
+                    if isinstance(output, AsyncResult):
+                        scheduling = output.scheduling
+                        output = output.output
+                except asyncio.CancelledError:
+                    logger.debug(
+                        "async tool cancelled",
+                        extra={
+                            "call_id": call_id,
+                            "function": fnc_name,
+                        },
                     )
-                return output
+                    return
+                except BaseException as e:
+                    output = e
+                finally:
+                    if not async_ctx._completed_fut.done():
+                        async_ctx._completed_fut.set_result(None)
 
-            exe_task = asyncio.create_task(
-                _execute_tool(), name=f"async_tool_{async_ctx.function_call.name}"
-            )
+                if not async_ctx._pending_fut.done():
+                    # pending() was never called — return output directly
+                    # as the tool result (handled by the framework)
+                    if isinstance(output, BaseException):
+                        async_ctx._pending_fut.set_exception(output)
+                    else:
+                        async_ctx._pending_fut.set_result(output)
+                    return
+
+                # Tool ran in background (pending was set).
+                # Deliver the final result through the conversation.
+                if output is None:
+                    return
+
+                await async_ctx._complete(output, scheduling=scheduling)
+
+            exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
             _pass_through_activity_task_info(exe_task)
             self._tasks[call_id] = _RunningTask(exe_task=exe_task, async_ctx=async_ctx)
-
-            def _on_task_done(task: asyncio.Task[Any]) -> None:
-                self._tasks.pop(call_id, None)
-                self._on_completed(task, async_ctx)
-
-            exe_task.add_done_callback(_on_task_done)
+            exe_task.add_done_callback(lambda _: self._tasks.pop(call_id, None))
 
             return await async_ctx._pending_fut
 
         wrapped_tool = tool.__class__(wrapper, tool.info)  # type: ignore[arg-type]
-
-        # replace the AsyncRunContext annotation with RunContext so the framework injects a plain RunContext
-        wrapped_tool.__signature__ = sig.replace(  # type: ignore[union-attr]
-            parameters=[
-                p.replace(annotation=RunContext) if p.name == ctx_param_name else p
-                for p in sig.parameters.values()
-            ]
-        )
+        wrapped_tool.__signature__ = wrapper_sig  # type: ignore[union-attr]
         wrapped_tool.__annotations__ = {
             **wrapped_tool.__annotations__,
             ctx_param_name: RunContext,
         }
+        if self._on_duplicate == "confirm":
+            wrapped_tool.__annotations__["confirm_duplicate"] = str | None
 
         return wrapped_tool
-
-    def _on_completed(self, task: asyncio.Task[Any], async_ctx: AsyncRunContext) -> None:
-        try:
-            output = task.result()
-        except BaseException as e:
-            if isinstance(e, asyncio.CancelledError):
-                logger.debug(
-                    "async tool cancelled",
-                    extra={
-                        "call_id": async_ctx.function_call.call_id,
-                        "function": async_ctx.function_call.name,
-                    },
-                )
-            output = e
-
-        if not (fut := async_ctx._pending_fut).done():
-            # set pending fut to stop the wrapper function from waiting
-            # it will create a tool output so we return from here directly
-            if isinstance(output, BaseException):
-                fut.set_exception(output)
-            else:
-                fut.set_result(output)
-            return
-
-        if output is None or isinstance(output, asyncio.CancelledError):
-            return
-
-        if isinstance(output, BaseException):
-            logger.error(f"Error in async tool {async_ctx.function_call.name}", exc_info=output)
-
-        result = async_ctx._make_tool_output(output, suffix="completed")
-        if result.agent_task is not None:
-            raise RuntimeError("returning Agent from async tool function is not supported")
-
-        if result.fnc_call_out is None:
-            return
-
-        async_ctx.session.generate_reply(
-            chat_ctx=ChatContext([result.fnc_call, result.fnc_call_out]),
-            merge_chat_ctx=True,
-        )
 
     async def cancel(self, call_id: str) -> bool:
         task = self._tasks.get(call_id)

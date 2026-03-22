@@ -12,7 +12,7 @@ except ImportError as e:
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, llm
 from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
-from livekit.plugins import openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("async-deep-research")
 
@@ -26,7 +26,10 @@ load_dotenv()
 class ResearchToolset(AsyncToolset):
     def __init__(self) -> None:
         super().__init__(id="research")
-        self._thinking_llm: llm.LLM = openai.LLM(model="gpt-5.4", reasoning_effort="medium")
+        # self._thinking_llm: llm.LLM = openai.LLM(model="gpt-5.4", reasoning_effort="medium")
+        self._thinking_llm = inference.LLM(
+            "openai/gpt-5.4", extra_kwargs={"reasoning_effort": "medium"}
+        )
         self._ddgs = DDGS()
 
     @llm.function_tool
