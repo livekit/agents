@@ -138,16 +138,6 @@ def attach_session(
     )
 
 
-def setup_hamming(*args: Any, **kwargs: Any) -> Any:
-    """Deprecated alias for configure_hamming."""
-    warnings.warn(
-        "setup_hamming() is deprecated; use configure_hamming()",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return configure_hamming(*args, **kwargs)
-
-
 def doctor(
     api_key: str | None = None,
     *,

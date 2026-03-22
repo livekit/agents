@@ -25,14 +25,12 @@ from ._setup import (
     configure_hamming,
     doctor,
     doctor_json,
-    setup_hamming,
 )
 from .log import logger
 from .version import __version__
 
 __all__ = [
     "configure_hamming",
-    "setup_hamming",
     "doctor",
     "doctor_json",
     "DoctorReport",
