@@ -124,6 +124,9 @@ async def assert_valid_synthesized_audio(
             ssl=ssl_ctx,
             server_hostname="api.openai.com",
         ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"Whisper transcription failed ({resp.status}): {body}")
             result = await resp.json()
 
     # semantic
