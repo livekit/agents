@@ -687,9 +687,10 @@ class SpeechStream(stt.SpeechStream):
                     enable_voice_activity_events=self._config.enable_voice_activity_events
                     or (voice_activity_timeout is not None),
                     voice_activity_timeout=voice_activity_timeout,
-                    endpointing_sensitivity=cloud_speech_v2.StreamingRecognitionFeatures.EndpointingSensitivity[
-                        self._config.endpointing_sensitivity
-                    ]
+                    endpointing_sensitivity=getattr(
+                        cloud_speech_v2.StreamingRecognitionFeatures.EndpointingSensitivity,
+                        self._config.endpointing_sensitivity,
+                    )
                     if is_given(self._config.endpointing_sensitivity)
                     else None,
                 ),
