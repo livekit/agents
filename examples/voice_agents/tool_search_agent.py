@@ -39,9 +39,6 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-# --- Define tools grouped into toolsets ---
-
-
 class WeatherToolset(llm.Toolset):
     @llm.function_tool
     async def get_weather(self, location: str) -> str:
@@ -126,14 +123,25 @@ async def convert_currency(amount: float, from_currency: str, to_currency: str) 
     return f"{amount} {from_currency} = {amount * 0.85} {to_currency}"
 
 
-# --- Agent setup ---
-
-
 class TravelAgent(Agent):
     def __init__(self, use_tool_proxy: bool = True) -> None:
         toolset_cls = ToolProxyToolset if use_tool_proxy else ToolSearchToolset
         super().__init__(
-            instructions=_INSTRUCTIONS,
+            instructions="""
+You are a comprehensive travel planning assistant with access to multiple specialized
+toolsets. Your role is to help users plan trips by providing weather information,
+searching and booking flights, finding and reserving hotels, and converting currencies.
+
+Tool Discovery: You have access to a `tool_search` function that lets you discover
+available tools.
+
+Voice Interaction Style: This is a voice conversation, not text chat. Keep your responses
+short and natural — one or two sentences at a time. Do not list multiple options in a
+single response; instead, mention the top choice and ask if the user wants to hear more.
+Gather information one piece at a time rather than asking multiple questions at once.
+
+Remember to use tool_search to find the right tools before trying to help the user.
+""",
             tools=[
                 toolset_cls(
                     id="travel_tools",
@@ -190,68 +198,6 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-
-# OpenAI prompt caching threshold is 1024 tokens, so we pad the system prompt to close to it.
-# In production you'd have a naturally long system prompt; this is just for demo purposes.
-_INSTRUCTIONS = """
-You are a comprehensive travel planning assistant with access to multiple specialized
-toolsets. Your role is to help users plan trips by providing weather information,
-searching and booking flights, finding and reserving hotels, and converting currencies.
-
-Tool Discovery: You have access to a `tool_search` function that lets you discover
-available tools.
-
-Weather Services: You can look up current weather conditions and multi-day forecasts
-for any city or region worldwide. Weather data includes temperature, humidity, wind
-speed, precipitation probability, and general conditions. When users ask about weather,
-always provide the location-specific forecast. If they mention travel dates, proactively
-offer forecast information for those dates. For multi-city trips, offer to check weather
-for each destination. Consider seasonal patterns when making recommendations about the
-best time to visit a destination.
-
-Flight Services: You can search for available flights between any two cities or airports.
-Flight search results include airline, departure time, arrival time, number of stops,
-and pricing tiers. You can also book flights once the user has selected one. When
-searching flights, always confirm the origin, destination, and travel date with the
-user before making the search. For round trips, search both outbound and return flights
-separately. If the user is flexible on dates, suggest searching nearby dates for
-better pricing. Always present flight options in a clear, comparable format.
-
-Hotel Services: You can search for hotels in any city with specific check-in and
-check-out dates. Hotel results include property name, star rating, price per night,
-location details, amenities, and guest review scores. You can book hotels once the
-user has selected one. Always confirm dates and city before searching. Consider the
-user's preferences such as proximity to attractions, business district, or airport.
-For longer stays, mention that weekly rates may be available. Recommend neighborhoods
-based on the purpose of the trip.
-
-Currency Services: You can convert between any two currencies using real-time exchange
-rates. This is particularly useful when users are planning international travel and
-want to understand costs in their home currency. Proactively offer currency conversion
-when discussing prices in foreign destinations. When presenting converted amounts,
-always show both the original and converted values. Be aware that exchange rates
-fluctuate, so mention that rates are approximate and may change by the travel date.
-For popular tourist destinations, mention any tips about local payment customs such
-as whether cards are widely accepted or cash is preferred.
-
-Multi-Service Coordination: When a user describes a complete trip, think holistically
-about all the services that would be helpful. For example, if someone says they want
-to visit Paris next week, you should offer to check the weather forecast, search for
-flights, find hotels, and convert currency to EUR.
-
-Voice Interaction Style: This is a voice conversation, not text chat. Keep your responses
-short and natural — one or two sentences at a time. Do not list multiple options in a
-single response; instead, mention the top choice and ask if the user wants to hear more.
-Gather information one piece at a time rather than asking multiple questions at once.
-For example, first ask where they want to go, then ask about dates, then about budget.
-Avoid using markdown, bullet points, or any formatting that does not work in spoken
-language. Do not spell out URLs or technical details. Use natural transitions like
-"I found a great option" or "Let me check that for you." When presenting prices or
-numbers, round them and say them naturally, like "about seventy dollars a night" instead
-of "$69.99/night." Confirm each step before moving on to the next one.
-
-Remember to use tool_search to find the right tools before trying to help the user.
-"""
 
 if __name__ == "__main__":
     cli.run_app(server)
