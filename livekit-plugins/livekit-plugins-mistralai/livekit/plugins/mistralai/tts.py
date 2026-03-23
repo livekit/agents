@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import os
+import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
+
+import httpx
 
 from livekit.agents import (
     APIConnectionError,
@@ -121,10 +124,11 @@ class ChunkedStream(tts.ChunkedStream):
                 input=self.input_text,
                 voice_id=self._opts.voice,
                 response_format=self._opts.response_format,
+                timeout_ms=int(self._conn_options.timeout * 1000),
             )
 
             output_emitter.initialize(
-                request_id="",
+                request_id=str(uuid.uuid4()),
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
                 mime_type=f"audio/{self._opts.response_format}",
@@ -134,10 +138,9 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.push(audio_bytes)
             output_emitter.flush()
 
+        except httpx.TimeoutException as e:
+            raise APITimeoutError() from e
         except SDKError as e:
-            if e.status_code in (408, 504):
-                raise APITimeoutError() from e
-            else:
-                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
         except Exception as e:
             raise APIConnectionError() from e
