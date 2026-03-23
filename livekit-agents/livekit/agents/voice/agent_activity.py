@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession
 
+
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
@@ -142,7 +143,7 @@ class AgentActivity(RecognitionHooks):
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
-        self._mcp_tools: list[mcp.MCPTool] = []
+        self._mcp_tools: list[mcp.MCPToolset] = []
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -582,32 +583,28 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
+            from ..llm.mcp import MCPToolset
+
+            logger.warning(
+                "passing MCP servers to AgentSession or Agent is deprecated "
+                "and will be removed in a future version. Use `MCPToolset` instead."
+            )
+            self._mcp_tools = [
+                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
+                for server in self.mcp_servers
+            ]
+
+        toolsets = [tool for tool in self.tools if isinstance(tool, llm.Toolset)]
+        if toolsets:
 
             @utils.log_exceptions(logger=logger)
-            async def _list_mcp_tools_task(
-                mcp_server: mcp.MCPServer,
-            ) -> list[mcp.MCPTool]:
-                if not mcp_server.initialized:
-                    await mcp_server.initialize()
+            async def _setup_toolset(toolset: llm.Toolset) -> None:
+                await toolset.setup()
 
-                return await mcp_server.list_tools()
-
-            gathered = await asyncio.gather(
-                *(_list_mcp_tools_task(s) for s in self.mcp_servers),
+            await asyncio.gather(
+                *(_setup_toolset(toolset) for toolset in toolsets),
                 return_exceptions=True,
             )
-            tools: list[mcp.MCPTool] = []
-            for mcp_server, res in zip(self.mcp_servers, gathered, strict=False):
-                if isinstance(res, BaseException):
-                    logger.error(
-                        f"failed to list tools from MCP server {mcp_server}",
-                        exc_info=res,
-                    )
-                    continue
-
-                tools.extend(res)
-
-            self._mcp_tools = tools
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._rt_session = self.llm.session()
@@ -822,9 +819,14 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
 
-        if self.mcp_servers:
+        # close the toolsets created internally and the ones from the agent
+        # leave the ones from the session open, they will be closed by the session
+        toolsets = self._mcp_tools + [
+            tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
+        ]
+        if toolsets:
             await asyncio.gather(
-                *(mcp_server.aclose() for mcp_server in self.mcp_servers), return_exceptions=True
+                *(toolset.aclose() for toolset in toolsets), return_exceptions=True
             )
 
         await self._cancel_speech_pause(
