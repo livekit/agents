@@ -24,6 +24,13 @@ EXCLUDED_STUBS = [
 _TYPES_MARKER = ".mypy_cache/.types_installed"
 
 
+def _run_or_exit(cmd: list[str], cwd: Path, label: str) -> None:
+    result = subprocess.run(cmd, capture_output=True, cwd=cwd)
+    if result.returncode != 0:
+        print(f"{label} failed: {result.stderr.decode('utf-8')}", file=sys.stderr)
+        sys.exit(result.returncode)
+
+
 def get_packages(repo_root: Path) -> list[str]:
     """Return all packages to type-check."""
     packages = ["livekit.agents"]
@@ -49,34 +56,34 @@ def ensure_types_installed(repo_root: Path, pkg_args: list[str]) -> None:
     marker_mtime = marker.stat().st_mtime if marker.exists() else 0.0
     lock_mtime = lock_file.stat().st_mtime if lock_file.exists() else 0.0
 
-    if marker_mtime >= lock_mtime:
+    if marker_mtime >= lock_mtime > 0:
         return
 
     # Ensure pip is available (required for mypy --install-types)
-    subprocess.run(
-        ["uv", "pip", "install", "pip"],
-        capture_output=True,
-        cwd=repo_root,
-    )
+    _run_or_exit(["uv", "pip", "install", "pip"], repo_root, "pip install")
 
-    subprocess.run(
-        ["uv", "run", "mypy", "--install-types", "--non-interactive", *pkg_args],
-        capture_output=True,
-        cwd=repo_root,
+    _run_or_exit(
+        [
+            "uv",
+            "run",
+            "mypy",
+            "--install-types",
+            "--non-interactive",
+            "--untyped-calls-exclude=smithy_aws_core",
+            *pkg_args,
+        ],
+        repo_root,
+        "mypy install types",
     )
 
     # Remove stubs that break our type checking
-    subprocess.run(
-        ["uv", "pip", "uninstall", "-y", *EXCLUDED_STUBS],
-        capture_output=True,
-        cwd=repo_root,
-    )
+    _run_or_exit(["uv", "pip", "uninstall", *EXCLUDED_STUBS], repo_root, "pip uninstall stubs")
 
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()
 
 
-def main() -> int:
+def main() -> None:
     repo_root = Path(__file__).parent.parent
     packages = get_packages(repo_root)
 
@@ -88,12 +95,12 @@ def main() -> int:
 
     # mypy's incremental mode reads/writes .mypy_cache and skips unchanged
     # modules, making the second and subsequent runs much faster (~1s vs 30s+).
-    result = subprocess.run(
+    _run_or_exit(
         ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
-        cwd=repo_root,
+        repo_root,
+        "mypy",
     )
-    return result.returncode
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
