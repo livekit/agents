@@ -27,7 +27,13 @@ _TYPES_MARKER = ".mypy_cache/.types_installed"
 def _run_or_exit(cmd: list[str], cwd: Path, label: str) -> None:
     result = subprocess.run(cmd, capture_output=True, cwd=cwd)
     if result.returncode != 0:
-        print(f"{label} failed: {result.stderr.decode('utf-8')}", file=sys.stderr)
+        stdout = result.stdout.decode("utf-8").rstrip()
+        stderr = result.stderr.decode("utf-8").rstrip()
+        if stdout:
+            print(stdout, file=sys.stderr)
+        if stderr:
+            print(stderr, file=sys.stderr)
+        print(f"{label} failed (exit code {result.returncode})", file=sys.stderr)
         sys.exit(result.returncode)
 
 
