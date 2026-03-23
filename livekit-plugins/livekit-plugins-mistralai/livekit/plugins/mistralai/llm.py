@@ -56,12 +56,12 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens,
         )
         mistral_api_key = api_key or os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
+        if not client and not mistral_api_key:
             raise ValueError(
                 "Mistral API key is required, either as argument or set"
                 " MISTRAL_API_KEY environment variable"
             )
-        self._client = Mistral(api_key=mistral_api_key)
+        self._client = client or Mistral(api_key=mistral_api_key)
 
     @property
     def model(self) -> str:
@@ -85,7 +85,7 @@ class LLM(llm.LLM):
         extra: dict[str, Any] = {}
 
         if is_given(self._opts.max_completion_tokens):
-            extra["max_completion_tokens"] = self._opts.max_completion_tokens
+            extra["max_tokens"] = self._opts.max_completion_tokens
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
