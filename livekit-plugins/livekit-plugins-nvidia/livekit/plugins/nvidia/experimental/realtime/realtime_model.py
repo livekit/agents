@@ -232,8 +232,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         raise NotImplementedError(
-            "generate_reply is not yet supported by the PersonaPlex realtime model. "
-            "Consider using `welcome_message` instead."
+            "generate_reply is not yet supported by the PersonaPlex realtime model."
         )
 
     def interrupt(self) -> None:
