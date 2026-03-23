@@ -3,7 +3,7 @@ from __future__ import annotations
 import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-
+import json
 from opentelemetry import trace
 
 from . import trace_types
@@ -28,40 +28,62 @@ def record_exception(span: trace.Span, exception: Exception) -> None:
 def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
     model_name = ev.metadata.model_name if ev.metadata else None
     model_provider = ev.metadata.model_provider if ev.metadata else None
-
-    attrs: dict[str, str | int] = {
-        trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-        trace_types.ATTR_GEN_AI_PROVIDER_NAME: model_provider or "unknown",
-        trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
-        trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
-        # Input text tokens (cached + uncached)
-        # As per OTEL spec, ATTR_GEN_AI_USAGE_INPUT_TOKENS should be inclusive of cached tokens
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
-        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
-        # Input text tokens (uncached)
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens
+    usage_details = {
+        "input_text_tokens": ev.input_token_details.text_tokens
         - (
             ev.input_token_details.cached_tokens_details.text_tokens
             if ev.input_token_details.cached_tokens_details
             else 0
         ),
-        # Input audio tokens (uncached)
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens
+        "input_audio_tokens": ev.input_token_details.audio_tokens
         - (
             ev.input_token_details.cached_tokens_details.audio_tokens
             if ev.input_token_details.cached_tokens_details
             else 0
         ),
-        # Input text tokens (cached)
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.text_tokens
+        "input_cached_text_tokens": ev.input_token_details.cached_tokens_details.text_tokens
         if ev.input_token_details.cached_tokens_details
         else 0,
-        # Input audio tokens (cached)
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.audio_tokens
+        "input_cached_audio_tokens": ev.input_token_details.cached_tokens_details.audio_tokens
         if ev.input_token_details.cached_tokens_details
         else 0,
-        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
-        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
+        "output_text_tokens": ev.output_token_details.text_tokens,
+        "output_audio_tokens": ev.output_token_details.audio_tokens,
+    }
+    attrs: dict[str, str | int] = {
+        trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+        trace_types.ATTR_GEN_AI_PROVIDER_NAME: model_provider or "unknown",
+        trace_types.ATTR_GEN_AI_REQUEST_MODEL: "temporarytesting",
+        trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
+        trace_types.ATTR_LANGFUSE_USAGE_DETAILS: json.dumps(usage_details),
+        # # Input text tokens (cached + uncached)
+        # # As per OTEL spec, ATTR_GEN_AI_USAGE_INPUT_TOKENS should be inclusive of cached tokens
+        # trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
+        # trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+        # # Input text tokens (uncached)
+        # trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens
+        # - (
+        #     ev.input_token_details.cached_tokens_details.text_tokens
+        #     if ev.input_token_details.cached_tokens_details
+        #     else 0
+        # ),
+        # # Input audio tokens (uncached)
+        # trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens
+        # - (
+        #     ev.input_token_details.cached_tokens_details.audio_tokens
+        #     if ev.input_token_details.cached_tokens_details
+        #     else 0
+        # ),
+        # # Input text tokens (cached)
+        # trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.text_tokens
+        # if ev.input_token_details.cached_tokens_details
+        # else 0,
+        # # Input audio tokens (cached)
+        # trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.audio_tokens
+        # if ev.input_token_details.cached_tokens_details
+        # else 0,
+        # trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
+        # trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
     }
     if ev.ttft != -1:
         completion_start_time = ev.timestamp + ev.ttft

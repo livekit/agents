@@ -93,3 +93,4 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+ATTR_LANGFUSE_USAGE_DETAILS = "langfuse.observation.usage_details"
