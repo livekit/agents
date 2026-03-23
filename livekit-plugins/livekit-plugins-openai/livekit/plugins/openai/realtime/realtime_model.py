@@ -779,6 +779,9 @@ class RealtimeSession(
         )
         self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
+    def _has_inflight_response(self) -> bool:
+        return self._current_generation is not None or len(self._response_created_futures) > 0
+
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
@@ -1163,9 +1166,12 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
+            current_tool_choice = to_oai_tool_choice(self._realtime_model._opts.tool_choice)
+            next_tool_choice = to_oai_tool_choice(tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
-            session.tool_choice = to_oai_tool_choice(tool_choice)
-            has_changes = True
+            if current_tool_choice != next_tool_choice:
+                session.tool_choice = next_tool_choice
+                has_changes = True
 
         if is_given(max_response_output_tokens):
             self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
@@ -1445,6 +1451,8 @@ class RealtimeSession(
         return fut
 
     def interrupt(self) -> None:
+        if not self._has_inflight_response():
+            return
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
@@ -1593,6 +1601,11 @@ class RealtimeSession(
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         assert event.item.id is not None, "item.id is None"
+
+        existing_item = self._remote_chat_ctx.get(event.item.id)
+        pending_create_future = self._item_create_future.get(event.item.id)
+        if existing_item and not pending_create_future:
+            return
 
         try:
             lk_item = openai_item_to_livekit_item(event.item)
