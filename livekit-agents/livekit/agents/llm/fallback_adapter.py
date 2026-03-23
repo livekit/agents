@@ -15,7 +15,7 @@ from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
-    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
+    max_retry=3, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
 
@@ -39,9 +39,8 @@ class FallbackAdapter(
         llm: list[LLM],
         *,
         attempt_timeout: float = 5.0,
-        # use fallback instead of retrying
-        max_retry_per_llm: int = 0,
-        retry_interval: float = 0.5,
+        max_retry_per_llm: int = 3,
+        retry_interval: float = 2.0,
         retry_on_chunk_sent: bool = False,
     ) -> None:
         """FallbackAdapter is an LLM that can fallback to a different LLM if the current LLM fails.
@@ -49,9 +48,9 @@ class FallbackAdapter(
         Args:
             llm (list[LLM]): List of LLM instances to fallback to.
             attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
-            max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
-                internal retries, the failed LLM will be skipped and the next LLM will be used.
-            retry_interval (float, optional): Interval between retries. Defaults to 0.5.
+            max_retry_per_llm (int, optional): Internal retries per LLM before falling back
+                to the next one. Defaults to 3.
+            retry_interval (float, optional): Interval between retries. Defaults to 2.0.
             retry_on_chunk_sent (bool, optional): Whether to retry when a LLM failed after chunks
                 are sent. Defaults to False.
 
