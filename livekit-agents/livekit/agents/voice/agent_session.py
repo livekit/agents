@@ -956,6 +956,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await asyncio.gather(*[toolset.shutdown() for toolset in self._async_toolsets])
                 self._async_toolsets.clear()
 
+            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets),
+                    return_exceptions=True,
+                )
+
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None

@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2026 Hamming, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,48 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Google AI plugin for LiveKit Agents
+"""Hamming plugin for LiveKit Agents.
 
-Supports Gemini, Cloud Speech-to-Text, and Cloud Text-to-Speech.
-
-See https://docs.livekit.io/agents/integrations/stt/google/ for more information.
+Exports final post-call monitoring artifacts to Hamming.
 """
 
-from . import beta, realtime, tools
-from .llm import LLM
-from .models import EndpointingSensitivity
-from .stt import STT, SpeechStream
-from .tts import TTS
+from livekit.agents import Plugin
+
+from ._setup import (
+    DoctorReport,
+    attach_session,
+    configure_hamming,
+    doctor,
+    doctor_json,
+)
+from .log import logger
 from .version import __version__
 
 __all__ = [
-    "STT",
-    "TTS",
-    "realtime",
-    "SpeechStream",
-    "EndpointingSensitivity",
+    "configure_hamming",
+    "doctor",
+    "doctor_json",
+    "DoctorReport",
+    "attach_session",
     "__version__",
-    "beta",
-    "LLM",
-    "tools",
 ]
-from livekit.agents import Plugin
-
-from .log import logger
 
 
-class GooglePlugin(Plugin):
+class HammingPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(GooglePlugin())
+Plugin.register_plugin(HammingPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
 NOT_IN_ALL = [m for m in _module if m not in __all__]
 
-__pdoc__ = {}
-
+__pdoc__: dict[str, bool] = {}
 for n in NOT_IN_ALL:
     __pdoc__[n] = False
