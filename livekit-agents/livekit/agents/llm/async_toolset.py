@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import inspect
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
@@ -294,6 +293,61 @@ def _is_async_context_type(ty: type) -> bool:
     return ty is AsyncRunContext or get_origin(ty) is AsyncRunContext
 
 
+def _has_async_context_param(tool: FunctionTool | RawFunctionTool) -> bool:
+    """Check if the tool has an AsyncRunContext parameter."""
+    try:
+        type_hints = get_type_hints(tool)
+    except Exception:
+        return False
+    return any(_is_async_context_type(h) for h in type_hints.values())
+
+
+def _build_raw_schema(tool: FunctionTool | RawFunctionTool) -> dict[str, Any]:
+    """Build a raw JSON schema dict from a tool, suitable for RawFunctionTool."""
+    if isinstance(tool, RawFunctionTool):
+        import copy
+
+        return copy.deepcopy(tool.info.raw_schema)
+
+    # FunctionTool — generate schema via pydantic.
+    # function_arguments_to_pydantic_model uses is_context_type(allow_subclasses=True)
+    # so it correctly skips AsyncRunContext parameters.
+    from ..llm.utils import function_arguments_to_pydantic_model
+
+    model = function_arguments_to_pydantic_model(tool)
+    return {
+        "name": tool.info.name,
+        "description": tool.info.description or "",
+        "parameters": model.model_json_schema(),
+    }
+
+
+def _prepare_tool_kwargs(
+    tool: FunctionTool | RawFunctionTool,
+    raw_arguments: dict[str, Any],
+    async_ctx: AsyncRunContext,
+) -> dict[str, Any]:
+    """Build kwargs to call the original tool, injecting AsyncRunContext."""
+    sig = inspect.signature(tool)
+    try:
+        type_hints = get_type_hints(tool)
+    except Exception:
+        type_hints = {}
+
+    kwargs: dict[str, Any] = {}
+    for param_name, param in sig.parameters.items():
+        hint = type_hints.get(param_name)
+        if hint is not None and _is_async_context_type(hint):
+            kwargs[param_name] = async_ctx
+        elif param_name == "raw_arguments" and isinstance(tool, RawFunctionTool):
+            kwargs["raw_arguments"] = raw_arguments
+        elif param_name in raw_arguments:
+            kwargs[param_name] = raw_arguments[param_name]
+        elif param.default is not inspect.Parameter.empty:
+            kwargs[param_name] = param.default
+    return kwargs
+
+
 class AsyncToolset(Toolset):
     """A toolset for running long-running functions in the background.
 
@@ -362,104 +416,55 @@ class AsyncToolset(Toolset):
             return f"Task {call_id} not found or already completed."
 
     def _wrap_tool(self, tool: Tool) -> Tool:
-        """Wrap a FunctionTool with async dispatch if it has an AsyncRunContext param."""
+        """Wrap a FunctionTool with async dispatch if it has an AsyncRunContext param.
+
+        The wrapped tool is a RawFunctionTool with a schema derived from the
+        original, plus ``confirm_duplicate`` when ``on_duplicate="confirm"``.
+        This avoids fragile signature surgery — the schema is a plain dict.
+        """
         if not isinstance(tool, (FunctionTool, RawFunctionTool)):
             return tool
 
-        # find the AsyncRunContext parameter
-        sig = inspect.signature(tool)
-        try:
-            type_hints = get_type_hints(tool)
-        except Exception:
-            type_hints = {}
-
-        ctx_param_name: str | None = None
-        for param_name in sig.parameters:
-            hint = type_hints.get(param_name)
-            if hint is not None and _is_async_context_type(hint):
-                ctx_param_name = param_name
-                break
-
-        if ctx_param_name is None:
+        if not _has_async_context_param(tool):
             return tool
 
-        # build the new signature before the wrapper so bind() accepts
-        # injected params like confirm_duplicate
-        new_params = [
-            p.replace(annotation=RunContext) if p.name == ctx_param_name else p
-            for p in sig.parameters.values()
-        ]
+        # --- Build the raw JSON schema for the LLM ---
+        raw_schema = _build_raw_schema(tool)
         if self._on_duplicate == "confirm":
-            new_params.append(
-                inspect.Parameter(
-                    "confirm_duplicate",
-                    inspect.Parameter.KEYWORD_ONLY,
-                    default=None,
-                    annotation=str | None,
-                )
-            )
-        wrapper_sig = sig.replace(parameters=new_params)
+            props = raw_schema["parameters"].setdefault("properties", {})
+            props["confirm_duplicate"] = {
+                "type": ["string", "null"],
+                "description": (
+                    "Set this to the call_id of an existing running task "
+                    "to confirm you want to run a duplicate."
+                ),
+                "default": None,
+            }
 
-        # build wrapper that receives RunContext from the framework,
-        # converts to AsyncRunContext, and dispatches as a background task.
-        @functools.wraps(tool)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            bound = wrapper_sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-            arguments = dict(bound.arguments)
-            run_ctx = arguments.pop(ctx_param_name)
-            assert isinstance(run_ctx, RunContext)
+        @function_tool(raw_schema=raw_schema, flags=tool.info.flags)
+        async def wrapper(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
+            call_id = ctx.function_call.call_id
+            fnc_name = ctx.function_call.name
 
-            call_id = run_ctx.function_call.call_id
-            fnc_name = run_ctx.function_call.name
-
-            # --- Duplicate detection ---
-            if self._on_duplicate != "allow":
-                existing = next(
-                    (t for t in self._tasks.values() if t.async_ctx.function_call.name == fnc_name),
-                    None,
-                )
-                if existing is not None:
-                    existing_call = existing.async_ctx.function_call
-
-                    if self._on_duplicate == "replace":
-                        await self.cancel(existing_call.call_id)
-                    elif self._on_duplicate == "reject":
-                        return (
-                            f"Tool `{fnc_name}` is already running "
-                            f"(call_id: {existing_call.call_id}, "
-                            f"args: {existing_call.arguments}). "
-                            f"Use `cancel_task('{existing_call.call_id}')` to cancel it."
-                        )
-                    elif self._on_duplicate == "confirm":
-                        confirm_value = arguments.pop("confirm_duplicate", None)
-                        if confirm_value != existing_call.call_id:
-                            return (
-                                f"Tool `{fnc_name}` is already running "
-                                f"(call_id: {existing_call.call_id}, "
-                                f"args: {existing_call.arguments}). "
-                                f"Re-call with `confirm_duplicate="
-                                f"'{existing_call.call_id}'` to run anyway, "
-                                f"or use `cancel_task('{existing_call.call_id}')` "
-                                f"to cancel the existing task."
-                            )
-                elif self._on_duplicate == "confirm":
-                    # No duplicate found — clean up confirm_duplicate from arguments
-                    arguments.pop("confirm_duplicate", None)
+            # Duplicate detection
+            duplicate_result = self._check_duplicate(fnc_name, raw_arguments)
+            if duplicate_result is not None:
+                return duplicate_result
 
             if call_id in self._tasks:
                 raise ValueError(f"Task already running for call_id: {call_id}")
 
-            run_ctx.session._register_async_toolset(self)  # cleanup in session.aclose
+            ctx.session._register_async_toolset(self)  # cleanup in session.aclose
 
-            # inject AsyncRunContext into the function arguments
-            async_ctx = AsyncRunContext(run_ctx=run_ctx)
-            arguments[ctx_param_name] = async_ctx
+            async_ctx = AsyncRunContext(run_ctx=ctx)
+
+            # Prepare arguments for the original tool
+            tool_kwargs = _prepare_tool_kwargs(tool, raw_arguments, async_ctx)
 
             async def _execute_tool() -> Any:
                 scheduling: SchedulingMode = "when_idle"
                 try:
-                    output = await tool(**arguments)
+                    output = await tool(**tool_kwargs)
 
                     if isinstance(output, AsyncResult):
                         scheduling = output.scheduling
@@ -467,10 +472,7 @@ class AsyncToolset(Toolset):
                 except asyncio.CancelledError:
                     logger.debug(
                         "async tool cancelled",
-                        extra={
-                            "call_id": call_id,
-                            "function": fnc_name,
-                        },
+                        extra={"call_id": call_id, "function": fnc_name},
                     )
                     return
                 except BaseException as e:
@@ -481,7 +483,6 @@ class AsyncToolset(Toolset):
 
                 if not async_ctx._pending_fut.done():
                     # pending() was never called — return output directly
-                    # as the tool result (handled by the framework)
                     if isinstance(output, BaseException):
                         async_ctx._pending_fut.set_exception(output)
                     else:
@@ -489,7 +490,6 @@ class AsyncToolset(Toolset):
                     return
 
                 # Tool ran in background (pending was set).
-                # Deliver the final result through the conversation.
                 if output is None:
                     return
 
@@ -502,16 +502,46 @@ class AsyncToolset(Toolset):
 
             return await async_ctx._pending_fut
 
-        wrapped_tool = tool.__class__(wrapper, tool.info)  # type: ignore[arg-type]
-        wrapped_tool.__signature__ = wrapper_sig  # type: ignore[union-attr]
-        wrapped_tool.__annotations__ = {
-            **wrapped_tool.__annotations__,
-            ctx_param_name: RunContext,
-        }
-        if self._on_duplicate == "confirm":
-            wrapped_tool.__annotations__["confirm_duplicate"] = str | None
+        return wrapper
 
-        return wrapped_tool
+    def _check_duplicate(self, fnc_name: str, raw_arguments: dict[str, Any]) -> str | None:
+        """Check for duplicate running tasks. Returns a message if blocked, None otherwise."""
+        if self._on_duplicate == "allow":
+            return None
+
+        existing = next(
+            (t for t in self._tasks.values() if t.async_ctx.function_call.name == fnc_name),
+            None,
+        )
+        if existing is not None:
+            existing_call = existing.async_ctx.function_call
+
+            if self._on_duplicate == "replace":
+                asyncio.ensure_future(self.cancel(existing_call.call_id))
+                return None
+            elif self._on_duplicate == "reject":
+                return (
+                    f"Tool `{fnc_name}` is already running "
+                    f"(call_id: {existing_call.call_id}, "
+                    f"args: {existing_call.arguments}). "
+                    f"Use `cancel_task('{existing_call.call_id}')` to cancel it."
+                )
+            elif self._on_duplicate == "confirm":
+                confirm_value = raw_arguments.pop("confirm_duplicate", None)
+                if confirm_value != existing_call.call_id:
+                    return (
+                        f"Tool `{fnc_name}` is already running "
+                        f"(call_id: {existing_call.call_id}, "
+                        f"args: {existing_call.arguments}). "
+                        f"Re-call with `confirm_duplicate="
+                        f"'{existing_call.call_id}'` to run anyway, "
+                        f"or use `cancel_task('{existing_call.call_id}')` "
+                        f"to cancel the existing task."
+                    )
+        elif self._on_duplicate == "confirm":
+            raw_arguments.pop("confirm_duplicate", None)
+
+        return None
 
     async def cancel(self, call_id: str) -> bool:
         task = self._tasks.get(call_id)

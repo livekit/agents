@@ -1,9 +1,7 @@
 import inspect
-from typing import get_type_hints
 
-from livekit.agents.llm import FunctionTool, RawFunctionTool, ToolContext, function_tool
+from livekit.agents.llm import RawFunctionTool, ToolContext, function_tool
 from livekit.agents.llm.async_toolset import AsyncResult, AsyncRunContext, AsyncToolset
-from livekit.agents.llm.utils import function_arguments_to_pydantic_model
 from livekit.agents.voice.events import RunContext
 
 
@@ -131,8 +129,8 @@ class TestAsyncToolWrapping:
     def test_async_tool_is_wrapped(self):
         ts = AsyncToolset(id="test", tools=[async_tool])
         wrapped = ts.tools[0]
-        # Wrapped tool should be a new FunctionTool, not the original
-        assert isinstance(wrapped, FunctionTool)
+        # Wrapped tool should be a RawFunctionTool, not the original
+        assert isinstance(wrapped, RawFunctionTool)
         assert wrapped is not async_tool
 
     def test_regular_tool_not_wrapped(self):
@@ -144,53 +142,38 @@ class TestAsyncToolWrapping:
         assert ts.tools[0] is no_ctx_tool
 
     def test_wrapped_signature_has_run_context(self):
-        """The wrapped tool's signature should have RunContext, not AsyncRunContext,
-        so the framework injects a plain RunContext."""
-        ts = AsyncToolset(id="test", tools=[async_tool])
-        wrapped = ts.tools[0]
-        sig = inspect.signature(wrapped)
-        ctx_param = sig.parameters["ctx"]
-        assert ctx_param.annotation is RunContext
-
-    def test_wrapped_type_hints_have_run_context(self):
-        """get_type_hints on the wrapped tool should see RunContext (not AsyncRunContext)
-        so the framework correctly excludes it from the LLM schema."""
-        from livekit.agents.llm.utils import is_context_type
+        """The wrapped tool's signature should have RunContext for context injection."""
+        from typing import get_type_hints
 
         ts = AsyncToolset(id="test", tools=[async_tool])
         wrapped = ts.tools[0]
         hints = get_type_hints(wrapped)
         assert hints["ctx"] is RunContext
-        assert is_context_type(hints["ctx"])
 
-    def test_wrapped_preserves_user_params(self):
-        """User-visible params (origin, destination) should be unchanged."""
+    def test_wrapped_preserves_user_params_in_schema(self):
+        """User-visible params (origin, destination) should appear in the raw schema."""
         ts = AsyncToolset(id="test", tools=[async_tool])
         wrapped = ts.tools[0]
-        sig = inspect.signature(wrapped)
-        assert "origin" in sig.parameters
-        assert "destination" in sig.parameters
-        hints = get_type_hints(wrapped)
-        assert hints["origin"] is str
-        assert hints["destination"] is str
+        assert isinstance(wrapped, RawFunctionTool)
+        props = wrapped.info.raw_schema["parameters"]["properties"]
+        assert "origin" in props
+        assert "destination" in props
+        assert "ctx" not in props
 
     def test_wrapped_preserves_tool_info(self):
         """The wrapped tool should have the same name and description."""
         ts = AsyncToolset(id="test", tools=[async_tool])
         wrapped = ts.tools[0]
         assert wrapped.info.name == "async_tool"
-        assert "Book a flight." in wrapped.info.description
+        assert "Book a flight." in wrapped.info.raw_schema.get("description", "")
 
-    def test_wrapped_tool_excluded_from_schema(self):
-        """The RunContext param should be excluded from the pydantic model
-        (i.e., not visible to the LLM)."""
+    def test_wrapped_tool_schema_excludes_context(self):
+        """The raw schema should not include the context parameter."""
         ts = AsyncToolset(id="test", tools=[async_tool])
         wrapped = ts.tools[0]
-        model = function_arguments_to_pydantic_model(wrapped)
-        field_names = list(model.model_fields.keys())
-        assert "ctx" not in field_names
-        assert "origin" in field_names
-        assert "destination" in field_names
+        assert isinstance(wrapped, RawFunctionTool)
+        props = wrapped.info.raw_schema["parameters"]["properties"]
+        assert "ctx" not in props
 
     def test_raw_async_tool_is_wrapped(self):
         ts = AsyncToolset(id="test", tools=[raw_async_tool])
@@ -231,19 +214,20 @@ class TestDuplicateHandling:
         assert toolset._on_duplicate == "reject"
 
     def test_confirm_mode_adds_confirm_param(self):
-        """In confirm mode, wrapped async tools should have confirm_duplicate parameter."""
+        """In confirm mode, wrapped async tools should have confirm_duplicate in schema."""
         toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate="confirm")
-        # Find the wrapped async_tool (not get_running_tasks or cancel_task)
         tool = next(t for t in toolset.tools if t.id == "async_tool")
-        sig = inspect.signature(tool)
-        assert "confirm_duplicate" in sig.parameters
+        assert isinstance(tool, RawFunctionTool)
+        props = tool.info.raw_schema["parameters"]["properties"]
+        assert "confirm_duplicate" in props
 
     def test_non_confirm_mode_no_confirm_param(self):
         """In non-confirm modes, wrapped async tools should NOT have confirm_duplicate."""
         for mode in ["allow", "replace", "reject"]:
             toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate=mode)
             tool = next(t for t in toolset.tools if t.id == "async_tool")
-            sig = inspect.signature(tool)
-            assert "confirm_duplicate" not in sig.parameters, (
+            assert isinstance(tool, RawFunctionTool)
+            props = tool.info.raw_schema["parameters"]["properties"]
+            assert "confirm_duplicate" not in props, (
                 f"mode={mode} should not have confirm_duplicate"
             )
