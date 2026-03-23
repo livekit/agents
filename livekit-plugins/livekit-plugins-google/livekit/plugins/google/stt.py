@@ -185,15 +185,14 @@ class STT(stt.STT):
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
             endpointing_sensitivity(EndpointingSensitivity): controls the trade-off between latency
-                and accuracy when detecting end-of-speech. Only supported with V2 streaming models
-                (chirp_2, chirp_3). Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
+                and accuracy when detecting end-of-speech. Only supported with chirp_3.
+                Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
                 ENDPOINTING_SENSITIVITY_SHORT, ENDPOINTING_SENSITIVITY_SUPERSHORT (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
-        if is_given(endpointing_sensitivity) and model not in get_args(SpeechModelsV2):
+        if is_given(endpointing_sensitivity) and model != "chirp_3":
             logger.warning(
-                "endpointing_sensitivity is only supported with V2 streaming models "
-                "(chirp_2, chirp_3); ignoring."
+                "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
             )
             endpointing_sensitivity = NOT_GIVEN
 
@@ -516,10 +515,9 @@ class STT(stt.STT):
         if is_given(speech_end_timeout):
             self._config.speech_end_timeout = speech_end_timeout
         if is_given(endpointing_sensitivity):
-            if self._config.version != 2:
+            if self._config.model != "chirp_3":
                 logger.warning(
-                    "endpointing_sensitivity is only supported with V2 streaming models "
-                    "(chirp_2, chirp_3); ignoring."
+                    "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
                 )
             else:
                 self._config.endpointing_sensitivity = endpointing_sensitivity
