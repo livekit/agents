@@ -519,6 +519,7 @@ class STT(stt.STT):
                 logger.warning(
                     "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
                 )
+                endpointing_sensitivity = NOT_GIVEN
             else:
                 self._config.endpointing_sensitivity = endpointing_sensitivity
 
