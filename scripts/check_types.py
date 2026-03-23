@@ -16,11 +16,6 @@ EXCLUDED_PLUGINS = [
     "rtzr",
 ]
 
-# Stub packages that mypy --install-types pulls in but that break our type checking
-EXCLUDED_STUBS = [
-    "scipy-stubs",
-]
-
 _TYPES_MARKER = ".mypy_cache/.types_installed"
 
 
@@ -68,6 +63,8 @@ def ensure_types_installed(repo_root: Path, pkg_args: list[str]) -> None:
     # Ensure pip is available (required for mypy --install-types)
     _run_or_exit(["uv", "pip", "install", "pip"], repo_root, "pip install")
 
+    # mypy --install-types installs type stubs but also runs the type checker (doubled runtime)
+    # https://github.com/python/mypy/issues/10600
     _run_or_exit(
         [
             "uv",
@@ -81,9 +78,6 @@ def ensure_types_installed(repo_root: Path, pkg_args: list[str]) -> None:
         repo_root,
         "mypy install types",
     )
-
-    # Remove stubs that break our type checking
-    _run_or_exit(["uv", "pip", "uninstall", *EXCLUDED_STUBS], repo_root, "pip uninstall stubs")
 
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()
