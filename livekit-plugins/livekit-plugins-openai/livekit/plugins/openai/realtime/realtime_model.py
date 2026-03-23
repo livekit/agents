@@ -837,6 +837,13 @@ class RealtimeSession(
                     ),
                 ) from e
 
+            for fut in self._response_created_futures.values():
+                if not fut.done():
+                    fut.set_exception(
+                        llm.RealtimeError("pending response discarded due to session reconnection")
+                    )
+            self._response_created_futures.clear()
+
             logger.debug("reconnected to OpenAI Realtime API")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
@@ -1163,24 +1170,30 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
+            current_oai = to_oai_tool_choice(self._realtime_model._opts.tool_choice)
+            next_oai = to_oai_tool_choice(tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
-            session.tool_choice = to_oai_tool_choice(tool_choice)
-            has_changes = True
+            if current_oai != next_oai:
+                session.tool_choice = next_oai
+                has_changes = True
 
         if is_given(max_response_output_tokens):
+            if self._realtime_model._opts.max_response_output_tokens != max_response_output_tokens:
+                session.max_output_tokens = max_response_output_tokens
+                has_changes = True
             self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
-            session.max_output_tokens = max_response_output_tokens
-            has_changes = True
 
         if is_given(tracing):
+            if self._realtime_model._opts.tracing != tracing:
+                session.tracing = tracing  # type: ignore[assignment]
+                has_changes = True
             self._realtime_model._opts.tracing = tracing
-            session.tracing = tracing  # type: ignore[assignment]
-            has_changes = True
 
         if is_given(truncation):
+            if self._realtime_model._opts.truncation != truncation:
+                session.truncation = truncation
+                has_changes = True
             self._realtime_model._opts.truncation = truncation
-            session.truncation = truncation
-            has_changes = True
 
         has_audio_config = False
         audio_output = RealtimeAudioConfigOutput()
@@ -1188,30 +1201,38 @@ class RealtimeSession(
         audio_config = RealtimeAudioConfig(output=audio_output, input=audio_input)
 
         if is_given(voice):
+            if self._realtime_model._opts.voice != voice:
+                audio_output.voice = voice
+                has_audio_config = True
             self._realtime_model._opts.voice = voice
-            audio_output.voice = voice
-            has_audio_config = True
 
         if is_given(turn_detection):
+            if self._realtime_model._opts.turn_detection != turn_detection:
+                audio_input.turn_detection = turn_detection
+                has_audio_config = True
             self._realtime_model._opts.turn_detection = turn_detection
-            audio_input.turn_detection = turn_detection
-            has_audio_config = True
 
         if is_given(input_audio_transcription):
+            if self._realtime_model._opts.input_audio_transcription != input_audio_transcription:
+                audio_input.transcription = input_audio_transcription
+                has_audio_config = True
             self._realtime_model._opts.input_audio_transcription = input_audio_transcription
-            audio_input.transcription = input_audio_transcription
-            has_audio_config = True
 
         if is_given(input_audio_noise_reduction):
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
+            if (
+                self._realtime_model._opts.input_audio_noise_reduction
+                != input_audio_noise_reduction
+            ):
+                audio_input.noise_reduction = input_audio_noise_reduction
+                has_audio_config = True
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
-            audio_input.noise_reduction = input_audio_noise_reduction
-            has_audio_config = True
 
         if is_given(speed):
+            if self._realtime_model._opts.speed != speed:
+                audio_output.speed = speed
+                has_audio_config = True
             self._realtime_model._opts.speed = speed
-            audio_output.speed = speed
-            has_audio_config = True
 
         if has_audio_config:
             session.audio = audio_config
@@ -1444,7 +1465,13 @@ class RealtimeSession(
         fut.add_done_callback(lambda _: handle.cancel())
         return fut
 
+    @property
+    def has_active_generation(self) -> bool:
+        return self._current_generation is not None or len(self._response_created_futures) > 0
+
     def interrupt(self) -> None:
+        if not self.has_active_generation:
+            return
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
