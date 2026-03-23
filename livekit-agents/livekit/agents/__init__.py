@@ -105,6 +105,7 @@ from .voice.run_result import (
     RunResult,
     mock_tools,
 )
+from .voice.turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 from .worker import (
     AgentServer,
     WorkerOptions,
@@ -217,6 +218,9 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "TurnHandlingOptions",
+    "EndpointingOptions",
+    "InterruptionOptions",
 ]
 
 # Cleanup docs of unexported modules

@@ -23,7 +23,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply()
+        self.session.generate_reply(instructions="greeting the user and introducing yourself")
 
 
 server = AgentServer()
@@ -37,8 +37,10 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
-        mcp_servers=[
-            mcp.MCPServerHTTP(url="http://localhost:8000/sse"),
+        tools=[
+            mcp.MCPToolset(
+                id="mcp_toolset_1", mcp_server=mcp.MCPServerHTTP(url="http://localhost:8000/sse")
+            )
         ],
     )
 

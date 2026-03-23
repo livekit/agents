@@ -1,5 +1,6 @@
 import enum
-from typing import Literal
+import json
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, Field
@@ -447,3 +448,52 @@ class TestStrictJsonSchema:
         status = schema["properties"]["status"]
         assert None not in status["enum"], f"enum should not contain None: {status}"
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
+
+
+class _OpenEnumModel(BaseModel):
+    """Simulates a codegen'd "open enum" pattern (e.g. Fern Python SDK).
+    Union[Literal["a", "b"], Any] produces an anyOf with a bare {} entry."""
+
+    preference: Literal["a", "b"] | Any | None = None
+
+
+class _NestedOpenEnumModel(BaseModel):
+    items: list[_OpenEnumModel]
+
+
+def _has_empty_schema(schema: object) -> bool:
+    """Recursively check if any dict in the schema tree is an empty {}."""
+    if isinstance(schema, dict):
+        if schema == {}:
+            return True
+        return any(_has_empty_schema(v) for v in schema.values())
+    if isinstance(schema, list):
+        return any(_has_empty_schema(v) for v in schema)
+    return False
+
+
+class TestEmptySchemaStripping:
+    """Test that empty {} entries are stripped from anyOf/oneOf."""
+
+    def test_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_OpenEnumModel)
+        assert not _has_empty_schema(schema), (
+            f"schema should not contain empty {{}}: {json.dumps(schema, indent=2)}"
+        )
+
+    def test_nested_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_NestedOpenEnumModel)
+        assert not _has_empty_schema(schema), (
+            f"nested schema should not contain empty {{}}: {json.dumps(schema, indent=2)}"
+        )
+
+    def test_single_variant_after_strip_is_unwrapped(self):
+        """When stripping {} leaves a single variant, anyOf should be unwrapped."""
+        schema = to_strict_json_schema(_OpenEnumModel)
+        pref = schema["properties"]["preference"]
+        # After stripping {}, the union should be simplified (no single-element anyOf)
+        any_of = pref.get("anyOf")
+        if any_of is not None:
+            assert len(any_of) != 1, (
+                f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
+            )

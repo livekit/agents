@@ -108,7 +108,16 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             try:
                 self._visited_tasks.add(task_id)
                 res = await self._current_task
+
+                # AgentTask handoff merges omit function calls. Re-merge the completed
+                # task context so task-group summarization can incorporate tool results.
+                self._chat_ctx.merge(
+                    self._current_task.chat_ctx.copy(),
+                    exclude_instructions=True,
+                )
+
                 task_results[task_id] = res
+
                 if self._task_completed_callback is not None:
                     await self._task_completed_callback(
                         TaskCompletedEvent(
@@ -134,13 +143,15 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
+                # keep every item to allow summarization to be more action-aware.
                 summarized_chat_ctx = await self.chat_ctx.copy(
-                    exclude_instructions=True,
-                    exclude_handoff=True,
-                    exclude_config_update=True,
-                    exclude_empty_message=True,
-                    exclude_function_call=True,
+                    exclude_instructions=False,
+                    exclude_handoff=False,
+                    exclude_config_update=False,
+                    exclude_empty_message=False,
+                    exclude_function_call=False,
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)
+
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
@@ -170,7 +181,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 list[str],
                 Field(
                     description="The IDs of the tasks requested",
-                    json_schema_extra={"items": {"enum": list(task_ids)}},
+                    json_schema_extra={"items": {"type": "string", "enum": list(task_ids)}},
                 ),
             ],
         ) -> None:
