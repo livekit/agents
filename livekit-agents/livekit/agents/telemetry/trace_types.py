@@ -67,17 +67,22 @@ ATTR_E2E_LATENCY = "lk.e2e_latency"
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
-ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"  # input tokens (cached + uncached)
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 
-# Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse
+# Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse:
 # https://langfuse.com/integrations/native/opentelemetry#usage
-# but not yet in the official OpenTelemetry specification.
-ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"
-ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS = "gen_ai.usage.input_audio_tokens"
-ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS = "gen_ai.usage.input_cached_tokens"
-ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS = "gen_ai.usage.output_text_tokens"
-ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.output_audio_tokens"
+# but not in the official OpenTelemetry specification.
+ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"  # uncached text tokens
+ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS = "gen_ai.usage.input_audio_tokens"  # uncached audio tokens
+ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS = (
+    "gen_ai.usage.input_cached_text_tokens"  # cached text tokens
+)
+ATTR_GEN_AI_USAGE_INPUT_AUDIO_CACHED_TOKENS = (
+    "gen_ai.usage.input_cached_audio_tokens"  # cached audio tokens
+)
+ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS = "gen_ai.usage.output_text_tokens"  # output text tokens
+ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.output_audio_tokens"  # output audio tokens
 
 # OpenTelemetry GenAI event names (for structured logging)
 EVENT_GEN_AI_SYSTEM_MESSAGE = "gen_ai.system.message"

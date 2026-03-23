@@ -34,11 +34,32 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         trace_types.ATTR_GEN_AI_PROVIDER_NAME: model_provider or "unknown",
         trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
+        # Input text tokens (cached + uncached)
+        # As per OTEL spec, ATTR_GEN_AI_USAGE_INPUT_TOKENS should be inclusive of cached tokens
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens,
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens,
-        trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: ev.input_token_details.cached_tokens,
+        # Input text tokens (uncached)
+        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens
+        - (
+            ev.input_token_details.cached_tokens_details.text_tokens
+            if ev.input_token_details.cached_tokens_details
+            else 0
+        ),
+        # Input audio tokens (uncached)
+        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens
+        - (
+            ev.input_token_details.cached_tokens_details.audio_tokens
+            if ev.input_token_details.cached_tokens_details
+            else 0
+        ),
+        # Input text tokens (cached)
+        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.text_tokens
+        if ev.input_token_details.cached_tokens_details
+        else 0,
+        # Input audio tokens (cached)
+        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_CACHED_TOKENS: ev.input_token_details.cached_tokens_details.audio_tokens
+        if ev.input_token_details.cached_tokens_details
+        else 0,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
     }

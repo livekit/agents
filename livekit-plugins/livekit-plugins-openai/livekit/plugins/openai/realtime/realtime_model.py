@@ -1784,8 +1784,10 @@ class RealtimeSession(
             total_tokens=usage.get("total_tokens", 0),
             tokens_per_second=usage.get("output_tokens", 0) / duration if duration > 0 else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
+                # audio tokens is INCLUSIVE of cached_tokens_details.audio_tokens
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),
+                # text tokens is INCLUSIVE of cached_tokens_details.text_tokens
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
                 cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
                     text_tokens=usage.get("input_token_details", {})
