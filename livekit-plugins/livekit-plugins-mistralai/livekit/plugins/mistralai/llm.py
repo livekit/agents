@@ -84,6 +84,9 @@ class LLM(llm.LLM):
     ) -> LLMStream:
         extra: dict[str, Any] = {}
 
+        if is_given(extra_kwargs):
+            extra.update(extra_kwargs)
+
         if is_given(self._opts.max_completion_tokens):
             extra["max_tokens"] = self._opts.max_completion_tokens
 
