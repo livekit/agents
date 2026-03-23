@@ -76,7 +76,7 @@ class STT(stt.STT):
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
+        if not client and not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
