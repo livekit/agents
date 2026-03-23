@@ -199,23 +199,23 @@ class TestAsyncToolWrapping:
 class TestDuplicateHandling:
     def test_default_on_duplicate_is_confirm(self):
         toolset = AsyncToolset(id="test")
-        assert toolset._on_duplicate == "confirm"
+        assert toolset._on_duplicate_call == "confirm"
 
     def test_on_duplicate_allow(self):
-        toolset = AsyncToolset(id="test", on_duplicate="allow")
-        assert toolset._on_duplicate == "allow"
+        toolset = AsyncToolset(id="test", on_duplicate_call="allow")
+        assert toolset._on_duplicate_call == "allow"
 
     def test_on_duplicate_replace(self):
-        toolset = AsyncToolset(id="test", on_duplicate="replace")
-        assert toolset._on_duplicate == "replace"
+        toolset = AsyncToolset(id="test", on_duplicate_call="replace")
+        assert toolset._on_duplicate_call == "replace"
 
     def test_on_duplicate_reject(self):
-        toolset = AsyncToolset(id="test", on_duplicate="reject")
-        assert toolset._on_duplicate == "reject"
+        toolset = AsyncToolset(id="test", on_duplicate_call="reject")
+        assert toolset._on_duplicate_call == "reject"
 
     def test_confirm_mode_adds_confirm_param(self):
         """In confirm mode, wrapped async tools should have confirm_duplicate in schema."""
-        toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate="confirm")
+        toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate_call="confirm")
         tool = next(t for t in toolset.tools if t.id == "async_tool")
         assert isinstance(tool, RawFunctionTool)
         props = tool.info.raw_schema["parameters"]["properties"]
@@ -224,7 +224,7 @@ class TestDuplicateHandling:
     def test_non_confirm_mode_no_confirm_param(self):
         """In non-confirm modes, wrapped async tools should NOT have confirm_duplicate."""
         for mode in ["allow", "replace", "reject"]:
-            toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate=mode)
+            toolset = AsyncToolset(id="test", tools=[async_tool], on_duplicate_call=mode)
             tool = next(t for t in toolset.tools if t.id == "async_tool")
             assert isinstance(tool, RawFunctionTool)
             props = tool.info.raw_schema["parameters"]["properties"]
