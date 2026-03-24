@@ -409,6 +409,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                per_response_tool_choice=True,
             )
         )
 
@@ -1440,20 +1441,24 @@ class RealtimeSession(
         self._pushed_duration_s = 0
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
+
+        params = RealtimeResponseCreateParams(
+            instructions=instructions or None,
+            metadata={"client_event_id": event_id},
+        )
+        if is_given(tool_choice):
+            params.tool_choice = to_oai_tool_choice(tool_choice)
+
         self.send_event(
-            ResponseCreateEvent(
-                type="response.create",
-                event_id=event_id,
-                response=RealtimeResponseCreateParams(
-                    instructions=instructions or None,
-                    metadata={"client_event_id": event_id},
-                ),
-            )
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
         )
 
         def _on_timeout() -> None:

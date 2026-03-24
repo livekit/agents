@@ -2554,14 +2554,20 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
+        per_response_tool_choice = (
+            self._rt_session.realtime_model.capabilities.per_response_tool_choice
+        )
         ori_tool_choice = self._tool_choice
-        if utils.is_given(model_settings.tool_choice):
+        if utils.is_given(model_settings.tool_choice) and not per_response_tool_choice:
             self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
             try:
                 generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
                 )
             except llm.RealtimeError as e:
                 logger.error(
@@ -2580,9 +2586,10 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions,
             )
         finally:
-            # reset tool_choice value
+            # reset tool_choice value (only needed for non-per-response models)
             if (
-                utils.is_given(model_settings.tool_choice)
+                not per_response_tool_choice
+                and utils.is_given(model_settings.tool_choice)
                 and model_settings.tool_choice != ori_tool_choice
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)

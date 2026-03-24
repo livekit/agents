@@ -71,6 +71,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             max_session_duration=max_session_duration if is_given(max_session_duration) else None,
             conn_options=conn_options,
         )
+        self._capabilities.per_response_tool_choice = False
 
     def session(self) -> "RealtimeSession":
         sess = RealtimeSession(self)
