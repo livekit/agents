@@ -59,16 +59,19 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
+            tool_content: list[dict[str, Any]] = []
+            if msg.output.text_contents:
+                tool_content.append({"text": msg.output.text_contents})
+            for img in msg.output.image_contents:
+                tool_content.append(_build_image(img))
+            if not tool_content:
+                tool_content.append({"text": ""})
             current_content.append(
                 {
                     "toolResult": {
                         "toolUseId": msg.call_id,
-                        "content": [
-                            {"json": msg.output}
-                            if isinstance(msg.output, dict)
-                            else {"text": msg.output}
-                        ],
-                        "status": "success",
+                        "content": tool_content,
+                        "status": "error" if msg.is_error else "success",
                     }
                 }
             )

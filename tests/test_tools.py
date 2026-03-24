@@ -6,12 +6,25 @@ import pytest
 from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm import (
+    FileContent,
+    FunctionCall,
+    FunctionCallOutput,
+    ImageContent,
+    ProviderTool,
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolOutput,
+    Toolset,
+    function_tool,
+)
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
     build_strict_openai_schema,
     function_arguments_to_pydantic_model,
+    make_function_call_output,
     prepare_function_arguments,
 )
 
@@ -398,6 +411,196 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestToolOutput:
+    def test_str_coercion(self):
+        out = ToolOutput._coerce("hello")
+        assert isinstance(out, str)
+        assert isinstance(out, ToolOutput)
+        assert out.text_contents == "hello"
+        assert str(out) == "hello"
+
+    def test_str_operations_backward_compat(self):
+        out = ToolOutput._coerce("Error: something went wrong")
+        assert out.lower().startswith("error")
+        assert "something" in out
+        assert out.find("went") >= 0
+        assert out[0:5] == "Error"
+
+    def test_none_coercion(self):
+        out = ToolOutput._coerce(None)
+        assert out.text_contents == ""
+        assert str(out) == ""
+
+    def test_dict_coercion(self):
+        d = {"key": "value", "num": 1}
+        out = ToolOutput._coerce(d)
+        assert isinstance(out, str)
+        assert out.text_contents == str(d)
+        assert not out.image_contents
+        assert not out.file_contents
+
+    def test_already_tool_output_returned_as_is(self):
+        original = ToolOutput._coerce("test")
+        result = ToolOutput._coerce(original)
+        assert result is original
+
+    def test_image_content_coercion(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        out = ToolOutput._coerce(img)
+        assert out.text_contents == ""
+        assert str(out) == "[image]"  # no mime_type set
+        assert len(out.image_contents) == 1
+        assert out.image_contents[0] is img
+        assert not out.file_contents
+
+    def test_image_content_coercion_with_mime_type(self):
+        img = ImageContent(image="https://example.com/img.jpg", mime_type="image/jpeg")
+        out = ToolOutput._coerce(img)
+        assert str(out) == "[image: image/jpeg]"
+
+    def test_file_content_coercion(self):
+        f = FileContent(name="report.pdf", data=b"%PDF", mime_type="application/pdf")
+        out = ToolOutput._coerce(f)
+        assert out.text_contents == ""
+        assert str(out) == "[file: report.pdf]"
+        assert len(out.file_contents) == 1
+        assert out.file_contents[0] is f
+        assert not out.image_contents
+
+    def test_tuple_text_and_image(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        out = ToolOutput._coerce(("Here is the image:", img))
+        assert out.text_contents == "Here is the image:"
+        assert str(out) == "Here is the image: [image]"
+        assert len(out.image_contents) == 1
+        assert out.image_contents[0] is img
+
+    def test_tuple_text_only(self):
+        out = ToolOutput._coerce(("hello", "world"))
+        assert out.text_contents == "hello\nworld"
+        assert str(out) == "hello\nworld"
+        assert not out.image_contents
+
+    def test_mixed_text_image_file(self):
+        img = ImageContent(image="https://example.com/chart.png")
+        f = FileContent(name="data.csv", data="col1,col2\n1,2", mime_type="text/csv")
+        out = ToolOutput._coerce(("Here is the chart and the raw data:", img, f))
+        assert out.text_contents == "Here is the chart and the raw data:"
+        assert str(out) == "Here is the chart and the raw data: [image] [file: data.csv]"
+        assert len(out.image_contents) == 1
+        assert out.image_contents[0] is img
+        assert len(out.file_contents) == 1
+        assert out.file_contents[0] is f
+        assert len(out.content) == 3
+
+    def test_list_coercion_with_image(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        out = ToolOutput._coerce(["result text", img])
+        assert out.text_contents == "result text"
+        assert len(out.image_contents) == 1
+
+    def test_serialize_text_only_returns_str(self):
+        out = ToolOutput._coerce("plain text")
+        assert out._serialize() == "plain text"
+
+    def test_serialize_with_image_returns_list(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        out = ToolOutput._coerce(("caption", img))
+        serialized = out._serialize()
+        assert isinstance(serialized, list)
+        assert serialized[0] == "caption"
+        assert serialized[1]["type"] == "image_content"
+
+    def test_pydantic_coerces_plain_string(self):
+        fco = FunctionCallOutput(call_id="c1", output="result", is_error=False)
+        assert isinstance(fco.output, ToolOutput)
+        assert fco.output.text_contents == "result"
+
+
+class TestMakeFunctionCallOutput:
+    def _make_call(self) -> FunctionCall:
+        return FunctionCall(call_id="call_1", name="my_tool", arguments="{}")
+
+    def test_string_output(self):
+        result = make_function_call_output(
+            fnc_call=self._make_call(), output="Order #123 found", exception=None
+        )
+        assert result.fnc_call_out is not None
+        assert not result.fnc_call_out.is_error
+        assert result.fnc_call_out.output.text_contents == "Order #123 found"
+
+    def test_dict_output_becomes_repr_string(self):
+        d = {"status": "ok", "count": 3}
+        result = make_function_call_output(fnc_call=self._make_call(), output=d, exception=None)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.output.text_contents == str(d)
+
+    def test_none_output(self):
+        result = make_function_call_output(fnc_call=self._make_call(), output=None, exception=None)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.output.text_contents == ""
+
+    def test_image_content_output(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        result = make_function_call_output(fnc_call=self._make_call(), output=img, exception=None)
+        assert result.fnc_call_out is not None
+        assert len(result.fnc_call_out.output.image_contents) == 1
+
+    def test_tuple_with_image_output(self):
+        img = ImageContent(image="https://example.com/img.jpg")
+        result = make_function_call_output(
+            fnc_call=self._make_call(), output=("Here you go:", img), exception=None
+        )
+        assert result.fnc_call_out is not None
+        out = result.fnc_call_out.output
+        assert out.text_contents == "Here you go:"
+        assert len(out.image_contents) == 1
+
+    def test_mixed_text_image_file_output(self):
+        img = ImageContent(image="https://example.com/chart.png")
+        f = FileContent(name="data.csv", data="col1,col2\n1,2", mime_type="text/csv")
+        result = make_function_call_output(
+            fnc_call=self._make_call(),
+            output=("Here is the chart and the raw data:", img, f),
+            exception=None,
+        )
+        assert result.fnc_call_out is not None
+        out = result.fnc_call_out.output
+        assert out.text_contents == "Here is the chart and the raw data:"
+        assert len(out.image_contents) == 1
+        assert len(out.file_contents) == 1
+
+    def test_file_content_output(self):
+        f = FileContent(name="data.pdf", data=b"%PDF", mime_type="application/pdf")
+        result = make_function_call_output(fnc_call=self._make_call(), output=f, exception=None)
+        assert result.fnc_call_out is not None
+        assert len(result.fnc_call_out.output.file_contents) == 1
+
+    def test_tool_error_exception(self):
+        result = make_function_call_output(
+            fnc_call=self._make_call(), output=None, exception=ToolError("not found")
+        )
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error
+        assert "not found" in result.fnc_call_out.output.text_contents
+
+    def test_generic_exception(self):
+        result = make_function_call_output(
+            fnc_call=self._make_call(), output=None, exception=RuntimeError("boom")
+        )
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error
+
+    def test_invalid_output_returns_none_fnc_call_out(self):
+        class Unsupported:
+            pass
+
+        result = make_function_call_output(
+            fnc_call=self._make_call(), output=Unsupported(), exception=None
+        )
+        assert result.fnc_call_out is None
 
 
 class TestNoParametersSchema:
