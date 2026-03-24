@@ -102,12 +102,12 @@ class MCPServer(ABC):
         async with self._lifecycle_lock:
             if self._lifecycle_task is None or self._lifecycle_task.done():
                 loop = asyncio.get_running_loop()
-                ready_fut = loop.create_future()
+                new_ready_fut: asyncio.Future[None] = loop.create_future()
                 close_event = asyncio.Event()
-                self._ready_fut = ready_fut
+                self._ready_fut = new_ready_fut
                 self._close_event = close_event
                 self._lifecycle_task = asyncio.create_task(
-                    self._run_client_lifecycle(ready_fut=ready_fut, close_event=close_event),
+                    self._run_client_lifecycle(ready_fut=new_ready_fut, close_event=close_event),
                     name=f"{type(self).__name__}._run_client_lifecycle",
                 )
 
