@@ -144,7 +144,32 @@ class ServerEnvOption(Generic[T]):
 
 
 _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
+_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
+
+VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
+
+
+def _validate_and_normalize_log_level(
+    log_level: str | ServerEnvOption[str],
+) -> str | ServerEnvOption[str]:
+    if isinstance(log_level, ServerEnvOption):
+        levels_to_check = [log_level.dev_default, log_level.prod_default]
+    else:
+        levels_to_check = [log_level]
+
+    for level in levels_to_check:
+        if level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            )
+
+    if isinstance(log_level, ServerEnvOption):
+        return ServerEnvOption(
+            dev_default=log_level.dev_default.upper(),
+            prod_default=log_level.prod_default.upper(),
+        )
+    return log_level.upper()
 
 
 # NOTE: this object must be pickle-able
@@ -206,6 +231,13 @@ class ServerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
 
+    log_level: str | ServerEnvOption[str] = _default_log_level
+    """Log level for the worker.
+
+    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
+    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
+    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
+
     host: str = ""  # default to all interfaces
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -232,6 +264,9 @@ class ServerOptions:
     When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
+
+    def __post_init__(self) -> None:
+        self.log_level = _validate_and_normalize_log_level(self.log_level)
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -285,6 +320,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        log_level: str | ServerEnvOption[str] = _default_log_level,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -314,12 +350,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
-        self._agent_name = os.environ.get("LIVEKIT_AGENT_NAME", "")
-        if self._agent_name:
-            logger.info(
-                "using agent name from LIVEKIT_AGENT_NAME",
-                extra={"agent_name": self._agent_name},
-            )
+        self._log_level = _validate_and_normalize_log_level(log_level)
+        self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -341,6 +373,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    @property
+    def log_level(self) -> str | ServerEnvOption[str]:
+        return self._log_level
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -383,8 +419,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy=options.http_proxy,
             multiprocessing_context=options.multiprocessing_context,
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            log_level=options.log_level,
         )
         server.rtc_session(
             options.entrypoint_fnc,
@@ -451,8 +489,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            if agent_name:
-                self._agent_name = agent_name
+            self._agent_name = agent_name
             self._server_type = type
             return f
 
@@ -602,21 +639,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
-            if not unregistered:
-                if not self._ws_url:
-                    raise ValueError(
-                        "ws_url is required, or set LIVEKIT_URL environment variable"
-                    )
+            if not self._ws_url:
+                raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
 
-                if not self._api_key:
-                    raise ValueError(
-                        "api_key is required, or set LIVEKIT_API_KEY environment variable"
-                    )
+            if not self._api_key:
+                raise ValueError("api_key is required, or set LIVEKIT_API_KEY environment variable")
 
-                if not self._api_secret:
-                    raise ValueError(
-                        "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
-                    )
+            if not self._api_secret:
+                raise ValueError(
+                    "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
+                )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
@@ -645,12 +677,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     except Exception as e:
                         logger.warning(f"failed to remove {file_path}", exc_info=e)
 
-            if self._ws_url:
-                os.environ["LIVEKIT_URL"] = self._ws_url
-            if self._api_key:
-                os.environ["LIVEKIT_API_KEY"] = self._api_key
-            if self._api_secret:
-                os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            os.environ["LIVEKIT_URL"] = self._ws_url
+            os.environ["LIVEKIT_API_KEY"] = self._api_key
+            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
             logger.info(
                 "starting worker",
@@ -693,10 +722,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
-            if self._ws_url:
-                self._api = api.LiveKitAPI(
-                    self._ws_url, self._api_key, self._api_secret, session=self._http_session
-                )
+            self._api = api.LiveKitAPI(
+                self._ws_url, self._api_key, self._api_secret, session=self._http_session
+            )
             self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
@@ -877,17 +905,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
-            if not token:
-                if fake_job and (not self._api_key or not self._api_secret):
-                    token = ""
-                else:
-                    token = (
-                        api.AccessToken(self._api_key, self._api_secret)
-                        .with_identity(agent_identity)
-                        .with_kind("agent")
-                        .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                        .to_jwt()
-                    )
+            token = token or (
+                api.AccessToken(self._api_key, self._api_secret)
+                .with_identity(agent_identity)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
@@ -906,13 +930,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     await self._close_future
                 return
 
-            self._closed = True
-
-            # Worker never fully started (e.g. interrupted during init)
-            if self._close_future is None:
-                return
-
             logger.info("shutting down worker", extra={"id": self.id})
+
+            assert self._close_future is not None
+            assert self._http_session is not None
+            assert self._api is not None
+            assert self._http_server is not None
+
+            self._closed = True
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
@@ -929,18 +954,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._inference_executor is not None:
                 await self._inference_executor.aclose()
 
-            if self._http_session is not None:
-                await self._http_session.close()
-
-            if self._http_server is not None:
-                await self._http_server.aclose()
+            await self._http_session.close()
+            await self._http_server.aclose()
 
             if self._prometheus_server:
                 await self._prometheus_server.aclose()
 
-            if self._api is not None:
-                await self._api.aclose()  # type: ignore
+            await self._api.aclose()  # type: ignore
 
+            # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
             if not self._close_future.done():

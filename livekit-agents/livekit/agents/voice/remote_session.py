@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import struct
+import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Literal
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal
+
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -21,27 +24,38 @@ from ..llm import (
     Toolset,
 )
 from ..log import logger
+from ..metrics import (
+    AgentSessionUsage,
+    InterruptionModelUsage,
+    LLMModelUsage,
+    STTModelUsage,
+    TTSModelUsage,
+)
 from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
+    SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
 )
+from .run_result import RunResult
 
 if TYPE_CHECKING:
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
-    from .agent_session import AgentSession
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
+    from ..inference.interruption import OverlappingSpeechEvent
+    from .agent_session import AgentSession, AgentSessionOptions
+    from .room_io.types import TextInputCallback
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
 
 class SessionTransport(ABC):
+    @abstractmethod
     async def start(self) -> None: ...
     @abstractmethod
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None: ...
@@ -59,21 +73,28 @@ class RoomSessionTransport(SessionTransport):
         self._remote_identity = remote_identity
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    @property
+    def remote_identity(self) -> str | None:
+        return self._remote_identity
+
+    @remote_identity.setter
+    def remote_identity(self, value: str | None) -> None:
+        self._remote_identity = value
 
     async def start(self) -> None:
         if self._handler_registered:
             return
-        self._room.register_byte_stream_handler(
-            TOPIC_SESSION_MESSAGES, self._on_byte_stream
-        )
+        self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
 
-    def _on_byte_stream(
-        self, reader: rtc.ByteStreamReader, participant_identity: str
-    ) -> None:
+    def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
             return
-        asyncio.create_task(self._read_stream(reader))
+        task = asyncio.create_task(self._read_stream(reader))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
@@ -94,13 +115,12 @@ class RoomSessionTransport(SessionTransport):
             return
         try:
             data = msg.SerializeToString()
-            kwargs: dict[str, str | list[str]] = {
-                "topic": TOPIC_SESSION_MESSAGES,
-                "name": TOPIC_SESSION_MESSAGES,
-            }
-            if self._remote_identity:
-                kwargs["destination_identities"] = [self._remote_identity]
-            writer = await self._room.local_participant.stream_bytes(**kwargs)
+            dest = [self._remote_identity] if self._remote_identity else None
+            writer = await self._room.local_participant.stream_bytes(
+                name=utils.shortuuid("AS_"),
+                topic=TOPIC_SESSION_MESSAGES,
+                destination_identities=dest,
+            )
             await writer.write(data)
             await writer.aclose()
         except Exception:
@@ -110,6 +130,8 @@ class RoomSessionTransport(SessionTransport):
         if self._recv_ch.closed:
             return
         self._recv_ch.close()
+        await utils.aio.cancel_and_wait(*self._tasks)
+        self._tasks.clear()
         if self._handler_registered:
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
@@ -129,7 +151,6 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
-
     def __init__(self, host: str, port: int) -> None:
         self._host = host
         self._port = port
@@ -186,7 +207,7 @@ class TcpSessionTransport(SessionTransport):
         try:
             header = await self._reader.readexactly(_TCP_HEADER_SIZE)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
         length = struct.unpack(">I", header)[0]
         if length > _TCP_MAX_MESSAGE_SIZE:
@@ -196,14 +217,14 @@ class TcpSessionTransport(SessionTransport):
         try:
             data = await self._reader.readexactly(length)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
         msg = agent_pb.AgentSessionMessage()
         msg.ParseFromString(data)
         return msg
 
 
-_AGENT_STATE_MAP: dict[AgentState, int] = {
+_AGENT_STATE_MAP: dict[AgentState, agent_pb.AgentState] = {
     "initializing": agent_pb.AS_INITIALIZING,
     "idle": agent_pb.AS_IDLE,
     "listening": agent_pb.AS_LISTENING,
@@ -211,7 +232,7 @@ _AGENT_STATE_MAP: dict[AgentState, int] = {
     "speaking": agent_pb.AS_SPEAKING,
 }
 
-_USER_STATE_MAP: dict[UserState, int] = {
+_USER_STATE_MAP: dict[UserState, agent_pb.UserState] = {
     "speaking": agent_pb.US_SPEAKING,
     "listening": agent_pb.US_LISTENING,
     "away": agent_pb.US_AWAY,
@@ -227,17 +248,17 @@ _METRICS_FIELDS = (
 )
 
 
-def _tool_names(tools: list) -> list[str]:
+def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
     for tool in tools:
-        if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        if isinstance(tool, FunctionTool | RawFunctionTool):
             result.append(tool.info.name)
         elif isinstance(tool, Toolset):
             result.extend(_tool_names(tool.tools))
     return result
 
 
-def _metrics_to_proto(metrics: dict | None) -> agent_pb.MetricsReport:
+def _metrics_to_proto(metrics: Mapping[str, Any] | None) -> agent_pb.MetricsReport:
     if not metrics:
         return agent_pb.MetricsReport()
     kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
@@ -300,8 +321,20 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
     return agent_pb.ChatContext.ChatItem()
 
 
-class _SessionHost:
+def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
+    return {
+        "endpointing": str(dict(opts.endpointing)),
+        "interruption": str(dict(opts.interruption)),
+        "max_tool_steps": str(opts.max_tool_steps),
+        "user_away_timeout": str(opts.user_away_timeout),
+        "preemptive_generation": str(opts.preemptive_generation),
+        "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
+        "use_tts_aligned_transcript": str(opts.use_tts_aligned_transcript),
+        "ivr_detection": str(opts.ivr_detection),
+    }
 
+
+class SessionHost:
     def __init__(
         self,
         transport: SessionTransport,
@@ -316,6 +349,7 @@ class _SessionHost:
         self._tasks = utils.aio.TaskSet()
         self._session: AgentSession | None = None
         self._events_registered = False
+        self._text_input_cb: TextInputCallback | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -326,8 +360,12 @@ class _SessionHost:
             session.on("conversation_item_added", self._on_conversation_item_added)
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
-            session.on("metrics_collected", self._on_metrics_collected)
+            session.on("session_usage_updated", self._on_session_usage_updated)
+            session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
+
+    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
+        self._text_input_cb = text_input_cb
 
     async def start(self) -> None:
         if self._started:
@@ -348,7 +386,8 @@ class _SessionHost:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
-            self._session.off("metrics_collected", self._on_metrics_collected)
+            self._session.off("session_usage_updated", self._on_session_usage_updated)
+            self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
 
         if self._recv_task:
@@ -372,15 +411,18 @@ class _SessionHost:
         except Exception:
             logger.warning("error processing session message", exc_info=True)
 
-    def _dispatch_transport_message(
-        self, msg_type: str, msg: agent_pb.AgentSessionMessage
-    ) -> None:
+    def _dispatch_transport_message(self, msg_type: str, msg: agent_pb.AgentSessionMessage) -> None:
         if msg_type == "audio_input" and self._audio_input is not None:
             self._audio_input.push_frame(msg.audio_input)
         elif msg_type == "audio_playback_finished" and self._audio_output is not None:
             self._audio_output.notify_playout_finished()
 
-    def _send_event(self, event: agent_pb.AgentSessionEvent) -> None:
+    def _send_event(
+        self, event: agent_pb.AgentSessionEvent, created_at: float | None = None
+    ) -> None:
+        ts = Timestamp()
+        ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
+        event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
         self._tasks.create_task(self._transport.send_message(msg))
 
@@ -399,13 +441,15 @@ class _SessionHost:
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         old_pb = _USER_STATE_MAP.get(event.old_state, agent_pb.US_LISTENING)
         new_pb = _USER_STATE_MAP.get(event.new_state, agent_pb.US_LISTENING)
+        # use the original timestamp which is adjusted for VAD latency
         self._send_event(
             agent_pb.AgentSessionEvent(
                 user_state_changed=agent_pb.AgentSessionEvent.UserStateChanged(
                     old_state=old_pb,
                     new_state=new_pb,
                 )
-            )
+            ),
+            created_at=event.created_at,
         )
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
@@ -419,6 +463,11 @@ class _SessionHost:
         )
 
     def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
+        if not isinstance(
+            event.item,
+            ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
+        ):
+            return
         chat_item = _chat_item_to_proto(event.item)
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -444,6 +493,7 @@ class _SessionHost:
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
+            if fco is not None
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -454,8 +504,33 @@ class _SessionHost:
             )
         )
 
-    def _on_metrics_collected(self, event: MetricsCollectedEvent) -> None:
-        pass
+    def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
+        detected_at = Timestamp()
+        detected_at.FromNanoseconds(int(event.detected_at * 1e9))
+
+        overlap_started_at: Timestamp | None = None
+        if event.overlap_started_at is not None:
+            overlap_started_at = Timestamp()
+            overlap_started_at.FromNanoseconds(int(event.overlap_started_at * 1e9))
+
+        pb = agent_pb.AgentSessionEvent.OverlappingSpeech(
+            is_interruption=event.is_interruption,
+            detection_delay=event.detection_delay,
+            detected_at=detected_at,
+        )
+        if overlap_started_at is not None:
+            pb.overlap_started_at.CopyFrom(overlap_started_at)
+
+        self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
+
+    def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                session_usage_updated=agent_pb.AgentSessionEvent.SessionUsageUpdated(
+                    usage=_session_usage_to_proto(event.usage),
+                )
+            )
+        )
 
     def _on_error(self, event: ErrorEvent) -> None:
         self._send_event(
@@ -527,39 +602,181 @@ class _SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("run_input"):
-            items: list[agent_pb.ChatContext.ChatItem] = []
+            items_list: list[agent_pb.ChatContext.ChatItem] = []
             error: str | None = None
             text = req.run_input.text
             if text:
-                # Disable audio/transcription so TTS is skipped and the run
-                # completes after text generation without waiting for playout.
-                self._session.output.audio = None
-                self._session.output.transcription = None
+                if self._text_input_cb is not None:
+                    from .room_io.types import TextInputEvent
 
-                # Interrupt any in-progress speech (e.g. the greeting) that may
-                # be blocking the speech queue waiting for audio playout.
-                try:
-                    await self._session.interrupt(force=True)
-                except RuntimeError:
-                    pass  # session not running yet
+                    cb_result = self._text_input_cb(
+                        self._session,
+                        TextInputEvent(text=text, info=None, participant=None),
+                    )
+                    if asyncio.iscoroutine(cb_result):
+                        await cb_result
+                else:
+                    try:
+                        await self._session.interrupt(force=True)
+                    except RuntimeError:
+                        pass
 
-                result = self._session.run(user_input=text)
-                try:
-                    await result
-                except Exception as e:
-                    error = str(e)
-                items = [_chat_item_to_proto(ev.item) for ev in result.events]
+                    try:
+                        result: RunResult[None] = self._session.run(user_input=text)
+                        await result
+                        items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                    except Exception as e:
+                        error = str(e)
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     error=error,
                     run_input=agent_pb.SessionResponse.RunInputResponse(
-                        items=items,
+                        items=items_list,
                     ),
                 )
             )
             await self._transport.send_message(resp)
+
+        elif req.HasField("get_session_state"):
+            agent = self._session.current_agent
+            created_at = Timestamp()
+            started_at = self._session._started_at or time.time()
+            created_at.FromNanoseconds(int(started_at * 1e9))
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
+                        agent_state=_AGENT_STATE_MAP.get(
+                            self._session.agent_state,
+                            agent_pb.AS_IDLE,
+                        ),
+                        user_state=_USER_STATE_MAP.get(
+                            self._session.user_state,
+                            agent_pb.US_LISTENING,
+                        ),
+                        agent_id=agent.id,
+                        options=_serialize_options(self._session.options),
+                        created_at=created_at,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("get_rtc_stats"):
+            from google.protobuf.struct_pb2 import Struct
+
+            rtc_stats = (
+                await self._session._room_io.room.get_rtc_stats()
+                if self._session._room_io is not None
+                else None
+            )
+            publisher_stats: list[Struct] = []
+            subscriber_stats: list[Struct] = []
+            if rtc_stats:
+                from google.protobuf.json_format import MessageToDict
+
+                for s in rtc_stats.publisher_stats:
+                    d = MessageToDict(s)
+                    st = Struct()
+                    st.update(d)
+                    publisher_stats.append(st)
+                for s in rtc_stats.subscriber_stats:
+                    d = MessageToDict(s)
+                    st = Struct()
+                    st.update(d)
+                    subscriber_stats.append(st)
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    get_rtc_stats=agent_pb.SessionResponse.GetRTCStatsResponse(
+                        publisher_stats=publisher_stats,
+                        subscriber_stats=subscriber_stats,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("get_session_usage"):
+            created_at = Timestamp()
+            created_at.FromNanoseconds(int(time.time() * 1e9))
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
+                        usage=_session_usage_to_proto(self._session.usage),
+                        created_at=created_at,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
+
+def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
+    model_usages: list[agent_pb.ModelUsage] = []
+    for mu in usage.model_usage:
+        if isinstance(mu, LLMModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    llm=agent_pb.LLMModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        input_tokens=mu.input_tokens,
+                        input_cached_tokens=mu.input_cached_tokens,
+                        input_audio_tokens=mu.input_audio_tokens,
+                        input_cached_audio_tokens=mu.input_cached_audio_tokens,
+                        input_text_tokens=mu.input_text_tokens,
+                        input_cached_text_tokens=mu.input_cached_text_tokens,
+                        input_image_tokens=mu.input_image_tokens,
+                        input_cached_image_tokens=mu.input_cached_image_tokens,
+                        output_tokens=mu.output_tokens,
+                        output_audio_tokens=mu.output_audio_tokens,
+                        output_text_tokens=mu.output_text_tokens,
+                        session_duration=mu.session_duration,
+                    )
+                )
+            )
+        elif isinstance(mu, TTSModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    tts=agent_pb.TTSModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        input_tokens=mu.input_tokens,
+                        output_tokens=mu.output_tokens,
+                        characters_count=mu.characters_count,
+                        audio_duration=mu.audio_duration,
+                    )
+                )
+            )
+        elif isinstance(mu, STTModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    stt=agent_pb.STTModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        input_tokens=mu.input_tokens,
+                        output_tokens=mu.output_tokens,
+                        audio_duration=mu.audio_duration,
+                    )
+                )
+            )
+        elif isinstance(mu, InterruptionModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    interruption=agent_pb.InterruptionModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        total_requests=mu.total_requests,
+                    )
+                )
+            )
+    return agent_pb.AgentSessionUsage(model_usage=model_usages)
+
 
 
 RemoteSessionEventTypes = Literal[
