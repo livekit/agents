@@ -341,7 +341,7 @@ class BrowserAgent:
                 await self._agent_loop_task
 
         if self._computer_tool:
-            self._computer_tool.aclose()
+            await self._computer_tool.aclose()
 
         if self._session:
             await self._session.aclose()

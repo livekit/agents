@@ -60,10 +60,24 @@ class SpeechData:
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
+    source_languages: list[LanguageCode] | None = None
+    """the source languages spoken by the user. populated by STT services that support translation,
+    where `language` holds the target language and `source_languages` holds the original spoken language(s).
+    may contain multiple entries when a single utterance spans multiple source languages."""
+    source_texts: list[str] | None = None
+    """the original transcription segments in the source language(s), when translation is active.
+    each entry corresponds to the same-indexed entry in `source_languages`."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
             self.language = LanguageCode(self.language)
+        if self.source_languages is not None:
+            self.source_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.source_languages
+            ]
 
 
 @dataclass
