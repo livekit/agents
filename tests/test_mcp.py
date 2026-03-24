@@ -152,12 +152,8 @@ async def test_mcp_lifecycle_uses_same_task_across_agent_handoff(
 ) -> None:
     first_server = _FakeMCPServer()
     second_server = _FakeMCPServer()
-    first_agent = _SimpleAgent(
-        lk_mcp.MCPToolset(id="mcp-toolset-a", mcp_server=first_server)
-    )
-    second_agent = _SimpleAgent(
-        lk_mcp.MCPToolset(id="mcp-toolset-b", mcp_server=second_server)
-    )
+    first_agent = _SimpleAgent(lk_mcp.MCPToolset(id="mcp-toolset-a", mcp_server=first_server))
+    second_agent = _SimpleAgent(lk_mcp.MCPToolset(id="mcp-toolset-b", mcp_server=second_server))
     session = _create_session()
 
     await session.start(first_agent, record=False)
