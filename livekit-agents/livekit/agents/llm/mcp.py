@@ -119,6 +119,11 @@ class MCPServer(ABC):
 
         try:
             await ready_fut
+        except asyncio.CancelledError:
+            if not lifecycle_task.done():
+                lifecycle_task.cancel()
+            await asyncio.gather(lifecycle_task, return_exceptions=True)
+            raise
         except Exception:
             await lifecycle_task
             raise
@@ -144,7 +149,7 @@ class MCPServer(ABC):
                     )
                 )
                 await client.initialize()
-            except Exception as e:
+            except BaseException as e:
                 startup_failed = True
                 if not ready_fut.done():
                     ready_fut.set_exception(e)
