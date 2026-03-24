@@ -417,7 +417,6 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
