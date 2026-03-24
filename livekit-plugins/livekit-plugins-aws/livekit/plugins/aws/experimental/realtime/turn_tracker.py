@@ -7,9 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...log import logger
 from livekit.agents import llm
 
-from ...log import logger
+
 
 # Nova Sonic's barge-in detection signal (raw content without newline)
 BARGE_IN_CONTENT = '{ "interrupted" : true }'
@@ -79,6 +80,12 @@ class _TurnTracker:
             self._maybe_emit_input_stopped(turn)
             self._maybe_emit_transcript_completed(turn)
             self._maybe_emit_generation_created(turn)
+            # Reset turn after finalizing transcript so next user utterance
+            # starts fresh (e.g. user speaks again during a long tool call)
+            if turn.ev_trans_completed:
+                turn.phase = _Phase.DONE
+                self._curr_turn = None
+                return
 
         elif kind == "BARGE_IN":
             logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER: {turn}")

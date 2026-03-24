@@ -44,9 +44,10 @@ from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from ...log import logger
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
-from ...log import logger
+
 from .events import (
     SonicEventBuilder as seb,
     Tool,
@@ -97,6 +98,8 @@ lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
 
 # Shared credentials resolver instance to preserve cache across all sessions
 _shared_credentials_resolver: Boto3CredentialsResolver | None = None
+
+
 def _get_credentials_resolver() -> Boto3CredentialsResolver:
     """Get or create the shared credentials resolver instance.
 
@@ -106,6 +109,8 @@ def _get_credentials_resolver() -> Boto3CredentialsResolver:
     if _shared_credentials_resolver is None:
         _shared_credentials_resolver = Boto3CredentialsResolver()
     return _shared_credentials_resolver
+
+
 @dataclass
 class _RealtimeOptions:
     """Configuration container for a Sonic realtime session.
@@ -129,6 +134,8 @@ class _RealtimeOptions:
     region: str
     turn_detection: TURN_DETECTION
     modalities: MODALITIES
+
+
 @dataclass
 class _MessageGeneration:
     """Grouping of streams that together represent one assistant message.
@@ -142,6 +149,8 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
+
 @dataclass
 class _ResponseGeneration:
     """Book-keeping dataclass tracking the lifecycle of a Nova Sonic completion.
@@ -175,6 +184,8 @@ class _ResponseGeneration:
     _restart_attempts: int = 0
     _done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
     _emitted: bool = False  # Track if generation_created event was emitted
+
+
 class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
     """IdentityResolver implementation that sources AWS credentials from boto3.
 
@@ -277,6 +288,8 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
         except Exception as e:
             logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
             return None
+
+
 class RealtimeModel(llm.RealtimeModel):
     """High-level entry point that conforms to the LiveKit RealtimeModel interface.
 
@@ -451,6 +464,8 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None:
         """Close all active sessions."""
         pass
+
+
 class RealtimeSession(  # noqa: F811
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
 ):
@@ -511,6 +526,8 @@ class RealtimeSession(  # noqa: F811
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
+        self._no_gen_content_roles: dict[str, str] = {}  # contentId → role for events without generation
+        self._current_user_content_id: str | None = None  # track current user utterance
         # Signalled after await_output() returns (HTTP 200 received).
         # Interactive text must wait for this to avoid being sent before
         # audio input is flowing (Nova Sonic requires active audio to generate).
@@ -1088,6 +1105,10 @@ class RealtimeSession(  # noqa: F811
         # Barge-in can set _current_generation to None between the creation above and here.
         # Without this check, we crash on interruptions.
         if self._current_generation is None:
+            # Track role for events that arrive without a generation
+            content_id = event_data["event"]["contentStart"].get("contentId")
+            if content_id:
+                self._no_gen_content_roles[content_id] = role
             logger.debug("No generation exists - ignoring content_start event")
             return
 
@@ -1108,17 +1129,19 @@ class RealtimeSession(  # noqa: F811
         log_event_data(event_data)
 
         if self._current_generation is None:
-            # No active generation. This happens for USER ASR text arriving
-            # between turns. Handle barge-in and chat context updates directly
-            # without creating a generation.
+            # No active generation. This happens for USER ASR and ASSISTANT FINAL
+            # text arriving between turns.
             content_id = event_data["event"]["textOutput"]["contentId"]
             text_content = event_data["event"]["textOutput"]["content"]
 
             if text_content == BARGE_IN_SIGNAL:
                 return
 
-            # USER ASR text — just update chat context
-            self._update_chat_ctx(role="user", text_content=text_content)
+            role = self._no_gen_content_roles.get(content_id, "USER")
+            if role == "USER":
+                self._update_chat_ctx(role="user", text_content=text_content, content_id=content_id)
+            elif role == "ASSISTANT":
+                self._update_chat_ctx(role="assistant", text_content=text_content)
             return
 
         content_id = event_data["event"]["textOutput"]["contentId"]
@@ -1142,7 +1165,7 @@ class RealtimeSession(  # noqa: F811
 
         if content_type == "USER_ASR":
             logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
-            self._update_chat_ctx(role="user", text_content=text_content)
+            self._update_chat_ctx(role="user", text_content=text_content, content_id=content_id)
 
         elif content_type == "ASSISTANT_TEXT":
             # Set first token timestamp if not already set
@@ -1154,17 +1177,27 @@ class RealtimeSession(  # noqa: F811
                 self._current_generation.message_gen.text_ch.send_nowait(text_content)
             self._update_chat_ctx(role="assistant", text_content=text_content)
 
-    def _update_chat_ctx(self, role: llm.ChatRole, text_content: str) -> None:
+    def _update_chat_ctx(self, role: llm.ChatRole, text_content: str, content_id: str | None = None) -> None:
         """
         Update the chat context with the latest ASR text while guarding against model limitations:
             a) 40 total messages limit
             b) 1kB message size limit
         """
         logger.debug(f"Updating chat context with role: {role} and text_content: {text_content}")
-        if len(self._chat_ctx.items) == 0:
+
+        # Start a new message when the user contentId changes (new utterance)
+        force_new = False
+        if role == "user" and content_id is not None:
+            if self._current_user_content_id != content_id:
+                force_new = True
+                self._current_user_content_id = content_id
+
+        if len(self._chat_ctx.items) == 0 or force_new:
             msg = self._chat_ctx.add_message(role=role, content=text_content)
             if role == "user":
                 self._audio_message_ids.add(msg.id)
+            if len(self._chat_ctx.items) > MAX_MESSAGES:
+                self._chat_ctx.truncate(max_items=MAX_MESSAGES)
         else:
             prev_utterance = self._chat_ctx.items[-1]
             if prev_utterance.type == "message" and prev_utterance.role == role:
@@ -1188,9 +1221,7 @@ class RealtimeSession(  # noqa: F811
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
-        """Handle text content end - log but don't close generation yet."""
-        # Nova Sonic sends multiple content blocks within one completion
-        # Don't close generation here - wait for completionEnd or audio_output_content_end
+        """Handle text content end."""
         log_event_data(event_data)
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
