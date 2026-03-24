@@ -815,6 +815,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data["pitch"] = self._opts.pitch
                     data["loudness"] = self._opts.loudness
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
+                    data["output_audio_codec"] = self._opts.output_audio_codec
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
                     data["output_audio_bitrate"] = self._opts.output_audio_bitrate
