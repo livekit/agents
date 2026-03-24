@@ -4,7 +4,7 @@ import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
 from typing_extensions import Self
 
 from ..inference.interruption import (
@@ -129,6 +129,14 @@ class AgentHandoffEvent(BaseModel):
     old_agent: Agent | None = None
     new_agent: Agent
     created_at: float = Field(default_factory=time.time)
+
+    @field_serializer("old_agent")
+    def _serialize_old_agent(self, agent: Agent | None) -> str | None:
+        return agent.id if agent is not None else None
+
+    @field_serializer("new_agent")
+    def _serialize_new_agent(self, agent: Agent) -> str:
+        return agent.id
 
 
 class UserInputTranscribedEvent(BaseModel):
