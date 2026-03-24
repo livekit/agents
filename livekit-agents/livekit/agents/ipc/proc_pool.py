@@ -35,6 +35,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        ping_interval: float,
+        ping_timeout: float,
         inference_executor: inference_executor.InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
@@ -50,6 +52,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._close_timeout = close_timeout
+        self._ping_interval = ping_interval
+        self._ping_timeout = ping_timeout
         self._inf_executor = inference_executor
         self._initialize_timeout = initialize_timeout
         self._loop = loop
@@ -169,7 +173,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
                 inference_executor=self._inf_executor,
-                ping_interval=2.5,
+                ping_interval=self._ping_interval,
                 high_ping_threshold=0.5,
                 http_proxy=self._http_proxy,
                 loop=self._loop,
@@ -184,8 +188,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 inference_executor=self._inf_executor,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
-                ping_interval=2.5,
-                ping_timeout=60,
+                ping_interval=self._ping_interval,
+                ping_timeout=self._ping_timeout,
                 high_ping_threshold=0.5,
                 memory_warn_mb=self._memory_warn_mb,
                 memory_limit_mb=self._memory_limit_mb,
