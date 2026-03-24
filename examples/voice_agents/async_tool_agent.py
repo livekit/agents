@@ -52,7 +52,7 @@ class TravelToolset(AsyncToolset):
         )
 
         # Phase 1: searching airlines (~60s)
-        await asyncio.sleep(40)
+        await asyncio.sleep(30)
 
         airlines = random.sample(
             ["United", "Delta", "American", "JetBlue", "Southwest", "Alaska"], k=3
@@ -66,7 +66,7 @@ class TravelToolset(AsyncToolset):
         )
 
         # Phase 2: confirming booking (~60s)
-        await asyncio.sleep(40)
+        await asyncio.sleep(60)
 
         logger.info("Flight booked")
         confirmation = f"FL-{random.randint(100000, 999999)}"
@@ -75,42 +75,46 @@ class TravelToolset(AsyncToolset):
             f"Price: ${prices[cheapest]}. Confirmation: {confirmation}."
         )
 
-    # -- Tool 2: Travel advice via web search --
+    # -- Tool 2: Tour guide via web search --
 
     @llm.function_tool
-    async def travel_advice(self, ctx: AsyncRunContext, destination: str, question: str) -> str:
-        """Look up travel advice for a destination using web research.
-        Use this when the user asks about things to do, where to eat,
-        safety tips, best time to visit, local customs, or any travel question.
+    async def tour_guide(self, ctx: AsyncRunContext, destination: str, interests: str) -> str:
+        """Research a destination and recommend what to see, where to eat, and
+        things to do. Use this when the user is visiting somewhere and wants
+        sightseeing spots, restaurant picks, local food, nightlife, or
+        neighborhood tips.
 
         Args:
-            destination: The travel destination (city or region).
-            question: The specific travel question to research.
+            destination: The city or area the user is visiting.
+            interests: What the user is interested in (e.g. "street food and temples",
+                "museums and nightlife", "family-friendly activities").
         """
-        ctx.pending(f"Researching travel tips for {destination}. Let me look that up.")
+        ctx.pending(
+            f"Looking up the best spots in {destination} for you. Give me a moment to search."
+        )
 
-        sources = await self._search(destination, question, chat_ctx=ctx.session.history)
+        sources = await self._search(destination, interests, chat_ctx=ctx.session.history)
 
         if not sources:
-            return f"Could not find travel information for {destination}."
+            return f"Could not find information about {destination}."
 
-        logger.info(f"Found {len(sources)} sources for travel advice")
+        logger.info(f"Found {len(sources)} sources for tour guide")
 
-        advice = await self._summarize(destination, question, sources, chat_ctx=ctx.session.history)
-        logger.info(f"Travel advice ready for {destination}")
-        return advice
+        tips = await self._summarize(destination, interests, sources, chat_ctx=ctx.session.history)
+        logger.info(f"Tour guide tips ready for {destination}")
+        return tips
 
     async def _search(
-        self, destination: str, question: str, chat_ctx: llm.ChatContext
+        self, destination: str, interests: str, chat_ctx: llm.ChatContext
     ) -> list[dict]:
-        logger.info(f"Searching travel info: {destination} — {question}")
+        logger.info(f"Searching: {destination} — {interests}")
         plan_ctx = chat_ctx.copy(exclude_function_call=True, exclude_instructions=True)
         plan_ctx.add_message(
             role="system",
             content=(
                 "You are a travel research assistant. Output 3-4 web search queries "
-                f"to find practical travel advice about {destination}, "
-                f"specifically: {question}. "
+                f"to find the best places to visit, eat, and explore in {destination} "
+                f"for someone interested in: {interests}. "
                 "Output only the queries, one per line, nothing else."
             ),
         )
@@ -128,7 +132,7 @@ class TravelToolset(AsyncToolset):
     async def _summarize(
         self,
         destination: str,
-        question: str,
+        interests: str,
         sources: list[dict],
         chat_ctx: llm.ChatContext,
     ) -> str:
@@ -137,20 +141,18 @@ class TravelToolset(AsyncToolset):
         summary_ctx.add_message(
             role="system",
             content=(
-                f"You are a helpful travel advisor. The user asked about {destination}: "
-                f'"{question}". Based on the conversation context, '
-                "summarize the search results below in no more than 300 words."
+                f"You are a local tour guide for {destination}. The user is interested in: "
+                f'"{interests}". Based on the search results below, recommend specific '
+                f"places to visit, restaurants to try, and things to do. "
+                f"Be specific — give actual names and neighborhoods. "
+                f"This will be spoken aloud, so keep it conversational and brief — "
+                f"3 to 5 top picks, no more than 200 words. No bullet points or markdown.\n\n"
                 f"Search results:\n{source_text}"
             ),
         )
 
         response = await self._thinking_llm.chat(chat_ctx=summary_ctx).collect()
-        return (
-            f"Summarized from search results: {response.text}. "
-            "Give a short, conversational answer with the most useful tips."
-            f"The response will be spoken aloud, so keep it brief — 2 to 4 key points, "
-            f"no bullet points or markdown."
-        )
+        return response.text
 
 
 class TravelAgent(Agent):
@@ -159,13 +161,14 @@ class TravelAgent(Agent):
             instructions=(
                 "You are a friendly travel assistant that communicates via voice. "
                 "Avoid emojis and markdown — speak naturally and concisely. "
-                "You can help with two things: booking flights and giving travel advice. "
+                "You can help with two things: booking flights and recommending what "
+                "to see, eat, and do at a destination. "
                 "Use the book_flight tool when the user wants to book a flight. "
-                "Use the travel_advice tool when the user asks about destinations, "
-                "things to do, local tips, safety, food, or anything travel-related. "
+                "Use the tour_guide tool when the user asks about places to visit, "
+                "restaurants, sightseeing, nightlife, or things to do somewhere. "
                 "Both tools run in the background, so keep chatting while they work. "
-                f"Today is {datetime.now().strftime('%Y-%m-%d')}. "
-                "Don't make up flight details or travel advice — always use the tools."
+                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
+                "Don't make up flight details or recommendations — always use the tools."
             ),
             tools=[TravelToolset()],
         )
@@ -174,7 +177,7 @@ class TravelAgent(Agent):
         self.session.generate_reply(
             instructions=(
                 "Greet the user and let them know you can help book flights "
-                "and give travel advice. Keep it short."
+                "and recommend places to visit and eat. Keep it short."
             )
         )
 
@@ -187,7 +190,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("inworld"),
+        tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         vad=silero.VAD.load(),
         turn_handling={"interruption": {"mode": "vad"}},
     )

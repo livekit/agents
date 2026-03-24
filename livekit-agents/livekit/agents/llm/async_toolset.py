@@ -15,7 +15,6 @@ from ..llm.tool_context import (
     RawFunctionTool,
     Tool,
     Toolset,
-    find_function_tools,
     function_tool,
 )
 from ..llm.utils import function_arguments_to_pydantic_model
@@ -244,20 +243,15 @@ class AsyncToolset(Toolset):
         tools: list[Tool] | None = None,
         on_duplicate_call: DuplicateMode = "confirm",
     ) -> None:
-        super().__init__(id=id)
-        all_tools: list[Tool] = list(tools or [])
-        all_tools.extend(find_function_tools(self))
-        self._tools = [
-            self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
-            for t in all_tools
-        ]
+        super().__init__(id=id, tools=tools)
 
         self._on_duplicate_call = on_duplicate_call
-        self._running_tasks: dict[str, _RunningTask] = {}
+        self._tools = [
+            self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
+            for t in self._tools
+        ]
 
-    @property
-    def tools(self) -> list[Tool]:
-        return self._tools
+        self._running_tasks: dict[str, _RunningTask] = {}
 
     @function_tool
     async def get_running_tasks(self) -> list[dict]:

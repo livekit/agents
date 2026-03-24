@@ -46,6 +46,7 @@ class MyAgent(Agent):
         # according to its instructions
         # self.session.generate_reply(instructions="greet the user and introduce yourself")
 
+        # TODO:
         self.session.generate_reply(instructions="count 1 2 3")
         self.session.generate_reply(user_input="continue to count to 10")
 
