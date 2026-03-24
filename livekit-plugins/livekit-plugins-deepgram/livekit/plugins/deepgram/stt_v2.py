@@ -200,6 +200,18 @@ class STTv2(stt.STT):
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        effective_eager = (
+            eager_eot_threshold if is_given(eager_eot_threshold) else self._opts.eager_eot_threshold
+        )
+        effective_eot = (
+            eot_threshold
+            if is_given(eot_threshold)
+            else (self._opts.eot_threshold if is_given(self._opts.eot_threshold) else 0.7)
+        )
+        if is_given(effective_eager) and effective_eager > effective_eot:
+            raise ValueError(
+                f"eager_eot_threshold ({effective_eager}) must be less than or equal to eot_threshold ({effective_eot})"
+            )
         if is_given(model):
             self._opts.model = model
         if is_given(sample_rate):
@@ -222,13 +234,7 @@ class STTv2(stt.STT):
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
-            effective_eot = self._opts.eot_threshold if is_given(self._opts.eot_threshold) else 0.7
-            if eager_eot_threshold > effective_eot:
-                raise ValueError(
-                    f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold ({effective_eot})"
-                )
-            else:
-                self._opts.eager_eot_threshold = eager_eot_threshold
+            self._opts.eager_eot_threshold = eager_eot_threshold
 
         for stream in self._streams:
             stream.update_options(
