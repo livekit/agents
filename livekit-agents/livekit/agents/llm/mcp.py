@@ -79,7 +79,6 @@ class MCPServer(ABC):
         tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
         self._client: ClientSession | None = None
-        self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
         self._tool_result_resolver: MCPToolResultResolver = (
             tool_result_resolver or _default_tool_result_resolver
@@ -87,6 +86,10 @@ class MCPServer(ABC):
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_task: asyncio.Task[None] | None = None
+        self._ready_fut: asyncio.Future[None] | None = None
+        self._close_event: asyncio.Event | None = None
 
     @property
     def initialized(self) -> bool:
@@ -96,22 +99,80 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
-        try:
-            streams = await self._exit_stack.enter_async_context(self.client_streams())
-            receive_stream, send_stream = streams[0], streams[1]
-            self._client = await self._exit_stack.enter_async_context(
-                ClientSession(
-                    receive_stream,
-                    send_stream,
-                    read_timeout_seconds=timedelta(seconds=self._read_timeout)
-                    if self._read_timeout
-                    else None,
+        async with self._lifecycle_lock:
+            if self._lifecycle_task is None or self._lifecycle_task.done():
+                loop = asyncio.get_running_loop()
+                ready_fut = loop.create_future()
+                close_event = asyncio.Event()
+                self._ready_fut = ready_fut
+                self._close_event = close_event
+                self._lifecycle_task = asyncio.create_task(
+                    self._run_client_lifecycle(ready_fut=ready_fut, close_event=close_event),
+                    name=f"{type(self).__name__}._run_client_lifecycle",
                 )
-            )
-            await self._client.initialize()  # type: ignore[union-attr]
+
+            ready_fut = self._ready_fut
+            lifecycle_task = self._lifecycle_task
+
+        assert ready_fut is not None
+        assert lifecycle_task is not None
+
+        try:
+            await ready_fut
         except Exception:
-            await self.aclose()
+            await lifecycle_task
             raise
+
+    async def _run_client_lifecycle(
+        self, *, ready_fut: asyncio.Future[None], close_event: asyncio.Event
+    ) -> None:
+        exit_stack = AsyncExitStack()
+        startup_failed = False
+
+        try:
+            client: ClientSession | None = None
+            try:
+                streams = await exit_stack.enter_async_context(self.client_streams())
+                receive_stream, send_stream = streams[0], streams[1]
+                client = await exit_stack.enter_async_context(
+                    ClientSession(
+                        receive_stream,
+                        send_stream,
+                        read_timeout_seconds=timedelta(seconds=self._read_timeout)
+                        if self._read_timeout
+                        else None,
+                    )
+                )
+                await client.initialize()
+            except Exception as e:
+                startup_failed = True
+                if not ready_fut.done():
+                    ready_fut.set_exception(e)
+                return
+
+            assert client is not None
+            self._client = client
+            if not ready_fut.done():
+                ready_fut.set_result(None)
+
+            await close_event.wait()
+        finally:
+            try:
+                await exit_stack.aclose()
+            except Exception:
+                if not startup_failed:
+                    raise
+            finally:
+                self._client = None
+                self._lk_tools = None
+
+                async with self._lifecycle_lock:
+                    if self._ready_fut is ready_fut:
+                        self._ready_fut = None
+                    if self._close_event is close_event:
+                        self._close_event = None
+                    if self._lifecycle_task is asyncio.current_task():
+                        self._lifecycle_task = None
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -171,11 +232,19 @@ class MCPServer(ABC):
         return function_tool(_tool_called, raw_schema=raw_schema)
 
     async def aclose(self) -> None:
-        try:
-            await self._exit_stack.aclose()
-        finally:
+        async with self._lifecycle_lock:
+            lifecycle_task = self._lifecycle_task
+            close_event = self._close_event
+
+        if lifecycle_task is None:
             self._client = None
             self._lk_tools = None
+            return
+
+        if close_event is not None:
+            close_event.set()
+
+        await lifecycle_task
 
     @abstractmethod
     def client_streams(
