@@ -411,6 +411,13 @@ class TTS(tts.TTS):
             raise ValueError("max_chunk_length must be between 50 and 500")
         if speech_sample_rate not in [8000, 16000, 22050, 24000]:
             raise ValueError("Sample rate must be 8000, 16000, 22050, or 24000 Hz")
+        if output_audio_codec is not None:
+            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+                raise ValueError(
+                    "output_audio_codec must be one of "
+                    f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+                )
+            self._opts.output_audio_codec = output_audio_codec
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
