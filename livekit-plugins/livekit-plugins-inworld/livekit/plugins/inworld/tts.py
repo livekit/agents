@@ -24,7 +24,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 from urllib.parse import urljoin
 
 import aiohttp
@@ -51,24 +51,38 @@ from .version import __version__
 USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
-DEFAULT_ENCODING = "OGG_OPUS"
-DEFAULT_MODEL = "inworld-tts-1"
-DEFAULT_SAMPLE_RATE = 48000
+DEFAULT_ENCODING: Encoding = "PCM"
+DEFAULT_MODEL = "inworld-tts-1.5-max"
+DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
-DEFAULT_TEMPERATURE = 1.1
+DEFAULT_TEMPERATURE = 1.0
 DEFAULT_SPEAKING_RATE = 1.0
 DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"] | str
+Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
-TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+_TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+TextNormalization = _TextNormalizationStr | bool
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
 
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
+
+
+def _validate_str_param(value: object, name: str, literal_type: Any) -> None:
+    valid = get_args(literal_type)
+    if not isinstance(value, str) or value not in valid:
+        raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
+
+
+def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
+    if isinstance(value, bool):
+        return "ON" if value else "OFF"
+    _validate_str_param(value, "text_normalization", _TextNormalizationStr)
+    return cast(_TextNormalizationStr, value)
 
 
 @dataclass
@@ -88,14 +102,14 @@ class _TTSOptions:
 
     @property
     def mime_type(self) -> str:
-        if self.encoding == "MP3":
+        if self.encoding == "PCM":
+            return "audio/pcm"
+        elif self.encoding == "MP3":
             return "audio/mpeg"
         elif self.encoding == "OGG_OPUS":
             return "audio/ogg"
         elif self.encoding == "FLAC":
             return "audio/flac"
-        elif self.encoding in ("ALAW", "MULAW"):
-            return "audio/basic"
         else:
             return "audio/wav"
 
@@ -114,6 +128,7 @@ class _ContextInfo:
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
     segment_started: bool = False
+    flush_after_push: bool = False
     created_at: float = field(default_factory=time.time)
     close_started_at: float | None = None
     # Cumulative timestamp tracking for monotonic timestamps across generations.
@@ -295,6 +310,7 @@ class _InworldConnection:
                         state=_ContextState.CREATING,
                         emitter=emitter,
                         waiter=waiter,
+                        flush_after_push=opts.encoding == "PCM",
                     )
                     self._contexts[ctx_id] = ctx_info
                     # Release reservation now that we have a real context
@@ -333,6 +349,14 @@ class _InworldConnection:
             self._outbound_queue.put_nowait(_FlushContextMsg(context_id=context_id))
         except asyncio.QueueFull:
             logger.warning("Outbound queue full, dropping flush")
+
+    def _release_context(self, context_id: str) -> None:
+        """Remove a context and signal that capacity is available."""
+        self._contexts.pop(context_id, None)
+        self._last_activity = time.time()
+        self._context_available.set()
+        if self._on_capacity_available:
+            self._on_capacity_available()
 
     def close_context(self, context_id: str) -> None:
         """Queue a close message for a context (removes from pool)."""
@@ -425,6 +449,18 @@ class _InworldConnection:
                     continue
 
                 data = json.loads(msg.data)
+
+                # Check for errors that are not associated with a context
+                if err_obj := data.get("error"):
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "error_code": err_obj.get("code", 0),
+                            "error_message": err_obj.get("message", "Unknown error"),
+                        },
+                    )
+                    continue
+
                 result = data.get("result", {})
                 context_id = result.get("contextId")
 
@@ -433,16 +469,22 @@ class _InworldConnection:
                 # Check for errors in status
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
-                    error = APIError(f"Inworld error: {status.get('message', 'Unknown error')}")
+                    error_msg = status.get("message", "Unknown error")
+                    error = APIError(f"Inworld error: {error_msg}")
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "context_id": context_id,
+                            "error_code": status.get("code"),
+                            "error_message": error_msg,
+                            "context_state": ctx.state.value if ctx else "unknown",
+                            "context_known": ctx is not None,
+                        },
+                    )
                     if ctx:
                         if ctx.waiter and not ctx.waiter.done():
                             ctx.waiter.set_exception(error)
-                        # Release the stuck context and signal capacity
-                        self._contexts.pop(context_id, None)
-                        self._last_activity = time.time()
-                        self._context_available.set()
-                        if self._on_capacity_available:
-                            self._on_capacity_available()
+                        self._release_context(context_id)
                     continue
 
                 if not ctx:
@@ -450,6 +492,10 @@ class _InworldConnection:
 
                 if "contextCreated" in result:
                     ctx.state = _ContextState.ACTIVE
+                    logger.info(
+                        "Context created confirmed by server",
+                        extra={"context_id": context_id},
+                    )
                     continue
 
                 if audio_chunk := result.get("audioChunk"):
@@ -500,6 +546,8 @@ class _InworldConnection:
 
                         if audio_content := audio_chunk.get("audioContent"):
                             ctx.emitter.push(base64.b64decode(audio_content))
+                            if ctx.flush_after_push:
+                                ctx.emitter.flush()
                     continue
 
                 if "flushCompleted" in result:
@@ -522,11 +570,7 @@ class _InworldConnection:
                 if "contextClosed" in result:
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(context_id, None)
-                    self._last_activity = time.time()
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(context_id)
                     continue
 
         except Exception as e:
@@ -544,14 +588,9 @@ class _InworldConnection:
                 # Use close_started_at if available, otherwise fall back to created_at
                 close_time = ctx.close_started_at or ctx.created_at
                 if ctx.state == _ContextState.CLOSING and now - close_time > 120.0:
-                    # Resolve waiter before evicting
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(ctx.context_id, None)
-                    self._last_activity = now
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(ctx.context_id)
 
     async def _handle_connection_error(self, error: Exception) -> None:
         """Handle connection-level error by failing all active contexts."""
@@ -805,14 +844,14 @@ class TTS(tts.TTS):
             api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
-            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
-            encoding (str, optional): The encoding to use. Defaults to "OGG_OPUS".
+            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1.5-max".
+            encoding (str, optional): The encoding to use. Defaults to "PCM".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 48000.
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
                 Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
-                tokens to generate the response. Range [0, 2]. Defaults to 1.1.
+                tokens to generate the response. Range (0, 2]. Defaults to 1.0.
             timestamp_type (str, optional): Controls timestamp metadata returned with the audio.
                 Use "WORD" for word-level timestamps or "CHARACTER" for character-level.
                 Useful for karaoke-style captions, word highlighting, and lipsync.
@@ -865,6 +904,19 @@ class TTS(tts.TTS):
         self._ws_url = ws_url
         self._session = http_session
 
+        if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
+        if is_given(timestamp_type):
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+        if is_given(text_normalization):
+            text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
+
         self._opts = _TTSOptions(
             voice=voice if is_given(voice) else DEFAULT_VOICE,
             model=model if is_given(model) else DEFAULT_MODEL,
@@ -875,9 +927,7 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
-            timestamp_transport_strategy=cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
-            )
+            timestamp_transport_strategy=timestamp_transport_strategy
             if is_given(timestamp_transport_strategy)
             else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
@@ -962,6 +1012,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
             self._opts.encoding = encoding
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
@@ -972,13 +1023,17 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
-            self._opts.timestamp_type = cast(TimestampType, timestamp_type)
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+            self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            self._opts.text_normalization = cast(TextNormalization, text_normalization)
+            self._opts.text_normalization = _resolve_text_normalization(text_normalization)
         if is_given(timestamp_transport_strategy):
-            self._opts.timestamp_transport_strategy = cast(
-                TimestampTransportStrategy, timestamp_transport_strategy
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
             )
+            self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
@@ -1126,7 +1181,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
-                            output_emitter.flush()
+                            if self._opts.encoding == "PCM":
+                                output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
                             message=error.get("message"),
@@ -1230,11 +1286,10 @@ def _parse_timestamp_info(
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        last_idx = len(words) - 1
-        for idx, (word, start, end) in enumerate(zip(words, starts, ends, strict=False)):
+        for word, start, end in zip(words, starts, ends, strict=False):
             # Each word gets a trailing space so that when the synchronizer concatenates
             # them via `pushed_text += text`, the transcript reads naturally.
-            text = f"{word} " if idx < last_idx else word
+            text = f"{word} "
             timed_strings.append(
                 TimedString(
                     text,

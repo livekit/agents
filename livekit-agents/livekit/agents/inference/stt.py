@@ -21,6 +21,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ..language import LanguageCode
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -30,11 +31,9 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 DeepgramModels = Literal[
-    "deepgram/flux-general",
-    "deepgram/flux-general-en",
     "deepgram/nova-3",
     "deepgram/nova-3-medical",
     "deepgram/nova-2",
@@ -42,10 +41,15 @@ DeepgramModels = Literal[
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
+DeepgramFluxModels = Literal[
+    "deepgram/flux-general",
+    "deepgram/flux-general-en",
+]
 CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
+    "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 
@@ -59,14 +63,38 @@ class DeepgramOptions(TypedDict, total=False):
     filler_words: bool  # default: True
     interim_results: bool  # default: True
     endpointing: int  # default: 25 (ms)
-    punctuate: bool  # default: False
+    punctuate: bool  # default: True
     smart_format: bool
     keywords: list[tuple[str, float]]
     keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
-    mip_opt_out: bool
+    mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
+    diarize: bool
+    dictation: bool
+    detect_language: bool
+    no_delay: bool  # default: True
+    utterance_end: bool
+    redact: str | list[str]
+    replace: str | list[str]
+    search: str | list[str]
+    tag: str | list[str]
+    channels: int
+    version: str
+    callback: str
+    callback_method: str
+    extra: str
+
+
+class DeepgramFluxOptions(TypedDict, total=False):
+    eager_eot_threshold: float  # range 0.3-0.9, default: 0.5
+    eot_threshold: float  # range 0.5-0.9
+    eot_timeout_ms: int
+    keyterm: str | list[str]
+    mip_opt_out: bool  # default: False
+    tag: str | list[str]
+    detect_language: bool
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -75,6 +103,9 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+    language_detection: bool
+    inactivity_timeout: float  # seconds
+    prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -84,6 +115,7 @@ class ElevenlabsOptions(TypedDict, total=False):
     vad_threshold: float
     min_speech_duration_ms: int
     min_silence_duration_ms: int
+    language_code: str
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -108,10 +140,10 @@ class FallbackModel(TypedDict, total=False):
 FallbackModelType = FallbackModel | str
 
 
-def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
-    language: NotGivenOr[str] = NOT_GIVEN
+def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
+    language: NotGivenOr[LanguageCode] = NOT_GIVEN
     if (idx := model.rfind(":")) != -1:
-        language = model[idx + 1 :]
+        language = LanguageCode(model[idx + 1 :])
         model = model[:idx]
     return model, language
 
@@ -133,6 +165,7 @@ def _normalize_fallback(
 
 STTModels = (
     DeepgramModels
+    | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
     | ElevenlabsModels
@@ -143,13 +176,12 @@ STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
 class STTOptions:
     model: NotGivenOr[STTModels | str]
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     encoding: STTEncoding
     sample_rate: int
     base_url: str
@@ -191,6 +223,23 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: DeepgramFluxModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[DeepgramFluxOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -261,6 +310,7 @@ class STT(stt.STT):
             dict[str, Any]
             | CartesiaOptions
             | DeepgramOptions
+            | DeepgramFluxOptions
             | AssemblyaiOptions
             | ElevenlabsOptions
         ] = NOT_GIVEN,
@@ -299,11 +349,7 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
@@ -326,11 +372,11 @@ class STT(stt.STT):
             )
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback)
 
         self._opts = STTOptions(
             model=model,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             base_url=lk_base_url,
@@ -398,24 +444,28 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
 
         for stream in self._streams:
-            stream.update_options(model=model, language=language)
+            stream.update_options(model=model, language=language, extra=extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
     ) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         options = replace(self._opts)
+        options.extra_kwargs = dict(options.extra_kwargs)
 
         if is_given(language):
-            options.language = language
+            options.language = LanguageCode(language)
 
         return options
 
@@ -433,22 +483,51 @@ class SpeechStream(stt.SpeechStream):
         self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
-        self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(
         self,
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        """Update streaming transcription options."""
+        """Update streaming transcription options.
+
+        When the WebSocket is live, a mid-stream session.update is sent so providers
+        that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
+        reconnecting. Unsupported providers ignore the message.
+        """
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
-        self._reconnect_event.set()
+            self._opts.language = LanguageCode(language)
+        if is_given(extra):
+            self._opts.extra_kwargs.update(extra)
+
+        has_update = is_given(model) or is_given(language) or is_given(extra)
+        if has_update and self._ws is not None and not self._ws.closed:
+            settings: dict[str, Any] = {}
+            if is_given(model):
+                settings["model"] = model
+            if is_given(language):
+                settings["language"] = str(LanguageCode(language))
+            if is_given(extra):
+                settings["extra"] = extra
+            update_msg = {
+                "type": "session.update",
+                "settings": settings,
+            }
+            asyncio.ensure_future(self._send_session_update(update_msg))
+
+    async def _send_session_update(self, msg: dict[str, Any]) -> None:
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.send_str(json.dumps(msg))
+        except Exception:
+            logger.debug("failed to send session.update, ws may be closing")
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -527,38 +606,21 @@ class SpeechStream(stt.SpeechStream):
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        try:
+            ws = await self._connect_ws()
+            self._ws = ws
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            self._ws = None
+            if ws is not None:
+                await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
@@ -615,7 +677,7 @@ class SpeechStream(stt.SpeechStream):
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
-        language = data.get("language", self._opts.language or "en")
+        language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
 
         if not text and not is_final:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -125,6 +127,13 @@ def _make_mock_http() -> MagicMock:
     return mock_http
 
 
+def _observability_endpoint_arg(func: Any) -> dict[str, str]:
+    """Build endpoint kwargs for old/new telemetry function signatures."""
+    if "observability_url" in inspect.signature(func).parameters:
+        return {"observability_url": "https://test.livekit.cloud"}
+    return {"cloud_hostname": "test.livekit.cloud"}
+
+
 @contextlib.contextmanager
 def _patch_upload_deps() -> Iterator[MagicMock]:
     """Patch OTel logger provider and AccessToken. Yields the mock logger for assertions."""
@@ -151,7 +160,7 @@ async def _call_upload(
     """Call _upload_session_report with sensible defaults."""
     await _upload_session_report(
         agent_name="test-agent",
-        cloud_hostname="test.livekit.cloud",
+        **_observability_endpoint_arg(_upload_session_report),
         report=report,
         tagger=tagger or _make_mock_tagger(),
         http_session=http_session or _make_mock_http(),
@@ -346,15 +355,15 @@ async def test_upload_evaluations_emitted_without_logs() -> None:
 
 
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
-    """LoggerProvider should be set up even when enable_logs=False (needed for evals)."""
+    """LoggerProvider should be set up even when enable_logs=False."""
     from livekit.agents.telemetry.traces import _setup_cloud_tracer
 
     with (
         patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
         patch(f"{_TRACES_MOD}.get_logger_provider") as mock_glp,
         patch(f"{_TRACES_MOD}.set_logger_provider") as mock_slp,
-        patch(f"{_TRACES_MOD}.OTLPLogExporter"),
-        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor"),
+        patch(f"{_TRACES_MOD}.OTLPLogExporter") as mock_exporter,
+        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor") as mock_blrp,
         patch(f"{_TRACES_MOD}.logging"),
     ):
         mock_token = MagicMock()
@@ -368,12 +377,15 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
         _setup_cloud_tracer(
             room_id="room-1",
             job_id="job-1",
-            cloud_hostname="test.livekit.cloud",
+            **_observability_endpoint_arg(_setup_cloud_tracer),
             enable_traces=False,
             enable_logs=False,
         )
 
     mock_slp.assert_called_once()
+    # OTLP exporter should NOT be created when enable_logs=False
+    mock_exporter.assert_not_called()
+    mock_blrp.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

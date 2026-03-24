@@ -2,7 +2,7 @@
 
 Support for OpenAI Realtime API, Responses API, LLM, TTS, and STT APIs.
 
-Also includes support for a large number of OpenAI-compatible APIs including [Azure OpenAI](https://docs.livekit.io/agents/integrations/llm/azure-openai/), [Cerebras](https://docs.livekit.io/agents/integrations/cerebras/), [Fireworks](https://docs.livekit.io/agents/integrations/llm/fireworks/), [Perplexity](https://docs.livekit.io/agents/integrations/llm/perplexity/), [Telnyx](https://docs.livekit.io/agents/integrations/llm/telnyx/), [xAI](https://docs.livekit.io/agents/integrations/llm/xai/), [Ollama](https://docs.livekit.io/agents/integrations/llm/ollama/), and [DeepSeek](https://docs.livekit.io/agents/integrations/llm/deepseek/).
+Also includes support for a large number of OpenAI-compatible APIs including [Azure OpenAI](https://docs.livekit.io/agents/integrations/llm/azure-openai/), [Cerebras](https://docs.livekit.io/agents/integrations/cerebras/), [Fireworks](https://docs.livekit.io/agents/integrations/llm/fireworks/), [Perplexity](https://docs.livekit.io/agents/integrations/llm/perplexity/), [Telnyx](https://docs.livekit.io/agents/integrations/llm/telnyx/), [xAI](https://docs.livekit.io/agents/integrations/llm/xai/), [Ollama](https://docs.livekit.io/agents/integrations/llm/ollama/), [DeepSeek](https://docs.livekit.io/agents/integrations/llm/deepseek/), and [SambaNova](https://docs.livekit.io/agents/integrations/llm/sambanova/).
 
 See [https://docs.livekit.io/agents/integrations/openai/](https://docs.livekit.io/agents/integrations/openai/) for more information.
 

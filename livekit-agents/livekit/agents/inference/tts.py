@@ -19,10 +19,11 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 CartesiaModels = Literal[
     "cartesia",
@@ -113,39 +114,66 @@ def _normalize_fallback(
 
 class CartesiaOptions(TypedDict, total=False):
     emotion: str
-    speed: Literal["slow", "normal", "fast"]
+    speed: Literal["slow", "normal", "fast"] | float
     volume: float
+    duration: float
+    max_buffer_delay_ms: int
+    add_timestamps: bool
+    add_phoneme_timestamps: bool
+    use_normalized_timestamps: bool
 
 
 class DeepgramOptions(TypedDict, total=False):
-    pass
+    mip_opt_out: bool  # default: False
 
 
 class ElevenlabsOptions(TypedDict, total=False):
-    inactivity_timeout: int  # default: 60
+    inactivity_timeout: int  # default: 60, range 5-180
     apply_text_normalization: Literal["auto", "off", "on"]  # default: "auto"
+    auto_mode: bool
+    enable_logging: bool
+    enable_ssml_parsing: bool
+    sync_alignment: bool
+    language_code: str
+    stability: float  # range 0-1
+    similarity_boost: float  # range 0-1
+    style: float  # range 0-1
+    speed: float  # range 0.25-4
+    use_speaker_boost: bool
+    chunk_length_schedule: list[float]
+    preferred_alignment: str
 
 
 class RimeOptions(TypedDict, total=False):
-    pass
+    """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
+    See: https://docs.rime.ai/api-reference/endpoint/websockets-json
+    """
+
+    speed_alpha: float  # default 1.0, <1 = faster, >1 = slower
+    pause_between_brackets: bool  # default False
+    phonemize_between_brackets: bool  # default False
+    inline_speed_alpha: str  # comma-separated speed factors for [bracketed] words
+    no_text_normalization: bool  # default False
 
 
 class InworldOptions(TypedDict, total=False):
-    pass
+    speaking_rate: float  # range >0.5, <=1.5
+    temperature: float  # range 0-2
+    timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
+    apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
 
 TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 24000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     voice: NotGivenOr[str]
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     encoding: TTSEncoding
     sample_rate: int
     base_url: str
@@ -325,11 +353,7 @@ class TTS(tts.TTS):
             if parsed_voice is not None and not is_given(voice):
                 voice = parsed_voice
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
@@ -353,12 +377,12 @@ class TTS(tts.TTS):
 
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback)
 
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
             sample_rate=sample_rate,
             base_url=lk_base_url,
@@ -492,7 +516,7 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(extra_kwargs):
             self._opts.extra_kwargs.update(extra_kwargs)
 

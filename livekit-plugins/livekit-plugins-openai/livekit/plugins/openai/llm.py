@@ -49,6 +49,7 @@ from .models import (
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     PerplexityChatModels,
+    SambaNovaChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
@@ -123,7 +124,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
                 reasoning_effort = "none"
             else:
                 reasoning_effort = "minimal"
@@ -209,6 +210,7 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -248,6 +250,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            max_completion_tokens=max_completion_tokens,
         )
         llm._owns_client = True
         return llm
@@ -279,6 +282,51 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "Cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            _strict_tool_schema=False,
+        )
+
+    @staticmethod
+    def with_sambanova(
+        *,
+        model: str | SambaNovaChatModels = "DeepSeek-R1-0528",
+        api_key: str | None = None,
+        base_url: str = "https://api.sambanova.ai/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of SambaNova LLM (OpenAI-compatible).
+
+        ``api_key`` must be set to your SambaNova API key, either using the argument or by setting
+        the ``SAMBANOVA_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("SAMBANOVA_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable"
             )
 
         return LLM(
@@ -955,7 +1003,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):

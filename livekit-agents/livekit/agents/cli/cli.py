@@ -19,6 +19,7 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from time import time as _wall_time
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -36,6 +37,7 @@ from rich.theme import Theme
 
 from livekit import api, rtc
 
+from .. import llm
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
@@ -44,7 +46,7 @@ from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
-from ..worker import AgentServer, WorkerOptions
+from ..worker import AgentServer, ServerEnvOption, WorkerOptions
 from . import proto
 from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
 
@@ -140,6 +142,7 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._pushed_duration: float = 0.0
         self._capture_start: float = 0.0
         self._flush_task: asyncio.Task[None] | None = None
+        self._playback_started_fired: bool = False
 
         self._output_buf = bytearray()
         self._audio_lock = threading.Lock()
@@ -149,6 +152,9 @@ class ConsoleAudioOutput(io.AudioOutput):
 
         self._paused_at: float | None = None
         self._paused_duration: float = 0.0
+
+        # track the segment id to avoid stale async operations
+        self._segment_id = 0
 
     @property
     def audio_lock(self) -> threading.Lock:
@@ -174,7 +180,6 @@ class ConsoleAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             self._capture_start = time.monotonic()
-            self.on_playback_started(created_at=time.time())
 
         self._pushed_duration += frame.duration
         with self._audio_lock:
@@ -194,6 +199,9 @@ class ConsoleAudioOutput(io.AudioOutput):
         with self._audio_lock:
             self._output_buf.clear()
             self._output_buf_empty.set()
+            # redundant (_wait_for_playout does the same, albeit async) but defensive
+            self._segment_id += 1
+            self._playback_started_fired = False
 
         if self._pushed_duration:
             self._interrupted_ev.set()
@@ -247,6 +255,24 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._interrupted_ev.clear()
         with self._audio_lock:
             self._output_buf_empty.set()
+            self._playback_started_fired = False
+            self._segment_id += 1
+
+    def _maybe_mark_playback_started(self) -> None:
+        """Mark the playback as started if it hasn't been already. Must be called under ``audio_lock``."""
+        if self._playback_started_fired:
+            return
+        self._playback_started_fired = True
+        t = _wall_time()
+        segment_id = self._segment_id
+        self._loop.call_soon_threadsafe(
+            lambda: self._on_playback_started(created_at=t, segment_id=segment_id)
+        )
+
+    def _on_playback_started(self, *, created_at: float, segment_id: int) -> None:
+        if self._segment_id != segment_id:
+            return
+        self.on_playback_started(created_at=created_at)
 
 
 class AgentsConsole:
@@ -305,6 +331,9 @@ class AgentsConsole:
         self._enabled = False
         self._record = False
 
+        self._last_metrics_text: Text | None = None
+        self._last_user_metrics: llm.MetricsReport | None = None
+
         self._text_mode_log_filter = TextModeLogFilter()
         self._log_handler = RichLoggingHandler(self)
 
@@ -336,6 +365,36 @@ class AgentsConsole:
             self._io_session = session
 
         if session:
+            from ..voice.events import (
+                AgentStateChangedEvent,
+                ConversationItemAddedEvent,
+            )
+
+            @session.on("conversation_item_added")
+            def _on_conversation_item_added(event: ConversationItemAddedEvent) -> None:
+                if not isinstance(event.item, llm.ChatMessage):
+                    return
+
+                if event.item.role == "user":
+                    self._last_user_metrics = event.item.metrics
+                elif event.item.role == "assistant":
+                    self._last_metrics_text = _format_turn_metrics(
+                        self._last_user_metrics, event.item.metrics
+                    )
+                    self._last_user_metrics = None
+
+            @session.on("agent_state_changed")
+            def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
+                if event.new_state == "speaking":
+                    early = session._early_assistant_metrics
+                    if early:
+                        self._last_metrics_text = _format_turn_metrics(
+                            self._last_user_metrics, early
+                        )
+                        session._early_assistant_metrics = None
+                elif event.new_state == "thinking":
+                    self._last_metrics_text = None
+
             self._update_sess_io(
                 session,
                 self.console_mode,
@@ -664,6 +723,8 @@ class AgentsConsole:
                 bytes_needed = frames * 2
                 if len(self._io_audio_output.audio_buffer) < bytes_needed:
                     available_bytes = len(self._io_audio_output.audio_buffer)
+                    if available_bytes > 0:
+                        self._io_audio_output._maybe_mark_playback_started()
                     outdata[: available_bytes // 2, 0] = np.frombuffer(
                         self._io_audio_output.audio_buffer,
                         dtype=np.int16,
@@ -673,6 +734,7 @@ class AgentsConsole:
                     del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
                     self.io_loop.call_soon_threadsafe(self._io_audio_output.mark_output_empty)
                 else:
+                    self._io_audio_output._maybe_mark_playback_started()
                     chunk = self._io_audio_output.audio_buffer[:bytes_needed]
                     outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
                     del self._io_audio_output.audio_buffer[:bytes_needed]
@@ -710,10 +772,17 @@ class FrequencyVisualizer:
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
 
     def __rich__(self) -> RenderableType:
-        table = Table.grid(padding=0)
+        table = Table.grid(padding=0, expand=True)
         table.add_column()
 
         label = f"   {self.label}  "
+        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
+        style = self.c.console.get_style("label")
+        label_seg = Text(label, style=style)
+
+        metrics_text = self.c._last_metrics_text
+        left_width = len(label) + len(bar)
+
         inner_table = Table.grid(
             Column(width=len(label), no_wrap=True),
             Column(no_wrap=True, overflow="fold"),
@@ -721,13 +790,34 @@ class FrequencyVisualizer:
             collapse_padding=True,
             pad_edge=False,
         )
-
-        style = self.c.console.get_style("label")
-        label_seg = Text(label, style=style)
-
-        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
         inner_table.add_row(Group(label_seg), Group(bar))
         table.add_row(inner_table)
+
+        if metrics_text is not None:
+            metrics_width = len(metrics_text.plain)
+            console_width = self.c.console.width
+
+            if left_width + metrics_width + 4 <= console_width:
+                # fits on the same row — re-do as 3-column layout
+                table = Table.grid(padding=0, expand=True)
+                table.add_column()
+                wide_table = Table.grid(
+                    Column(width=len(label), no_wrap=True),
+                    Column(no_wrap=True, overflow="fold"),
+                    Column(no_wrap=True, justify="right"),
+                    padding=(0, 0, 0, 0),
+                    collapse_padding=True,
+                    pad_edge=False,
+                    expand=True,
+                )
+                wide_table.add_row(Group(label_seg), Group(bar), metrics_text)
+                table.add_row(wide_table)
+            else:
+                # metrics on a separate line, right-aligned
+                right_metrics = metrics_text.copy()
+                right_metrics.justify = "right"
+                table.add_row(right_metrics)
+
         table.add_row(Text(""))
 
         if self.show_shortcuts:
@@ -1109,7 +1199,7 @@ def _text_mode(c: AgentsConsole) -> None:
             task = asyncio.create_task(_generate(text))
             task.add_done_callback(_done_callback)
 
-        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        h: asyncio.Future[list[RunEvent]] = c.io_loop.create_future()
         c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
 
         c.console.print()
@@ -1126,8 +1216,11 @@ def _text_mode(c: AgentsConsole) -> None:
             while not h.done():
                 time.sleep(0.1)
 
+        last_user_metrics: llm.MetricsReport | None = None
         for event in h.result():
-            _print_run_event(c, event)
+            if event.type == "message" and event.item.role == "user":
+                last_user_metrics = event.item.metrics
+            _print_run_event(c, event, last_user_metrics)
 
 
 AGENT_PALETTE: list[str] = [
@@ -1159,7 +1252,73 @@ def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
     return "\n".join(head + ["..."] + tail)
 
 
-def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
+def _format_duration_ms(seconds: float) -> str:
+    ms = seconds * 1000
+    if ms >= 10:
+        return f"{ms:.0f}ms"
+    elif ms >= 1:
+        return f"{ms:.1f}ms"
+    else:
+        return f"{ms:.2f}ms"
+
+
+def _format_turn_metrics(
+    user_metrics: llm.MetricsReport | None,
+    assistant_metrics: llm.MetricsReport | None,
+) -> Text | None:
+    parts: list[tuple[str, str]] = []
+
+    # user-side metrics
+    if user_metrics:
+        if "end_of_turn_delay" in user_metrics:
+            v = user_metrics["end_of_turn_delay"]
+            parts.append(("end_of_turn: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "on_user_turn_completed_delay" in user_metrics:
+            v = user_metrics["on_user_turn_completed_delay"]
+            parts.append(("turn_completed_cb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+
+    # assistant-side metrics
+    if assistant_metrics:
+        if "llm_node_ttft" in assistant_metrics:
+            v = assistant_metrics["llm_node_ttft"]
+            parts.append(("llm_ttft: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "tts_node_ttfb" in assistant_metrics:
+            v = assistant_metrics["tts_node_ttfb"]
+            parts.append(("tts_ttfb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+    e2e_parts: list[tuple[str, str]] = []
+    if assistant_metrics and "e2e_latency" in assistant_metrics:
+        v = assistant_metrics["e2e_latency"]
+        e2e_parts.append(("e2e: ", "dim"))
+        e2e_parts.append((_format_duration_ms(v), "red" if v >= 1.0 else "dim"))
+
+    if not parts and not e2e_parts:
+        return None
+
+    assembled: list[tuple[str, str]] = []
+    pair_count = len(parts) // 2
+    for i in range(pair_count):
+        if i > 0:
+            assembled.append((" \u00b7 ", "dim"))
+        assembled.append(parts[i * 2])  # label
+        assembled.append(parts[i * 2 + 1])  # value
+
+    if e2e_parts:
+        if assembled:
+            assembled.append(("  \u2500  ", "dim"))
+        assembled.extend(e2e_parts)
+
+    return Text.assemble(*assembled)
+
+
+def _print_run_event(
+    c: AgentsConsole,
+    event: RunEvent,
+    last_user_metrics: llm.MetricsReport | None = None,
+) -> None:
     if event.type == "function_call":
         c.console.print()
         c.console.print(
@@ -1233,6 +1392,15 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
             )
             for line in event.item.text_content.split("\n"):
                 c.console.print(Text(f"    {line}"))
+
+            metrics_text = _format_turn_metrics(
+                last_user_metrics if event.item.role == "assistant" else None,
+                event.item.metrics if event.item.role == "assistant" else None,
+            )
+            if metrics_text is not None:
+                metrics_line = Text("    ")
+                metrics_line.append_text(metrics_text)
+                c.console.print(metrics_line)
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 
@@ -1325,13 +1493,14 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    log_level: int | str = logging.DEBUG,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
     c.record = record
 
-    _configure_logger(c, logging.DEBUG)
+    _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1494,6 +1663,17 @@ class LogLevel(str, enum.Enum):
 def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
+    @app.callback(invoke_without_command=True)
+    def _set_dev_mode(ctx: typer.Context) -> None:
+        if ctx.invoked_subcommand is None:
+            print(ctx.get_help())
+            raise typer.Exit()
+        if ctx.invoked_subcommand in ("console", "dev"):
+            os.environ["LIVEKIT_DEV_MODE"] = "1"
+
+    _start_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, False))
+    _dev_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, True))
+
     @app.command()
     def console(
         *,
@@ -1520,6 +1700,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1540,6 +1726,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             output_device=output_device,
             mode="text" if text else "audio",
             record=record,
+            log_level=log_level.value,
         )
 
     @app.command()
@@ -1547,8 +1734,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.info,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _start_log_default,
         url: Annotated[
             str | None,  # noqa: UP007
             typer.Option(
@@ -1595,8 +1784,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.debug,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
         reload: Annotated[
             bool,
             typer.Option(help="Enable auto-reload of the server when (code) files change."),

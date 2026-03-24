@@ -30,8 +30,17 @@ class LogQueueListener:
         if self._thread is None:
             return
 
-        self._duplex.close()
-        self._thread.join()
+        # join the thread first so it can drain all remaining log records
+        # from the socket buffer before we close the duplex. The sending end
+        # must already be closed (child process exited) so recv_bytes() will
+        # see EOF after the buffer is consumed and the thread will exit.
+        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            # fallback: force-close the duplex to unblock the thread
+            self._duplex.close()
+            self._thread.join()
+        else:
+            self._duplex.close()
         self._thread = None
 
     def handle(self, record: logging.LogRecord) -> None:

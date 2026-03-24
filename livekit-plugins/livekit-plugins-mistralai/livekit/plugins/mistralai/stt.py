@@ -23,6 +23,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
 )
 from livekit.agents.types import (
@@ -31,8 +32,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
-from mistralai import Mistral
-from mistralai.models.sdkerror import SDKError
+from mistralai.client import Mistral
+from mistralai.client.errors.sdkerror import SDKError
 
 from .models import STTModels
 
@@ -40,7 +41,7 @@ from .models import STTModels
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str | None
+    language: LanguageCode | None
 
 
 class STT(stt.STT):
@@ -70,12 +71,12 @@ class STT(stt.STT):
             )
         )
         self._opts = _STTOptions(
-            language=language,
+            language=LanguageCode(language) if language else None,
             model=model,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
+        if not client and not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
@@ -104,7 +105,7 @@ class STT(stt.STT):
         if is_given(model):
             self._opts.model = model
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
 
     async def _recognize_impl(
         self,
@@ -115,7 +116,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             if is_given(language):
-                self._opts.language = language
+                self._opts.language = LanguageCode(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
             # MistralAI transcription API call
@@ -131,7 +132,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=self._opts.language if self._opts.language else "",
+                        language=LanguageCode(self._opts.language if self._opts.language else ""),
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
