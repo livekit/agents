@@ -189,6 +189,13 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_result(None)
                 return
 
+            # propagate speech handle errors (e.g. LLM failures)
+            if self.__last_speech_handle._done_fut.done():
+                exc = self.__last_speech_handle._done_fut.exception()
+                if exc is not None:
+                    self._done_fut.set_exception(exc)
+                    return
+
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):

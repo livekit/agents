@@ -351,9 +351,14 @@ class AgentInput:
 
         # enabled by default
         self._audio_enabled = True
+        self._audio_locked = False
         self._video_enabled = True
 
     def set_audio_enabled(self, enable: bool) -> None:
+        if self._audio_locked:
+            logger.warning("audio input is locked, ignoring set_audio_enabled(%s)", enable)
+            return
+
         if enable and not self._audio_stream:
             logger.warning("Cannot enable audio input when it's not set")
 
@@ -453,6 +458,7 @@ class AgentOutput:
         self._transcription_changed = transcription_changed
 
         self._audio_enabled = True
+        self._audio_locked = False
         self._video_enabled = True
         self._transcription_enabled = True
 
@@ -474,6 +480,10 @@ class AgentOutput:
             self._video_sink.on_detached()
 
     def set_audio_enabled(self, enabled: bool) -> None:
+        if self._audio_locked:
+            logger.warning("audio output is locked, ignoring set_audio_enabled(%s)", enabled)
+            return
+
         if enabled and not self._audio_sink:
             logger.warning("Cannot enable audio output when it's not set")
 

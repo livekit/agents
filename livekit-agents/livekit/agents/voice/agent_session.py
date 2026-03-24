@@ -750,18 +750,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state = RunResult(output_type=None)
                 self._global_run_state = run_state
 
-            # it is ok to await it directly, there is no previous task to drain
-            tasks.append(
-                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
-            )
+            # Phase 1: connect to room and wait for RoomIO init (participant
+            # detection, simulator attribute check, audio lock) before starting
+            # the activity — otherwise STT/audio may start before being disabled.
+            if tasks:
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.cancel_and_wait(*tasks)
 
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+            if self._room_io:
+                await self._room_io.wait_for_ready()
 
             if self._session_host is not None:
                 await self._session_host.start()
+
+            # Phase 2: start the agent activity (LLM, STT, etc.)
+            activity_task = asyncio.create_task(
+                self._update_activity(self._agent, wait_on_enter=False)
+            )
+            try:
+                await activity_task
+            finally:
+                await utils.aio.cancel_and_wait(activity_task)
 
             # important: no await should be done after this!
 
@@ -970,6 +981,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            if self._global_run_state and not self._global_run_state.done():
+                self._global_run_state._done_fut.set_exception(
+                    RuntimeError(f"session closed: {error}" if error else "session closed")
+                )
 
             if self._session_host:
                 await self._session_host.aclose()
@@ -1472,6 +1488,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
+
+    def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:
+        self._chat_ctx.insert(item)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
