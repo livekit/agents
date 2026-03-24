@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
 
@@ -2333,9 +2333,7 @@ class AgentActivity(RecognitionHooks):
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):
-            self._rt_session.update_options(
-                tool_choice=cast(llm.ToolChoice, model_settings.tool_choice)
-            )
+            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
             generation_ev = await self._rt_session.generate_reply(
@@ -2861,7 +2859,13 @@ class AgentActivity(RecognitionHooks):
         self, old_task: asyncio.Task[None] | None = None, *, interrupt: bool = True
     ) -> None:
         if old_task is not None:
-            await old_task
+            try:
+                await old_task
+            except Exception:
+                # Don't let a failed prior task poison subsequent turn completions.
+                # This can happen when _wait_for_generation raises because
+                # the paused speech had no active generation (race condition).
+                logger.debug("previous _cancel_speech_pause task failed, ignoring")
 
         if self._false_interruption_timer is not None:
             self._false_interruption_timer.cancel()
@@ -2876,8 +2880,11 @@ class AgentActivity(RecognitionHooks):
             and self._paused_speech.allow_interruptions
         ):
             self._paused_speech.interrupt()
-            # ensure the generation is done
-            await self._paused_speech._wait_for_generation()
+            # ensure the generation is done — but only if a generation
+            # was actually started; a paused speech that was never
+            # authorized won't have an active generation future.
+            if self._paused_speech._generations:
+                await self._paused_speech._wait_for_generation()
         self._paused_speech = None
 
         if self._session.options.resume_false_interruption and self._session.output.audio:

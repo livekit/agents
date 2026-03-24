@@ -89,6 +89,7 @@ from .voice import (
     avatar,
     io,
     room_io,
+    text_transforms,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -170,6 +171,7 @@ __all__ = [
     "Plugin",
     "AgentSession",
     "RecordingOptions",
+    "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",

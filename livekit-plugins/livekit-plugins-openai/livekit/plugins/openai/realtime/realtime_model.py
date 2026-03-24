@@ -86,6 +86,7 @@ from .utils import (
     AZURE_DEFAULT_TURN_DETECTION,
     DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
     DEFAULT_MAX_SESSION_DURATION,
+    calculate_confidence_from_logprobs,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
     to_audio_transcription,
@@ -532,7 +533,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,  # type: ignore
             input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,  # type: ignore
+            turn_detection=turn_detection,
             temperature=temperature,
             speed=speed,
             tracing=tracing,  # type: ignore
@@ -1517,9 +1518,12 @@ class RealtimeSession(
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        confidence = calculate_confidence_from_logprobs(event.logprobs)
+
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             assert isinstance(remote_item.item, llm.ChatMessage)
             remote_item.item.content.append(event.transcript)
+            remote_item.item.transcript_confidence = confidence
 
         self.emit(
             "input_audio_transcription_completed",
@@ -1527,6 +1531,7 @@ class RealtimeSession(
                 item_id=event.item_id,
                 transcript=event.transcript,
                 is_final=True,
+                confidence=confidence,
             ),
         )
 

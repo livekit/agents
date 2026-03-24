@@ -26,7 +26,8 @@ from livekit import rtc
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import JobContext, get_job_context
-from ..llm import AgentHandoff, ChatContext, Instructions, MetricsReport
+from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -62,7 +63,7 @@ from .speech_handle import InputDetails, SpeechHandle
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
-    from .transcription.filters import TextTransforms
+    from .transcription.text_transforms import TextTransforms
 
 
 class RecordingOptions(TypedDict, total=False):

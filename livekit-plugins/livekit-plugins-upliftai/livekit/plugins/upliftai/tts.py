@@ -11,7 +11,7 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import socketio  # type: ignore[import-not-found]
 
@@ -148,9 +148,7 @@ class TTS(tts.TTS):
         # Use provided tokenizer or create default
         resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
         if is_given(word_tokenizer):
-            resolved_word_tokenizer = cast(
-                tokenize.WordTokenizer | tokenize.SentenceTokenizer, word_tokenizer
-            )
+            resolved_word_tokenizer = word_tokenizer
         else:
             resolved_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
@@ -182,7 +180,7 @@ class TTS(tts.TTS):
         if is_given(voice_id):
             self._opts.voice_settings.voice_id = voice_id
         if is_given(output_format):
-            self._opts.voice_settings.output_format = cast(OutputFormat, output_format)
+            self._opts.voice_settings.output_format = output_format
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
