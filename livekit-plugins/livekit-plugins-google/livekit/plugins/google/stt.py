@@ -182,8 +182,11 @@ class STT(stt.STT):
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
-            speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
-            speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
+            speech_start_timeout(float): seconds to wait before Google closes the stream if no speech begins.
+                The stream auto-reconnects if audio is still being received. (default: None)
+            speech_end_timeout(float): seconds of silence after speech before Google closes the stream.
+                The stream auto-reconnects if audio is still being received, reducing perceived
+                latency for short utterances at the cost of a reconnect per turn. (default: None)
             endpointing_sensitivity(EndpointingSensitivity): controls the trade-off between latency
                 and accuracy when detecting end-of-speech. Only supported with chirp_3.
                 Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
@@ -875,7 +878,11 @@ class SpeechStream(stt.SpeechStream):
                             if task != wait_reconnect_task:
                                 task.result()
                         if wait_reconnect_task not in done:
-                            break
+                            # Google closed the stream server-side (e.g. speech_end_timeout fired).
+                            # Reconnect if the input channel is still open (more audio expected).
+                            if self._input_ch.closed:
+                                break
+                            logger.debug("Google STT stream closed by server, reconnecting...")
                         self._reconnect_event.clear()
                     finally:
                         should_stop.set()
