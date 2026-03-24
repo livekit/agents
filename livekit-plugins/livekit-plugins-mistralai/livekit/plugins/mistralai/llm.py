@@ -42,7 +42,7 @@ class _LLMOptions:
 class LLM(llm.LLM):
     def __init__(
         self,
-        model: str | ChatModels = "ministral-8b-2410",
+        model: str | ChatModels = "ministral-8b-latest",
         api_key: str | None = None,
         client: Mistral | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
