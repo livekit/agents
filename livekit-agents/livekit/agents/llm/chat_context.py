@@ -406,6 +406,10 @@ class ChatContext:
         items = list(item) if isinstance(item, Sequence) else [item]
 
         for _item in items:
+            if self.get_by_id(_item.id) is not None:
+                logger.warning(f"ChatItem with ID {_item.id} already exists, skipping insertion")
+                continue
+
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
 

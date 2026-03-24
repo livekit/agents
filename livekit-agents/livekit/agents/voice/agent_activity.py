@@ -63,6 +63,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -104,6 +105,16 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
+
+
+@dataclass
+class _PipelineGeneration:
+    origin_chat_ctx: llm.ChatContext
+    chat_ctx: llm.ChatContext
+    llm_gen_data: _LLMGenerationData
+    tts_gen_data: _TTSGenerationData | None
+    tasks: list[asyncio.Task[Any]]
+    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -393,8 +404,10 @@ class AgentActivity(RecognitionHooks):
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
-        chat_ctx = chat_ctx.copy(tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN)
-        self._agent._chat_ctx = chat_ctx
+        self._agent._chat_ctx.items = chat_ctx.copy(
+            tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN
+        ).items  # keep the original reference
+        chat_ctx = self._agent._chat_ctx
 
         if self._rt_session is not None:
             remove_instructions(chat_ctx)
@@ -2149,76 +2162,74 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
-        chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
 
-        if new_message is not None:
-            chat_ctx.insert(new_message)
-
-        if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
-
-        # apply the correct variant of the instructions for the turn's input modality
-        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
-
-        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
-        # I should implement a retry mechanism?
-
-        tasks: list[asyncio.Task[Any]] = []
-        llm_task, llm_gen_data = perform_llm_inference(
-            node=self._agent.llm_node,
-            chat_ctx=chat_ctx,
-            tool_ctx=tool_ctx,
-            model_settings=model_settings,
-            model=self.llm.model if self.llm else None,
-            provider=self.llm.provider if self.llm else None,
-        )
-        tasks.append(llm_task)
-
-        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = text_tee
-
-        tts_task: asyncio.Task[bool] | None = None
-        tts_gen_data: _TTSGenerationData | None = None
-        read_transcript_from_tts = False
-        if audio_output is not None:
-            await llm_gen_data.started_fut  # make sure tts span starts after llm span
-            tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node,
-                input=tts_text_input,
-                model_settings=model_settings,
-                text_transforms=self._session.options.tts_text_transforms,
-                model=self.tts.model if self.tts else None,
-                provider=self.tts.provider if self.tts else None,
+        async def _start_generation(chat_ctx: llm.ChatContext) -> _PipelineGeneration:
+            origin_chat_ctx = chat_ctx.copy(
+                exclude_instructions=True,
+                exclude_config_update=True,
+                exclude_handoff=True,
+                exclude_empty_message=True,
             )
-            tasks.append(tts_task)
-            if (
-                self.use_tts_aligned_transcript
-                and (tts := self.tts)
-                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-                and (timed_texts := await tts_gen_data.timed_texts_fut)
-            ):
-                tr_input = timed_texts
-                read_transcript_from_tts = True
+            chat_ctx = chat_ctx.copy()
+            if new_message:
+                # always append the new message to the end for generation
+                chat_ctx.items.append(new_message)
+
+            if instructions is not None:
+                try:
+                    update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
+                except ValueError:
+                    logger.exception("failed to update the instructions")
+
+            # apply the correct variant of the instructions for the turn's input modality
+            apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
+
+            # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
+            # I should implement a retry mechanism?
+
+            tasks: list[asyncio.Task[Any]] = []
+            llm_task, llm_gen_data = perform_llm_inference(
+                node=self._agent.llm_node,
+                chat_ctx=chat_ctx,
+                tool_ctx=tool_ctx,
+                model_settings=model_settings,
+                model=self.llm.model if self.llm else None,
+                provider=self.llm.provider if self.llm else None,
+            )
+            tasks.append(llm_task)
+
+            llm_output_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
+            tts_gen_data: _TTSGenerationData | None = None
+            if audio_output is not None:
+                await llm_gen_data.started_fut  # make sure tts span starts after llm span
+                tts_task, tts_gen_data = perform_tts_inference(
+                    node=self._agent.tts_node,
+                    input=llm_output_tee[0],
+                    model_settings=model_settings,
+                    text_transforms=self._session.options.tts_text_transforms,
+                    model=self.tts.model if self.tts else None,
+                    provider=self.tts.provider if self.tts else None,
+                )
+                tasks.append(tts_task)
+
+            return _PipelineGeneration(
+                origin_chat_ctx=origin_chat_ctx,
+                chat_ctx=chat_ctx,
+                llm_gen_data=llm_gen_data,
+                tts_gen_data=tts_gen_data,
+                tasks=tasks,
+                llm_output_tee=llm_output_tee,
+            )
+
+        pipeline_gen = await _start_generation(chat_ctx)
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
-
-        # add new message to chat context if the speech is scheduled
-
-        user_metrics: llm.MetricsReport | None = _previous_user_metrics
-        if new_message is not None and speech_handle.scheduled:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
-            user_metrics = new_message.metrics
-
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
-            await text_tee.aclose()
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks, wait_for_scheduled)
+            await pipeline_gen.llm_output_tee.aclose()
             return
 
         self._session._update_agent_state("thinking")
@@ -2232,10 +2243,56 @@ class AgentActivity(RecognitionHooks):
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            if new_message is not None:
+                self._agent._chat_ctx.insert(new_message)
+                self._session._conversation_item_added(new_message)
+
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
-            await text_tee.aclose()
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks, *authorization_tasks)
+            await pipeline_gen.llm_output_tee.aclose()
             return
+
+        # check if the chat context has changed since the generation
+        # e.g. a previous speech committed the agent message to the chat context
+        if chat_ctx is self._agent._chat_ctx and not chat_ctx.copy(
+            exclude_instructions=True,
+            exclude_config_update=True,
+            exclude_handoff=True,
+            exclude_empty_message=True,
+        ).is_equivalent(pipeline_gen.origin_chat_ctx):
+            logger.debug(
+                "chat context changed since speech was created, re-generating",
+                extra={"speech_id": speech_handle.id},
+            )
+            await utils.aio.cancel_and_wait(*pipeline_gen.tasks)
+            await pipeline_gen.llm_output_tee.aclose()
+            pipeline_gen = await _start_generation(chat_ctx)
+
+        # add new message to chat context after authorization
+        user_metrics: llm.MetricsReport | None = _previous_user_metrics
+        if new_message is not None:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
+            user_metrics = new_message.metrics
+
+        # start text and audio forwarding
+        tasks = pipeline_gen.tasks
+        chat_ctx = pipeline_gen.chat_ctx  # the copy that was used for the pipeline generation
+        llm_gen_data = pipeline_gen.llm_gen_data
+        tts_gen_data = pipeline_gen.tts_gen_data
+
+        read_transcript_from_tts = False
+        if (
+            tts_gen_data is not None
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+            and (timed_texts := await tts_gen_data.timed_texts_fut)
+        ):
+            tr_input: AsyncIterable[str | FlushSentinel] = timed_texts
+            read_transcript_from_tts = True
+        else:
+            tr_input = pipeline_gen.llm_output_tee[1]
 
         reply_started_at = time.time()
 
@@ -2417,7 +2474,7 @@ class AgentActivity(RecognitionHooks):
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
 
-        await text_tee.aclose()
+        await pipeline_gen.llm_output_tee.aclose()
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
