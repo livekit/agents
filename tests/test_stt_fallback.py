@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 import pytest
 
@@ -51,6 +52,33 @@ class FallbackAdapterTester(FallbackAdapter):
         stt: STT,
     ) -> utils.aio.ChanReceiver[AvailabilityChangedEvent]:
         return self._availability_changed_ch[id(stt)]
+
+
+def _aligned_fake_stt(aligned_transcript: Literal["word", "chunk", False]) -> FakeSTT:
+    fake_stt = FakeSTT(fake_transcript="hello world")
+    fake_stt.capabilities.aligned_transcript = aligned_transcript
+    return fake_stt
+
+
+@pytest.mark.parametrize(
+    ("aligned_transcripts", "expected"),
+    [
+        (["word", "word"], "word"),
+        (["word", "chunk"], "chunk"),
+        (["word", False], False),
+    ],
+)
+async def test_stt_fallback_derives_common_aligned_transcript_capability(
+    aligned_transcripts: list[Literal["word", "chunk", False]],
+    expected: Literal["word", "chunk", False],
+) -> None:
+    fallback_adapter = FallbackAdapterTester(
+        [_aligned_fake_stt(aligned_transcript) for aligned_transcript in aligned_transcripts]
+    )
+
+    assert fallback_adapter.capabilities.aligned_transcript == expected
+
+    await fallback_adapter.aclose()
 
 
 async def test_stt_fallback() -> None:

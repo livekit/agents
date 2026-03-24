@@ -68,11 +68,20 @@ class FallbackAdapter(
                 StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
             ]
 
+        aligned_vals = [t.capabilities.aligned_transcript for t in stt]
+        if any(v is False for v in aligned_vals):
+            merged_aligned: Literal["word", "chunk", False] = False
+        elif any(v == "chunk" for v in aligned_vals):
+            merged_aligned = "chunk"
+        else:
+            merged_aligned = "word"
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=True,
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
+                aligned_transcript=merged_aligned,
             )
         )
 
