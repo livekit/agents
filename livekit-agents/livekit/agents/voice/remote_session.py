@@ -565,6 +565,8 @@ class SessionHost:
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
         assert self._session is not None
+        req_type = req.WhichOneof("request")
+        logger.debug("session host received request", extra={"request_id": req.request_id, "type": req_type})
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -634,8 +636,11 @@ class SessionHost:
                         result: RunResult[None] = self._session.run(user_input=text)
                         await result
                         items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                        if not items_list:
+                            logger.warning("run_input produced 0 items", extra={"request_id": req.request_id, "events": len(result.events), "done": result.done()})
                     except Exception as e:
                         error = str(e)
+                        logger.warning("run_input error", extra={"request_id": req.request_id, "error": error})
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -860,6 +865,8 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning("error processing session message", exc_info=True)
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
+        resp_type = response.WhichOneof("response")
+        logger.debug("remote session received response", extra={"request_id": response.request_id, "type": resp_type, "has_error": bool(response.error)})
         future = self._pending_requests.pop(response.request_id, None)
         if future and not future.done():
             future.set_result(response)
@@ -869,16 +876,27 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
+        req_type = request.WhichOneof("request")
+        logger.debug("remote session sending request", extra={"request_id": request.request_id, "type": req_type})
         future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
         self._pending_requests[request.request_id] = future
 
         try:
             msg = agent_pb.AgentSessionMessage(request=request)
             await self._transport.send_message(msg)
-            return await asyncio.wait_for(future, timeout=timeout)
-        except (asyncio.TimeoutError, Exception):
+            resp = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_requests.pop(request.request_id, None)
+            logger.warning("remote session request timed out", extra={"request_id": request.request_id, "type": req_type, "timeout": timeout})
+            raise
+        except Exception:
             self._pending_requests.pop(request.request_id, None)
             raise
+
+        if resp.error:
+            raise RuntimeError(f"session request {req_type} failed: {resp.error}")
+
+        return resp
 
     async def wait_for_ready(
         self, timeout: float = 5.0, retry_interval: float = 0.5
@@ -899,7 +917,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out")
 
-    async def fetch_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
+    async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
@@ -907,13 +925,21 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         resp = await self._send_request(req)
         return resp.get_chat_history
 
-    async def fetch_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
+    async def get_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
         )
         resp = await self._send_request(req)
         return resp.get_agent_info
+
+    async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_session_state=agent_pb.SessionRequest.GetSessionState(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_session_state
 
     async def run(
         self, text: str, timeout: float = 60.0
@@ -923,6 +949,4 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             run_input=agent_pb.SessionRequest.RunInput(text=text),
         )
         resp = await self._send_request(req, timeout=timeout)
-        if resp.error:
-            raise RuntimeError(resp.error)
         return resp.run_input

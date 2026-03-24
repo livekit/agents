@@ -14,7 +14,7 @@ from ..job import JobExecutorType
 from ..log import logger
 from ..voice import AgentSession, io
 from ..voice.transcription import TranscriptSynchronizer
-from ..worker import AgentServer, ServerEnvOption, WorkerOptions
+from ..worker import AgentServer, WorkerOptions
 from . import proto
 from .log import setup_logging
 
@@ -284,6 +284,16 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
 
 
 def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
+    kwargs: dict = {}
+    if args.url:
+        kwargs["ws_url"] = args.url
+    if args.api_key:
+        kwargs["api_key"] = args.api_key
+    if args.api_secret:
+        kwargs["api_secret"] = args.api_secret
+    if kwargs:
+        server.update_options(**kwargs)
+
     devmode = args.reload_addr is not None
 
     exit_raised = False

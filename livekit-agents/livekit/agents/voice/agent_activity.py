@@ -689,11 +689,12 @@ class AgentActivity(RecognitionHooks):
         self._session._config_update_added(initial_config)
 
         await self._resume_scheduling_task()
+        use_stt = self.stt and self._session.input.audio_enabled
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
+            stt=self._agent.stt_node if use_stt else None,
+            vad=self.vad if self._session.input.audio_enabled else None,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
@@ -2104,6 +2105,10 @@ class AgentActivity(RecognitionHooks):
                 if exc := task.exception():
                     raise exc
 
+        if tts_task and tts_task.done() and not tts_task.cancelled() and (exc := tts_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
+
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
@@ -2411,6 +2416,14 @@ class AgentActivity(RecognitionHooks):
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        if llm_task.done() and not llm_task.cancelled() and (exc := llm_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
+
+        if tts_task and tts_task.done() and not tts_task.cancelled() and (exc := tts_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
 
         # wait for the end of the playout if the audio is enabled
         if audio_output is not None:
@@ -2964,6 +2977,11 @@ class AgentActivity(RecognitionHooks):
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        for task in tasks:
+            if task.done() and not task.cancelled() and (exc := task.exception()):
+                speech_handle._mark_done(error=exc)
+                return
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         current_span.set_attribute(

@@ -355,7 +355,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
-        self._agent_name = os.environ.get("LIVEKIT_AGENT_NAME", "")
+        self._agent_name_env = os.environ.get("LIVEKIT_AGENT_NAME", "")
+        self._agent_name = self._agent_name_env
         if self._agent_name:
             logger.info(
                 "using agent name from LIVEKIT_AGENT_NAME",
@@ -499,8 +500,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            if agent_name:
-                self._agent_name = agent_name
+            self._agent_name = self._agent_name_env or agent_name
             self._server_type = type
             return f
 
