@@ -3,7 +3,15 @@ from __future__ import annotations
 import logging
 
 from ..log import logger as default_logger
-from .base import AgentMetrics, EOUMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    EOUMetrics,
+    InterruptionMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+)
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:
@@ -12,10 +20,10 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
 
     metadata: dict[str, str | float] = {}
     if metrics.metadata:
-        metadata.update(
-            model_name=metrics.metadata.model_name or "unknown",
-            model_provider=metrics.metadata.model_provider or "unknown",
-        )
+        metadata |= {
+            "model_name": metrics.metadata.model_name or "unknown",
+            "model_provider": metrics.metadata.model_provider or "unknown",
+        }
 
     if isinstance(metrics, LLMMetrics):
         logger.info(
@@ -76,14 +84,27 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             },
         )
     elif isinstance(metrics, STTMetrics):
-        extra: dict[str, str | float | int] = {
-            "audio_duration": round(metrics.audio_duration, 2),
-        }
-        if metrics.input_tokens is not None:
-            extra.update(
-                input_tokens=metrics.input_tokens,
-                output_tokens=metrics.output_tokens or 0,
-                total_tokens=metrics.total_tokens or 0,
-                input_audio_tokens=metrics.input_audio_tokens or 0,
-            )
-        logger.info("STT metrics", extra=metadata | extra)
+        logger.info(
+            "STT metrics",
+            extra=metadata
+            | {
+                "audio_duration": round(metrics.audio_duration, 2),
+            },
+        )
+    elif isinstance(metrics, InterruptionMetrics):
+        logger.info(
+            "Interruption metrics",
+            extra=metadata
+            | {
+                "total_duration": round(metrics.total_duration, 2),
+                "prediction_duration": round(metrics.prediction_duration, 2),
+                "detection_delay": round(metrics.detection_delay, 2),
+                "num_interruptions": metrics.num_interruptions,
+                "num_backchannels": metrics.num_backchannels,
+                "num_requests": metrics.num_requests,
+                "input_tokens": metrics.input_tokens,
+                "output_tokens": metrics.output_tokens,
+                "total_tokens": metrics.total_tokens,
+                "input_audio_tokens": metrics.input_audio_tokens,
+            },
+        )

@@ -39,16 +39,16 @@ class STTMetrics(BaseModel):
     """
     audio_duration: float
     """The duration of the pushed audio in seconds.
-    0.0 if duration irrelevant/ or unknown due to token-based billing."""
+    0.0 if duration irrelevant/ or unknown like in streaming STT or token billing."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
-    input_tokens: int | None = None
-    """Total input tokens billed by the ASR model."""
-    output_tokens: int | None = None
-    """Total output tokens (transcription text) billed by the ASR model."""
-    total_tokens: int | None = None
+    input_tokens: int = 0
+    """Total input tokens (for token-based billing)."""
+    output_tokens: int = 0
+    """Total output tokens (for token-based billing)."""
+    total_tokens: int = 0
     """Sum of input and output tokens."""
-    input_audio_tokens: int | None = None
+    input_audio_tokens: int = 0
     """Number of audio input tokens billed by the ASR model."""
     metadata: Metadata | None = None
 
@@ -63,6 +63,11 @@ class TTSMetrics(BaseModel):
     audio_duration: float
     cancelled: bool
     characters_count: int
+    """Number of characters synthesized (for character-based billing)."""
+    input_tokens: int = 0
+    """Input text tokens (for token-based billing, e.g., OpenAI TTS)."""
+    output_tokens: int = 0
+    """Output audio tokens (for token-based billing, e.g., OpenAI TTS)."""
     streamed: bool
     segment_id: str | None = None
     speech_id: str | None = None
@@ -102,40 +107,43 @@ class EOUMetrics(BaseModel):
 
 class RealtimeModelMetrics(BaseModel):
     class CachedTokenDetails(BaseModel):
-        audio_tokens: int
-        text_tokens: int
-        image_tokens: int
+        audio_tokens: int = 0
+        text_tokens: int = 0
+        image_tokens: int = 0
 
     class InputTokenDetails(BaseModel):
-        audio_tokens: int
-        text_tokens: int
-        image_tokens: int
-        cached_tokens: int
-        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None
+        audio_tokens: int = 0
+        text_tokens: int = 0
+        image_tokens: int = 0
+        cached_tokens: int = 0
+        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None = None
 
     class OutputTokenDetails(BaseModel):
-        text_tokens: int
-        audio_tokens: int
-        image_tokens: int
+        text_tokens: int = 0
+        audio_tokens: int = 0
+        # image_tokens is deprecated, Realtime models no longer emit this metric
+        image_tokens: int = 0
 
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
-    label: str
+    label: str = ""
     request_id: str
     timestamp: float
     """The timestamp of the response creation."""
-    duration: float
+    duration: float = 0.0
     """The duration of the response from created to done in seconds."""
-    ttft: float
+    session_duration: float = 0.0
+    """The duration of the session connection in seconds (for session-based billing like xAI)."""
+    ttft: float = -1
     """Time to first audio token in seconds. -1 if no audio token was sent."""
-    cancelled: bool
+    cancelled: bool = False
     """Whether the request was cancelled."""
-    input_tokens: int
+    input_tokens: int = 0
     """The number of input tokens used in the Response, including text and audio tokens."""
-    output_tokens: int
+    output_tokens: int = 0
     """The number of output tokens sent in the Response, including text and audio tokens."""
-    total_tokens: int
+    total_tokens: int = 0
     """The total number of tokens in the Response."""
-    tokens_per_second: float
+    tokens_per_second: float = 0.0
     """The number of tokens per second."""
     input_token_details: InputTokenDetails
     """Details about the input tokens used in the Response."""
@@ -144,4 +152,30 @@ class RealtimeModelMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-AgentMetrics = STTMetrics | LLMMetrics | TTSMetrics | VADMetrics | EOUMetrics | RealtimeModelMetrics
+class InterruptionMetrics(BaseModel):
+    type: Literal["interruption_metrics"] = "interruption_metrics"
+    timestamp: float
+    total_duration: float
+    """Latest RTT (Round Trip Time) time taken to perform the inference, in seconds."""
+    prediction_duration: float
+    """Latest time taken to perform the inference from the model side, in seconds."""
+    detection_delay: float
+    """Latest total time from the onset of the speech to the final prediction, in seconds."""
+    num_interruptions: int
+    """Number of interruptions detected, incrementally counted."""
+    num_backchannels: int
+    """Number of backchannels detected, incrementally counted."""
+    num_requests: int
+    """Number of requests sent to the interruption detection model, incrementally counted."""
+    metadata: Metadata | None = None
+
+
+AgentMetrics = (
+    STTMetrics
+    | LLMMetrics
+    | TTSMetrics
+    | VADMetrics
+    | EOUMetrics
+    | RealtimeModelMetrics
+    | InterruptionMetrics
+)

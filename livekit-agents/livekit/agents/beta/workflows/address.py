@@ -12,7 +12,7 @@ from ...voice.agent import AgentTask
 from ...voice.events import RunContext
 
 if TYPE_CHECKING:
-    from ...voice.audio_recognition import TurnDetectionMode
+    from ...voice.turn import TurnDetectionMode
 
 
 _BASE_INSTRUCTIONS = """
