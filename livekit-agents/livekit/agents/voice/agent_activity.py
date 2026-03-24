@@ -1278,6 +1278,8 @@ class AgentActivity(RecognitionHooks):
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
                 self._session.output.audio.pause()
                 self._session._update_agent_state("listening")
+                if self._audio_recognition is not None:
+                    self._audio_recognition._on_agent_end_of_speech()
             else:
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
@@ -1876,6 +1878,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_end_of_speech()
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -2188,6 +2192,8 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("thinking")
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_end_of_speech()
 
         await text_tee.aclose()
 
@@ -2603,6 +2609,8 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             self._session._update_agent_state("listening")
+            if self._audio_recognition is not None:
+                self._audio_recognition._on_agent_end_of_speech()
             current_span.set_attribute(
                 trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
             )

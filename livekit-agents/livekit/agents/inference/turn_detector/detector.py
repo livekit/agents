@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -20,12 +19,9 @@ from .languages import LANGUAGES
 from .types import TurnDetectorEncoding
 
 if TYPE_CHECKING:
-    from .stream import MultiModalTurnDetectionStream
-
-TURN_DETECTOR_HTTP_ENV = "LIVEKIT_TURN_DETECTOR_HTTP"
+    from .stream import TurnDetectionStream
 
 INFERENCE_TIMEOUT = 1
-INFERENCE_INTERVAL = 0.1
 
 DEFAULT_SAMPLE_RATE: int = 16000
 DEFAULT_ENCODING: TurnDetectorEncoding = "pcm_s16le"
@@ -37,6 +33,7 @@ class TurnDetectionEvent:
     type: Literal["eou_prediction"]
     end_of_turn_probability: float
     last_speaking_time: float
+    detection_delay: float | None = None
 
 
 @dataclass
@@ -87,7 +84,7 @@ class MultiModalTurnDetector:
         )
 
         self._session = http_session
-        self._streams: weakref.WeakSet[MultiModalTurnDetectionStream] = weakref.WeakSet()
+        self._streams: weakref.WeakSet[TurnDetectionStream] = weakref.WeakSet()
 
     @property
     def model(self) -> str:
@@ -106,25 +103,14 @@ class MultiModalTurnDetector:
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> MultiModalTurnDetectionStream:
-        from .stream import HTTPStream, WSStream
+    ) -> TurnDetectionStream:
+        from .stream import TurnDetectionStream
 
-        # TODO: @chenghao-mou replace this with the EOT remote url env check
-        use_http = os.getenv(TURN_DETECTOR_HTTP_ENV, "").lower() in ("1", "true", "yes")
-
-        stream: MultiModalTurnDetectionStream
-        if use_http:
-            stream = HTTPStream(
-                detector=self,
-                opts=self._opts,
-                conn_options=conn_options,
-            )
-        else:
-            stream = WSStream(
-                detector=self,
-                opts=self._opts,
-                conn_options=conn_options,
-            )
+        stream: TurnDetectionStream = TurnDetectionStream(
+            detector=self,
+            opts=self._opts,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 

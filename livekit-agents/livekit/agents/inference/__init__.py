@@ -2,9 +2,9 @@ from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .turn_detector import (
-    MultiModalTurnDetectionStream,
     MultiModalTurnDetector,
     TurnDetectionEvent,
+    TurnDetectionStream,
 )
 
 __all__ = [
@@ -16,6 +16,6 @@ __all__ = [
     "TTSModels",
     "LLMModels",
     "MultiModalTurnDetector",
-    "MultiModalTurnDetectionStream",
+    "TurnDetectionStream",
     "TurnDetectionEvent",
 ]

@@ -22,24 +22,24 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import duration_pb2 as google_dot_protobuf_dot_duration__pb2
+from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'agent/livekit_agent_turn_detector.proto\x12\rlivekit.agent\"I\n\rTdChatMessage\x12\'\n\x04role\x18\x01 \x01(\x0e\x32\x19.livekit.agent.TdChatRole\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"?\n\rTdChatContext\x12.\n\x08messages\x18\x01 \x03(\x0b\x32\x1c.livekit.agent.TdChatMessage\"V\n\x0fSessionSettings\x12\x13\n\x0bsample_rate\x18\x01 \x01(\r\x12.\n\x08\x65ncoding\x18\x02 \x01(\x0e\x32\x1c.livekit.agent.AudioEncoding\"P\n\rSessionCreate\x12\x30\n\x08settings\x18\x01 \x01(\x0b\x32\x1e.livekit.agent.SessionSettings\x12\r\n\x05model\x18\x02 \x01(\t\"\x1b\n\nInputAudio\x12\r\n\x05\x61udio\x18\x01 \x01(\x0c\"Z\n\x10InputChatContext\x12\x32\n\x0c\x63hat_context\x18\x01 \x01(\x0b\x32\x1c.livekit.agent.TdChatContext\x12\x12\n\nrequest_id\x18\x02 \x01(\t\"\x0e\n\x0cSessionFlush\"\x11\n\x0fSessionFinalize\"$\n\x0eInferenceStart\x12\x12\n\nrequest_id\x18\x01 \x01(\t\"\x0f\n\rInferenceStop\"\xb3\x03\n\x19TurnDetectorClientMessage\x12\x36\n\x0esession_create\x18\x01 \x01(\x0b\x32\x1c.livekit.agent.SessionCreateH\x00\x12\x30\n\x0binput_audio\x18\x02 \x01(\x0b\x32\x19.livekit.agent.InputAudioH\x00\x12=\n\x12input_chat_context\x18\x03 \x01(\x0b\x32\x1f.livekit.agent.InputChatContextH\x00\x12\x34\n\rsession_flush\x18\x04 \x01(\x0b\x32\x1b.livekit.agent.SessionFlushH\x00\x12:\n\x10session_finalize\x18\x05 \x01(\x0b\x32\x1e.livekit.agent.SessionFinalizeH\x00\x12\x38\n\x0finference_start\x18\x06 \x01(\x0b\x32\x1d.livekit.agent.InferenceStartH\x00\x12\x36\n\x0einference_stop\x18\x07 \x01(\x0b\x32\x1c.livekit.agent.InferenceStopH\x00\x42\t\n\x07message\"\x10\n\x0eSessionCreated\"\\\n\rEouPrediction\x12\x13\n\x0bprobability\x18\x01 \x01(\x02\x12\x15\n\x08language\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x12\n\nrequest_id\x18\x03 \x01(\tB\x0b\n\t_language\"\x12\n\x10SessionFinalized\"\x0f\n\rSessionClosed\"$\n\x11TurnDetectorError\x12\x0f\n\x07message\x18\x01 \x01(\t\"\xc1\x02\n\x19TurnDetectorServerMessage\x12\x38\n\x0fsession_created\x18\x01 \x01(\x0b\x32\x1d.livekit.agent.SessionCreatedH\x00\x12\x36\n\x0e\x65ou_prediction\x18\x02 \x01(\x0b\x32\x1c.livekit.agent.EouPredictionH\x00\x12<\n\x11session_finalized\x18\x03 \x01(\x0b\x32\x1f.livekit.agent.SessionFinalizedH\x00\x12\x36\n\x0esession_closed\x18\x04 \x01(\x0b\x32\x1c.livekit.agent.SessionClosedH\x00\x12\x31\n\x05\x65rror\x18\x05 \x01(\x0b\x32 .livekit.agent.TurnDetectorErrorH\x00\x42\t\n\x07message\"\xa8\x01\n\x0ePredictRequest\x12\r\n\x05model\x18\x01 \x01(\t\x12\r\n\x05\x61udio\x18\x02 \x01(\x0c\x12\x30\n\x08settings\x18\x03 \x01(\x0b\x32\x1e.livekit.agent.SessionSettings\x12\x32\n\x0c\x63hat_context\x18\x04 \x01(\x0b\x32\x1c.livekit.agent.TdChatContext\x12\x12\n\nrequest_id\x18\x05 \x01(\t*-\n\rAudioEncoding\x12\x1c\n\x18\x41UDIO_ENCODING_PCM_S16LE\x10\x00*?\n\nTdChatRole\x12\x15\n\x11TD_CHAT_ROLE_USER\x10\x00\x12\x1a\n\x16TD_CHAT_ROLE_ASSISTANT\x10\x01\x42LZ)github.com/livekit/protocol/livekit/agent\xaa\x02\rLiveKit.Proto\xea\x02\x0eLiveKit::Protob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'agent/livekit_agent_turn_detector.proto\x12\rlivekit.agent\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"I\n\rTdChatMessage\x12\'\n\x04role\x18\x01 \x01(\x0e\x32\x19.livekit.agent.TdChatRole\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"V\n\x0fSessionSettings\x12\x13\n\x0bsample_rate\x18\x01 \x01(\r\x12.\n\x08\x65ncoding\x18\x02 \x01(\x0e\x32\x1c.livekit.agent.AudioEncoding\"P\n\rSessionCreate\x12\x30\n\x08settings\x18\x01 \x01(\x0b\x32\x1e.livekit.agent.SessionSettings\x12\r\n\x05model\x18\x02 \x01(\t\"\x1b\n\nInputAudio\x12\r\n\x05\x61udio\x18\x01 \x01(\x0c\"B\n\x10InputChatContext\x12.\n\x08messages\x18\x01 \x03(\x0b\x32\x1c.livekit.agent.TdChatMessage\"\x0e\n\x0cSessionFlush\"\x11\n\x0fSessionFinalize\"$\n\x0eInferenceStart\x12\x12\n\nrequest_id\x18\x01 \x01(\t\"#\n\rInferenceStop\x12\x12\n\nrequest_id\x18\x01 \x01(\t\"\xe3\x03\n\x19TurnDetectorClientMessage\x12\x36\n\x0esession_create\x18\x01 \x01(\x0b\x32\x1c.livekit.agent.SessionCreateH\x00\x12\x30\n\x0binput_audio\x18\x02 \x01(\x0b\x32\x19.livekit.agent.InputAudioH\x00\x12=\n\x12input_chat_context\x18\x03 \x01(\x0b\x32\x1f.livekit.agent.InputChatContextH\x00\x12\x34\n\rsession_flush\x18\x04 \x01(\x0b\x32\x1b.livekit.agent.SessionFlushH\x00\x12:\n\x10session_finalize\x18\x05 \x01(\x0b\x32\x1e.livekit.agent.SessionFinalizeH\x00\x12\x38\n\x0finference_start\x18\x06 \x01(\x0b\x32\x1d.livekit.agent.InferenceStartH\x00\x12\x36\n\x0einference_stop\x18\x07 \x01(\x0b\x32\x1c.livekit.agent.InferenceStopH\x00\x12.\n\ncreated_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.TimestampB\t\n\x07message\"\x10\n\x0eSessionCreated\"\x81\x02\n\x0fProcessingStats\x12\x39\n\x16preprocessing_duration\x18\x01 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x35\n\x12inference_duration\x18\x02 \x01(\x0b\x32\x19.google.protobuf.Duration\x12>\n\x1a\x65\x61rliest_client_created_at\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12<\n\x18latest_client_created_at\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"\x82\x01\n\rEouPrediction\x12\x13\n\x0bprobability\x18\x01 \x01(\x02\x12\x15\n\x08language\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x38\n\x10processing_stats\x18\x03 \x01(\x0b\x32\x1e.livekit.agent.ProcessingStatsB\x0b\n\t_language\"\x12\n\x10InferenceStarted\"\x12\n\x10InferenceStopped\"\x12\n\x10SessionFinalized\"\x0f\n\rSessionClosed\"2\n\x11TurnDetectorError\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x0c\n\x04\x63ode\x18\x02 \x01(\r\"\xb7\x04\n\x19TurnDetectorServerMessage\x12\x38\n\x0fsession_created\x18\x01 \x01(\x0b\x32\x1d.livekit.agent.SessionCreatedH\x00\x12<\n\x11inference_started\x18\x02 \x01(\x0b\x32\x1f.livekit.agent.InferenceStartedH\x00\x12<\n\x11inference_stopped\x18\x03 \x01(\x0b\x32\x1f.livekit.agent.InferenceStoppedH\x00\x12\x36\n\x0e\x65ou_prediction\x18\x04 \x01(\x0b\x32\x1c.livekit.agent.EouPredictionH\x00\x12<\n\x11session_finalized\x18\x05 \x01(\x0b\x32\x1f.livekit.agent.SessionFinalizedH\x00\x12\x36\n\x0esession_closed\x18\x06 \x01(\x0b\x32\x1c.livekit.agent.SessionClosedH\x00\x12\x31\n\x05\x65rror\x18\x07 \x01(\x0b\x32 .livekit.agent.TurnDetectorErrorH\x00\x12\x17\n\nrequest_id\x18\x08 \x01(\tH\x01\x88\x01\x01\x12:\n\x11\x63lient_created_at\x18\t \x01(\x0b\x32\x1a.google.protobuf.TimestampH\x02\x88\x01\x01\x42\t\n\x07messageB\r\n\x0b_request_idB\x14\n\x12_client_created_at*-\n\rAudioEncoding\x12\x1c\n\x18\x41UDIO_ENCODING_PCM_S16LE\x10\x00*?\n\nTdChatRole\x12\x15\n\x11TD_CHAT_ROLE_USER\x10\x00\x12\x1a\n\x16TD_CHAT_ROLE_ASSISTANT\x10\x01\x42NH\x01Z)github.com/livekit/protocol/livekit/agent\xaa\x02\rLiveKit.Proto\xea\x02\x0eLiveKit::Protob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'agent.livekit_agent_turn_detector_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'Z)github.com/livekit/protocol/livekit/agent\252\002\rLiveKit.Proto\352\002\016LiveKit::Proto'
-  _globals['_AUDIOENCODING']._serialized_start=1699
-  _globals['_AUDIOENCODING']._serialized_end=1744
-  _globals['_TDCHATROLE']._serialized_start=1746
-  _globals['_TDCHATROLE']._serialized_end=1809
-  _globals['_TDCHATMESSAGE']._serialized_start=58
-  _globals['_TDCHATMESSAGE']._serialized_end=131
-  _globals['_TDCHATCONTEXT']._serialized_start=133
-  _globals['_TDCHATCONTEXT']._serialized_end=196
+  _globals['DESCRIPTOR']._serialized_options = b'H\001Z)github.com/livekit/protocol/livekit/agent\252\002\rLiveKit.Proto\352\002\016LiveKit::Proto'
+  _globals['_AUDIOENCODING']._serialized_start=2171
+  _globals['_AUDIOENCODING']._serialized_end=2216
+  _globals['_TDCHATROLE']._serialized_start=2218
+  _globals['_TDCHATROLE']._serialized_end=2281
+  _globals['_TDCHATMESSAGE']._serialized_start=123
+  _globals['_TDCHATMESSAGE']._serialized_end=196
   _globals['_SESSIONSETTINGS']._serialized_start=198
   _globals['_SESSIONSETTINGS']._serialized_end=284
   _globals['_SESSIONCREATE']._serialized_start=286
@@ -47,29 +47,33 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_INPUTAUDIO']._serialized_start=368
   _globals['_INPUTAUDIO']._serialized_end=395
   _globals['_INPUTCHATCONTEXT']._serialized_start=397
-  _globals['_INPUTCHATCONTEXT']._serialized_end=487
-  _globals['_SESSIONFLUSH']._serialized_start=489
-  _globals['_SESSIONFLUSH']._serialized_end=503
-  _globals['_SESSIONFINALIZE']._serialized_start=505
-  _globals['_SESSIONFINALIZE']._serialized_end=522
-  _globals['_INFERENCESTART']._serialized_start=524
-  _globals['_INFERENCESTART']._serialized_end=560
-  _globals['_INFERENCESTOP']._serialized_start=562
-  _globals['_INFERENCESTOP']._serialized_end=577
-  _globals['_TURNDETECTORCLIENTMESSAGE']._serialized_start=580
-  _globals['_TURNDETECTORCLIENTMESSAGE']._serialized_end=1015
-  _globals['_SESSIONCREATED']._serialized_start=1017
-  _globals['_SESSIONCREATED']._serialized_end=1033
-  _globals['_EOUPREDICTION']._serialized_start=1035
-  _globals['_EOUPREDICTION']._serialized_end=1127
-  _globals['_SESSIONFINALIZED']._serialized_start=1129
-  _globals['_SESSIONFINALIZED']._serialized_end=1147
-  _globals['_SESSIONCLOSED']._serialized_start=1149
-  _globals['_SESSIONCLOSED']._serialized_end=1164
-  _globals['_TURNDETECTORERROR']._serialized_start=1166
-  _globals['_TURNDETECTORERROR']._serialized_end=1202
-  _globals['_TURNDETECTORSERVERMESSAGE']._serialized_start=1205
-  _globals['_TURNDETECTORSERVERMESSAGE']._serialized_end=1526
-  _globals['_PREDICTREQUEST']._serialized_start=1529
-  _globals['_PREDICTREQUEST']._serialized_end=1697
+  _globals['_INPUTCHATCONTEXT']._serialized_end=463
+  _globals['_SESSIONFLUSH']._serialized_start=465
+  _globals['_SESSIONFLUSH']._serialized_end=479
+  _globals['_SESSIONFINALIZE']._serialized_start=481
+  _globals['_SESSIONFINALIZE']._serialized_end=498
+  _globals['_INFERENCESTART']._serialized_start=500
+  _globals['_INFERENCESTART']._serialized_end=536
+  _globals['_INFERENCESTOP']._serialized_start=538
+  _globals['_INFERENCESTOP']._serialized_end=573
+  _globals['_TURNDETECTORCLIENTMESSAGE']._serialized_start=576
+  _globals['_TURNDETECTORCLIENTMESSAGE']._serialized_end=1059
+  _globals['_SESSIONCREATED']._serialized_start=1061
+  _globals['_SESSIONCREATED']._serialized_end=1077
+  _globals['_PROCESSINGSTATS']._serialized_start=1080
+  _globals['_PROCESSINGSTATS']._serialized_end=1337
+  _globals['_EOUPREDICTION']._serialized_start=1340
+  _globals['_EOUPREDICTION']._serialized_end=1470
+  _globals['_INFERENCESTARTED']._serialized_start=1472
+  _globals['_INFERENCESTARTED']._serialized_end=1490
+  _globals['_INFERENCESTOPPED']._serialized_start=1492
+  _globals['_INFERENCESTOPPED']._serialized_end=1510
+  _globals['_SESSIONFINALIZED']._serialized_start=1512
+  _globals['_SESSIONFINALIZED']._serialized_end=1530
+  _globals['_SESSIONCLOSED']._serialized_start=1532
+  _globals['_SESSIONCLOSED']._serialized_end=1547
+  _globals['_TURNDETECTORERROR']._serialized_start=1549
+  _globals['_TURNDETECTORERROR']._serialized_end=1599
+  _globals['_TURNDETECTORSERVERMESSAGE']._serialized_start=1602
+  _globals['_TURNDETECTORSERVERMESSAGE']._serialized_end=2169
 # @@protoc_insertion_point(module_scope)

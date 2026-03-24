@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import abc
 import asyncio
 import contextlib
 import time
@@ -8,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 import aiohttp
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
 
@@ -20,27 +20,23 @@ from ..._exceptions import (
     create_api_error_from_http,
 )
 from ...language import LanguageCode
-from ...llm.chat_context import ChatContext, ChatMessage
+from ...llm.chat_context import ChatContext
 from ...log import logger
 from ...types import APIConnectOptions
 from ...utils import aio
-from ...utils.audio import AudioFrameBuffer
 from .._utils import create_access_token
-from .detector import INFERENCE_INTERVAL, INFERENCE_TIMEOUT, TurnDetectionEvent, TurnDetectorOptions
+from .detector import INFERENCE_TIMEOUT, TurnDetectionEvent, TurnDetectorOptions
 from .proto.livekit_agent_turn_detector_pb2 import (
     TD_CHAT_ROLE_ASSISTANT,
-    TD_CHAT_ROLE_USER,
     EouPrediction,
     InferenceStart,
     InferenceStop,
     InputAudio,
     InputChatContext,
-    PredictRequest,
     SessionCreate,
     SessionFinalize,
     SessionFlush,
     SessionSettings,
-    TdChatContext as PbChatContext,
     TdChatMessage as PbChatMessage,
     TurnDetectorClientMessage,
     TurnDetectorServerMessage,
@@ -50,34 +46,23 @@ if TYPE_CHECKING:
     from .detector import MultiModalTurnDetector
 
 
-# TODO: @chenghao-mou add tests for this function
-def _chat_ctx_to_proto(chat_ctx: ChatContext) -> PbChatContext:
-
-    def _merge_trailing_user_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
-        while len(messages) > 1 and messages[-2].role == messages[-1].role == "user":
-            messages[-2].content.extend(messages.pop().content)
-        return messages
-
-    _ROLE_MAP = {
-        "user": TD_CHAT_ROLE_USER,
-        "assistant": TD_CHAT_ROLE_ASSISTANT,
-    }
-    # merge the trailing user messages into one user message to save on tokens
-    # truncate to the last agent + user messages
-    ctx_data: list[ChatMessage] = _merge_trailing_user_messages(
-        [msg.model_copy() for msg in chat_ctx.messages()]
-    )[-2:]
-    messages: list[PbChatMessage] = []
-    for item in ctx_data:
-        if (pb_role := _ROLE_MAP.get(item.role)) is None:
+def _extract_last_assistant_message(chat_ctx: ChatContext) -> list[PbChatMessage]:
+    """Extract only the last assistant message from the chat context."""
+    for msg in reversed(chat_ctx.messages()):
+        if msg.role != "assistant":
             continue
-        if not (text := " ".join([part for part in item.content if isinstance(part, str)]).strip()):
-            continue
-        messages.append(PbChatMessage(role=pb_role, content=text))
-    return PbChatContext(messages=messages)
+        text = " ".join([part for part in msg.content if isinstance(part, str)]).strip()
+        if text:
+            return [PbChatMessage(role=TD_CHAT_ROLE_ASSISTANT, content=text)]
+    return []
 
 
-class MultiModalTurnDetectionStream(abc.ABC):
+class TurnDetectionStream:
+    """WebSocket-based stream that sends audio frame-by-frame."""
+
+    class _FlushSentinel:
+        pass
+
     def __init__(
         self,
         *,
@@ -85,7 +70,6 @@ class MultiModalTurnDetectionStream(abc.ABC):
         opts: TurnDetectorOptions,
         conn_options: APIConnectOptions,
     ) -> None:
-        """This class follows the _TurnDetector protocol so that it can be used as a turn detector."""
         self._detector = detector
         self._opts = opts
         self._conn_options = conn_options
@@ -94,10 +78,40 @@ class MultiModalTurnDetectionStream(abc.ABC):
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
 
+        self._audio_ch = aio.Chan[rtc.AudioFrame | TurnDetectionStream._FlushSentinel]()
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._event_ch = aio.Chan[TurnDetectionEvent]()
         self._num_retries = 0
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._tasks: set[asyncio.Task[None]] = set()
+
+        self._assistant_messages: list[PbChatMessage] = []
+
+        # Turn detection states:
+        #
+        # | state        | inference state | results admitted | audio streaming |
+        # |--------------|-----------------|------------------|-------------------|
+        # | warming up   | running         | no               | yes               | <- VAD silence detected
+        # | active       | running         | yes              | yes               | <- user not speaking (VAD EOS)
+        # | not active   | stopped         | no               | yes               | <- user speaking (VAD SOS)
+        # | flushed      | stopped         | no               | cleared           | <- agent speaking started/ended
+
+        # stateDiagram-v2
+        #     state "warming up" as warming_up
+        #     state "not active" as not_active
+        #     warming_up --> not_active
+        #     warming_up --> active
+        #     active --> not_active
+        #     not_active --> active
+        #     active --> flushed
+        #     flushed --> warming_up
+
+        self._warming_up = False
+        self._active = False
+        self._flushed = False
+        self._active_request_id: str | None = None
+        self._active_request_fut: asyncio.Future[float] | None = None
 
     @property
     def model(self) -> str:
@@ -107,32 +121,23 @@ class MultiModalTurnDetectionStream(abc.ABC):
     def provider(self) -> str:
         return self._detector.provider
 
+    @property
+    def is_active(self) -> bool:
+        return self._active
+
+    @property
+    def is_inference_running(self) -> bool:
+        return self._warming_up or self._active
+
+    @property
+    def is_admitting_results(self) -> bool:
+        return self.is_active
+
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         return await self._detector.unlikely_threshold(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return await self._detector.supports_language(language)
-
-    @abc.abstractmethod
-    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
-
-    @abc.abstractmethod
-    def push_chat_ctx(self, chat_ctx: ChatContext) -> asyncio.Future[float]: ...
-
-    @abc.abstractmethod
-    def flush(self) -> None: ...
-
-    @abc.abstractmethod
-    def set_active(self, active: bool) -> None:
-        """Signal the stream to start or stop producing inferences.
-
-        active=True when the user stops speaking (VAD EOS).
-        active=False when the user starts speaking (VAD SOS).
-        """
-        ...
-
-    @abc.abstractmethod
-    def end_input(self) -> None: ...
 
     async def predict_end_of_turn(
         self,
@@ -140,19 +145,25 @@ class MultiModalTurnDetectionStream(abc.ABC):
         *,
         timeout: float | None = INFERENCE_TIMEOUT,
     ) -> float:
+        """
+        This is purely for timeout mechanism for each active inference window:
+        - time to first prediction
+        - time to next prediction since last prediction
+        """
         try:
-            fut = self.push_chat_ctx(chat_ctx)
+            self.update_chat_ctx(chat_ctx)
+            fut = self.warmup()
+            self._activate()
             done, _ = await asyncio.wait([fut], timeout=timeout)
             if not done:
                 raise asyncio.TimeoutError()
             return done.pop().result()
         except asyncio.TimeoutError:
-            logger.warning("EOU prediction timed out", extra={"timeout": timeout})
+            logger.warning(
+                "EOU prediction timed out",
+                extra={"timeout": timeout, "request_id": self._active_request_id},
+            )
             return 0.0
-
-    async def aclose(self) -> None:
-        self.end_input()
-        await aio.cancel_and_wait(self._task)
 
     async def __anext__(self) -> TurnDetectionEvent:
         try:
@@ -173,26 +184,23 @@ class MultiModalTurnDetectionStream(abc.ABC):
             try:
                 return await self._run()
             except APIError as e:
-                if max_retries == 0:
+                if max_retries == 0 or not e.retryable:
                     raise
-                elif self._num_retries == max_retries:
+
+                if self._num_retries == max_retries:
                     raise APIConnectionError(
                         f"failed to connect livekit turn detector after {self._num_retries} attempts",
                     ) from e
-                else:
-                    retry_interval = self._conn_options._interval_for_retry(self._num_retries)
-                    logger.warning(
-                        "livekit turn detector connection failed: %s, retrying in %ss",
-                        e,
-                        retry_interval,
-                        extra={"attempt": self._num_retries},
-                    )
-                    await asyncio.sleep(retry_interval)
 
+                retry_interval = self._conn_options._interval_for_retry(self._num_retries)
+                logger.warning(
+                    "livekit turn detector connection failed: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"attempt": self._num_retries},
+                )
+                await asyncio.sleep(retry_interval)
                 self._num_retries += 1
-
-    @abc.abstractmethod
-    async def _run(self) -> None: ...
 
     def _build_auth_headers(self) -> dict[str, str]:
         return {
@@ -241,26 +249,70 @@ class MultiModalTurnDetectionStream(abc.ABC):
         self._audio_input_sample_rate = None
         self._audio_input_num_channels = None
 
+    def warmup(self) -> asyncio.Future[float]:
+        if not self.is_inference_running:
+            self._warmup()
 
-class WSStream(MultiModalTurnDetectionStream):
-    """WebSocket-based stream that sends audio frame-by-frame."""
+        if self._active_request_id is not None:
+            self._send_message_sync(
+                TurnDetectorClientMessage(
+                    input_chat_context=InputChatContext(messages=self._assistant_messages)
+                )
+            )
+        return self._active_request_fut
 
-    class _FlushSentinel:
-        pass
+    def _warmup(self) -> None:
+        if self._warming_up:
+            return
+        self._warming_up = True
+        self._active = False
+        self._flushed = False
+        request_id = utils.shortuuid("turn_request_")
+        self._active_request_id = request_id
+        self._active_request_fut = asyncio.Future[float]()
+        request_id = self._active_request_id
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg = TurnDetectorClientMessage(
+            inference_start=InferenceStart(request_id=request_id), created_at=created_at
+        )
+        self._send_message_sync(msg)
 
-    def __init__(
-        self,
-        *,
-        detector: MultiModalTurnDetector,
-        opts: TurnDetectorOptions,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        self._audio_ch = aio.Chan[rtc.AudioFrame | WSStream._FlushSentinel]()
-        self._chat_ctx_ch = aio.Chan[tuple[ChatContext, asyncio.Future[float], str]]()
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._tasks: set[asyncio.Task[None]] = set()
-        self._futures: dict[str, asyncio.Future[float]] = {}
-        super().__init__(detector=detector, opts=opts, conn_options=conn_options)
+    def _activate(self) -> None:
+        if self._active:
+            return
+        self._warming_up = False
+        self._active = True
+        self._flushed = False
+
+    def _deactivate(self) -> None:
+        if not self._active:
+            return
+        self._active_request_id = None
+        if self._active_request_fut is not None:
+            self._active_request_fut.set_result(0.0)
+            self._active_request_fut = None
+        self._active = False
+        self._flushed = False
+        self._warming_up = False
+
+    def _send_message_sync(self, msg: TurnDetectorClientMessage) -> None:
+        if self._ws is None or self._ws.closed:
+            return
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg.created_at.CopyFrom(created_at)
+        task = asyncio.create_task(self._ws.send_bytes(msg.SerializeToString()))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _send_message_async(self, msg: TurnDetectorClientMessage) -> None:
+        if self._ws is None or self._ws.closed:
+            return
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg.created_at.CopyFrom(created_at)
+        return await self._ws.send_bytes(msg.SerializeToString())
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._audio_ch.closed:
@@ -268,46 +320,55 @@ class WSStream(MultiModalTurnDetectionStream):
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
 
-    def push_chat_ctx(self, chat_ctx: ChatContext) -> asyncio.Future[float]:
-        fut = asyncio.Future[float]()
-        if self._chat_ctx_ch.closed:
-            fut.set_result(0.0)
-            return fut
-        request_id = utils.shortuuid("turn_request_")
-        self._chat_ctx_ch.send_nowait((chat_ctx, fut, request_id))
-        return fut
+    def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        """
+        Update the assistant messages if needed for the active request.
+        It should start when either the assistant finishes speaking or when the user starts speaking.
 
-    def flush(self) -> None:
+        Returns:
+            A future that will be set to the end-of-turn probability.
+        """
+        self._assistant_messages = _extract_last_assistant_message(chat_ctx)
+
+    def flush(self, reason: str | None = None) -> None:
         if self._audio_ch.closed:
             return
+        if self._flushed:
+            return
+
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
-        self._audio_ch.send_nowait(WSStream._FlushSentinel())
+        self._audio_ch.send_nowait(TurnDetectionStream._FlushSentinel())
+        logger.trace("flushing turn detection audio", extra={"reason": reason})
+        self._flushed = True
+        self._deactivate()
 
     def set_active(self, active: bool) -> None:
+        """Start inference when the user stops talking."""
         ws = self._ws
         if ws is None or ws.closed:
             return
 
         if active:
-            msg = TurnDetectorClientMessage(inference_start=InferenceStart())
-        else:
-            msg = TurnDetectorClientMessage(inference_stop=InferenceStop())
-        task = asyncio.create_task(ws.send_bytes(msg.SerializeToString()))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+            if not self.is_active:
+                self._activate()
+            return
+
+        self._deactivate()
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg = TurnDetectorClientMessage(inference_stop=InferenceStop(), created_at=created_at)
+        self._send_message_sync(msg)
 
     def end_input(self) -> None:
         self.flush()
         self._audio_ch.close()
-        self._chat_ctx_ch.close()
 
     async def _run(self) -> None:
         closing_ws = False
-        self._futures = {}
 
         @utils.log_exceptions(logger=logger)
-        async def send_audio_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_audio_task() -> None:
             nonlocal closing_ws
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -316,37 +377,35 @@ class WSStream(MultiModalTurnDetectionStream):
                 samples_per_channel=self._opts.sample_rate // 20,  # 50ms chunks
             )
 
-            async def _send_audio_frame(frame: rtc.AudioFrame) -> None:
-                msg = TurnDetectorClientMessage(input_audio=InputAudio(audio=frame.data.tobytes()))
-                await ws.send_bytes(msg.SerializeToString())
-
             async for frame in self._audio_ch:
-                if isinstance(frame, WSStream._FlushSentinel):
+                if isinstance(frame, TurnDetectionStream._FlushSentinel):
                     for chunk in audio_bstream.flush():
-                        await _send_audio_frame(chunk)
-                    flush_msg = TurnDetectorClientMessage(session_flush=SessionFlush())
-                    await ws.send_bytes(flush_msg.SerializeToString())
+                        await self._send_message_async(
+                            TurnDetectorClientMessage(
+                                input_audio=InputAudio(audio=chunk.data.tobytes())
+                            )
+                        )
+                    await self._send_message_async(
+                        TurnDetectorClientMessage(session_flush=SessionFlush())
+                    )
                     continue
 
                 for chunk in audio_bstream.push(frame.data):
-                    await _send_audio_frame(chunk)
+                    await self._send_message_async(
+                        TurnDetectorClientMessage(
+                            input_audio=InputAudio(audio=chunk.data.tobytes())
+                        )
+                    )
 
             for chunk in audio_bstream.flush():
-                await _send_audio_frame(chunk)
+                await self._send_message_async(
+                    TurnDetectorClientMessage(input_audio=InputAudio(audio=chunk.data.tobytes()))
+                )
 
             closing_ws = True
-            finalize_msg = TurnDetectorClientMessage(session_finalize=SessionFinalize())
-            await ws.send_bytes(finalize_msg.SerializeToString())
-
-        @utils.log_exceptions(logger=logger)
-        async def send_chat_ctx_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for chat_ctx, fut, request_id in self._chat_ctx_ch:
-                self._futures[request_id] = fut
-                pb_ctx = _chat_ctx_to_proto(chat_ctx)
-                msg = TurnDetectorClientMessage(
-                    input_chat_context=InputChatContext(chat_context=pb_ctx, request_id=request_id)
-                )
-                await ws.send_bytes(msg.SerializeToString())
+            await self._send_message_async(
+                TurnDetectorClientMessage(session_finalize=SessionFinalize())
+            )
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -379,8 +438,7 @@ class WSStream(MultiModalTurnDetectionStream):
             ws = await self._connect_ws()
             self._ws = ws
             tasks = [
-                asyncio.create_task(send_audio_task(ws)),
-                asyncio.create_task(send_chat_ctx_task(ws)),
+                asyncio.create_task(send_audio_task()),
                 asyncio.create_task(recv_task(ws)),
             ]
             try:
@@ -400,20 +458,21 @@ class WSStream(MultiModalTurnDetectionStream):
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
-                    f"{base_url}/turn-detector?model={self._detector.model}",
+                    f"{base_url}/turn-detector",
                     headers=self._build_auth_headers(),
                 ),
                 self._conn_options.timeout,
             )
-            create_msg = TurnDetectorClientMessage(
-                session_create=SessionCreate(
-                    settings=SessionSettings(
-                        sample_rate=self._opts.sample_rate,
-                    ),
-                    model=self._detector.model,
+            await self._send_message_async(
+                TurnDetectorClientMessage(
+                    session_create=SessionCreate(
+                        settings=SessionSettings(
+                            sample_rate=self._opts.sample_rate,
+                        ),
+                        model=self._detector.model,
+                    )
                 )
             )
-            await ws.send_bytes(create_msg.SerializeToString())
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
@@ -427,153 +486,77 @@ class WSStream(MultiModalTurnDetectionStream):
             case "eou_prediction":
                 prediction: EouPrediction = msg.eou_prediction
                 probability = prediction.probability
-                fut = self._futures.pop(prediction.request_id, None)
+                request_id = msg.request_id
+                if request_id != self._active_request_id:
+                    return
+                fut = self._active_request_fut
                 if fut is not None:
                     with contextlib.suppress(asyncio.InvalidStateError):
                         fut.set_result(probability)
-                self._event_ch.send_nowait(
-                    TurnDetectionEvent(
-                        type="eou_prediction",
-                        # TODO: @chenghao-mou use the actual last speaking time from the prediction
-                        last_speaking_time=time.time(),
-                        end_of_turn_probability=probability,
-                    )
+                    # Reset the future for the next prediction
+                    self._active_request_fut = asyncio.Future[float]()
+
+                current_time = Timestamp()
+                current_time.GetCurrentTime()
+                stats = msg.eou_prediction.processing_stats
+                rtt_duration_ms = (
+                    current_time.ToMilliseconds() - stats.latest_client_created_at.ToMilliseconds()
                 )
-            case "session_created" | "session_finalized" | "session_closed":
-                pass
+                inference_duration_ms = stats.inference_duration.ToMilliseconds()
+
+                logger.trace(
+                    "turn detector prediction received",
+                    extra={
+                        "probability": probability,
+                        "rtt_duration_ms": rtt_duration_ms or 0.0,
+                        "inference_duration_ms": inference_duration_ms or 0.0,
+                        "request_id": request_id,
+                    },
+                )
+
+                if self.is_admitting_results:
+                    self._event_ch.send_nowait(
+                        TurnDetectionEvent(
+                            type="eou_prediction",
+                            last_speaking_time=time.time(),
+                            end_of_turn_probability=probability,
+                        )
+                    )
+            case (
+                "session_created"
+                | "session_finalized"
+                | "session_closed"
+                | "inference_started"
+                | "inference_stopped"
+            ):
+                current_time = Timestamp()
+                current_time.GetCurrentTime()
+                if (
+                    transport_latency := current_time.ToMilliseconds()
+                    - msg.client_created_at.ToMilliseconds()
+                ) > 1000 and msg.client_created_at.ToMilliseconds() > 0:
+                    logger.warning(
+                        "turn detector transport latency is too high: %sms",
+                        transport_latency,
+                    )
             case "error":
-                raise APIError(f"turn detector returned error: {msg.error.message}")
+                raise APIStatusError(
+                    f"turn detector returned error: {msg.error.message}",
+                    status_code=msg.error.code,
+                    request_id=msg.request_id,
+                )
             case _:
                 logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))
 
     async def aclose(self) -> None:
-        await super().aclose()
-        for fut in self._futures.values():
+        self.end_input()
+        await aio.cancel_and_wait(self._task)
+        if self._active_request_fut is not None:
             with contextlib.suppress(asyncio.InvalidStateError):
-                fut.set_result(0.0)
-        self._futures.clear()
-
-
-class HTTPStream(MultiModalTurnDetectionStream):
-    """HTTP-based stream that buffers audio and sends periodic POST requests."""
-
-    def __init__(
-        self,
-        *,
-        detector: MultiModalTurnDetector,
-        opts: TurnDetectorOptions,
-        conn_options: APIConnectOptions,
-        inference_interval: float = INFERENCE_INTERVAL,
-        max_buffer_duration: float = 5.0,
-    ) -> None:
-        self._audio_buffer = AudioFrameBuffer(max_duration=max_buffer_duration)
-        self._latest_chat_ctx: tuple[ChatContext, str] | None = None
-        self._active = asyncio.Event()
-        self._closed = False
-        self._inference_interval = inference_interval
-        self._futures: dict[str, asyncio.Future[float]] = {}
-        super().__init__(detector=detector, opts=opts, conn_options=conn_options)
-
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            return
-        for resampled_frame in self._resample_audio_frame(frame):
-            self._audio_buffer.push(resampled_frame)
-
-    def push_chat_ctx(self, chat_ctx: ChatContext) -> asyncio.Future[float]:
-        fut = asyncio.Future[float]()
-        if self._closed:
-            fut.set_result(0.0)
-            return fut
-        request_id = utils.shortuuid("turn_request_")
-        self._latest_chat_ctx = (chat_ctx, request_id)
-        self._futures[request_id] = fut
-        return fut
-
-    def flush(self) -> None:
-        if self._closed:
-            return
-        self._reset_audio_resampler()
-        self._audio_buffer.reset()
-
-    def set_active(self, active: bool) -> None:
-        if active:
-            self._active.set()
-        else:
-            self._active.clear()
-
-    def end_input(self) -> None:
-        self.flush()
-        self._closed = True
-        self._active.set()  # unblock any waiter so the task can exit
-
-    async def _run(self) -> None:
-        base_url = self._opts.base_url
-        url = f"{base_url}/turn-detector?model={self._detector.model}"
-        headers = {
-            **self._build_auth_headers(),
-            "Content-Type": "application/x-protobuf",
-        }
-
-        while not self._closed:
-            await self._active.wait()
-            if self._closed:
-                return
-            last_speaking_time = time.time()
-            await asyncio.sleep(self._inference_interval)
-            if self._closed or not self._active.is_set():
-                continue
-
-            snapshot = self._audio_buffer.snapshot()
-            if snapshot is None:
-                continue
-
-            if self._latest_chat_ctx is None:
-                continue
-
-            chat_ctx, request_id = self._latest_chat_ctx
-
-            req = PredictRequest(
-                model=self._detector.model,
-                audio=snapshot.data.tobytes(),
-                settings=SessionSettings(sample_rate=self._opts.sample_rate),
-                request_id=request_id,
-            )
-            req.chat_context.CopyFrom(_chat_ctx_to_proto(chat_ctx))
-
-            try:
-                async with self._session.post(
-                    url,
-                    data=req.SerializeToString(),
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
-                ) as resp:
-                    resp.raise_for_status()
-                    body = await resp.read()
-                    pb_resp = EouPrediction()
-                    pb_resp.ParseFromString(body)
-                    probability = pb_resp.probability
-                    with contextlib.suppress(asyncio.InvalidStateError):
-                        self._futures[request_id].set_result(probability)
-                        self._event_ch.send_nowait(
-                            TurnDetectionEvent(
-                                type="eou_prediction",
-                                end_of_turn_probability=probability,
-                                last_speaking_time=last_speaking_time,
-                            )
-                        )
-            except aiohttp.ClientResponseError as e:
-                raise create_api_error_from_http(
-                    e.message, status=e.status, request_id=request_id
-                ) from e
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError("turn detector HTTP request timed out") from e
-            except aiohttp.ClientConnectorError as e:
-                raise APIConnectionError("failed to connect to turn detector") from e
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        for fut in self._futures.values():
-            with contextlib.suppress(asyncio.InvalidStateError):
-                fut.set_result(0.0)
-        self._futures.clear()
+                self._active_request_fut.set_result(0.0)
+        self._active_request_fut = None
+        self._active_request_id = None
+        self._assistant_messages = []
+        self._active = False
+        self._flushed = False
+        self._warming_up = False
