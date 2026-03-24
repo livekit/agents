@@ -37,7 +37,6 @@ class MyAgent(Agent):
             instructions="You are a helpful voice AI assistant named Sabrina.",
             llm=RealtimeModel(
                 voice="sabrina",
-                welcome_message="Hey there, how can I help you today?",
                 audio_speed=1.2,
             ),
         )
@@ -64,6 +63,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=MyAgent(), room=ctx.room)
+    await session.generate_reply(
+        instructions="Greet the user, asking about their day.",
+    )
 
 
 if __name__ == "__main__":

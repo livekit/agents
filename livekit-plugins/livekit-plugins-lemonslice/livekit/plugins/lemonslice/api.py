@@ -74,6 +74,7 @@ class LemonSliceAPI:
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
@@ -85,7 +86,8 @@ class LemonSliceAPI:
             livekit_token: The LiveKit access token for the agent.
             agent_id: The ID of the LemonSlice agent to add to the session.
             agent_image_url: The URL of the image to use as the agent's avatar.
-            agent_prompt: A prompt that subtly influences the avatar's movements and expressions.
+            agent_prompt: A prompt that subtly influences the avatar's movements and expressions while responding.
+            agent_idle_prompt: A prompt that subtly influences the avatar's movements and expressions while idle.
             idle_timeout: The idle timeout, in seconds.
             extra_payload: Additional payload to include in the request.
 
@@ -112,13 +114,17 @@ class LemonSliceAPI:
             payload["agent_image_url"] = agent_image_url
         if utils.is_given(agent_prompt):
             payload["agent_prompt"] = agent_prompt
+        if utils.is_given(agent_idle_prompt):
+            payload["agent_idle_prompt"] = agent_idle_prompt
         if utils.is_given(idle_timeout):
             payload["idle_timeout"] = idle_timeout
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
         response_data = await self._post(payload)
-        return response_data["session_id"]  # type: ignore
+        session_id = response_data["session_id"]
+        logger.debug(f"LemonSlice Session ID = {session_id}")
+        return session_id  # type: ignore
 
     async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
@@ -149,17 +155,23 @@ class LemonSliceAPI:
                         if not response.ok:
                             text = await response.text()
                             raise APIStatusError(
-                                "Server returned an error", status_code=response.status, body=text
+                                "LemonSlice Server returned an error",
+                                status_code=response.status,
+                                body=text,
                             )
                         return await response.json()  # type: ignore
                 except Exception as e:
-                    if isinstance(e, APIStatusError) and not e.retryable:
-                        raise APIConnectionError(
-                            "Failed to call LemonSlice API with non-retryable error",
-                            retryable=False,
-                        ) from e
-
-                    if isinstance(e, APIConnectionError):
+                    if isinstance(e, APIStatusError):
+                        logger.error(
+                            "LemonSlice API returned an error",
+                            extra={
+                                "status_code": e.status_code,
+                                "body": e.body,
+                            },
+                        )
+                        if not e.retryable:
+                            raise e
+                    elif isinstance(e, APIConnectionError):
                         logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
                     else:
                         logger.exception("failed to call lemonslice api")

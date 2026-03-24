@@ -22,8 +22,14 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.4.4",
+    "livekit-agents>=1.5.1",
     "nvidia-riva-client",
+]
+
+[project.optional-dependencies]
+personaplex = [
+    "livekit-agents[codecs]>=1.5.1",
+    "sphn>=0.2.0",
 ]
 
 [project.urls]

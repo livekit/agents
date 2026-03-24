@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
-from typing import cast
 
 import aiohttp
 
@@ -181,7 +180,7 @@ class TTS(tts.TTS):
             language (NotGivenOr[str]): Language code for the TTS model.
         """
         if is_given(model):
-            self._opts.model = cast(TTSModels, model)
+            self._opts.model = model
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(language):
