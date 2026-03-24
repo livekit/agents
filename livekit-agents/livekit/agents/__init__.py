@@ -71,6 +71,7 @@ from .voice import (
     Agent,
     AgentEvent,
     AgentFalseInterruptionEvent,
+    AgentHandoffEvent,
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
@@ -94,7 +95,6 @@ from .voice import (
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
-    AgentHandoffEvent,
     ChatMessageEvent,
     EventAssert,
     EventRangeAssert,

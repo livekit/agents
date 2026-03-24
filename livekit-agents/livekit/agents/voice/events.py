@@ -26,6 +26,7 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from .agent import Agent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -90,6 +91,7 @@ class RunContext(Generic[Userdata_T]):
 EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
+    "agent_handoff",
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
@@ -117,6 +119,15 @@ class AgentStateChangedEvent(BaseModel):
     type: Literal["agent_state_changed"] = "agent_state_changed"
     old_state: AgentState
     new_state: AgentState
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentHandoffEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["agent_handoff"] = "agent_handoff"
+    old_agent: Agent | None = None
+    new_agent: Agent
     created_at: float = Field(default_factory=time.time)
 
 
@@ -248,6 +259,7 @@ AgentEvent = Annotated[
     UserInputTranscribedEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
+    | AgentHandoffEvent
     | AgentFalseInterruptionEvent
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent

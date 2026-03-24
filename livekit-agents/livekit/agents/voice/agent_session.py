@@ -45,6 +45,7 @@ from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .events import (
     AgentEvent,
+    AgentHandoffEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -1243,6 +1244,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     new_agent=self._activity.agent,
                 )
             self._chat_ctx.insert(handoff_item)
+            self.emit(
+                "agent_handoff",
+                AgentHandoffEvent(
+                    old_agent=previous_activity_v.agent if previous_activity_v else None,
+                    new_agent=self._activity.agent,
+                ),
+            )
 
             if new_activity == "start":
                 await self._activity.start()
