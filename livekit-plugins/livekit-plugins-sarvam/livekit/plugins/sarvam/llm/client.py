@@ -28,6 +28,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.llm import LLM as OpenAILLM
 
+from .models import SarvamLLMModels
 
 SARVAM_LLM_BASE_URL = "https://api.sarvam.ai/v1"
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
@@ -52,7 +53,7 @@ class LLM(OpenAILLM):
     def __init__(
         self,
         *,
-        model: str | "sarvam-30b",
+        model: str | SarvamLLMModels = "sarvam-30b",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = SARVAM_LLM_BASE_URL,
         client: openai.AsyncClient | None = None,
@@ -79,7 +80,7 @@ class LLM(OpenAILLM):
         the ``SARVAM_API_KEY`` environment variable.
         """
         validated_model = _validate_model(model)
-        sarvam_api_key = api_key if is_given(api_key) else os.environ.get("SARVAM_API_KEY")
+        sarvam_api_key = _get_api_key(api_key)
         merged_headers = dict(extra_headers) if is_given(extra_headers) else {}
         # Sarvam chat-completions auth and telemetry headers are always enforced.
         merged_headers["api-subscription-key"] = sarvam_api_key
@@ -104,7 +105,7 @@ class LLM(OpenAILLM):
 
         super().__init__(
             model=validated_model,
-            api_key=api_key,
+            api_key=sarvam_api_key,
             base_url=base_url,
             client=client,
             user=user,
@@ -124,6 +125,15 @@ class LLM(OpenAILLM):
     @property
     def provider(self) -> str:
         return "Sarvam"
+
+
+def _get_api_key(key: NotGivenOr[str]) -> str:
+    sarvam_api_key = key if is_given(key) else os.environ.get("SARVAM_API_KEY")
+    if not sarvam_api_key:
+        raise ValueError(
+            "SARVAM_API_KEY is required, either as argument or set SARVAM_API_KEY environment variable"
+        )
+    return sarvam_api_key
 
 
 def _validate_model(model: str) -> str:

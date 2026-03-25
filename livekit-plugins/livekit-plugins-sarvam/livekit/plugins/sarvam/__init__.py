@@ -26,7 +26,7 @@ from .stt import STT
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "LLM", "__version__"]
+__all__ = ["STT", "TTS", "LLM", "SarvamLLMModels", "__version__"]
 
 
 from livekit.agents import Plugin

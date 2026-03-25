@@ -13,5 +13,6 @@
 # limitations under the License.
 
 from .client import LLM
+from .models import SarvamLLMModels
 
-__all__ = ["LLM"]
+__all__ = ["LLM", "SarvamLLMModels"]
