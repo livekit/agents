@@ -1048,7 +1048,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
-        instructions_pos: Literal["top", "end"] = "top",
+        instructions_mode: Literal["inline", "append"] = "inline",
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
@@ -1060,8 +1060,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_input (NotGivenOr[str | llm.ChatMessage], optional): The user's input that may influence the reply,
                 such as answering a question.
             instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
-            instructions_pos (Literal["top", "end"], optional): Where to place the instructions in the chat context.
-                "top" (default) merges them into the system prompt at the top. "end" appends them as a system
+            instructions_mode (Literal["inline", "append"], optional): How to place the instructions in the chat context.
+                "inline" (default) merges them into the system prompt. "append" appends them as a new system
                 message at the end of the chat context.
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
@@ -1097,7 +1097,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             handle = activity._generate_reply(
                 user_message=user_message if user_message else None,
                 instructions=instructions,
-                instructions_pos=instructions_pos,
+                instructions_mode=instructions_mode,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,

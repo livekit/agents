@@ -942,7 +942,7 @@ class AgentActivity(RecognitionHooks):
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
-        instructions_pos: Literal["top", "end"] = "top",
+        instructions_mode: Literal["inline", "append"] = "inline",
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
@@ -1017,7 +1017,7 @@ class AgentActivity(RecognitionHooks):
             # instructions used inside generate_reply are "extra" instructions.
             # this matches the behavior of the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions and instructions_pos == "top":
+            if instructions and instructions_mode == "inline":
                 instructions = self._agent.instructions + "\n" + instructions
 
             task = self._create_speech_task(
@@ -1027,7 +1027,7 @@ class AgentActivity(RecognitionHooks):
                     tools=tools,
                     new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
-                    instructions_pos=instructions_pos,
+                    instructions_mode=instructions_mode,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
                         if utils.is_given(tool_choice) or self._tool_choice is None
@@ -2097,7 +2097,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
-        instructions_pos: Literal["top", "end"] = "top",
+        instructions_mode: Literal["inline", "append"] = "inline",
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -2116,7 +2116,7 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 new_message=new_message,
                 instructions=instructions,
-                instructions_pos=instructions_pos,
+                instructions_mode=instructions_mode,
                 _previous_user_metrics=_previous_user_metrics,
                 _previous_tools_messages=_previous_tools_messages,
             )
@@ -2130,7 +2130,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
-        instructions_pos: Literal["top", "end"] = "top",
+        instructions_mode: Literal["inline", "append"] = "inline",
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -2159,7 +2159,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            if instructions_pos == "end":
+            if instructions_mode == "append":
                 chat_ctx.add_message(role="system", content=instructions)
             else:
                 try:
