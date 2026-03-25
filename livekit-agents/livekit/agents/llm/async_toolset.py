@@ -33,8 +33,6 @@ The task is still running, so DON'T make up or give information not included in 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
-DUPLICATE_CONFIRM_DESCRIPTION = """\
-Set this to True to confirm you want to run a duplicate. Only do this when the duplication is needed."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {running_fnc_calls}
@@ -222,7 +220,10 @@ class AsyncToolset(Toolset):
             props = raw_schema["parameters"].setdefault("properties", {})
             props[confirm_duplicate_param] = {
                 "type": ["boolean"],
-                "description": DUPLICATE_CONFIRM_DESCRIPTION,
+                "description": (
+                    "Set this to True to confirm you want to run a duplicate. "
+                    "Only do this when user confirms the duplication is needed."
+                ),
                 "default": False,
             }
 
