@@ -732,7 +732,8 @@ class RealtimeSession(  # noqa: F811
             audio_content_name=str(uuid.uuid4()),
         )
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
-        logger.debug("[SESSION] Created fresh tool results channel")
+        self._audio_input_chan = utils.aio.Chan[bytes]()
+        logger.debug("[SESSION] Created fresh tool results and audio input channels")
         self._audio_end_turn_received = False
         self._stream_ready.clear()
 
@@ -922,6 +923,27 @@ class RealtimeSession(  # noqa: F811
                     restart_ctx.items.insert(0, dummy_msg)
                     logger.debug("[SESSION] Added dummy USER message to start of chat history")
 
+            # On restart, if the last message is from the user, send it as
+            # interactive text instead of non-interactive history. This triggers
+            # Nova Sonic to generate a response, since non-interactive history
+            # alone won't prompt the model to act.
+            interactive_user_text: str | None = None
+            if is_restart and restart_ctx.items:
+                last_item = restart_ctx.items[-1]
+                if (
+                    last_item.type == "message"
+                    and last_item.role == "user"
+                    and last_item.text_content
+                    and last_item.text_content.strip()
+                ):
+                    interactive_user_text = last_item.text_content.strip()
+                    restart_ctx = restart_ctx.copy()
+                    restart_ctx.items.pop()
+                    logger.debug(
+                        f"[SESSION] Popped last user message for interactive send: "
+                        f"{interactive_user_text[:60]}..."
+                    )
+
             init_events, history_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
@@ -961,6 +983,15 @@ class RealtimeSession(  # noqa: F811
             # interactive contentStart events simultaneously.
             await asyncio.sleep(0.05)
             self._is_sess_active.set()
+
+            # Step 5: If we popped a user message from history, send it as
+            # interactive text now to trigger Nova Sonic to respond.
+            if interactive_user_text:
+                await self._stream_ready.wait()
+                logger.debug(
+                    f"[SESSION] Sending interactive user text: {interactive_user_text[:60]}..."
+                )
+                await self._send_text_message(interactive_user_text, interactive=True)
 
             logger.debug("Stream initialized successfully")
         except Exception as e:
@@ -1756,15 +1787,61 @@ class RealtimeSession(  # noqa: F811
 
     # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)  # noqa: E501
     async def update_tools(self, tools: list[llm.Tool]) -> None:
-        """Replace the active tool set with tools and notify Sonic if necessary."""
-        logger.debug(f"Updating tools: {tools}")
+        """Replace the active tool set with tools.
+
+        Nova Sonic requires tools to be declared at session start.
+        If the session is already active, we schedule a session recycle
+        so the new tool set is sent in the next prompt start block.
+        The recycle is deferred to avoid conflicts with in-flight tool
+        results that are still being delivered to the current session.
+        """
+        old_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
         self._tools = llm.ToolContext(tools)
+        new_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
+
         if self._tools.function_tools:
             if self._tools_ready is None:
                 self._tools_ready = asyncio.get_running_loop().create_future()
             if not self._tools_ready.done():
                 self._tools_ready.set_result(True)
-            logger.debug("Tool list has been injected")
+                logger.debug("Tool list has been injected (initial)")
+                return
+
+        # If tools actually changed and session is active, schedule a deferred recycle.
+        # We defer because update_tools is often called from within a tool execution
+        # callback, and the tool result is still being delivered to the current session.
+        if old_tools != new_tools and self._is_sess_active.is_set():
+            logger.info(
+                f"[SESSION] Tools changed (added={new_tools - old_tools}, "
+                f"removed={old_tools - new_tools}), scheduling deferred session recycle"
+            )
+            asyncio.create_task(self._deferred_tool_recycle())
+        else:
+            logger.debug("Tool list updated locally")
+
+    async def _deferred_tool_recycle(self) -> None:
+        """Wait for in-flight tool results to be delivered, then recycle."""
+        # Short yield to let the tool result be sent to Bedrock
+        # before we tear down the session.
+        await asyncio.sleep(0.15)
+
+        if not self._is_sess_active.is_set():
+            logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+            return
+
+        logger.info("[SESSION] Recycling session for updated tools")
+        # Clear pending tools so stale results from update_chat_ctx are ignored
+        self._pending_tools.clear()
+        # Drain and discard any queued tool results
+        while True:
+            try:
+                discarded = self._tool_results_ch.recv_nowait()
+                logger.debug(
+                    f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}"
+                )
+            except utils.aio.channel.ChanEmpty:
+                break
+        await self._graceful_session_recycle()
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Live update of inference options is not supported by Sonic yet."""
