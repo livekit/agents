@@ -1243,6 +1243,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     new_agent=self._activity.agent,
                 )
             self._chat_ctx.insert(handoff_item)
+            self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
 
             if new_activity == "start":
                 await self._activity.start()
