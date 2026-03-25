@@ -276,7 +276,7 @@ class AsyncToolset(Toolset):
             return True
         return False
 
-    async def shutdown(self) -> None:
+    async def aclose(self) -> None:
         """Cancel all tasks."""
         tasks = []
         for task in self._running_tasks.values():
@@ -318,7 +318,6 @@ class AsyncToolset(Toolset):
                 raise ValueError(f"Task already running for call_id: {call_id}")
 
             async_ctx = AsyncRunContext(run_ctx=ctx)
-            async_ctx.session._register_async_toolset(self)  # cleanup in session.aclose
 
             async def _execute_tool() -> Any:
                 try:
