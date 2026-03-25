@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from livekit.agents import inference
 from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -10,7 +11,6 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents import inference
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
