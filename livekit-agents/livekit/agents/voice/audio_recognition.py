@@ -850,6 +850,7 @@ class AudioRecognition:
                 if (
                     self._turn_detector_stream is not None
                     and not self._turn_detector_stream.is_inference_running
+                    and not self._agent_speaking
                 ):
                     logger.debug(
                         "turn detection warmup started",
