@@ -99,7 +99,7 @@ async def entrypoint(ctx: JobContext) -> None:
             # See more at https://docs.livekit.io/agents/build/turns
             # turn_detection=MultilingualModel(),
             turn_detection=inference.MultiModalTurnDetector(
-                base_url="https://livekit-multimodal-turn-detector--turn-detector-turn-f22ba8-dev.modal.run",
+                base_url="",
                 sample_rate=16000,
             ),
             endpointing={
