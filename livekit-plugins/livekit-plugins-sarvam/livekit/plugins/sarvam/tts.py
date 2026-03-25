@@ -58,9 +58,6 @@ SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
     "mp3",
-    "linear16",
-    "mulaw",
-    "alaw",
     "opus",
     "flac",
     "aac",
