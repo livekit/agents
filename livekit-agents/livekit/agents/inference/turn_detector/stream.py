@@ -261,6 +261,18 @@ class TurnDetectionStream:
             )
         return self._active_request_fut
 
+    def stop_warmup(self) -> None:
+        if not self.is_inference_running:
+            return
+        self._warming_up = False
+        self._active = False
+        self._flushed = False
+        self._active_request_id = None
+        if self._active_request_fut is not None:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._active_request_fut.set_result(0.0)
+            self._active_request_fut = None
+
     def _warmup(self) -> None:
         if self._warming_up:
             return
@@ -290,7 +302,8 @@ class TurnDetectionStream:
             return
         self._active_request_id = None
         if self._active_request_fut is not None:
-            self._active_request_fut.set_result(0.0)
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._active_request_fut.set_result(0.0)
             self._active_request_fut = None
         self._active = False
         self._flushed = False
@@ -339,9 +352,13 @@ class TurnDetectionStream:
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
         self._audio_ch.send_nowait(TurnDetectionStream._FlushSentinel())
-        logger.trace("flushing turn detection audio", extra={"reason": reason})
+        logger.trace("turn detection audio flushed", extra={"reason": reason})
         self._flushed = True
         self._deactivate()
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg = TurnDetectorClientMessage(inference_stop=InferenceStop(), created_at=created_at)
+        self._send_message_sync(msg)
 
     def set_active(self, active: bool) -> None:
         """Start inference when the user stops talking."""
@@ -351,9 +368,11 @@ class TurnDetectionStream:
 
         if active:
             if not self.is_active:
+                logger.trace("turn detection activated")
                 self._activate()
             return
 
+        logger.trace("turn detection deactivated")
         self._deactivate()
         created_at = Timestamp()
         created_at.GetCurrentTime()
@@ -493,8 +512,6 @@ class TurnDetectionStream:
                 if fut is not None:
                     with contextlib.suppress(asyncio.InvalidStateError):
                         fut.set_result(probability)
-                    # Reset the future for the next prediction
-                    self._active_request_fut = asyncio.Future[float]()
 
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
@@ -505,23 +522,26 @@ class TurnDetectionStream:
                 inference_duration_ms = stats.inference_duration.ToMilliseconds()
 
                 logger.trace(
-                    "turn detector prediction received",
+                    "turn prediction result received",
                     extra={
                         "probability": probability,
                         "rtt_duration_ms": rtt_duration_ms or 0.0,
                         "inference_duration_ms": inference_duration_ms or 0.0,
                         "request_id": request_id,
+                        "queued": not self.is_admitting_results,
                     },
                 )
 
-                if self.is_admitting_results:
-                    self._event_ch.send_nowait(
-                        TurnDetectionEvent(
-                            type="eou_prediction",
-                            last_speaking_time=time.time(),
-                            end_of_turn_probability=probability,
-                        )
+                self._event_ch.send_nowait(
+                    TurnDetectionEvent(
+                        type="eou_prediction",
+                        last_speaking_time=time.time(),
+                        end_of_turn_probability=probability,
                     )
+                )
+                # Reset the future for the next prediction
+                if fut is not None and probability < 0.3:
+                    self._active_request_fut = asyncio.Future[float]()
             case (
                 "session_created"
                 | "session_finalized"
@@ -534,9 +554,9 @@ class TurnDetectionStream:
                 if (
                     transport_latency := current_time.ToMilliseconds()
                     - msg.client_created_at.ToMilliseconds()
-                ) > 1000 and msg.client_created_at.ToMilliseconds() > 0:
+                ) > 200 and msg.client_created_at.ToMilliseconds() > 0:
                     logger.warning(
-                        "turn detector transport latency is too high: %sms",
+                        "turn detection transport latency is too high: %sms",
                         transport_latency,
                     )
             case "error":

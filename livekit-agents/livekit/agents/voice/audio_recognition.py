@@ -155,6 +155,7 @@ class AudioRecognition:
         self._mm_ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool] | None = None
         self._mm_atask: asyncio.Task[None] | None = None
         self._silence_guard_event = asyncio.Event()
+        self._vad_eos_silence_passed = asyncio.Event()
 
     def update_options(
         self,
@@ -215,9 +216,17 @@ class AudioRecognition:
         if self.adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
+        if self._mm_ch is not None and not self._speaking:
+            self._mm_ch.send_nowait(False)
+
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
         if self._agent_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=time.time())
+
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.flush("end of agent speech")
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._turn_detector_stream.update_chat_ctx(chat_ctx)
 
         if not self.adaptive_interruption_active:
             self._agent_speaking = False
@@ -818,6 +827,7 @@ class AudioRecognition:
 
             self._speaking = True
             self._silence_guard_event.set()
+            self._vad_eos_silence_passed.clear()
 
             if self._mm_ch is not None:
                 self._mm_ch.send_nowait(ev)
@@ -842,7 +852,7 @@ class AudioRecognition:
                     and not self._turn_detector_stream.is_inference_running
                 ):
                     logger.debug(
-                        "preemptive turn detection started",
+                        "turn detection warmup started",
                         extra={
                             "raw_accumulated_silence": ev.raw_accumulated_silence,
                             "speech_duration": ev.speech_duration,
@@ -850,21 +860,19 @@ class AudioRecognition:
                     )
                     self._turn_detector_stream.warmup()
 
-                self._silence_guard_event.set()
-
-            if ev.raw_accumulated_silence > 0.1 and self._speaking:
+            if ev.raw_accumulated_silence == 0 and self._speaking:
                 if (
                     self._turn_detector_stream is not None
-                    and not self._turn_detector_stream.is_inference_running
+                    and self._turn_detector_stream.is_inference_running
                 ):
                     logger.debug(
-                        "preemptive turn detection started",
+                        "turn detection warmup stopped",
                         extra={
                             "raw_accumulated_silence": ev.raw_accumulated_silence,
                             "speech_duration": ev.speech_duration,
                         },
                     )
-                    self._turn_detector_stream.warmup()
+                    self._turn_detector_stream.stop_warmup()
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
@@ -873,6 +881,7 @@ class AudioRecognition:
             self._vad_speech_started = False
             self._speaking = False
             self._silence_guard_event.clear()
+            self._vad_eos_silence_passed.set()
             self._last_speaking_time = time.time()
 
             if self._mm_ch is not None:
@@ -887,17 +896,6 @@ class AudioRecognition:
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
-
-    def _on_agent_start_of_speech(self) -> None:
-        if self._mm_ch is not None and not self._speaking:
-            self._mm_ch.send_nowait(False)
-
-    def _on_agent_end_of_speech(self) -> None:
-        """Signal the turn detector stream to flush and push the chat context."""
-        if self._turn_detector_stream is not None:
-            self._turn_detector_stream.flush("end of agent speech")
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._turn_detector_stream.update_chat_ctx(chat_ctx)
 
     def _run_eou_detection(
         self,
@@ -1217,48 +1215,7 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                self._run_eou_detection(
-                    self._hooks.retrieve_chat_ctx().copy(),
-                    latest_eou_prediction=ev,
-                    source="turn_detector",
-                )
-                if ev.end_of_turn_probability >= await stream.unlikely_threshold(
-                    self._last_language
-                ):
-                    stream.flush("eot")
-        finally:
-            await aio.cancel_and_wait(forward_task)
-            await stream.aclose()
-
-    @utils.log_exceptions(logger=logger)
-    async def _mm_task(
-        self,
-        stream: TurnDetectionStream,
-        ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool],
-        task: asyncio.Task[None] | None,
-    ) -> None:
-        if task is not None:
-            await aio.cancel_and_wait(task)
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward() -> None:
-            async for msg in ch:
-                if isinstance(msg, rtc.AudioFrame):
-                    stream.push_audio(msg)
-                elif isinstance(msg, llm.ChatContext):
-                    stream.update_chat_ctx(msg)
-                elif isinstance(msg, VADEvent):
-                    if msg.type == VADEventType.START_OF_SPEECH:
-                        stream.set_active(False)
-                    elif msg.type == VADEventType.END_OF_SPEECH:
-                        stream.set_active(True)
-                elif isinstance(msg, bool):
-                    stream.set_active(msg)
-
-        forward_task = asyncio.create_task(_forward())
-
-        try:
-            async for ev in stream:
+                await self._vad_eos_silence_passed.wait()
                 self._run_eou_detection(
                     self._hooks.retrieve_chat_ctx().copy(),
                     latest_eou_prediction=ev,
