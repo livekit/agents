@@ -10,7 +10,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.plugins import openai
+from livekit.agents import inference
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -26,7 +26,7 @@ def ai_function1(a: int, b: str = "default") -> None:
 
 
 def skip_if_no_credentials():
-    required_vars = ["OPENAI_API_KEY"]
+    required_vars = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
     missing = [var for var in required_vars if not os.getenv(var)]
     return pytest.mark.skipif(
         bool(missing), reason=f"Missing environment variables: {', '.join(missing)}"
@@ -253,7 +253,7 @@ async def test_summarize():
 
     import json
 
-    async with openai.LLM(model="gpt-4o") as llm:
+    async with inference.LLM(model="openai/gpt-4.1-mini") as llm:
         summary = await chat_ctx._summarize(llm, keep_last_turns=1)
         print("\n=== Summary ===\n")
         print(json.dumps(summary.to_dict(), indent=2))
