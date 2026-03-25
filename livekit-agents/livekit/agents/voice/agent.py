@@ -81,7 +81,10 @@ class Agent:
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            if llm.startswith(("openai/gpt-realtime", "gpt-realtime")):
+                llm = inference.STS.from_model_string(llm)
+            else:
+                llm = inference.LLM.from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
