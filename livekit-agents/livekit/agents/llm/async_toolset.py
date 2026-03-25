@@ -13,6 +13,7 @@ from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
     Tool,
+    ToolError,
     Toolset,
     function_tool,
 )
@@ -234,6 +235,9 @@ class AsyncToolset(Toolset):
             confirm_duplicate = raw_arguments.pop(confirm_duplicate_param, None)
             duplicate_result = await self._check_duplicate(fnc_name, confirm_duplicate)
             if duplicate_result is not None:
+                logger.debug(
+                    "duplicate tool call rejected", extra={"call_id": call_id, "function": fnc_name}
+                )
                 return duplicate_result
 
             if call_id in self._running_tasks:
@@ -244,7 +248,6 @@ class AsyncToolset(Toolset):
             async def _execute_tool() -> Any:
                 try:
                     tool_kwargs = _prepare_tool_kwargs(tool, raw_arguments, async_ctx)
-                    logger.info(f"Executing tool {fnc_name} with kwargs: {tool_kwargs}")
                     output = await tool(**tool_kwargs)
                 except asyncio.CancelledError:
                     logger.debug(
@@ -322,10 +325,10 @@ class AsyncToolset(Toolset):
         agent_chat_items = session.current_agent.chat_ctx.items
         if agent_chat_items and agent_chat_items[-1].created_at > pending_items[-1].created_at:
             logger.debug("skipping async toolset reply — agent already spoke after updates")
-            # TODO: use a LLM to verify another reply is needed or not?
+            # TODO: use a LLM to verify if another reply is needed?
             return
 
-        # TODO: add instructions to mention the pending tools
+        # TODO: add instructions to emphasize the pending tools
         session.generate_reply(tool_choice="none")
 
     async def _check_duplicate(self, fnc_name: str, confirm_duplicate: bool) -> str | None:
@@ -403,6 +406,7 @@ def _prepare_tool_kwargs(
         type_hints = {}
 
     kwargs: dict[str, Any] = {}
+    missing_params: list[str] = []
     for param_name, param in sig.parameters.items():
         hint = type_hints.get(param_name)
         if hint is not None and _is_async_context_type(hint):
@@ -413,4 +417,10 @@ def _prepare_tool_kwargs(
             kwargs[param_name] = raw_arguments[param_name]
         elif param.default is not inspect.Parameter.empty:
             kwargs[param_name] = param.default
+        else:
+            missing_params.append(param_name)
+
+    if missing_params:
+        raise ToolError(f"Missing required parameters: {missing_params}")
+
     return kwargs

@@ -39,7 +39,7 @@ class TravelToolset(AsyncToolset):
     async def book_flight(
         self, ctx: AsyncRunContext, origin: str, destination: str, date: str
     ) -> str:
-        """Book a flight ticket. This takes a while to search airlines and confirm the booking.
+        """Called when user wants to book a flight.
 
         Args:
             origin: Departure city or airport code.
@@ -51,7 +51,7 @@ class TravelToolset(AsyncToolset):
             "This will take a couple of minutes."
         )
 
-        # Phase 1: searching airlines (~60s)
+        # Phase 1: searching airlines
         await asyncio.sleep(30)
 
         airlines = random.sample(
@@ -60,13 +60,14 @@ class TravelToolset(AsyncToolset):
         prices = {a: random.randint(180, 650) for a in airlines}
         cheapest = min(prices, key=lambda a: prices[a])
 
-        ctx.update(
+        logger.info("Found airlines and prices, booking the flight...")
+        await ctx.update(
             f"Found {len(airlines)} options. Best price: ${prices[cheapest]} on {cheapest}. "
             "Confirming the booking now.",
         )
 
-        # Phase 2: confirming booking (~60s)
-        await asyncio.sleep(60)
+        # Phase 2: confirming booking
+        await asyncio.sleep(40)
 
         logger.info("Flight booked")
         confirmation = f"FL-{random.randint(100000, 999999)}"
@@ -79,19 +80,14 @@ class TravelToolset(AsyncToolset):
 
     @llm.function_tool
     async def tour_guide(self, ctx: AsyncRunContext, destination: str, interests: str) -> str:
-        """Research a destination and recommend what to see, where to eat, and
-        things to do. Use this when the user is visiting somewhere and wants
-        sightseeing spots, restaurant picks, local food, nightlife, or
-        neighborhood tips.
+        """Called when user wants to know about a destination, including
+        sightseeing spots, restaurants, local food, nightlife, or neighborhood tips.
 
         Args:
             destination: The city or area the user is visiting.
-            interests: What the user is interested in (e.g. "street food and temples",
-                "museums and nightlife", "family-friendly activities").
+            interests: What the user is interested in (e.g. "street food and temples", "museums and nightlife", "family-friendly activities").
         """
-        ctx.pending(
-            f"Looking up the best spots in {destination} for you. Give me a moment to search."
-        )
+        ctx.pending(f"Looking up the best spots in {destination} for you.")
 
         sources = await self._search(destination, interests, chat_ctx=ctx.session.history)
 
@@ -166,20 +162,17 @@ class TravelAgent(Agent):
                 "Use the book_flight tool when the user wants to book a flight. "
                 "Use the tour_guide tool when the user asks about places to visit, "
                 "restaurants, sightseeing, nightlife, or things to do somewhere. "
-                "Both tools run in the background, so keep chatting while they work. "
+                "Summarize the results in a concise and natural manner that suitable for voice communication. "
                 f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
-                "Don't make up flight details or recommendations — always use the tools."
+                "When user is not asking, don't repeat the messages you have already said in the conversation. "
+                "Don't make up flight details or ask for flight preferences — always use the tools. "
             ),
             tools=[TravelToolset()],
         )
+        self._llm_count = 0
 
     async def on_enter(self):
-        self.session.generate_reply(
-            instructions=(
-                "Greet the user and let them know you can help book flights "
-                "and recommend places to visit and eat. Keep it short."
-            )
-        )
+        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
 
 server = AgentServer()
@@ -189,8 +182,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("openai/gpt-5.3-chat-latest"),
         tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
+        # llm=google.realtime.RealtimeModel(),
         vad=silero.VAD.load(),
         turn_handling={"interruption": {"mode": "vad"}},
     )

@@ -44,11 +44,7 @@ class MyAgent(Agent):
     async def on_enter(self) -> None:
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        # self.session.generate_reply(instructions="greet the user and introduce yourself")
-
-        # TODO:
-        self.session.generate_reply(instructions="count 1 2 3")
-        self.session.generate_reply(user_input="continue to count to 10")
+        self.session.generate_reply(instructions="greet the user and introduce yourself")
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -108,7 +104,6 @@ async def entrypoint(ctx: JobContext) -> None:
                 # when it's detected, you may resume the agent's speech
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
-                "mode": "vad",
             },
         ),
         # allow the LLM to generate a response while waiting for the end of turn
