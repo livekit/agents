@@ -196,9 +196,12 @@ class MCPServer(ABC):
 
     async def aclose(self) -> None:
         self._closing_ev.set()
-        if self._client_task:
-            await self._client_task
-            self._client_task = None
+        try:
+            if self._client_task:
+                await self._client_task
+                self._client_task = None
+        finally:
+            self._closing_ev.clear()
 
     @abstractmethod
     def client_streams(
