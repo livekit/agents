@@ -679,7 +679,6 @@ class RealtimeModel(llm.RealtimeModel):
 def process_base_url(
     url: str,
     model: str,
-    is_azure: bool = False,
     azure_deployment: str | None = None,
 ) -> str:
     if url.startswith("http"):
@@ -693,6 +692,9 @@ def process_base_url(
         path = parsed_url.path.rstrip("/") + "/realtime"
     else:
         path = parsed_url.path
+
+    if "model" not in query_params:
+        query_params["model"] = [azure_deployment or model]
 
     new_query = urlencode(query_params, doseq=True)
     return urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
@@ -859,7 +861,6 @@ class RealtimeSession(
         url = process_base_url(
             self._realtime_model._opts.base_url,
             self._realtime_model._opts.model,
-            is_azure=self._realtime_model._opts.is_azure,
             azure_deployment=self._realtime_model._opts.azure_deployment,
         )
 
