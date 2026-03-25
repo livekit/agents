@@ -21,7 +21,7 @@ Sarvam.ai provides high-quality STT and TTS for Indian languages and OpenAI-comp
 For API access, visit https://sarvam.ai/
 """
 
-from .llm import LLM
+from .llm import LLM, SarvamLLMModels
 from .stt import STT
 from .tts import TTS
 from .version import __version__
