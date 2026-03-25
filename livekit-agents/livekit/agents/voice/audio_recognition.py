@@ -902,7 +902,9 @@ class AudioRecognition:
         chat_ctx: llm.ChatContext,
         skip_reply: bool = False,
         latest_eou_prediction: NotGivenOr[TurnDetectionEvent] = NOT_GIVEN,
-        source: Literal["vad", "turn_detector", "stt", "manual", "unknown"] = "unknown",
+        source: Literal[
+            "vad", "vad preemptive", "turn_detector", "stt", "manual", "unknown"
+        ] = "unknown",
     ) -> None:
         """
         Run endpointing delay arbitrage. Turn detection might have been decided already by the vad, manual, or stt.

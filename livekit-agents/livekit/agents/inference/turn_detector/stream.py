@@ -133,7 +133,7 @@ class TurnDetectionStream:
     def is_admitting_results(self) -> bool:
         return self.is_active
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float:
         return await self._detector.unlikely_threshold(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
@@ -259,6 +259,7 @@ class TurnDetectionStream:
                     input_chat_context=InputChatContext(messages=self._assistant_messages)
                 )
             )
+        assert self._active_request_fut is not None
         return self._active_request_fut
 
     def stop_warmup(self) -> None:
