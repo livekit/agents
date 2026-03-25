@@ -44,9 +44,10 @@ from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from ...log import logger
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
-from ...log import logger
+
 from .events import (
     SonicEventBuilder as seb,
     Tool,
@@ -525,6 +526,8 @@ class RealtimeSession(  # noqa: F811
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
+        self._no_gen_content_roles: dict[str, str] = {}  # contentId → role for events without generation
+        self._current_user_content_id: str | None = None  # track current user utterance
         # Signalled after await_output() returns (HTTP 200 received).
         # Interactive text must wait for this to avoid being sent before
         # audio input is flowing (Nova Sonic requires active audio to generate).
@@ -1120,28 +1123,23 @@ class RealtimeSession(  # noqa: F811
 
         role = event_data["event"]["contentStart"]["role"]
 
-        # CRITICAL: Create NEW generation for each ASSISTANT SPECULATIVE response
-        # Nova Sonic sends ASSISTANT SPECULATIVE for each new assistant turn, including after tool calls.
-        # Without this, audio frames get routed to the wrong generation and don't play.
+        # SPECULATIVE text blocks are incremental previews within the same response.
+        # Don't close the generation here — keep one generation open per response.
+        # Close happens on END_TURN, barge-in, tool call, or completionEnd.
         if role == "ASSISTANT":
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
-                # This is a new assistant response - close previous and create new
                 logger.debug("[GEN] ASSISTANT SPECULATIVE text received")
-                if self._current_generation is not None:
-                    logger.debug(
-                        f"[GEN] Closing previous generation (response_id={self._current_generation.response_id}) for new SPECULATIVE"
-                    )
-                    self._close_current_generation()
-                self._create_response_generation()
-        else:
-            # For USER and FINAL, just ensure generation exists
-            self._create_response_generation()
+                self._create_response_generation()  # reuses existing if present
 
         # CRITICAL: Check if generation exists before accessing
         # Barge-in can set _current_generation to None between the creation above and here.
         # Without this check, we crash on interruptions.
         if self._current_generation is None:
+            # Track role for events that arrive without a generation
+            content_id = event_data["event"]["contentStart"].get("contentId")
+            if content_id:
+                self._no_gen_content_roles[content_id] = role
             logger.debug("No generation exists - ignoring content_start event")
             return
 
@@ -1162,7 +1160,19 @@ class RealtimeSession(  # noqa: F811
         log_event_data(event_data)
 
         if self._current_generation is None:
-            logger.debug("No generation exists - ignoring text_output event")
+            # No active generation. This happens for USER ASR and ASSISTANT FINAL
+            # text arriving between turns.
+            content_id = event_data["event"]["textOutput"]["contentId"]
+            text_content = event_data["event"]["textOutput"]["content"]
+
+            if text_content == BARGE_IN_SIGNAL:
+                return
+
+            role = self._no_gen_content_roles.get(content_id, "USER")
+            if role == "USER":
+                self._update_chat_ctx(role="user", text_content=text_content, content_id=content_id)
+            elif role == "ASSISTANT":
+                self._update_chat_ctx(role="assistant", text_content=text_content)
             return
 
         content_id = event_data["event"]["textOutput"]["contentId"]
@@ -1186,7 +1196,7 @@ class RealtimeSession(  # noqa: F811
 
         if content_type == "USER_ASR":
             logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
-            self._update_chat_ctx(role="user", text_content=text_content)
+            self._update_chat_ctx(role="user", text_content=text_content, content_id=content_id)
 
         elif content_type == "ASSISTANT_TEXT":
             # Set first token timestamp if not already set
@@ -1198,17 +1208,27 @@ class RealtimeSession(  # noqa: F811
                 self._current_generation.message_gen.text_ch.send_nowait(text_content)
             self._update_chat_ctx(role="assistant", text_content=text_content)
 
-    def _update_chat_ctx(self, role: llm.ChatRole, text_content: str) -> None:
+    def _update_chat_ctx(self, role: llm.ChatRole, text_content: str, content_id: str | None = None) -> None:
         """
         Update the chat context with the latest ASR text while guarding against model limitations:
             a) 40 total messages limit
             b) 1kB message size limit
         """
         logger.debug(f"Updating chat context with role: {role} and text_content: {text_content}")
-        if len(self._chat_ctx.items) == 0:
+
+        # Start a new message when the user contentId changes (new utterance)
+        force_new = False
+        if role == "user" and content_id is not None:
+            if self._current_user_content_id != content_id:
+                force_new = True
+                self._current_user_content_id = content_id
+
+        if len(self._chat_ctx.items) == 0 or force_new:
             msg = self._chat_ctx.add_message(role=role, content=text_content)
             if role == "user":
                 self._audio_message_ids.add(msg.id)
+            if len(self._chat_ctx.items) > MAX_MESSAGES:
+                self._chat_ctx.truncate(max_items=MAX_MESSAGES)
         else:
             prev_utterance = self._chat_ctx.items[-1]
             if prev_utterance.type == "message" and prev_utterance.role == role:
@@ -1232,9 +1252,7 @@ class RealtimeSession(  # noqa: F811
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
-        """Handle text content end - log but don't close generation yet."""
-        # Nova Sonic sends multiple content blocks within one completion
-        # Don't close generation here - wait for completionEnd or audio_output_content_end
+        """Handle text content end."""
         log_event_data(event_data)
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
@@ -1317,9 +1335,7 @@ class RealtimeSession(  # noqa: F811
         if stop_reason == "END_TURN":
             self._audio_end_turn_received = True
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
-
-        # Nova Sonic uses one completion for entire session
-        # Don't close generation here - wait for new completionStart or session end
+            self._close_current_generation()
 
     def _close_current_generation(self) -> None:
         """Helper that closes all channels of the active generation."""
