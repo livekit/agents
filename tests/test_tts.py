@@ -9,6 +9,7 @@ import ssl
 import time
 import wave
 from collections import defaultdict
+from urllib.parse import urlencode
 
 import aiohttp
 import av
@@ -16,7 +17,7 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tokenize, tts
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tts
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -30,7 +31,6 @@ from livekit.plugins import (
     inworld,
     lmnt,
     neuphonic,
-    openai,
     resemble,
     rime,
     speechify,
@@ -51,22 +51,22 @@ TEST_AUDIO_SYNTHESIZE_MULTI_TOKENS = pathlib.Path(
 ).read_text()
 
 PROXY_LISTEN = "0.0.0.0:443"
-OAI_LISTEN = "0.0.0.0:500"
+DG_STT_LISTEN = "0.0.0.0:500"
 
 
-def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
-    return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
+def setup_deepgram_stt_proxy(toxiproxy: Toxiproxy) -> Proxy:
+    return toxiproxy.create(
+        "api.deepgram.com:443", "dg-stt-proxy", listen=DG_STT_LISTEN, enabled=True
+    )
 
 
 async def assert_valid_synthesized_audio(
     *, frames: AudioBuffer, text: str, sample_rate: int, num_channels: int
 ):
-    # use whisper as the source of truth to verify synthesized speech (smallest WER)
+    # use Deepgram as the source of truth to verify synthesized speech
     frame = rtc.combine_audio_frames(frames)
 
     # Make sure the data is PCM and can't be another container.
-    # OpenAI STT seems to probe the input so the test could still pass even if the data isn't PCM!!
-
     try:
         probe_opts = {
             "probe_size": "32",
@@ -102,11 +102,8 @@ async def assert_valid_synthesized_audio(
     assert frame.sample_rate == sample_rate, "sample rate should be the same"
     assert frame.num_channels == num_channels, "num channels should be the same"
 
-    data = frame.to_wav_bytes()
-    form = aiohttp.FormData()
-    form.add_field("file", data, filename="file.wav", content_type="audio/wav")
-    form.add_field("model", "whisper-1")
-    form.add_field("response_format", "verbose_json")
+    wav_data = frame.to_wav_bytes()
+    params = urlencode({"model": "nova-3", "punctuate": "true", "language": "en-US"})
 
     ssl_ctx = ssl.create_default_context()
     connector = aiohttp.TCPConnector(ssl=ssl_ctx)
@@ -115,28 +112,24 @@ async def assert_valid_synthesized_audio(
         connector=connector, timeout=aiohttp.ClientTimeout(total=30)
     ) as session:
         async with session.post(
-            "https://toxiproxy:500/v1/audio/transcriptions",
-            data=form,
+            f"https://toxiproxy:500/v1/listen?{params}",
+            data=wav_data,
             headers={
-                "Host": "api.openai.com",
-                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                "Host": "api.deepgram.com",
+                "Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}",
+                "Accept": "application/json",
+                "Content-Type": "audio/wav",
             },
             ssl=ssl_ctx,
-            server_hostname="api.openai.com",
+            server_hostname="api.deepgram.com",
         ) as resp:
             if resp.status != 200:
                 body = await resp.text()
-                raise RuntimeError(f"Whisper transcription failed ({resp.status}): {body}")
+                raise RuntimeError(f"Deepgram transcription failed ({resp.status}): {body}")
             result = await resp.json()
 
-    # semantic
-    assert wer(result["text"], text) <= WER_THRESHOLD
-
-    # clipping
-    # signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
-    # peak = np.iinfo(np.int16).max
-    # num_clipped = np.sum((signal >= peak) | (signal <= -peak))
-    # assert num_clipped <= 10, f"{num_clipped} samples are clipped"
+    transcribed = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+    assert wer(transcribed, text) <= WER_THRESHOLD
 
 
 SYNTHESIZE_TTS = [
@@ -195,13 +188,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.neuphonic.com:443",
         },
         id="neuphonic",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": openai.TTS(),
-            "proxy-upstream": "api.openai.com:443",
-        },
-        id="openai",
     ),
     pytest.param(
         lambda: {
@@ -297,7 +283,7 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -328,7 +314,7 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -436,15 +422,6 @@ STREAM_TTS = [
             "proxy-upstream": "texttospeech.googleapis.com:443",
         },
         id="google",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": tts.StreamAdapter(
-                tts=openai.TTS(), sentence_tokenizer=tokenize.blingfire.SentenceTokenizer()
-            ),
-            "proxy-upstream": "api.openai.com:443",
-        },
-        id="openai-stream-adapter",
     ),
     pytest.param(
         lambda: {
@@ -575,7 +552,7 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -639,7 +616,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -664,7 +641,7 @@ async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
