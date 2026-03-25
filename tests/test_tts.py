@@ -9,12 +9,12 @@ import ssl
 import time
 import wave
 from collections import defaultdict
+from urllib.parse import urlencode
 
 import aiohttp
 import av
 import pytest
 from dotenv import load_dotenv
-from urllib.parse import urlencode
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tts
