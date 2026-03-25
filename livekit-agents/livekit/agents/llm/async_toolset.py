@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
-
-from attr import dataclass
 
 from .. import utils
 from ..llm.chat_context import ChatItem, FunctionCall
@@ -204,6 +203,7 @@ class AsyncToolset(Toolset):
 
     async def aclose(self) -> None:
         """Cancel all tasks."""
+        await super().aclose()
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if self._reply_task is not None:
             tasks.append(self._reply_task)
@@ -253,6 +253,8 @@ class AsyncToolset(Toolset):
                     logger.debug(
                         "async tool cancelled", extra={"call_id": call_id, "function": fnc_name}
                     )
+                    if not async_ctx._pending_fut.done():
+                        async_ctx._pending_fut.set_result(None)
                     return
                 except BaseException as e:
                     output = e
