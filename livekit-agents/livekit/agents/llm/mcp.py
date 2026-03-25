@@ -127,10 +127,15 @@ class MCPServer(ABC):
                     await self._closing_ev.wait()
         except BaseException as e:
             if not ready_fut.done():
-                ready_fut.set_exception(e)
+                ready_fut.set_exception(e)  # raising from `await initialize()`
+            else:
+                if isinstance(e, Exception):
+                    logger.exception("MCP client connection failed with unexpected error")
+                raise
         finally:
             self._client = None
             self._lk_tools = None
+            self._closing_ev.clear()
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -191,12 +196,9 @@ class MCPServer(ABC):
 
     async def aclose(self) -> None:
         self._closing_ev.set()
-        try:
-            if self._client_task:
-                await self._client_task
-                self._client_task = None
-        finally:
-            self._closing_ev.clear()
+        if self._client_task:
+            await self._client_task
+            self._client_task = None
 
     @abstractmethod
     def client_streams(
