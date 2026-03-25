@@ -4,7 +4,7 @@ import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from ..inference.interruption import (
@@ -15,6 +15,7 @@ from ..inference.interruption import (
 from ..language import LanguageCode
 from ..llm import (
     LLM,
+    AgentHandoff,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
@@ -26,7 +27,6 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
-from .agent import Agent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -91,7 +91,6 @@ class RunContext(Generic[Userdata_T]):
 EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
-    "agent_handoff",
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
@@ -120,23 +119,6 @@ class AgentStateChangedEvent(BaseModel):
     old_state: AgentState
     new_state: AgentState
     created_at: float = Field(default_factory=time.time)
-
-
-class AgentHandoffEvent(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    type: Literal["agent_handoff"] = "agent_handoff"
-    old_agent: Agent | None = None
-    new_agent: Agent
-    created_at: float = Field(default_factory=time.time)
-
-    @field_serializer("old_agent")
-    def _serialize_old_agent(self, agent: Agent | None) -> str | None:
-        return agent.id if agent is not None else None
-
-    @field_serializer("new_agent")
-    def _serialize_new_agent(self, agent: Agent) -> str:
-        return agent.id
 
 
 class UserInputTranscribedEvent(BaseModel):
@@ -187,7 +169,7 @@ class _TypeDiscriminator(BaseModel):
 
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    item: ChatMessage | _TypeDiscriminator
+    item: ChatMessage | AgentHandoff | _TypeDiscriminator
     created_at: float = Field(default_factory=time.time)
 
 
@@ -267,7 +249,6 @@ AgentEvent = Annotated[
     UserInputTranscribedEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
-    | AgentHandoffEvent
     | AgentFalseInterruptionEvent
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent

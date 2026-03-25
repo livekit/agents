@@ -4,7 +4,6 @@ from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSam
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
-    AgentHandoffEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
@@ -48,7 +47,6 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
-    "AgentHandoffEvent",
     "TranscriptSynchronizer",
     "io",
     "room_io",
