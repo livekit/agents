@@ -1223,11 +1223,11 @@ class AgentActivity(RecognitionHooks):
         agent_active = True
         user_active = True
         while agent_active or user_active:
-            if (speech := self.current_speech) is None:
+            if self._current_speech is None and not self._speech_q:
                 agent_active = False
             else:
                 agent_active = True
-                if speech._generations:
+                if (speech := self._current_speech) and speech._generations:
                     await speech._wait_for_generation()
                 await asyncio.sleep(0)
 
