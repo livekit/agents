@@ -1652,16 +1652,6 @@ class AgentActivity(RecognitionHooks):
             created_at=time.time(),
         )
 
-    def on_user_turn_corrected(self) -> None:
-        """Called when a late STT segment was merged into the last user message.
-
-        Forces an interruption of the in-progress generation and re-generates
-        with the updated chat context so the agent responds to the full
-        transcript, not just the first segment.
-        """
-        self.interrupt(force=True)
-        self._session.generate_reply()
-
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
@@ -1727,6 +1717,18 @@ class AgentActivity(RecognitionHooks):
 
         # interrupt all background speeches and wait for them to finish to update the chat context
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
+
+        # append any late STT segments that arrived after the turn was committed
+        # but before the user message is created (avoids a race where the
+        # merge would target the wrong message in the chat context)
+        if self._audio_recognition:
+            late = self._audio_recognition.consume_pending_late_transcript()
+            if late:
+                info.new_transcript = f"{info.new_transcript} {late}"
+                logger.debug(
+                    "appended late STT transcript to turn",
+                    extra={"late_transcript": late, "full_transcript": info.new_transcript},
+                )
 
         user_message = llm.ChatMessage(
             role="user",

@@ -75,7 +75,6 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-    def on_user_turn_corrected(self) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -199,6 +198,8 @@ class AudioRecognition:
         # timestamp of the last turn commit — used to suppress phantom turns
         # from late STT segments arriving shortly after a turn was committed
         self._last_turn_committed_at: float | None = None
+        # late FINAL_TRANSCRIPT text stored here until consumed by the turn task
+        self._pending_late_transcript: str = ""
 
     def update_options(
         self,
@@ -569,6 +570,12 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
+    def consume_pending_late_transcript(self) -> str:
+        """Return and clear any late STT text stored during the grace period."""
+        text = self._pending_late_transcript
+        self._pending_late_transcript = ""
+        return text
+
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
@@ -719,19 +726,13 @@ class AudioRecognition:
             if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                 late_text = ev.alternatives[0].text if ev.alternatives else ""
                 if late_text:
-                    chat_ctx = self._hooks.retrieve_chat_ctx()
-                    for item in reversed(chat_ctx.items):
-                        if isinstance(item, llm.ChatMessage) and item.role == "user":
-                            for i in range(len(item.content) - 1, -1, -1):
-                                if isinstance(item.content[i], str):
-                                    item.content[i] = f"{item.content[i]} {late_text}"
-                                    break
-                            break
+                    self._pending_late_transcript = (
+                        f"{self._pending_late_transcript} {late_text}".strip()
+                    )
                     logger.debug(
-                        "merged late STT transcript into previous turn",
+                        "stored late STT transcript for pending turn",
                         extra={"late_transcript": late_text},
                     )
-                    self._hooks.on_user_turn_corrected()
             return
 
         # handle interruption detection
@@ -905,6 +906,7 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_turn_committed_at = None  # new speech → reset phantom protection
+            self._pending_late_transcript = ""
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()

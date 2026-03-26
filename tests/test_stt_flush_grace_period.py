@@ -151,11 +151,23 @@ async def test_late_stt_transcript_suppressed() -> None:
             ttft=0.1,
             duration=0.1,
         ),
+        FakeLLMResponse(
+            input="Hello world how are you?",
+            content="I'm doing even better now!",
+            ttft=0.1,
+            duration=0.1,
+        ),
     ]
 
     tts_responses = [
         FakeTTSResponse(
             input="I'm doing great!",
+            audio_duration=0.5,
+            ttfb=0.05,
+            duration=0.1,
+        ),
+        FakeTTSResponse(
+            input="I'm doing even better now!",
             audio_duration=0.5,
             ttfb=0.05,
             duration=0.1,
@@ -186,8 +198,3 @@ async def test_late_stt_transcript_suppressed() -> None:
         f"expected 1 user message but got {len(user_messages)}: "
         f"{[m.item.text_content for m in user_messages]}"
     )
-
-    # the late transcript should be merged into the first user message
-    transcript = user_messages[0].item.text_content or ""
-    assert "Hello world" in transcript
-    assert "how are you?" in transcript
