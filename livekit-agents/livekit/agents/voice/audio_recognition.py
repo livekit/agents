@@ -710,6 +710,7 @@ class AudioRecognition:
                 stt.SpeechEventType.INTERIM_TRANSCRIPT,
                 stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
             )
+            and self._vad is not None
             and not self._speaking
             and self._last_turn_committed_at is not None
             and time.time() - self._last_turn_committed_at < _STT_FLUSH_GRACE_PERIOD
