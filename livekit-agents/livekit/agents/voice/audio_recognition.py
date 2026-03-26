@@ -39,6 +39,11 @@ MIN_LANGUAGE_DETECTION_LENGTH = 5
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 
+# grace period to wait for late STT transcripts before committing a turn.
+# some streaming STT providers segment long utterances internally and deliver the last
+# segment's FINAL_TRANSCRIPT after the endpointing delay, creating a phantom user turn.
+_STT_FLUSH_GRACE_PERIOD = 0.5
+
 
 @dataclass
 class _EndOfTurnInfo:
@@ -70,6 +75,7 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
+    def on_user_turn_corrected(self) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -189,6 +195,10 @@ class AudioRecognition:
         self._closing = asyncio.Event()
 
         self._vad_speech_started: bool = False
+
+        # timestamp of the last turn commit — used to suppress phantom turns
+        # from late STT segments arriving shortly after a turn was committed
+        self._last_turn_committed_at: float | None = None
 
     def update_options(
         self,
@@ -688,6 +698,40 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
+        # merge late STT segments arriving shortly after a turn commit while
+        # the user is not speaking — these are leftover segments from the
+        # previous utterance that would create phantom turns if processed
+        # normally.  instead of dropping them we append the text to the last
+        # user message in the chat context so the information is preserved.
+        if (
+            ev.type
+            in (
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            )
+            and not self._speaking
+            and self._last_turn_committed_at is not None
+            and time.time() - self._last_turn_committed_at < _STT_FLUSH_GRACE_PERIOD
+        ):
+            late_text = ev.alternatives[0].text if ev.alternatives else ""
+            if late_text:
+                chat_ctx = self._hooks.retrieve_chat_ctx()
+                # walk backwards to find the last user message and concat
+                for item in reversed(chat_ctx.items):
+                    if isinstance(item, llm.ChatMessage) and item.role == "user":
+                        for i in range(len(item.content) - 1, -1, -1):
+                            if isinstance(item.content[i], str):
+                                item.content[i] = f"{item.content[i]} {late_text}"
+                                break
+                        break
+                logger.debug(
+                    "merged late STT transcript into previous turn",
+                    extra={"late_transcript": late_text},
+                )
+                self._hooks.on_user_turn_corrected()
+            return
+
         # handle interruption detection
         # - hold the event until the ignore_user_transcript_until expires
         # - release only relevant events
@@ -858,6 +902,7 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(ev)
 
             self._speaking = True
+            self._last_turn_committed_at = None  # new speech → reset phantom protection
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1019,8 +1064,11 @@ class AudioRecognition:
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
+                self._audio_interim_transcript = ""
+                self._audio_preflight_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                self._last_turn_committed_at = time.time()
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:

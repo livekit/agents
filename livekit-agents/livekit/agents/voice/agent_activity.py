@@ -1652,6 +1652,16 @@ class AgentActivity(RecognitionHooks):
             created_at=time.time(),
         )
 
+    def on_user_turn_corrected(self) -> None:
+        """Called when a late STT segment was merged into the last user message.
+
+        Forces an interruption of the in-progress generation and re-generates
+        with the updated chat context so the agent responds to the full
+        transcript, not just the first segment.
+        """
+        self.interrupt(force=True)
+        self._session.generate_reply()
+
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
