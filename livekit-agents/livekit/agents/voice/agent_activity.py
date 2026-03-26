@@ -593,8 +593,8 @@ class AgentActivity(RecognitionHooks):
             and isinstance(self.llm, llm.RealtimeModel)
             and self.llm is new_activity.llm
         ):
-            # reset chat context is supported or if the chat context is equivalent
-            reusable = self.llm.capabilities.supports_context_reset or (
+            # context update is supported or chat context is equivalent
+            reusable = self.llm.capabilities.mid_session_context_update or (
                 self._rt_session.chat_ctx.copy(
                     exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
                 ).is_equivalent(
@@ -603,10 +603,15 @@ class AgentActivity(RecognitionHooks):
                     )
                 )
             )
-            # update instructions is supported or if the instructions are the same
+            # instructions update is supported or instructions are the same
             reusable = reusable and (
-                self.llm.capabilities.supports_instructions_update
+                self.llm.capabilities.mid_session_instructions_update
                 or self.agent.instructions == new_activity.agent.instructions
+            )
+            # tools update is supported or tools are the same
+            reusable = reusable and (
+                self.llm.capabilities.mid_session_tools_update
+                or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
             )
 
             if reusable:
@@ -674,7 +679,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         if isinstance(self.llm, llm.RealtimeModel):
-            if reuse_resources is not None and reuse_resources.rt_session is not None:
+            rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
+            if rt_reused:
+                assert reuse_resources and reuse_resources.rt_session is not None
                 logger.debug("reusing realtime session from previous activity")
                 self._rt_session = reuse_resources.rt_session
                 reuse_resources.rt_session = None  # ownership transferred
@@ -698,20 +705,25 @@ class AgentActivity(RecognitionHooks):
 
             remove_instructions(self._agent._chat_ctx)
 
-            try:
-                await self._rt_session.update_instructions(self._agent.instructions)
-            except llm.RealtimeError:
-                logger.exception("failed to update the instructions")
+            # skip the update if the session is reused and the capability is not supported
+            # this means the content is the same as the previous session
+            if not rt_reused or self.llm.capabilities.mid_session_instructions_update:
+                try:
+                    await self._rt_session.update_instructions(self._agent.instructions)
+                except llm.RealtimeError:
+                    logger.exception("failed to update the instructions")
 
-            try:
-                await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
-            except llm.RealtimeError:
-                logger.exception("failed to update the chat_ctx")
+            if not rt_reused or self.llm.capabilities.mid_session_context_update:
+                try:
+                    await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
+                except llm.RealtimeError:
+                    logger.exception("failed to update the chat_ctx")
 
-            try:
-                await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-            except llm.RealtimeError:
-                logger.exception("failed to update the tools")
+            if not rt_reused or self.llm.capabilities.mid_session_tools_update:
+                try:
+                    await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
+                except llm.RealtimeError:
+                    logger.exception("failed to update the tools")
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
             if (

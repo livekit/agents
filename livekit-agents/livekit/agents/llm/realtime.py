@@ -61,8 +61,9 @@ class RealtimeCapabilities:
     auto_tool_reply_generation: bool
     audio_output: bool
     manual_function_calls: bool
-    supports_context_reset: bool = False
-    supports_instructions_update: bool = False
+    mid_session_context_update: bool = False
+    mid_session_instructions_update: bool = False
+    mid_session_tools_update: bool = False
 
 
 class RealtimeError(Exception):
