@@ -178,9 +178,7 @@ async def test_late_stt_transcript_suppressed() -> None:
     await asyncio.wait_for(_run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     user_messages = [
-        ev
-        for ev in conversation_events
-        if ev.item.type == "message" and ev.item.role == "user"
+        ev for ev in conversation_events if ev.item.type == "message" and ev.item.role == "user"
     ]
 
     # key assertion: only ONE user message (no phantom turn)
