@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 
 from ..types import NOT_GIVEN, NotGivenOr
-from .chat_context import ChatContext, FunctionCall
+from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
 
 
@@ -114,6 +114,7 @@ EventTypes = Literal[
     "generation_created",
     "session_reconnected",
     "metrics_collected",
+    "remote_item_added",
     "error",
 ]
 
@@ -134,6 +135,12 @@ class InputTranscriptionCompleted:
 @dataclass
 class RealtimeSessionReconnectedEvent:
     pass
+
+
+@dataclass
+class RemoteItemAddedEvent:
+    previous_item_id: str | None
+    item: ChatItem
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
