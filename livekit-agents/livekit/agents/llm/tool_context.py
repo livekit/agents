@@ -61,7 +61,8 @@ class Toolset:
 
     def __init__(self, *, id: str, tools: list[Tool | Toolset] | None = None) -> None:
         self._id = id
-        self._tools: Sequence[Tool | Toolset] = tools or []
+        self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
+        self._tools.extend(find_function_tools(self))
 
     @property
     def id(self) -> str:
@@ -89,7 +90,7 @@ class Toolset:
         toolsets (passed to ``AgentSession(tools=...)``) are closed only when the
         ``AgentSession`` shuts down.
         """
-        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
 
