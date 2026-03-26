@@ -872,18 +872,24 @@ class AgentActivity(RecognitionHooks):
                 "pause_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
             )
+
+            resources: _ReusableResources | None = None
             try:
                 await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
 
                 # detach after speech tasks are done but before _close_session
-                resources: _ReusableResources | None = None
                 if new_activity is not None:
                     resources = await self._detach_reusable_resources(new_activity)
 
                 await self._close_session()
-                return resources
+            except BaseException:
+                if resources is not None:
+                    await resources.cleanup()
+                raise
             finally:
                 span.end()
+
+            return resources
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
