@@ -366,6 +366,9 @@ class AgentInput:
 
         self._audio_enabled = enable
 
+        if self._audio_enabled_cb is not None:
+            self._audio_enabled_cb(enable)
+
         if not self._audio_stream:
             return
 
@@ -373,9 +376,6 @@ class AgentInput:
             self._audio_stream.on_attached()
         else:
             self._audio_stream.on_detached()
-
-        if self._audio_enabled_cb is not None:
-            self._audio_enabled_cb(enable)
 
     def set_video_enabled(self, enable: bool) -> None:
         if enable and not self._video_stream:
