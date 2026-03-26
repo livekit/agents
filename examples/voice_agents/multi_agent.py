@@ -21,6 +21,7 @@ from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 
 # uncomment to enable Krisp BVC noise cancellation, currently supported on Linux and MacOS
+# requires LiveKit Cloud; leave disabled on self-hosted servers
 # from livekit.plugins import noise_cancellation
 
 ## The storyteller agent is a multi-agent that can handoff the session to another agent.

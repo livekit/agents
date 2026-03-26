@@ -23,6 +23,7 @@ from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
+# requires LiveKit Cloud; leave disabled on self-hosted servers
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
@@ -134,6 +135,7 @@ async def entrypoint(ctx: JobContext) -> None:
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
                 # uncomment to enable the Krisp BVC noise cancellation
+                # requires LiveKit Cloud
                 # noise_cancellation=noise_cancellation.BVC(),
             ),
         ),

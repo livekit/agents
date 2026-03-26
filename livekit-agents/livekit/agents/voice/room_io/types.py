@@ -72,6 +72,13 @@ class AudioInputOptions:
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None
     ) = None
+    """Noise cancellation or audio processing for inbound audio.
+
+    Note:
+        The official ``livekit.plugins.noise_cancellation`` Krisp filters require
+        LiveKit Cloud. On self-hosted servers, leave this unset or use your own
+        ``rtc.FrameProcessor`` implementation instead.
+    """
     auto_gain_control: bool = True
     """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
     pre_connect_audio: bool = True
@@ -255,6 +262,13 @@ class RoomInputOptions:
     noise_cancellation: rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None = (
         None
     )
+    """Noise cancellation or audio processing for inbound audio.
+
+    Note:
+        The official ``livekit.plugins.noise_cancellation`` Krisp filters require
+        LiveKit Cloud. On self-hosted servers, leave this unset or use your own
+        ``rtc.FrameProcessor`` implementation instead.
+    """
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,

@@ -105,7 +105,7 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                # enable Krisp BVC noise cancellation
+                # enable Krisp BVC noise cancellation (requires LiveKit Cloud)
                 noise_cancellation=noise_cancellation.BVCTelephony(),
             ),
             delete_room_on_close=False,  # keep the room open for the customer and supervisor
