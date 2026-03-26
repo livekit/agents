@@ -191,21 +191,6 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
-    @deprecate_params(
-        {
-            "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-        },
-        target_version="v2.0",
-    )
     def __init__(
         self,
         *,
@@ -453,8 +438,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
+    if not TYPE_CHECKING:
+        __init__ = deprecate_params(
+            {
+                "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+            },
+            target_version="v2.0",
+        )(__init__)
+
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
-        if event == "metrics_collected":
+        if event == "metrics_collected" and callback is not None:
             logger.warning(
                 "metrics_collected is deprecated. "
                 "Use session_usage_updated for usage tracking "
@@ -953,6 +955,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
 
+            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets),
+                    return_exceptions=True,
+                )
+
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
@@ -1208,43 +1217,59 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
-            previous_activity_v = self._activity
-            if (activity := self._activity) is not None:
-                if previous_activity == "close":
-                    await activity.drain()
-                    await activity.aclose()
-                elif previous_activity == "pause":
-                    await activity.pause(blocked_tasks=blocked_tasks or [])
-
-            if self._closing and new_activity == "start":
-                # disallow starting a new activity when the session is closing
-                logger.warning(
-                    f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
-                )
-                self._next_activity = None
-                self._activity = None
-                return
-
-            self._activity = self._next_activity
-            self._next_activity = None
-
-            run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
+            # detach STT pipeline from old activity for potential reuse in the new one
+            _reuse_pipeline = (
+                await self._activity._detach_stt_pipeline_if_reusable(self._next_activity)
+                if self._activity is not None
+                else None
             )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
-                )
-            self._chat_ctx.insert(handoff_item)
 
-            if new_activity == "start":
-                await self._activity.start()
-            elif new_activity == "resume":
-                await self._activity.resume()
+            try:
+                previous_activity_v = self._activity
+                if (activity := self._activity) is not None:
+                    if previous_activity == "close":
+                        await activity.drain()
+                        await activity.aclose()
+                    elif previous_activity == "pause":
+                        await activity.pause(blocked_tasks=blocked_tasks or [])
+
+                if self._closing and new_activity == "start":
+                    # disallow starting a new activity when the session is closing
+                    logger.warning(
+                        f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
+                    )
+                    if _reuse_pipeline is not None:
+                        await _reuse_pipeline.aclose()
+                        _reuse_pipeline = None
+                    self._next_activity = None
+                    self._activity = None
+                    return
+
+                self._activity = self._next_activity
+                self._next_activity = None
+
+                run_state = self._global_run_state
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
+                )
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
+                self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
+
+                if new_activity == "start":
+                    await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
+                elif new_activity == "resume":
+                    await self._activity.resume(reuse_stt_pipeline=_reuse_pipeline)
+            except BaseException:
+                if _reuse_pipeline is not None:
+                    await _reuse_pipeline.aclose()
+                raise
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:

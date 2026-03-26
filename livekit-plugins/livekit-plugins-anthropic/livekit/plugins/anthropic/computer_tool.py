@@ -38,16 +38,11 @@ class ComputerTool(llm.Toolset):
         width: int = 1280,
         height: int = 720,
     ) -> None:
-        super().__init__(id="computer")
-        self._actions = actions
-        self._provider_tool = ComputerUse(
-            display_width_px=width,
-            display_height_px=height,
+        super().__init__(
+            id="computer",
+            tools=[ComputerUse(display_width_px=width, display_height_px=height)],
         )
-
-    @property
-    def tools(self) -> list[llm.Tool]:
-        return [self._provider_tool]
+        self._actions = actions
 
     async def execute(self, action: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Dispatch an Anthropic computer_use action and return screenshot content."""
@@ -113,7 +108,8 @@ class ComputerTool(llm.Toolset):
             return [{"type": "text", "text": "(no frame available yet)"}]
         return _screenshot_content(frame)
 
-    def aclose(self) -> None:
+    async def aclose(self) -> None:
+        await super().aclose()
         self._actions.aclose()
 
 

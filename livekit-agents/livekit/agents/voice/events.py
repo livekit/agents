@@ -15,6 +15,7 @@ from ..inference.interruption import (
 from ..language import LanguageCode
 from ..llm import (
     LLM,
+    AgentHandoff,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
@@ -168,7 +169,7 @@ class _TypeDiscriminator(BaseModel):
 
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    item: ChatMessage | _TypeDiscriminator
+    item: ChatMessage | AgentHandoff | _TypeDiscriminator
     created_at: float = Field(default_factory=time.time)
 
 

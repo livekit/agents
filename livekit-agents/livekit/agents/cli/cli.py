@@ -869,7 +869,7 @@ class RichLoggingHandler(logging.Handler):
 
         output = Table.grid(padding=(0, 1))
         output.add_column(style="log.time")
-        output.add_column(style="log.level", width=6, no_wrap=True)
+        output.add_column(style="log.level", width=8, no_wrap=True)
         output.add_column(style="log.name", width=MAX_NAME_WIDTH, no_wrap=True, overflow="ellipsis")
         output.add_column(ratio=1, style="log.message")
         output.add_column(style="log.extra", no_wrap=True)
