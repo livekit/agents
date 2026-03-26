@@ -773,7 +773,9 @@ class AgentActivity(RecognitionHooks):
             self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
-    async def drain(self) -> None:
+    async def drain(
+        self, *, new_activity: AgentActivity | None = None
+    ) -> _ReusableResources | None:
         # `drain` must only be called by AgentSession
         # AgentSession makes sure there is always one agent available to the users.
         current_span = trace.get_current_span()
@@ -801,6 +803,11 @@ class AgentActivity(RecognitionHooks):
                 pass  # already logged by @log_exceptions
 
             await self._pause_scheduling_task()
+
+            # detach after speech tasks are done but before _close_session
+            if new_activity is not None:
+                return await self._detach_reusable_resources(new_activity)
+            return None
 
     async def _pause_scheduling_task(
         self, *, blocked_tasks: list[asyncio.Task] | None = None
@@ -847,7 +854,12 @@ class AgentActivity(RecognitionHooks):
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
-    async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
+    async def pause(
+        self,
+        *,
+        blocked_tasks: list[asyncio.Task],
+        new_activity: AgentActivity | None = None,
+    ) -> _ReusableResources | None:
         # `pause` must only be called by AgentSession
 
         # When draining, the tasks that have done the "premption" must be ignored.
@@ -862,7 +874,14 @@ class AgentActivity(RecognitionHooks):
             )
             try:
                 await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+
+                # detach after speech tasks are done but before _close_session
+                resources: _ReusableResources | None = None
+                if new_activity is not None:
+                    resources = await self._detach_reusable_resources(new_activity)
+
                 await self._close_session()
+                return resources
             finally:
                 span.end()
 
