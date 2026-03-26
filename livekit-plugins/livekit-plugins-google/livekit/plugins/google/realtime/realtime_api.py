@@ -283,6 +283,8 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
+                support_context_reset=False,
+                supports_instructions_update=True,
             )
         )
 

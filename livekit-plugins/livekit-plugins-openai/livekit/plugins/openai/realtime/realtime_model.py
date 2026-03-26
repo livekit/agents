@@ -409,6 +409,8 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                supports_context_reset=True,
+                supports_instructions_update=True,
             )
         )
 
