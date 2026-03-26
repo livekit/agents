@@ -705,32 +705,29 @@ class AgentActivity(RecognitionHooks):
 
             remove_instructions(self._agent._chat_ctx)
 
-            # skip the update if the session is reused and the capability is not supported
+            # skip the update if the session is reused and no mid-session update is supported
             # this means the content is the same as the previous session
-            if not rt_reused or self.llm.capabilities.mid_session_instructions_update:
+            capabilities = self.llm.capabilities
+            if not rt_reused or capabilities.mid_session_instructions_update:
                 try:
                     await self._rt_session.update_instructions(self._agent.instructions)
                 except llm.RealtimeError:
                     logger.exception("failed to update the instructions")
 
-            if not rt_reused or self.llm.capabilities.mid_session_context_update:
+            if not rt_reused or capabilities.mid_session_context_update:
                 try:
                     await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
                 except llm.RealtimeError:
                     logger.exception("failed to update the chat_ctx")
 
-            if not rt_reused or self.llm.capabilities.mid_session_tools_update:
+            if not rt_reused or capabilities.mid_session_tools_update:
                 try:
                     await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
                 except llm.RealtimeError:
                     logger.exception("failed to update the tools")
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
-            if (
-                not self.llm.capabilities.audio_output
-                and not self.tts
-                and self._session.output.audio
-            ):
+            if not capabilities.audio_output and not self.tts and self._session.output.audio:
                 logger.error(
                     "audio output is enabled but RealtimeModel has no audio modality "
                     "and no TTS is set. Either enable audio modality in the RealtimeModel "
