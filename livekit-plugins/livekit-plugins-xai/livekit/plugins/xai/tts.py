@@ -41,7 +41,7 @@ from .types import GrokVoices, TTSLanguages
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
-XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/realtime/audio/speech"
+XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/tts"
 DEFAULT_VOICE = "ara"
 
 

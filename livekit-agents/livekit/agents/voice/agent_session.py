@@ -191,21 +191,6 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
-    @deprecate_params(
-        {
-            "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
-            "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-        },
-        target_version="v2.0",
-    )
     def __init__(
         self,
         *,
@@ -449,8 +434,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
+    if not TYPE_CHECKING:
+        __init__ = deprecate_params(
+            {
+                "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
+                "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+            },
+            target_version="v2.0",
+        )(__init__)
+
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
-        if event == "metrics_collected":
+        if event == "metrics_collected" and callback is not None:
             logger.warning(
                 "metrics_collected is deprecated. "
                 "Use session_usage_updated for usage tracking "
@@ -691,6 +693,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
+                    self._room_io.register_text_input(text_input_opts.text_input_cb)
                     self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
@@ -947,6 +950,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
+
+            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets),
+                    return_exceptions=True,
+                )
 
             if self._session_span:
                 self._session_span.end()
@@ -1246,6 +1256,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         new_agent=self._activity.agent,
                     )
                 self._chat_ctx.insert(handoff_item)
+                self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
 
                 if new_activity == "start":
                     await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
