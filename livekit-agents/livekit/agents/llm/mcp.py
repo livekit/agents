@@ -90,6 +90,7 @@ class MCPServer(ABC):
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
+        self._ready_fut: asyncio.Future[None] | None = None
 
     @property
     def initialized(self) -> bool:
@@ -101,9 +102,11 @@ class MCPServer(ABC):
     async def initialize(self) -> None:
         if self._client_task and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
+            if self._ready_fut:
+                await self._ready_fut
             return
 
-        ready_fut = asyncio.Future[None]()
+        self._ready_fut = ready_fut = asyncio.Future[None]()
         self._client_task = asyncio.create_task(
             self._run_client(ready_fut), name=f"{type(self).__name__}._run_client"
         )
