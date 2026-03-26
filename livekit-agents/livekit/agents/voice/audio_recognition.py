@@ -698,11 +698,12 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
-        # merge late STT segments arriving shortly after a turn commit while
+        # handle late STT segments arriving shortly after a turn commit while
         # the user is not speaking — these are leftover segments from the
         # previous utterance that would create phantom turns if processed
-        # normally.  instead of dropping them we append the text to the last
-        # user message in the chat context so the information is preserved.
+        # normally.  interims/preflights are silently dropped (they are
+        # cumulative so merging would duplicate text); the final that follows
+        # carries the complete text and is merged into the previous turn.
         if (
             ev.type
             in (
@@ -715,22 +716,22 @@ class AudioRecognition:
             and self._last_turn_committed_at is not None
             and time.time() - self._last_turn_committed_at < _STT_FLUSH_GRACE_PERIOD
         ):
-            late_text = ev.alternatives[0].text if ev.alternatives else ""
-            if late_text:
-                chat_ctx = self._hooks.retrieve_chat_ctx()
-                # walk backwards to find the last user message and concat
-                for item in reversed(chat_ctx.items):
-                    if isinstance(item, llm.ChatMessage) and item.role == "user":
-                        for i in range(len(item.content) - 1, -1, -1):
-                            if isinstance(item.content[i], str):
-                                item.content[i] = f"{item.content[i]} {late_text}"
-                                break
-                        break
-                logger.debug(
-                    "merged late STT transcript into previous turn",
-                    extra={"late_transcript": late_text},
-                )
-                self._hooks.on_user_turn_corrected()
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                late_text = ev.alternatives[0].text if ev.alternatives else ""
+                if late_text:
+                    chat_ctx = self._hooks.retrieve_chat_ctx()
+                    for item in reversed(chat_ctx.items):
+                        if isinstance(item, llm.ChatMessage) and item.role == "user":
+                            for i in range(len(item.content) - 1, -1, -1):
+                                if isinstance(item.content[i], str):
+                                    item.content[i] = f"{item.content[i]} {late_text}"
+                                    break
+                            break
+                    logger.debug(
+                        "merged late STT transcript into previous turn",
+                        extra={"late_transcript": late_text},
+                    )
+                    self._hooks.on_user_turn_corrected()
             return
 
         # handle interruption detection
