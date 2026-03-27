@@ -430,6 +430,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_id=request_id,
                 body=None,
             ) from None
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
