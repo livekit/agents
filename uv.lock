@@ -1978,7 +1978,7 @@ requires-dist = [
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-asyncai", marker = "extra == 'asyncai'", editable = "livekit-plugins/community/livekit-plugins-asyncai" },
     { name = "livekit-plugins-avatario", marker = "extra == 'avatario'", editable = "livekit-plugins/community/livekit-plugins-avatario" },
-    { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/community/livekit-plugins-aws" },
+    { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
     { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
     { name = "livekit-plugins-baseten", marker = "extra == 'baseten'", editable = "livekit-plugins/community/livekit-plugins-baseten" },
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/community/livekit-plugins-bey" },
@@ -2181,7 +2181,7 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-aws"
-source = { editable = "livekit-plugins/community/livekit-plugins-aws" }
+source = { editable = "livekit-plugins/livekit-plugins-aws" }
 dependencies = [
     { name = "aioboto3" },
     { name = "aws-sdk-transcribe-streaming" },

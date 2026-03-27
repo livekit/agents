@@ -16,7 +16,7 @@ jobs:
           python-version: "3.12"
 
       - name: Generate report
-        run: python .github/download_stats.py > stats.txt 2>&1
+        run: python .github/download_stats.py > stats.txt
 
       - name: Post to Slack
         env:
