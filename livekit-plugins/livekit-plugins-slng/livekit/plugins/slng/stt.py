@@ -725,28 +725,23 @@ class SpeechStream(stt.SpeechStream):
                 recv = asyncio.create_task(recv_task(ws))
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
 
-                retry_connection = False
-                while True:
-                    done, _ = await asyncio.wait(
-                        (send, recv, wait_reconnect),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
+                tasks_group = asyncio.gather(send, recv)
+                done, _ = await asyncio.wait(
+                    (tasks_group, wait_reconnect),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
-                    if wait_reconnect in done:
-                        self._reconnect_event.clear()
-                        await utils.aio.gracefully_cancel(send, recv, wait_reconnect)
-                        retry_connection = True
-                        break
-
-                    for task in (send, recv):
-                        if task in done:
-                            task.result()
-
+                if wait_reconnect in done:
+                    self._reconnect_event.clear()
+                    tasks_group.cancel()
                     await utils.aio.gracefully_cancel(send, recv, wait_reconnect)
-                    return
-
-                if retry_connection:
                     continue
+
+                for task in done:
+                    task.result()
+
+                await utils.aio.gracefully_cancel(wait_reconnect)
+                return
             except Exception as exc:
                 tasks = [t for t in (send, recv, wait_reconnect) if t is not None]
                 if tasks:
