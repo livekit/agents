@@ -25,7 +25,12 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import audio as audio_utils, images, is_given
-from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
+from livekit.plugins.google.realtime.api_proto import (
+    A2A_ONLY_MODELS,
+    ClientEvents,
+    LiveAPIModels,
+    Voice,
+)
 
 from ..log import logger
 from ..utils import create_tools_config, get_tool_results_for_realtime
@@ -701,12 +706,18 @@ class RealtimeSession(llm.RealtimeSession):
             self._in_user_activity = False
 
         # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        # so we need to add a placeholder user turn in order to trigger a new generation.
+        # A2A-only models (e.g. gemini-3.1-flash-live-preview) reject send_client_content
+        # entirely and require send_realtime_input for text input.
+        if self._opts.model in A2A_ONLY_MODELS:
+            prompt = instructions if is_given(instructions) else "."
+            self._send_client_event(types.LiveClientRealtimeInput(text=prompt))
+        else:
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -811,19 +822,23 @@ class RealtimeSession(llm.RealtimeSession):
                                 f"update_instructions() to set system-level context instead."
                             )
 
-                        turns_dict, _ = self._chat_ctx.copy(
-                            exclude_function_call=True,
-                            exclude_handoff=True,
-                            exclude_instructions=True,
-                            exclude_empty_message=True,
-                            exclude_config_update=True,
-                        ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        if turns_dict:
-                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                            await session.send_client_content(
-                                turns=turns,  # type: ignore
-                                turn_complete=False,
-                            )
+                        # A2A-only models reject send_client_content; skip chat
+                        # context seeding for these models as they only accept
+                        # audio/text via send_realtime_input.
+                        if self._opts.model not in A2A_ONLY_MODELS:
+                            turns_dict, _ = self._chat_ctx.copy(
+                                exclude_function_call=True,
+                                exclude_handoff=True,
+                                exclude_instructions=True,
+                                exclude_empty_message=True,
+                                exclude_config_update=True,
+                            ).to_provider_format(format="google", inject_dummy_user_message=False)
+                            if turns_dict:
+                                turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                                await session.send_client_content(
+                                    turns=turns,  # type: ignore
+                                    turn_complete=False,
+                                )
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -898,10 +913,15 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         break
                 if isinstance(msg, types.LiveClientContent):
-                    await session.send_client_content(
-                        turns=msg.turns,  # type: ignore
-                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
-                    )
+                    if self._opts.model in A2A_ONLY_MODELS:
+                        logger.debug(
+                            "A2A model: dropping send_client_content, not supported"
+                        )
+                    else:
+                        await session.send_client_content(
+                            turns=msg.turns,  # type: ignore
+                            turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
+                        )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
@@ -1121,6 +1141,19 @@ class RealtimeSession(llm.RealtimeSession):
         self.emit("generation_created", generation_event)
 
     def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
+        # Skip empty server_content (e.g. A2A models send an empty
+        # server_content with only usage_metadata before first model_turn)
+        has_content = (
+            server_content.model_turn
+            or server_content.output_transcription
+            or server_content.input_transcription
+            or server_content.turn_complete is not None
+            or server_content.generation_complete is not None
+            or server_content.interrupted is not None
+        )
+        if not has_content:
+            return
+
         current_gen = self._current_generation
         if not current_gen:
             logger.warning("received server content but no active generation.")
