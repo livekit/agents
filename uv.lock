@@ -1975,7 +1975,7 @@ requires-dist = [
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/community/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
-    { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/community/livekit-plugins-assemblyai" },
+    { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-asyncai", marker = "extra == 'asyncai'", editable = "livekit-plugins/community/livekit-plugins-asyncai" },
     { name = "livekit-plugins-avatario", marker = "extra == 'avatario'", editable = "livekit-plugins/community/livekit-plugins-avatario" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/community/livekit-plugins-aws" },
@@ -2137,7 +2137,7 @@ requires-dist = [
 
 [[package]]
 name = "livekit-plugins-assemblyai"
-source = { editable = "livekit-plugins/community/livekit-plugins-assemblyai" }
+source = { editable = "livekit-plugins/livekit-plugins-assemblyai" }
 dependencies = [
     { name = "livekit-agents" },
 ]

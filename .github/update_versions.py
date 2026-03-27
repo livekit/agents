@@ -20,6 +20,21 @@ def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
     return dirs
 
 
+def _read_pypi_name(pdir: pathlib.Path) -> str:
+    """Read the actual PyPI package name from pyproject.toml or setup.py."""
+    pyproject = pdir / "pyproject.toml"
+    if pyproject.exists():
+        m = re.search(r'^name\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE)
+        if m:
+            return m.group(1)
+    setup_py = pdir / "setup.py"
+    if setup_py.exists():
+        m = re.search(r'name\s*=\s*"([^"]+)"', setup_py.read_text())
+        if m:
+            return m.group(1)
+    return pdir.name
+
+
 def _is_community_plugin(pdir: pathlib.Path) -> bool:
     """Check if a plugin directory is under the community folder."""
     return "community" in pdir.parts
@@ -200,10 +215,10 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str
     old_text = agents_pyproject.read_text()
     new_text = old_text
     
-    for plugin_name, new_version in plugin_versions.items():
-        if plugin_name.startswith("livekit-plugins-"):
-            dep_key = plugin_name[len("livekit-plugins-"):]
-            pattern = rf'({dep_key}\s*=\s*\["livekit-plugins-{re.escape(dep_key)}>=)([\w\.\-]+)(\"])'
+    for pypi_name, new_version in plugin_versions.items():
+        if pypi_name.startswith("livekit-plugins-"):
+            dep_key = pypi_name[len("livekit-plugins-"):]
+            pattern = rf'({re.escape(dep_key)}\s*=\s*\["{re.escape(pypi_name)}>=)([\w\.\-]+)(\"])'
             
             def replacer(m: re.Match) -> str:
                 return f"{m.group(1)}{new_version}{m.group(3)}"
@@ -236,29 +251,30 @@ def update_versions(changesets: Dict[str, Tuple[str, List[str]]]) -> None:
 
     for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             if pdir.name in changesets:
                 bump_type, _ = changesets[pdir.name]
                 cur = read_version(vf)
                 new = bump_version(cur, bump_type)
-                print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+                print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
                 write_new_version(vf, new)
-                plugin_versions[pdir.name] = new
+                plugin_versions[pypi_name] = new
             else:
-                print(f"Warning: Found version.py for {pdir.name}, but no bump info in next-release.")
+                print(f"Warning: Found version.py for {pypi_name}, but no bump info in next-release.")
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
 def update_versions_ignore_changesets(bump_type: str) -> None:
     agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
     plugins_root = pathlib.Path("livekit-plugins")
-    
+
     new_agents_version = None
     plugin_versions = {}
 
@@ -273,18 +289,19 @@ def update_versions_ignore_changesets(bump_type: str) -> None:
 
     for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
             new = bump_version(cur, bump_type)
-            print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+            print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
             write_new_version(vf, new)
-            plugin_versions[pdir.name] = new
+            plugin_versions[pypi_name] = new
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
@@ -306,18 +323,19 @@ def update_prerelease(prerelease_type: str) -> None:
 
     for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
             new_v = bump_prerelease(cur, prerelease_type)
-            print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new_v}{_esc(0)}")
+            print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new_v}{_esc(0)}")
             write_new_version(vf, new_v)
-            plugin_versions[pdir.name] = new_v
+            plugin_versions[pypi_name] = new_v
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
