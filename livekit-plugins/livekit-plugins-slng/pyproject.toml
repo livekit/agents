@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-slng"
+dynamic = ["version"]
+description = "Agent Framework plugin for STT and TTS services using SLNG's gateway."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "SLNG", email = "hello@slng.ai" }]
+keywords = ["voice", "ai", "realtime", "audio", "livekit", "slng", "stt", "tts"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["aiohttp>=3.10", "livekit-agents>=1.5.1"]
+
+[project.urls]
+Documentation = "https://docs.slng.ai/"
+Website = "https://slng.ai/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/slng/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
