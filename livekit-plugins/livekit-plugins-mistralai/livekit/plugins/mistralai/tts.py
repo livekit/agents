@@ -18,7 +18,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
-from mistralai.client.errors import SDKError
+from mistralai.client.errors.sdkerror import SDKError
 
 from .models import TTSModels, TTSVoices
 
@@ -68,7 +68,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(model=model, voice=voice, response_format=response_format)
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
+        if not client and not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
