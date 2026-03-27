@@ -352,6 +352,7 @@ class STT(stt.STT):
         config = dataclasses.replace(self._opts)
         if is_given(language):
             config.language = language
+        stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             opts=config,
