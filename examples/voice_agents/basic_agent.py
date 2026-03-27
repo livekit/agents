@@ -20,7 +20,6 @@ from livekit.agents import (
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -98,7 +97,14 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=TurnHandlingOptions(
             # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
             # See more at https://docs.livekit.io/agents/build/turns
-            turn_detection=MultilingualModel(),
+            # turn_detection=MultilingualModel(),
+            turn_detection=inference.MultiModalTurnDetector(
+                base_url="",
+                sample_rate=16000,
+            ),
+            endpointing={
+                "max_delay": 3.0,
+            },
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech

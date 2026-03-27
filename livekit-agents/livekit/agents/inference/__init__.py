@@ -7,6 +7,11 @@ from .interruption import (
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
+from .turn_detector import (
+    MultiModalTurnDetector,
+    TurnDetectionEvent,
+    TurnDetectionStream,
+)
 
 __all__ = [
     "STT",
@@ -16,6 +21,9 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
+    "MultiModalTurnDetector",
+    "TurnDetectionStream",
+    "TurnDetectionEvent",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
     "OverlappingSpeechEvent",

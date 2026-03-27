@@ -4,6 +4,7 @@ from typing import Literal, Protocol
 
 from typing_extensions import TypedDict
 
+from ..inference.turn_detector import MultiModalTurnDetector
 from ..language import LanguageCode
 from ..llm import ChatContext
 from ..types import NOT_GIVEN, NotGivenOr
@@ -28,7 +29,9 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | MultiModalTurnDetector
+)
 """
 The mode of turn detection to use.
 
