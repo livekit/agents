@@ -773,7 +773,7 @@ class SpeechStream(stt.SpeechStream):
                             self._pending_replay = bytes(replay_bytes)
                         continue
                 if not await failover(exc=exc):
-                    return
+                    raise
                 immediate_reconnect_attempts[self._active_endpoint_index] = 0
                 continue
             finally:
