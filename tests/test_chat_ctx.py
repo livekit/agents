@@ -1,9 +1,18 @@
 import os
+from typing import Any
 
 import pytest
 
-from livekit.agents.llm import AgentHandoff, FunctionCall, FunctionCallOutput, utils
-from livekit.plugins import openai
+from livekit.agents import inference
+from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+
+from .fake_llm import FakeLLM, FakeLLMResponse
 
 
 def ai_function1(a: int, b: str = "default") -> None:
@@ -17,7 +26,7 @@ def ai_function1(a: int, b: str = "default") -> None:
 
 
 def skip_if_no_credentials():
-    required_vars = ["OPENAI_API_KEY"]
+    required_vars = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
     missing = [var for var in required_vars if not os.getenv(var)]
     return pytest.mark.skipif(
         bool(missing), reason=f"Missing environment variables: {', '.join(missing)}"
@@ -244,10 +253,210 @@ async def test_summarize():
 
     import json
 
-    async with openai.LLM(model="gpt-4o") as llm:
+    async with inference.LLM(model="openai/gpt-4.1-mini") as llm:
         summary = await chat_ctx._summarize(llm, keep_last_turns=1)
         print("\n=== Summary ===\n")
         print(json.dumps(summary.to_dict(), indent=2))
+
+
+# --- summarize unit tests (no credentials required) ---
+
+
+class _FixedSummaryLLM(FakeLLM):
+    """FakeLLM that returns a fixed summary string for any input."""
+
+    def __init__(self, summary: str) -> None:
+        super().__init__()
+        self._summary = summary
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: Any = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: Any = NOT_GIVEN,
+        extra_kwargs: Any = NOT_GIVEN,
+    ):
+        last_msg = chat_ctx.items[-1]
+        input_text = last_msg.text_content
+        self._fake_response_map[input_text] = FakeLLMResponse(
+            input=input_text,
+            content=self._summary,
+            ttft=0.0,
+            duration=0.0,
+        )
+        return super().chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+        )
+
+
+CANNED_SUMMARY = "User asked about earbuds. Agent resolved the issue."
+
+
+def _build_conversation_ctx() -> ChatContext:
+    """Build a ChatContext with system, user/assistant pairs, and interleaved tool calls."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="You are a helpful assistant.")
+    ctx.add_message(role="user", content="Hi, my earbuds are broken.")
+    ctx.add_message(role="assistant", content="Can you share your order number?")
+    ctx.add_message(role="user", content="Order #123.")
+    ctx.items.append(FunctionCall(name="lookup_order", call_id="c1", arguments='{"order": "123"}'))
+    ctx.items.append(
+        FunctionCallOutput(
+            name="lookup_order", call_id="c1", output='{"status":"delivered"}', is_error=False
+        )
+    )
+    ctx.add_message(role="assistant", content="Found your order. Let me check warranty.")
+    ctx.add_message(role="user", content="Thanks.")
+    ctx.add_message(role="assistant", content="You are under warranty.")
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_summarize_head_tail_split_basic():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="msg1")
+    ctx.add_message(role="assistant", content="reply1")
+    ctx.add_message(role="user", content="msg2")
+    ctx.add_message(role="assistant", content="reply2")
+    ctx.add_message(role="user", content="msg3")
+    ctx.add_message(role="assistant", content="reply3")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    tail_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(tail_msgs) == 2
+    assert tail_msgs[0].text_content == "msg3"
+    assert tail_msgs[1].text_content == "reply3"
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+    assert CANNED_SUMMARY in summaries[0].text_content
+
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_head_tail_split_with_renderables():
+    ctx = _build_conversation_ctx()
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=2)
+
+    # With keep_last_turns=2, the backward walk counts 4 ChatMessages:
+    #   "You are under warranty." (1), "Thanks." (2),
+    #   "Found your order..." (3), "Order #123." (4) ← split here
+    # The FunctionCall + FunctionCallOutput between "Order #123." and
+    # "Found your order..." fall inside the tail and must be preserved.
+    tail_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(tail_msgs) == 4
+    assert tail_msgs[0].text_content == "Order #123."
+    assert tail_msgs[1].text_content == "Found your order. Let me check warranty."
+    assert tail_msgs[2].text_content == "Thanks."
+    assert tail_msgs[3].text_content == "You are under warranty."
+
+    fn_items = [it for it in result.items if it.type in ("function_call", "function_call_output")]
+    assert len(fn_items) == 2
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_keep_last_turns_zero():
+    ctx = _build_conversation_ctx()
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=0)
+
+    raw_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(raw_msgs) == 0
+
+    fn_items = [it for it in result.items if it.type in ("function_call", "function_call_output")]
+    assert len(fn_items) == 0
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_preserves_structural_items():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="Hello.")
+    ctx.add_message(role="assistant", content="Hi there.")
+    ctx.items.append(AgentHandoff(old_agent_id="AgentA", new_agent_id="AgentB"))
+    ctx.add_message(role="user", content="Transfer me.")
+    ctx.add_message(role="assistant", content="Done.")
+    ctx.add_message(role="user", content="Thanks.")
+    ctx.add_message(role="assistant", content="Welcome.")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    # system message preserved
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+    # agent handoff preserved
+    handoffs = [it for it in result.items if it.type == "agent_handoff"]
+    assert len(handoffs) == 1
+    assert handoffs[0].old_agent_id == "AgentA"
+    assert handoffs[0].new_agent_id == "AgentB"
+
+
+@pytest.mark.asyncio
+async def test_summarize_skips_when_not_enough_messages():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="Hello.")
+    ctx.add_message(role="assistant", content="Hi there.")
+
+    original_items = list(ctx.items)
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    # budget covers all messages, so nothing to summarize — early return
+    assert len(result.items) == len(original_items)
+    for a, b in zip(result.items, original_items, strict=True):
+        assert a.id == b.id
 
 
 # --- truncate tests ---

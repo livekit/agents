@@ -1,11 +1,8 @@
 from .realtime_model import RealtimeModel, RealtimeSession
-from .realtime_model_beta import RealtimeModelBeta, RealtimeSessionBeta
 
 __all__ = [
     "RealtimeSession",
     "RealtimeModel",
-    "RealtimeModelBeta",
-    "RealtimeSessionBeta",
 ]
 
 # Cleanup docs of unexported modules

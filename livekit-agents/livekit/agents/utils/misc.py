@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import re
 import time
@@ -41,3 +42,17 @@ def is_cloud(url: str) -> bool:
     if hostname is None:
         return False
     return hostname.endswith(".livekit.cloud") or hostname.endswith(".livekit.run")
+
+
+def is_dev_mode() -> bool:
+    """Return whether the agent is running in development mode.
+
+    True when launched via ``console``, ``dev``.
+    Reads the ``LIVEKIT_DEV_MODE`` environment variable.
+    """
+    return os.getenv("LIVEKIT_DEV_MODE") == "1"
+
+
+def is_hosted() -> bool:
+    """Return whether the agent is hosted on LiveKit Cloud."""
+    return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None

@@ -83,6 +83,7 @@ from .voice import (
     ModelSettings,
     RecordingOptions,
     RunContext,
+    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -105,6 +106,7 @@ from .voice.run_result import (
     RunResult,
     mock_tools,
 )
+from .voice.turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 from .worker import (
     AgentServer,
     WorkerOptions,
@@ -159,6 +161,7 @@ __all__ = [
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
+    "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
@@ -217,6 +220,9 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "TurnHandlingOptions",
+    "EndpointingOptions",
+    "InterruptionOptions",
 ]
 
 # Cleanup docs of unexported modules
