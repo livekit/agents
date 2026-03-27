@@ -622,7 +622,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx:
                 job_ctx.init_recording(self._recording_options)
 
-                if job_ctx._primary_agent_session is None:
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
