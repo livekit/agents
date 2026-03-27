@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import struct
 import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -18,9 +19,16 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
-from mistralai.client.errors.sdkerror import SDKError
+from mistralai.client.errors import SDKError
 
 from .models import TTSModels, TTSVoices
+
+
+def _f32le_to_s16le(data: bytes) -> bytes:
+    n = len(data) // 4
+    floats = struct.unpack(f"<{n}f", data)
+    return struct.pack(f"<{n}h", *(max(-32768, min(32767, int(s * 32767))) for s in floats))
+
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -29,7 +37,7 @@ DEFAULT_MODEL: TTSModels = "voxtral-mini-tts-2603"
 DEFAULT_VOICE: TTSVoices = "en_paul_neutral"
 
 RESPONSE_FORMATS = Literal["mp3", "wav", "pcm", "opus", "flac"]
-DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMATS = "mp3"
+DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMATS = "pcm"
 
 
 @dataclass
@@ -119,23 +127,32 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            resp = await self._tts._client.audio.speech.complete_async(
-                model=self._opts.model,
-                input=self.input_text,
-                voice_id=self._opts.voice,
-                response_format=self._opts.response_format,
-                timeout_ms=int(self._conn_options.timeout * 1000),
-            )
-
             output_emitter.initialize(
                 request_id=str(uuid.uuid4()),
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
                 mime_type=f"audio/{self._opts.response_format}",
             )
+            stream = await self._tts._client.audio.speech.complete_async(
+                model=self._opts.model,
+                input=self.input_text,
+                voice_id=self._opts.voice,
+                response_format=self._opts.response_format,
+                timeout_ms=int(self._conn_options.timeout * 1000),
+                stream=True,
+            )
+            async for ev in stream:
+                if ev.event == "speech.audio.delta":
+                    data = base64.b64decode(ev.data.audio_data)
+                    if self._opts.response_format == "pcm":
+                        data = _f32le_to_s16le(data)
+                    output_emitter.push(data)
+                elif ev.event == "speech.audio.done":
+                    self._set_token_usage(
+                        input_tokens=ev.data.usage.prompt_tokens,
+                        output_tokens=ev.data.usage.completion_tokens,
+                    )
 
-            audio_bytes = base64.b64decode(resp.audio_data)
-            output_emitter.push(audio_bytes)
             output_emitter.flush()
 
         except httpx.TimeoutException as e:
