@@ -704,9 +704,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._session_host = SessionHost(transport)
                     self._session_host.register_session(self)
 
-                    text_input_opts = room_options.get_text_input_options()
-                    if text_input_opts:
-                        self._room_io.register_text_input(text_input_opts.text_input_cb)
+                text_input_opts = room_options.get_text_input_options()
+                if text_input_opts:
+                    self._room_io.register_text_input(text_input_opts.text_input_cb)
+                    if self._session_host is not None:
                         self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
