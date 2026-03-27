@@ -337,6 +337,8 @@ class STT(stt.STT):
         except TimeoutError:
             logger.error("[SLNG STT] HTTP request timed out")
             raise APITimeoutError("SLNG STT HTTP request timed out") from None
+        except APIStatusError:
+            raise
         except Exception as e:
             logger.error(f"[SLNG STT] HTTP unexpected error: {e}", exc_info=True)
             raise APIStatusError(f"SLNG STT HTTP error: {e}") from e
