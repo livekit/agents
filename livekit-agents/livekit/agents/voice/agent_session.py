@@ -191,6 +191,21 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+    @deprecate_params(
+        {
+            "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
+        },
+        target_version="v2.0",
+    )
     def __init__(
         self,
         *,
@@ -433,23 +448,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
-
-    if not TYPE_CHECKING:
-        __init__ = deprecate_params(
-            {
-                "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "max_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "resume_false_interruption": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
-                "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
-            },
-            target_version="v2.0",
-        )(__init__)
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
