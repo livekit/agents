@@ -628,6 +628,8 @@ class SpeechStream(stt.SpeechStream):
                         "type": "final_transcript" if is_final else "partial_transcript",
                         "transcript": alt0.get("transcript", ""),
                         "confidence": alt0.get("confidence", 0.0),
+                        "words": alt0.get("words", []),
+                        "language": data.get("language", alt0.get("language")),
                     }
                     msg_type = data["type"]
 
