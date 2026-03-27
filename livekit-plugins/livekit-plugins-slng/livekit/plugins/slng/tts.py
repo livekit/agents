@@ -27,7 +27,12 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .gateway_adapter import build_tts_init_payload, is_rime_arcana_model, normalize_region_override
+from .gateway_adapter import (
+    build_tts_init_payload,
+    is_rime_arcana_model,
+    normalize_region_override,
+    normalize_tts_voice,
+)
 from .log import logger
 
 NUM_CHANNELS = 1
@@ -102,6 +107,8 @@ class TTS(tts.TTS):
             slng_base_url=slng_base_url,
             model=model,
         )
+
+        voice = normalize_tts_voice(model, voice)
 
         self._opts = _TTSOptions(
             model_endpoint=resolved_model_endpoint,
@@ -202,6 +209,7 @@ class TTS(tts.TTS):
         """
         invalidate_pool = False
         if is_given(voice):
+            voice = normalize_tts_voice(self._opts.model, voice)
             invalidate_pool = invalidate_pool or self._opts.voice != voice
             self._opts.voice = voice
         if is_given(language):
