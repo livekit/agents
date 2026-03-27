@@ -64,13 +64,14 @@ livekit-agents/livekit/agents/
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 └── utils/              # Audio processing, codecs, HTTP, async utilities
 
-livekit-plugins/        # 50+ provider plugins (openai, anthropic, google, deepgram, etc.)
+livekit-plugins/        # LiveKit-maintained provider plugins (openai, anthropic, google, etc.)
+  community/            # Community-contributed plugins (~48 providers)
 tests/                  # Test suite with mock implementations (fake_stt.py, fake_vad.py)
 examples/               # Example agents and use cases
 ```
 
 ### Plugin System
-Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`.
+Plugins in `livekit-plugins/` (LiveKit-maintained) and `livekit-plugins/community/` (community-contributed) provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py` and declare their maintainer via the `maintained_by` field (`"livekit"` or `"community"`).
 
 ### Model Interface Pattern
 STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:

@@ -32,7 +32,7 @@ __all__ = [
 
 class BrowserPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__, logger, maintained_by="livekit")
 
     def download_files(self) -> None:
         from livekit.browser import download

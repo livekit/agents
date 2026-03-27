@@ -10,6 +10,83 @@ colorama.init()
 
 BUMP_ORDER: Dict[str, int] = {"patch": 0, "minor": 1, "major": 2}
 
+
+def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
+    """Return all plugin directories (maintained + community)."""
+    dirs = list(plugins_root.glob("livekit-plugins-*"))
+    community = plugins_root / "community"
+    if community.is_dir():
+        dirs.extend(community.glob("livekit-plugins-*"))
+    return dirs
+
+
+def _is_community_plugin(pdir: pathlib.Path) -> bool:
+    """Check if a plugin directory is under the community folder."""
+    return "community" in pdir.parts
+
+
+def _read_maintained_by(pdir: pathlib.Path) -> str | None:
+    """Read the maintained_by value from a plugin's __init__.py or other source files."""
+    if "livekit-plugins-" not in pdir.name:
+        return None
+    plugin_name = pdir.name.split("livekit-plugins-")[1].replace("-", "_")
+    plugin_pkg = pdir / "livekit" / "plugins" / plugin_name
+    if not plugin_pkg.is_dir():
+        return None
+    # Check __init__.py first, then fall back to other files
+    init_file = plugin_pkg / "__init__.py"
+    files = [init_file] if init_file.exists() else []
+    files.extend(f for f in sorted(plugin_pkg.glob("*.py")) if f != init_file)
+    for py_file in files:
+        text = py_file.read_text()
+        m = re.search(r'maintained_by\s*=\s*["\'](\w+)["\']', text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def log_plugin_summary(plugins_root: pathlib.Path) -> None:
+    """Log all discovered plugins grouped by maintainer and validate consistency."""
+    maintained = []
+    community = []
+    mismatches = []
+
+    for pdir in sorted(_iter_plugin_dirs(plugins_root)):
+        is_community_dir = _is_community_plugin(pdir)
+        declared = _read_maintained_by(pdir)
+
+        if is_community_dir:
+            community.append(pdir.name)
+        else:
+            maintained.append(pdir.name)
+
+        # Validate that declared maintained_by matches directory location
+        if declared is not None:
+            if is_community_dir and declared == "livekit":
+                mismatches.append(
+                    f"{pdir.name}: in community/ but declares maintained_by='livekit'"
+                )
+            elif not is_community_dir and declared == "community":
+                mismatches.append(
+                    f"{pdir.name}: in maintained dir but declares maintained_by='community'"
+                )
+
+    print(f"\n{_esc(1)}Discovered {len(maintained) + len(community)} plugins{_esc(0)}")
+    print(f"  {_esc(32)}LiveKit-maintained ({len(maintained)}):{_esc(0)}")
+    for name in maintained:
+        print(f"    {name}")
+    print(f"  {_esc(33)}Community ({len(community)}):{_esc(0)}")
+    for name in community:
+        print(f"    {name}")
+
+    if mismatches:
+        print(f"\n{_esc(31)}ERROR: maintained_by mismatch detected!{_esc(0)}")
+        for msg in mismatches:
+            print(f"  {_esc(31)}{msg}{_esc(0)}")
+        raise SystemExit(1)
+
+    print()
+
 def _esc(*codes: int) -> str:
     return "\033[" + ";".join(str(c) for c in codes) + "m"
 
@@ -100,7 +177,7 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
 
 def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
     plugins_root = pathlib.Path("livekit-plugins")
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
             old_text = pyproject.read_text()
@@ -157,7 +234,7 @@ def update_versions(changesets: Dict[str, Tuple[str, List[str]]]) -> None:
     else:
         print("Warning: No version.py or no bump info for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
         if vf.exists():
             if pdir.name in changesets:
@@ -194,7 +271,7 @@ def update_versions_ignore_changesets(bump_type: str) -> None:
     else:
         print("Warning: No version.py found for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
         if vf.exists():
             cur = read_version(vf)
@@ -227,7 +304,7 @@ def update_prerelease(prerelease_type: str) -> None:
     else:
         print("Warning: No version.py for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
         if vf.exists():
             cur = read_version(vf)
@@ -274,6 +351,8 @@ def bump(pre: str, ignore_changesets: bool, bump_type: str) -> None:
     For pre-release bumps (--pre=rc or --pre=dev), it updates the current versions to a new RC or DEV version.
     In both cases, plugin pyproject.toml references for 'livekit-agents' will be updated if that version changes.
     """
+    log_plugin_summary(pathlib.Path("livekit-plugins"))
+
     if pre == "none":
         if ignore_changesets:
             update_versions_ignore_changesets(bump_type)
