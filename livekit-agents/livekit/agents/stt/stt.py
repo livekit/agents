@@ -60,16 +60,32 @@ class SpeechData:
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
+    source_languages: list[LanguageCode] | None = None
+    """the source languages spoken by the user. populated by STT services that support translation,
+    where `language` holds the target language and `source_languages` holds the original spoken language(s).
+    may contain multiple entries when a single utterance spans multiple source languages."""
+    source_texts: list[str] | None = None
+    """the original transcription segments in the source language(s), when translation is active.
+    each entry corresponds to the same-indexed entry in `source_languages`."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
             self.language = LanguageCode(self.language)
+        if self.source_languages is not None:
+            self.source_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.source_languages
+            ]
 
 
 @dataclass
 class RecognitionUsage:
     audio_duration: float
     """Incremental audio duration/usage in seconds"""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -375,6 +391,8 @@ class RecognizeStream(ABC):
                     duration=0.0,
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
+                    input_tokens=ev.recognition_usage.input_tokens,
+                    output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider

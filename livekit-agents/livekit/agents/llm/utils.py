@@ -17,6 +17,7 @@ from typing import (
     get_type_hints,
 )
 
+import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined, from_json
@@ -28,7 +29,7 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool
+from .tool_context import FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -200,10 +201,6 @@ def build_legacy_openai_schema(
     info = function_tool.info
     schema = model.model_json_schema()
 
-    # Ensure 'required' field exists for compatibility with strict APIs like Groq
-    if "required" not in schema:
-        schema["required"] = []
-
     if internally_tagged:
         return {
             "name": info.name,
@@ -229,10 +226,6 @@ def build_strict_openai_schema(
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
-
-    # Ensure 'required' field exists for compatibility with strict APIs
-    if "required" not in schema:
-        schema["required"] = []
 
     return {
         "type": "function",
@@ -380,6 +373,8 @@ def prepare_function_arguments(
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
     args_dict = from_json(json_arguments)
+    if args_dict is None:
+        args_dict = {}
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
@@ -602,6 +597,24 @@ async def execute_function_call(
             json_arguments=tool_call.arguments or "{}",
             call_ctx=call_ctx,
         )
+    except (pydantic.ValidationError, ValueError) as e:
+        # Surface argument validation errors to the LLM so it can self-correct.
+        # Without this, the LLM only sees "An internal error occurred" and has
+        # no signal about what was wrong with its arguments.
+        logger.warning(
+            f"invalid arguments for AI function `{tool_call.name}`: {e}",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
+    except Exception as e:
+        logger.exception(
+            f"exception preparing arguments for AI function `{tool_call.name}`",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+    try:
         result = function_tool(*fnc_args, **fnc_kwargs)
         if asyncio.iscoroutine(result):
             result = await result
