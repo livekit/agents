@@ -430,7 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
