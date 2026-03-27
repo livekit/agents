@@ -12,37 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Baseten STT plugin for LiveKit Agents.
-
-This plugin connects to Baseten's Whisper Streaming WebSocket endpoint
-(both truss and chain deployments) for real-time speech-to-text.
-
-Endpoint URL formats:
-    - Truss:  ``wss://model-{model_id}.api.baseten.co/environments/production/websocket``
-    - Chain:  ``wss://chain-{chain_id}.api.baseten.co/environments/production/websocket``
-
-The WebSocket protocol is:
-    1. Connect with ``Authorization: Api-Key <api_key>`` header.
-    2. Send a JSON metadata message matching the ``StreamingWhisperInput`` schema.
-    3. Stream raw audio bytes (PCM s16le or µ-law).
-    4. Receive JSON transcription results (``StreamingWhisperResult``).
-
-Examples::
-
-    from livekit.plugins import baseten
-
-    # Using a truss model endpoint (explicit URL):
-    stt = baseten.STT(api_key="...", model_id="abc123")
-
-    # Using a chain endpoint:
-    stt = baseten.STT(api_key="...", chain_id="5qe5d2qo")
-
-    # Or pass a full URL directly:
-    stt = baseten.STT(
-        api_key="...",
-        model_endpoint="wss://model-abc123.api.baseten.co/environments/production/websocket",
-    )
-"""
+"""Baseten STT plugin for LiveKit Agents."""
 
 from __future__ import annotations
 
@@ -86,25 +56,6 @@ ssl_context = ssl._create_unverified_context()
 
 @dataclass
 class STTOptions:
-    """Options for the Baseten STT plugin.
-
-    Attributes:
-        sample_rate: Audio sample rate in Hz.
-        buffer_size_seconds: Size of audio buffer in seconds.
-        encoding: Audio encoding format (``pcm_s16le`` or ``pcm_mulaw``).
-        language: Language code for transcription (e.g. ``en``, ``es``, ``auto``).
-        enable_partial_transcripts: Whether to receive interim (partial) transcripts
-            before the speaker finishes.  Highly recommended for LiveKit voice agents.
-        partial_transcript_interval_s: How often (in seconds) partial transcripts are
-            emitted while the speaker is still talking.
-        final_transcript_max_duration_s: Maximum duration (in seconds) of audio before
-            the server forces a final transcript.
-        show_word_timestamps: Request word-level timestamps from Whisper.
-        vad_threshold: Server-side VAD speech probability threshold (0.0–1.0).
-        vad_min_silence_duration_ms: Minimum silence duration (ms) to mark end of speech.
-        vad_speech_pad_ms: Padding (ms) added around detected speech regions.
-    """
-
     sample_rate: int = 16000
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
@@ -125,52 +76,6 @@ class STTOptions:
 
 
 class STT(stt.STT):
-    """Baseten Speech-to-Text provider.
-
-    Connects to a Baseten Whisper Streaming WebSocket model for real-time
-    transcription.  Works with both **truss** and **chain** deployments.
-
-    There are three ways to specify the endpoint (in priority order):
-
-    1. ``model_endpoint`` – pass the full WebSocket URL directly.
-    2. ``model_id`` – auto-constructs a **truss** endpoint URL::
-
-           wss://model-{model_id}.api.baseten.co/environments/production/websocket
-
-    3. ``chain_id`` – auto-constructs a **chain** endpoint URL::
-
-           wss://chain-{chain_id}.api.baseten.co/environments/production/websocket
-
-    If none of the above are provided, the ``BASETEN_MODEL_ENDPOINT`` environment
-    variable is used as a fallback.
-
-    Args:
-        api_key: Baseten API key.  Falls back to the ``BASETEN_API_KEY`` env var.
-        model_endpoint: Full WebSocket URL of the deployed model.  Takes
-            priority over ``model_id`` and ``chain_id``.
-        model_id: Baseten **truss** model ID.  The plugin builds the endpoint
-            URL automatically.  Ignored when ``model_endpoint`` is given.
-        chain_id: Baseten **chain** ID.  The plugin builds the endpoint URL
-            automatically.  Ignored when ``model_endpoint`` is given.
-        sample_rate: Audio sample rate in Hz (default ``16000``).
-        encoding: Audio encoding – ``pcm_s16le`` (default) or ``pcm_mulaw``.
-        buffer_size_seconds: Audio buffer size in seconds.
-        language: BCP-47 language code (default ``en``).  Use ``auto`` for
-            automatic language detection.
-        enable_partial_transcripts: Emit interim transcripts while the speaker
-            is still talking.  Defaults to ``True``.
-        partial_transcript_interval_s: Interval (seconds) between partial
-            transcript updates.
-        final_transcript_max_duration_s: Maximum seconds of audio before the
-            server forces a final transcript.
-        show_word_timestamps: Include word-level timestamps in results.
-        vad_threshold: Server-side VAD threshold (0.0–1.0).
-        vad_min_silence_duration_ms: Minimum silence (ms) to end an utterance.
-        vad_speech_pad_ms: Padding (ms) around detected speech.
-        http_session: Optional :class:`aiohttp.ClientSession` to reuse.
-    """
-
-    # URL templates for auto-constructing endpoints from model/chain IDs.
     _TRUSS_URL_TEMPLATE = "wss://model-{model_id}.api.baseten.co/environments/production/websocket"
     _CHAIN_URL_TEMPLATE = "wss://chain-{chain_id}.api.baseten.co/environments/production/websocket"
 
@@ -194,6 +99,50 @@ class STT(stt.STT):
         vad_speech_pad_ms: int = 30,
         http_session: aiohttp.ClientSession | None = None,
     ):
+        """Baseten Speech-to-Text provider.
+
+        Connects to a Baseten Whisper Streaming WebSocket model for real-time
+        transcription.  Works with both **truss** and **chain** deployments.
+
+        There are three ways to specify the endpoint (in priority order):
+
+        1. ``model_endpoint`` – pass the full WebSocket URL directly.
+        2. ``model_id`` – auto-constructs a **truss** endpoint URL::
+
+               wss://model-{model_id}.api.baseten.co/environments/production/websocket
+
+        3. ``chain_id`` – auto-constructs a **chain** endpoint URL::
+
+               wss://chain-{chain_id}.api.baseten.co/environments/production/websocket
+
+        If none of the above are provided, the ``BASETEN_MODEL_ENDPOINT`` environment
+        variable is used as a fallback.
+
+        Args:
+            api_key: Baseten API key.  Falls back to the ``BASETEN_API_KEY`` env var.
+            model_endpoint: Full WebSocket URL of the deployed model.  Takes
+                priority over ``model_id`` and ``chain_id``.
+            model_id: Baseten **truss** model ID.  The plugin builds the endpoint
+                URL automatically.  Ignored when ``model_endpoint`` is given.
+            chain_id: Baseten **chain** ID.  The plugin builds the endpoint URL
+                automatically.  Ignored when ``model_endpoint`` is given.
+            sample_rate: Audio sample rate in Hz (default ``16000``).
+            encoding: Audio encoding – ``pcm_s16le`` (default) or ``pcm_mulaw``.
+            buffer_size_seconds: Audio buffer size in seconds.
+            language: BCP-47 language code (default ``en``).  Use ``auto`` for
+                automatic language detection.
+            enable_partial_transcripts: Emit interim transcripts while the speaker
+                is still talking.  Defaults to ``True``.
+            partial_transcript_interval_s: Interval (seconds) between partial
+                transcript updates.
+            final_transcript_max_duration_s: Maximum seconds of audio before the
+                server forces a final transcript.
+            show_word_timestamps: Include word-level timestamps in results.
+            vad_threshold: Server-side VAD threshold (0.0–1.0).
+            vad_min_silence_duration_ms: Minimum silence (ms) to end an utterance.
+            vad_speech_pad_ms: Padding (ms) around detected speech.
+            http_session: Optional :class:`aiohttp.ClientSession` to reuse.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
