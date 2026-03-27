@@ -1038,7 +1038,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._activity is not None:
             self._activity.update_options(
-                endpointing_opts=endpointing_opts,
+                endpointing_opts=(
+                    self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
+                ),
                 turn_detection=turn_detection,
             )
 
