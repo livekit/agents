@@ -365,7 +365,7 @@ class ChunkedStream(tts.ChunkedStream):
                     raise APIStatusError(f"SLNG TTS error: {error_msg}")
                 else:
                     logger.debug("[SLNG TTS] ignoring unknown message: %s", resp)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
