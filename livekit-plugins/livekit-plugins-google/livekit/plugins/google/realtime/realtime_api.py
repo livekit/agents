@@ -927,14 +927,20 @@ class RealtimeSession(llm.RealtimeSession):
                     # Otherwise, silently drop to prevent 1007 errors.
                     if self._opts.model in RESTRICTED_CLIENT_CONTENT_MODELS:
                         if self._opts.reconnect_on_update:
-                            logger.debug("restricted model: reconnecting to apply LiveClientContent update")
+                            logger.debug(
+                                "restricted model: reconnecting to apply LiveClientContent update"
+                            )
                             self._mark_restart_needed()
                         else:
-                            logger.debug("restricted model: dropping LiveClientContent (not supported mid-session)")
+                            logger.debug(
+                                "restricted model: dropping LiveClientContent (not supported mid-session)"
+                            )
                     else:
                         await session.send_client_content(
                             turns=msg.turns,  # type: ignore
-                            turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
+                            turn_complete=msg.turn_complete
+                            if msg.turn_complete is not None
+                            else True,
                         )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
