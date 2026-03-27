@@ -990,31 +990,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_options(
         self,
         *,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the agent session.
 
         Args:
-            min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
-            max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+            endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
+            min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
+            max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
-        if is_given(min_endpointing_delay):
-            self._opts.endpointing["min_delay"] = min_endpointing_delay
-        if is_given(max_endpointing_delay):
-            self._opts.endpointing["max_delay"] = max_endpointing_delay
+        if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
+            logger.warning(
+                "min_endpointing_delay and max_endpointing_delay are deprecated, "
+                "use endpointing_opts instead"
+            )
+            endpointing_opts = EndpointingOptions(
+                mode=self._opts.endpointing["mode"],
+                min_delay=(
+                    min_endpointing_delay
+                    if is_given(min_endpointing_delay)
+                    else self._opts.endpointing["min_delay"]
+                ),
+                max_delay=(
+                    max_endpointing_delay
+                    if is_given(max_endpointing_delay)
+                    else self._opts.endpointing["max_delay"]
+                ),
+            )
+
+        if is_given(endpointing_opts):
+            self._opts.endpointing["mode"] = endpointing_opts["mode"]
+            self._opts.endpointing["min_delay"] = endpointing_opts["min_delay"]
+            self._opts.endpointing["max_delay"] = endpointing_opts["max_delay"]
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
         if self._activity is not None:
             self._activity.update_options(
-                min_endpointing_delay=min_endpointing_delay,
-                max_endpointing_delay=max_endpointing_delay,
+                endpointing_opts=endpointing_opts,
                 turn_detection=turn_detection,
             )
 
