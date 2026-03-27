@@ -173,7 +173,7 @@ def main() -> None:
         )
 
     for label, idx, min_prev in [("WoW", 4, 500), ("MoM", 5, 2000), ("QoQ", 6, 5000)]:
-        prev_idx = {4: 2, 5: 3, 6: 4}
+        prev_idx = {4: 1, 5: 2, 6: 3}  # map growth idx -> current period volume field
         growers = [
             (r[0], r[idx]) for r in results
             if r[idx] is not None and r[idx] > 0 and r[prev_idx[idx]] >= min_prev
