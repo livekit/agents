@@ -1,4 +1,4 @@
-name: Weekly Download Stats
+name: Weekly Python Download Stats
 
 on:
   schedule:
@@ -22,9 +22,17 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.DOWNLOAD_STATS_SLACK_WEBHOOK }}
         run: |
-          STATS=$(cat stats.txt)
-          # escape for JSON
-          STATS_JSON=$(echo "$STATS" | python -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": ${STATS_JSON}}"
+          python -c "
+          import json, urllib.request
+
+          stats = open('stats.txt').read()
+          payload = json.dumps({'text': '📊 *Weekly Python PyPI Download Stats*\n\`\`\`\n' + stats + '\n\`\`\`'}).encode()
+
+          req = urllib.request.Request(
+              '${{ secrets.DOWNLOAD_STATS_SLACK_WEBHOOK }}',
+              data=payload,
+              headers={'Content-Type': 'application/json'},
+          )
+          resp = urllib.request.urlopen(req)
+          print(resp.status, resp.read().decode())
+          "
