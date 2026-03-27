@@ -19,3 +19,5 @@ ChatModels = Literal[
 STTModels = Literal[
     "voxtral-small-2507", "voxtral-mini-2507", "voxtral-mini-latest", "voxtral-small-latest"
 ]
+
+TTSModels = Literal["voxtral-tts-2603",]
