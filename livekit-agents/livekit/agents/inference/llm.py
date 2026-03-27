@@ -338,8 +338,9 @@ class LLMStream(llm.LLMStream):
                     },
                 )
             if not self._tools:
-                # remove tool_choice from extra_kwargs if no tools are provided
+                # remove tool_choice/parallel_tool_calls from extra_kwargs if no tools are provided
                 self._extra_kwargs.pop("tool_choice", None)
+                self._extra_kwargs.pop("parallel_tool_calls", None)
 
             if self._provider:
                 headers = self._extra_kwargs.setdefault("extra_headers", {})
