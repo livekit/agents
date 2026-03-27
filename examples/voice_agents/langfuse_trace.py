@@ -1,8 +1,8 @@
-import base64
 import logging
 import os
 
 from dotenv import load_dotenv
+from langfuse import Langfuse
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util.types import AttributeValue
 
@@ -32,7 +32,6 @@ load_dotenv()
 # To enable tracing, set the trace provider with `set_tracer_provider` in the module level or
 # inside the entrypoint before the `AgentSession.start()`.
 
-
 def setup_langfuse(
     metadata: dict[str, AttributeValue] | None = None,
     *,
@@ -40,23 +39,26 @@ def setup_langfuse(
     public_key: str | None = None,
     secret_key: str | None = None,
 ) -> TracerProvider:
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
     public_key = public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
     secret_key = secret_key or os.getenv("LANGFUSE_SECRET_KEY")
-    host = host or os.getenv("LANGFUSE_HOST")
+    host = host or os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL")
 
     if not public_key or not secret_key or not host:
-        raise ValueError("LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_HOST must be set")
-
-    langfuse_auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
-    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host.rstrip('/')}/api/public/otel"
-    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {langfuse_auth}"
+        raise ValueError(
+            "LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_HOST (or LANGFUSE_BASE_URL) must be set"
+        )
 
     trace_provider = TracerProvider()
-    trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider, metadata=metadata)
+
+    Langfuse(
+        public_key=public_key,
+        secret_key=secret_key,
+        base_url=host,
+        tracer_provider=trace_provider,
+        should_export_span=lambda span: True,
+    )
+
     return trace_provider
 
 
