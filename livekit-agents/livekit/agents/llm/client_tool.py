@@ -29,6 +29,21 @@ if TYPE_CHECKING:
 
 CLIENT_TOOL_ATTRIBUTE_PREFIX = "lk.client_tools."
 CLIENT_TOOL_MANIFEST_VERSION = 1
+PARTICIPANT_IDENTITY_PARAM = "lk_participant_identity"
+
+def _generate_default_schema(client_name: str) -> dict[str, Any]:
+    return {
+        "name": client_name,
+        "description": (
+            f"Client tool '{client_name}' "
+            f"(waiting for client to advertise)"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+def _schemas_match(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Check if two JSON Schema parameter dicts are equivalent."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
 class ClientTool(RawFunctionTool):
@@ -38,6 +53,10 @@ class ClientTool(RawFunctionTool):
     The client advertises available tools as participant attributes
     (``lk.client_tools.<name>``), and the agent framework routes execution to the client
     via ``perform_rpc``.
+
+    When multiple participants advertise the same tool with matching schemas, a
+    ``lk_participant_identity`` parameter is automatically injected so the LLM can
+    choose which participant to route the call to.
 
     Use the :func:`client_tool` factory function to create instances.
     """
@@ -54,7 +73,8 @@ class ClientTool(RawFunctionTool):
         super().__init__(func, info, instance)
         self._client_name = client_name
         self._required = required
-        self._resolved = False
+        self._advertisers: list[str] = []  # participant identities
+        self._base_manifest: dict[str, Any] | None = None
 
     @property
     def client_name(self) -> str:
@@ -69,36 +89,101 @@ class ClientTool(RawFunctionTool):
     @property
     def resolved(self) -> bool:
         """Whether this tool has been resolved from a client manifest."""
-        return self._resolved
+        return len(self._advertisers) > 0
 
-    def _resolve(self, manifest: dict[str, Any]) -> None:
-        """Update the tool's raw_schema from a valid manifest and mark it resolved."""
-        description = manifest.get("description", "")
-        parameters = manifest.get(
+    @property
+    def advertisers(self) -> list[str]:
+        """Participant identities currently advertising this tool."""
+        return list(self._advertisers)
+
+    def _update_schema(self) -> None:
+        """Rebuild raw_schema from the base manifest and current advertisers."""
+        if not self._base_manifest or not self._advertisers:
+            self._info.raw_schema = _generate_default_schema(self._client_name)
+            return
+
+        description = self._base_manifest.get("description", "")
+        parameters = self._base_manifest.get(
             "parameters", {"type": "object", "properties": {}}
         )
+
+        if len(self._advertisers) > 1:
+            parameters = self._inject_participant_param(parameters)
+
         self._info.raw_schema = {
             "name": self._client_name,
             "description": description,
             "parameters": parameters,
         }
-        self._resolved = True
-        logger.debug(f"Resolved client tool '{self._client_name}' from manifest")
 
-    def _unresolve(self) -> None:
-        """Mark the tool as unresolved, resetting its schema to the placeholder."""
-        if not self._resolved:
-            return
-        self._info.raw_schema = {
-            "name": self._client_name,
+    def _inject_participant_param(
+        self, parameters: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return a copy of parameters with lk_participant_identity injected."""
+        parameters = json.loads(json.dumps(parameters))  # deep copy
+        properties = parameters.setdefault("properties", {})
+        properties[PARTICIPANT_IDENTITY_PARAM] = {
+            "type": "string",
+            "enum": sorted(self._advertisers),
             "description": (
-                f"Client tool '{self._client_name}' "
-                f"(waiting for client to advertise)"
+                "The identity of the participant to send the request to."
             ),
-            "parameters": {"type": "object", "properties": {}},
         }
-        self._resolved = False
-        logger.debug(f"Unresolved client tool '{self._client_name}'")
+        required = parameters.setdefault("required", [])
+        if PARTICIPANT_IDENTITY_PARAM not in required:
+            required.append(PARTICIPANT_IDENTITY_PARAM)
+        return parameters
+
+    def _add_advertiser(
+        self, identity: str, manifest: dict[str, Any]
+    ) -> None:
+        """Add a participant as an advertiser of this tool."""
+        params = manifest.get(
+            "parameters", {"type": "object", "properties": {}}
+        )
+
+        if self._base_manifest is not None:
+            base_params = self._base_manifest.get(
+                "parameters", {"type": "object", "properties": {}}
+            )
+            if not _schemas_match(base_params, params):
+                logger.warning(
+                    f"Client tool '{self._client_name}': participant "
+                    f"'{identity}' has a different parameter schema than "
+                    f"existing advertisers, skipping this participant. "
+                    f"All participants advertising the same client tool "
+                    f"must use identical parameter schemas."
+                )
+                return
+
+        if identity not in self._advertisers:
+            self._advertisers.append(identity)
+
+        # Use this manifest as the base if we don't have one yet
+        if self._base_manifest is None:
+            self._base_manifest = manifest
+
+        self._update_schema()
+        logger.debug(
+            f"Client tool '{self._client_name}': added advertiser "
+            f"'{identity}' (total: {len(self._advertisers)})"
+        )
+
+    def _remove_advertiser(self, identity: str) -> None:
+        """Remove a participant as an advertiser of this tool."""
+        if identity not in self._advertisers:
+            return
+
+        self._advertisers.remove(identity)
+
+        if not self._advertisers:
+            self._base_manifest = None
+
+        self._update_schema()
+        logger.debug(
+            f"Client tool '{self._client_name}': removed advertiser "
+            f"'{identity}' (total: {len(self._advertisers)})"
+        )
 
 
 def client_tool(
@@ -131,7 +216,7 @@ def client_tool(
         if not context.session._agent:
             raise ToolError("Agent state missing from context")
 
-        # Find our ClientTool instance to check the resolved flag
+        # Find our ClientTool instance
         tool: ClientTool | None = None
         for t in context.session._agent._tools:
             if isinstance(t, ClientTool) and t.client_name == name:
@@ -152,16 +237,32 @@ def client_tool(
             )
 
         room = room_io.room
-        linked = room_io.linked_participant
-        if linked is None:
-            raise ToolError(
-                f"Client tool '{name}' cannot execute: no linked participant"
-            )
 
-        payload = json.dumps(raw_arguments)
+        # Determine which participant to route to
+        args_to_send = dict(raw_arguments)
+        if len(tool.advertisers) > 1:
+            destination = args_to_send.pop(PARTICIPANT_IDENTITY_PARAM, None)
+            if not isinstance(destination, str):
+                raise ToolError(
+                    f"Client tool '{name}' requires "
+                    f"'{PARTICIPANT_IDENTITY_PARAM}' when multiple "
+                    f"participants advertise the tool."
+                )
+            if destination not in tool.advertisers:
+                raise ToolError(
+                    f"Client tool '{name}': participant '{destination}' is "
+                    f"not currently advertising this tool. "
+                    f"Available: {tool.advertisers}"
+                )
+        elif len(tool.advertisers) == 1:
+            destination = tool.advertisers[0]
+        else:
+            raise ToolError(f"Client tool '{name}' has no advertisers.")
+
+        payload = json.dumps(args_to_send)
         try:
             response = await room.local_participant.perform_rpc(
-                destination_identity=linked.identity,
+                destination_identity=destination,
                 method=name,
                 payload=payload,
             )
@@ -170,20 +271,9 @@ def client_tool(
 
         return response
 
-    raw_schema: dict[str, Any] = {
-        "name": name,
-        "description": (
-            f"Client tool '{name}' (waiting for client to advertise)"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-    }
-
     info = RawFunctionToolInfo(
         name=name,
-        raw_schema=raw_schema,
+        raw_schema=_generate_default_schema(name),
         flags=ToolFlag.NONE,
     )
 
@@ -191,12 +281,17 @@ def client_tool(
 
 
 class ClientToolWatcher:
-    """Watches linked participant lifecycle and attributes to keep client tools in sync.
+    """Watches participant lifecycle and attributes to keep client tools in sync.
+
+    Scans remote participants for ``lk.client_tools.*`` attributes. When multiple
+    participants advertise the same tool with matching schemas, a routing parameter
+    is injected. Mismatched schemas produce a warning and the conflicting participant
+    is skipped.
 
     Listens to:
     - ``participant_attributes_changed``: client adds/updates/removes a tool attribute
     - ``participant_connected``: a new participant joins with tool attributes already set
-    - ``participant_disconnected``: the linked participant leaves, all tools become unresolved
+    - ``participant_disconnected``: a participant leaves
 
     Created and started by ``AgentSession`` when client tools are present.
     """
@@ -222,10 +317,12 @@ class ClientToolWatcher:
             "participant_disconnected", self._on_participant_disconnected
         )
 
-        # Initial scan if linked participant is already present
-        linked = self._room_io.linked_participant
-        if linked is not None:
-            self._sync_from_participant(linked)
+        # Initial scan of all current participants
+        for participant in self._room.remote_participants.values():
+            self._sync_participant(participant)
+
+        # Check for missing required tools after initial scan
+        self._check_required()
 
     def stop(self) -> None:
         if not self._started:
@@ -245,8 +342,7 @@ class ClientToolWatcher:
     def _on_attributes_changed(
         self, changed: list[str], participant: rtc.Participant
     ) -> None:
-        linked = self._room_io.linked_participant
-        if linked is None or participant.identity != linked.identity:
+        if not isinstance(participant, rtc.RemoteParticipant):
             return
 
         has_client_tool_changes = any(
@@ -255,27 +351,18 @@ class ClientToolWatcher:
         if not has_client_tool_changes:
             return
 
-        self._sync_from_participant(linked)
+        self._sync_participant(participant)
 
     def _on_participant_connected(
         self, participant: rtc.RemoteParticipant
     ) -> None:
-        linked = self._room_io.linked_participant
-        if linked is None or participant.identity != linked.identity:
-            return
-
-        self._sync_from_participant(participant)
+        self._sync_participant(participant)
 
     def _on_participant_disconnected(
         self, participant: rtc.RemoteParticipant
     ) -> None:
-        linked = self._room_io.linked_participant
-        if linked is not None and participant.identity != linked.identity:
-            return
-
-        # Linked participant left — unresolve all client tools
         for tool in self._get_client_tools():
-            tool._unresolve()
+            tool._remove_advertiser(participant.identity)
 
     def _get_client_tools(self) -> list[ClientTool]:
         return [t for t in self._agent._tools if isinstance(t, ClientTool)]
@@ -316,26 +403,25 @@ class ClientToolWatcher:
 
         return manifest
 
-    def _sync_from_participant(self, participant: rtc.Participant) -> None:
-        """Sync all client tools from the participant's current attributes."""
-        client_tools = self._get_client_tools()
-        if not client_tools:
-            return
-
-        for tool in client_tools:
+    def _sync_participant(self, participant: rtc.RemoteParticipant) -> None:
+        """Sync client tools for a single participant."""
+        for tool in self._get_client_tools():
             attr_key = f"{CLIENT_TOOL_ATTRIBUTE_PREFIX}{tool.client_name}"
             attr_value = participant.attributes.get(attr_key, "")
 
             manifest = self._parse_manifest(tool.client_name, attr_value)
             if manifest is None:
-                # Tool not advertised or invalid — unresolve if it was resolved
-                tool._unresolve()
-                if attr_value == "" and tool.required:
-                    logger.warning(
-                        f"Required client tool '{tool.client_name}' is not "
-                        f"advertised by the linked participant. "
-                        f"Ensure the client registers this tool."
-                    )
-                continue
+                # Tool not advertised or invalid — remove this participant
+                tool._remove_advertiser(participant.identity)
+            else:
+                tool._add_advertiser(participant.identity, manifest)
 
-            tool._resolve(manifest)
+    def _check_required(self) -> None:
+        """Log warnings for required tools with no advertisers."""
+        for tool in self._get_client_tools():
+            if tool.required and not tool.advertisers:
+                logger.warning(
+                    f"Required client tool '{tool.client_name}' is not "
+                    f"advertised by any participant. "
+                    f"Ensure a client registers this tool."
+                )
