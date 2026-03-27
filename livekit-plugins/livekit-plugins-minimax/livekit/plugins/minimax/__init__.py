@@ -14,36 +14,29 @@
 
 """Minimax plugin for LiveKit Agents
 
-See [Plugin Docs URL - when available] for more information.
+Support for TTS and LLM with MiniMax.
+
+See https://www.minimax.io for more information.
 """
-
-# 1. Import the core TTS class from our tts.py module.
-# 2. Import the version number.
-from .tts import TTS
-from .version import __version__
-
-# 3. Define the public API of the package.
-#    Since we only implement TTS, we only expose the TTS class and the version.
-__all__ = ["TTS", "__version__"]
 
 from livekit.agents import Plugin
 
-# 4. Import the package-specific logger.
+from .llm import LLM
 from .log import logger
+from .tts import TTS
+from .version import __version__
+
+__all__ = ["TTS", "LLM", "__version__"]
 
 
-# 5. Define and register the plugin.
 class MiniMaxPlugin(Plugin):
     def __init__(self) -> None:
-        # The super() call requires the plugin name, version, package path, and logger.
         super().__init__(__name__, __version__, __package__, logger)
 
 
-# Register an instance of our plugin with the LiveKit Agents framework.
 Plugin.register_plugin(MiniMaxPlugin())
 
-# 6. (Optional but recommended) pdoc configuration to hide internal modules
-#    from the generated documentation. This is standard boilerplate.
+# Cleanup docs of unexported modules
 _module = dir()
 NOT_IN_ALL = [m for m in _module if m not in __all__]
 
