@@ -39,7 +39,8 @@ NUM_CHANNELS = 1
 
 
 def _default_tts_endpoint(*, slng_base_url: str, model: str) -> str:
-    protocol = "ws" if "localhost" in slng_base_url or "127.0.0.1" in slng_base_url else "wss"
+    host = slng_base_url.split(":")[0]
+    protocol = "ws" if host in ("localhost", "127.0.0.1") else "wss"
     return f"{protocol}://{slng_base_url}/v1/tts/{model}"
 
 
