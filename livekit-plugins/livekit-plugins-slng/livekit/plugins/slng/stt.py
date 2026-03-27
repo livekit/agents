@@ -335,7 +335,7 @@ class STT(stt.STT):
         except aiohttp.ClientError as e:
             logger.error(f"[SLNG STT] HTTP connection error: {e}")
             raise APIConnectionError(f"SLNG STT HTTP connection error: {e}") from e
-        except TimeoutError:
+        except asyncio.TimeoutError:
             logger.error("[SLNG STT] HTTP request timed out")
             raise APITimeoutError("SLNG STT HTTP request timed out") from None
         except APIStatusError:
