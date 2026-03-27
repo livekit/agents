@@ -1026,9 +1026,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
         if is_given(endpointing_opts):
-            self._opts.endpointing["mode"] = endpointing_opts["mode"]
-            self._opts.endpointing["min_delay"] = endpointing_opts["min_delay"]
-            self._opts.endpointing["max_delay"] = endpointing_opts["max_delay"]
+            if mode := endpointing_opts.get("mode"):
+                self._opts.endpointing["mode"] = mode
+            if min_delay := endpointing_opts.get("min_delay"):
+                self._opts.endpointing["min_delay"] = min_delay
+            if max_delay := endpointing_opts.get("max_delay"):
+                self._opts.endpointing["max_delay"] = max_delay
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
