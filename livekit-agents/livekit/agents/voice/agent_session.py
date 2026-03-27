@@ -34,6 +34,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils.misc import is_given
+from ..llm.client_tool import ClientTool, ClientToolWatcher
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
@@ -334,6 +335,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
         self._client_events_handler: ClientEventsHandler | None = None
+        self._client_tool_watcher: ClientToolWatcher | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -531,6 +533,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._room_io = None
             self._recorder_io = None
             self._client_events_handler = None
+            self._client_tool_watcher = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -665,6 +668,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # Start client events handler after room is connected (requires local_participant)
             if self._client_events_handler is not None:
                 await self._client_events_handler.start()
+
+            # Start client tool watcher if agent has any client tools
+            if (
+                self._room_io is not None
+                and self._agent is not None
+                and any(isinstance(t, ClientTool) for t in self._agent._tools)
+            ):
+                self._client_tool_watcher = ClientToolWatcher(
+                    self._agent, self._room_io
+                )
+                self._client_tool_watcher.start()
 
             # important: no await should be done after this!
 
@@ -849,6 +863,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            # stop client tool watcher before closing room io
+            if self._client_tool_watcher:
+                self._client_tool_watcher.stop()
+                self._client_tool_watcher = None
 
             # close client events handler before room io
             if self._client_events_handler:

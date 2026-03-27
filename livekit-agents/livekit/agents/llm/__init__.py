@@ -37,6 +37,10 @@ from .realtime import (
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
 )
+from .client_tool import (
+    ClientTool,
+    client_tool,
+)
 from .tool_context import (
     FunctionTool,
     ProviderTool,
@@ -106,6 +110,8 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "RealtimeSessionRestoredEvent",
     "LLMError",
+    "ClientTool",
+    "client_tool",
 ]
 
 # Cleanup docs of unexported modules

@@ -47,6 +47,10 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
+from .llm.client_tool import (
+    ClientTool,
+    client_tool,
+)
 from .llm.tool_context import (
     FunctionTool,
     ProviderTool,
