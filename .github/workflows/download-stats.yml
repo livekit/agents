@@ -1,0 +1,30 @@
+name: Weekly Download Stats
+
+on:
+  schedule:
+    - cron: "0 14 * * 1" # every Monday at 2pm UTC
+  workflow_dispatch:
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch download stats
+        run: python .github/download_stats.py > stats.txt 2>&1
+
+      - name: Post to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.DOWNLOAD_STATS_SLACK_WEBHOOK }}
+        run: |
+          STATS=$(cat stats.txt)
+          # escape for JSON
+          STATS_JSON=$(echo "$STATS" | python -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": ${STATS_JSON}}"
