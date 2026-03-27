@@ -190,7 +190,7 @@ class _EUORunnerBase(_InferenceRunner):
 
 class EOUPlugin(Plugin):
     def __init__(self, runner: type[_EUORunnerBase]) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__, logger, maintained_by="livekit")
         self._runner_class = runner
 
     def download_files(self) -> None:

@@ -9,6 +9,8 @@ from . import utils
 
 EventTypes = Literal["plugin_registered",]
 
+PluginMaintainer = Literal["livekit", "community"]
+
 
 class Plugin(ABC):  # noqa: B024
     registered_plugins: list[Plugin] = []
@@ -21,11 +23,13 @@ class Plugin(ABC):  # noqa: B024
         version: str,
         package: str,
         logger: logging.Logger | None = None,
+        maintained_by: PluginMaintainer = "community",
     ) -> None:
         self._title = title
         self._version = version
         self._package = package
         self._logger = logger
+        self._maintained_by = maintained_by
 
     @classmethod
     def register_plugin(cls, plugin: Plugin) -> None:
@@ -54,3 +58,7 @@ class Plugin(ABC):  # noqa: B024
     @property
     def logger(self) -> logging.Logger | None:
         return self._logger
+
+    @property
+    def maintained_by(self) -> PluginMaintainer:
+        return self._maintained_by

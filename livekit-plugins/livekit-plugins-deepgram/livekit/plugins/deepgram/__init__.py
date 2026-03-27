@@ -34,7 +34,7 @@ from .log import logger
 
 class DeepgramPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__, logger, maintained_by="livekit")
 
 
 Plugin.register_plugin(DeepgramPlugin())

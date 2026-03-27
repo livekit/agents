@@ -37,7 +37,11 @@ def get_packages(repo_root: Path) -> list[str]:
     packages = ["livekit.agents"]
 
     plugins_dir = repo_root / "livekit-plugins"
-    for plugin_dir in sorted(plugins_dir.glob("livekit-plugins-*")):
+    plugin_dirs = list(plugins_dir.glob("livekit-plugins-*"))
+    community_dir = plugins_dir / "community"
+    if community_dir.is_dir():
+        plugin_dirs.extend(community_dir.glob("livekit-plugins-*"))
+    for plugin_dir in sorted(plugin_dirs):
         if plugin_dir.is_dir():
             # livekit-plugins-openai -> openai
             # livekit-plugins-turn-detector -> turn_detector
