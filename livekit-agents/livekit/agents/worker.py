@@ -419,6 +419,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy=options.http_proxy,
             multiprocessing_context=options.multiprocessing_context,
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
             log_level=options.log_level,

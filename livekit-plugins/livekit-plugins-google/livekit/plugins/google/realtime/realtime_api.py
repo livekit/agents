@@ -56,6 +56,7 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
     }
