@@ -125,18 +125,23 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
     }
 
 
-def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
+def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
         if isinstance(tool, llm.FunctionTool):
-            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            schemas.append(
-                {
-                    "name": fnc["name"],
-                    "description": fnc["description"] or "",
-                    "input_schema": fnc["parameters"],
-                }
-            )
+            if strict:
+                fnc = llm.utils.build_strict_openai_schema(tool)
+                function_data = fnc["function"]
+            else:
+                function_data = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            tool_schema: dict[str, Any] = {
+                "name": function_data["name"],
+                "description": function_data.get("description") or "",
+                "input_schema": function_data["parameters"],
+            }
+            if strict:
+                tool_schema["strict"] = True
+            schemas.append(tool_schema)
         elif isinstance(tool, llm.RawFunctionTool):
             info = tool.info
             schemas.append(
