@@ -121,6 +121,7 @@ class STTOptions:
 
     client_reference_id: str | None = None
     translation: TranslationConfig | None = None
+    max_endpoint_delay_ms: int | None = None
 
 
 class STT(stt.STT):
@@ -260,6 +261,8 @@ class SpeechStream(stt.SpeechStream):
                 translation_dict["language_a"] = tr.language_a
                 translation_dict["language_b"] = tr.language_b
             config["translation"] = translation_dict
+        if self._stt._params.max_endpoint_delay_ms is not None:
+            config["max_endpoint_delay_ms"] = self._stt._params.max_endpoint_delay_ms
         # Connect to the Soniox Speech-to-Text API.
         ws = await asyncio.wait_for(
             self._ensure_session().ws_connect(self._stt._base_url),
