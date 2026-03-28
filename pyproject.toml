@@ -1,5 +1,6 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
+exclude-newer = "3 days"
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
