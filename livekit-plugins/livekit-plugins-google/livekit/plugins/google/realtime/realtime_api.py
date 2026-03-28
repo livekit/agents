@@ -62,6 +62,14 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     }
 )
 
+# Models that only support send_realtime_input (not send_client_content)
+# gemini-3.1-flash-live-preview rejects send_client_content with 1007 error
+REALTIME_INPUT_ONLY_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-3.1-flash-live-preview",
+    }
+)
+
 
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     """
@@ -702,11 +710,19 @@ class RealtimeSession(llm.RealtimeSession):
 
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        if self._opts.model in REALTIME_INPUT_ONLY_MODELS:
+            # Models like gemini-3.1-flash-live-preview reject send_client_content
+            # with a 1007 error. Use send_realtime_input with text instead.
+            text_to_send = instructions if is_given(instructions) else "."
+            self._send_client_event(
+                types.LiveClientRealtimeInput(text=text_to_send)
+            )
+        else:
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -818,12 +834,28 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_empty_message=True,
                             exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        if turns_dict:
+                        if turns_dict and self._opts.model not in REALTIME_INPUT_ONLY_MODELS:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
                             await session.send_client_content(
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+                        elif turns_dict and self._opts.model in REALTIME_INPUT_ONLY_MODELS:
+                            # Convert initial chat context to send_realtime_input with role prefixes
+                            text_parts = []
+                            for turn_data in turns_dict:
+                                role = turn_data.get("role", "user")
+                                parts = turn_data.get("parts", [])
+                                for part in parts:
+                                    text = part.get("text", "")
+                                    if text:
+                                        text_parts.append(f"[{role}]: {text}")
+                            if text_parts:
+                                combined_text = "\n".join(text_parts)
+                                await session.send_realtime_input(text=combined_text)
+                                logger.debug("Sent initial chat context via send_realtime_input ")
+                            else:
+                                logger.debug("No text content in initial chat context to send ")
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -898,10 +930,26 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         break
                 if isinstance(msg, types.LiveClientContent):
-                    await session.send_client_content(
-                        turns=msg.turns,  # type: ignore
-                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
-                    )
+                    if self._opts.model in REALTIME_INPUT_ONLY_MODELS:
+                        # Models like gemini-3.1-flash-live-preview reject send_client_content.
+                        # Convert to send_realtime_input with text content.
+                        # Preserve role context so the model knows who said what.
+                        text_parts = []
+                        for turn in (msg.turns or []):
+                            role = turn.role or "user"
+                            for part in (turn.parts or []):
+                                if part.text:
+                                    text_parts.append(f"[{role}]: {part.text}")
+                        if text_parts:
+                            combined_text = "\n".join(text_parts)
+                            await session.send_realtime_input(text=combined_text)
+                        else:
+                            logger.warning("Skipping LiveClientContent with no text parts (realtime-input-only model)")
+                    else:
+                        await session.send_client_content(
+                            turns=msg.turns,  # type: ignore
+                            turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
+                        )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
