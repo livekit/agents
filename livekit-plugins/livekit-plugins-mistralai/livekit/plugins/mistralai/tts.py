@@ -37,7 +37,7 @@ from .models import TTSModels
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
-DEFAULT_MODEL = "voxtral-tts-2603"
+DEFAULT_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_BASE_URL = "https://api.mistral.ai"
 
 RESPONSE_FORMATS = Literal["mp3", "opus", "flac", "wav", "pcm"]
