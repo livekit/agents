@@ -563,6 +563,16 @@ class RealtimeSession(llm.RealtimeSession):
                     self._mark_restart_needed()
                     return
 
+            if self._opts.model in REALTIME_INPUT_ONLY_MODELS:
+                # For realtime-input-only models (e.g. gemini-3.1-flash-live-preview),
+                # send_client_content is rejected. Trigger a reconnect so updated
+                # instructions are applied via system_instruction in _build_connect_config.
+                logger.debug(
+                    "Reconnecting to apply updated instructions (realtime-input-only model)"
+                )
+                self._mark_restart_needed()
+                return
+
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
             self._send_client_event(
@@ -713,7 +723,12 @@ class RealtimeSession(llm.RealtimeSession):
         if self._opts.model in REALTIME_INPUT_ONLY_MODELS:
             # Models like gemini-3.1-flash-live-preview reject send_client_content
             # with a 1007 error. Use send_realtime_input with text instead.
-            text_to_send = instructions if is_given(instructions) else "."
+            # Include both instructions (as model guidance) and a user trigger "."
+            # to match the original two-turn behavior.
+            if is_given(instructions):
+                text_to_send = f"[model]: {instructions}\n[user]: ."
+            else:
+                text_to_send = "."
             self._send_client_event(
                 types.LiveClientRealtimeInput(text=text_to_send)
             )
@@ -968,11 +983,9 @@ class RealtimeSession(llm.RealtimeSession):
 
                 if lk_google_debug and isinstance(
                     msg,
-                    (
-                        types.LiveClientContent,
-                        types.LiveClientToolResponse,
-                        types.LiveClientRealtimeInput,
-                    ),
+                    types.LiveClientContent
+                    | types.LiveClientToolResponse
+                    | types.LiveClientRealtimeInput,
                 ):
                     if not isinstance(msg, types.LiveClientRealtimeInput) or not (
                         msg.audio or msg.video or msg.text
