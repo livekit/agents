@@ -26,9 +26,8 @@ def to_chat_ctx(
                 "type": "function",
                 "function": {"name": tool_call.name, "arguments": tool_call.arguments},
             }
-            # Include provider-specific extra content (e.g., Google thought signatures)
-            if tool_call.extra.get("google"):
-                tc["extra_content"] = {"google": tool_call.extra["google"]}
+            if tool_call.extra:
+                tc["extra_content"] = tool_call.extra
             tool_calls.append(tc)
         if tool_calls:
             msg["tool_calls"] = tool_calls
@@ -62,9 +61,8 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append({"type": "text", "text": text_content})
             result = {"role": msg.role, "content": list_content}
 
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            result["extra_content"] = {"google": msg.extra["google"]}
+        if msg.extra:
+            result["extra_content"] = msg.extra
         return result
 
     elif msg.type == "function_call":
@@ -76,9 +74,8 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 "arguments": msg.arguments,
             },
         }
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            tc["extra_content"] = {"google": msg.extra["google"]}
+        if msg.extra:
+            tc["extra_content"] = msg.extra
         return {
             "role": "assistant",
             "tool_calls": [tc],
