@@ -1467,7 +1467,7 @@ class AgentActivity(RecognitionHooks):
         speech_start_time = time.time()
         if ev:
             speech_start_time = speech_start_time - ev.speech_duration - ev.inference_duration
-        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
+        self._session._update_user_state("speaking", speech_boundary_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
                 started_at=speech_start_time,
@@ -1501,7 +1501,7 @@ class AgentActivity(RecognitionHooks):
 
         self._session._update_user_state(
             "listening",
-            last_speaking_time=speech_end_time,
+            speech_boundary_time=speech_end_time,
         )
         self._user_silence_event.set()
 

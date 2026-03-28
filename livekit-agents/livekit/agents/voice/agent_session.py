@@ -436,6 +436,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # trace
         self._user_speaking_span: trace.Span | None = None
+        self._user_speaking_start_time_ns: int | None = None
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
@@ -939,6 +940,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._user_speaking_span:
                 self._user_speaking_span.end()
                 self._user_speaking_span = None
+                self._user_speaking_start_time_ns = None
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
@@ -1459,19 +1461,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _update_user_state(
-        self, state: UserState, *, last_speaking_time: float | None = None
+        self, state: UserState, *, speech_boundary_time: float | None = None
     ) -> None:
+        """Update the user state.
+
+        ``speech_boundary_time`` is the inferred wall-clock timestamp of the speech
+        boundary for this transition: speech start when entering ``"speaking"`` and
+        speech end when entering ``"listening"``.
+        """
         if self._user_state == state:
             return
 
-        last_speaking_time_ns = (
-            int(last_speaking_time * 1_000_000_000) if last_speaking_time else None
+        speech_boundary_time_ns = (
+            int(speech_boundary_time * 1_000_000_000) if speech_boundary_time is not None else None
         )
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span(
-                "user_speaking", start_time=last_speaking_time_ns
+                "user_speaking", start_time=speech_boundary_time_ns
             )
+            self._user_speaking_start_time_ns = speech_boundary_time_ns
 
             if self._room_io and self._room_io.linked_participant:
                 _set_participant_attributes(
@@ -1480,10 +1489,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            # end_time = last_speaking_time or time.time()
+            # end_time = speech_boundary_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=last_speaking_time_ns)
+            if (
+                speech_boundary_time_ns is not None
+                and self._user_speaking_start_time_ns is not None
+                and speech_boundary_time_ns >= self._user_speaking_start_time_ns
+            ):
+                self._user_speaking_span.end(end_time=speech_boundary_time_ns)
+            else:
+                self._user_speaking_span.end()
+
             self._user_speaking_span = None
+            self._user_speaking_start_time_ns = None
 
         if state == "listening" and self._agent_state == "listening":
             self._set_user_away_timer()
@@ -1497,7 +1515,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             UserStateChangedEvent(
                 old_state=old_state,
                 new_state=state,
-                created_at=last_speaking_time or time.time(),
+                created_at=speech_boundary_time or time.time(),
             ),
         )
 
