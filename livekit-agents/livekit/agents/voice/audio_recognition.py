@@ -147,12 +147,11 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
-        # multimodal turn detection
-        self._turn_detector: MultiModalTurnDetector | None = (
-            turn_detection if isinstance(turn_detection, MultiModalTurnDetector) else None
-        )
+        # multimodal streaming turn detection
         self._turn_detector_stream: TurnDetectionStream | None = None
-        self._turn_detection_ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool] | None = None
+        self._turn_detection_ch: (
+            aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool] | None
+        ) = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
         # make sure the turn detection is cancelled when the user starts to speak again
         self._silence_guard_event = asyncio.Event()
@@ -193,7 +192,8 @@ class AudioRecognition:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
-        self.update_turn_detector(self._turn_detector)
+        if isinstance(self._turn_detector, MultiModalTurnDetector) or self._turn_detector is None:
+            self.update_turn_detector(self._turn_detector)
 
     def stop(self) -> None:
         self.update_stt(None)
@@ -520,7 +520,9 @@ class AudioRecognition:
         if self._turn_detector_stream is not None:
             self._turn_detection_ch = aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool]()
             self._turn_detection_atask = asyncio.create_task(
-                self._turn_detection_task(self._turn_detector_stream, self._turn_detection_ch, self._turn_detection_atask)
+                self._turn_detection_task(
+                    self._turn_detector_stream, self._turn_detection_ch, self._turn_detection_atask
+                )
             )
         elif self._turn_detection_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._turn_detection_atask))
@@ -1127,6 +1129,7 @@ class AudioRecognition:
         task_func = (
             _bounce_eou_task_with_silence_guard
             if self._turn_detector is not None
+            and isinstance(self._turn_detector, MultiModalTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)
@@ -1219,7 +1222,7 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                if not stream.is_admitting_results:
+                if not stream.is_active:
                     continue
                 self._run_eou_detection(
                     self._hooks.retrieve_chat_ctx().copy(),

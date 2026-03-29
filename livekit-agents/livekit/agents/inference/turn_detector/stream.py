@@ -95,7 +95,7 @@ class TurnDetectionStream:
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._tasks: set[asyncio.Task[None]] = set()
 
-        self._messages: tuple[list[PbChatMessage], str | None] = ([], None)
+        self._messages: list[PbChatMessage] = []
 
         # Turn detection states:
         #
@@ -121,8 +121,6 @@ class TurnDetectionStream:
         self._flushed = False
         self._active_request_id: str | None = None
         self._active_request_fut: asyncio.Future[float] | None = None
-        # make sure the VAD EOS is always observed before emitting any turn detection results
-        self._active_evt = asyncio.Event()
 
     @property
     def model(self) -> str:
@@ -135,18 +133,10 @@ class TurnDetectionStream:
     @property
     def is_active(self) -> bool:
         return self._active
-    
-    @property
-    def active_evt(self) -> asyncio.Event:
-        return self._active_evt
 
     @property
     def is_inference_running(self) -> bool:
         return self._warming_up or self._active
-
-    @property
-    def is_admitting_results(self) -> bool:
-        return self.is_active
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float:
         return await self._detector.unlikely_threshold(language)
@@ -217,6 +207,7 @@ class TurnDetectionStream:
                 await asyncio.sleep(retry_interval)
                 self._num_retries += 1
 
+    # region: utility functions
     def _build_auth_headers(self) -> dict[str, str]:
         return {
             "Authorization": (
@@ -264,6 +255,132 @@ class TurnDetectionStream:
         self._audio_input_sample_rate = None
         self._audio_input_num_channels = None
 
+    def _send_message_sync(self, msg: TurnDetectorClientMessage) -> None:
+        if self._ws is None or self._ws.closed:
+            return
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg.created_at.CopyFrom(created_at)
+        task = asyncio.create_task(self._ws.send_bytes(msg.SerializeToString()))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _send_message_async(self, msg: TurnDetectorClientMessage) -> None:
+        if self._ws is None or self._ws.closed:
+            return
+        created_at = Timestamp()
+        created_at.GetCurrentTime()
+        msg.created_at.CopyFrom(created_at)
+        return await self._ws.send_bytes(msg.SerializeToString())
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        base_url = self._opts.base_url
+        if base_url.startswith(("http://", "https://")):
+            base_url = base_url.replace("http", "ws", 1)
+
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    f"{base_url}/turn-detector",
+                    headers=self._build_auth_headers(),
+                ),
+                self._conn_options.timeout,
+            )
+            await self._send_message_async(
+                TurnDetectorClientMessage(
+                    session_create=SessionCreate(
+                        settings=SessionSettings(
+                            sample_rate=self._opts.sample_rate,
+                        ),
+                        model=self._detector.model,
+                    )
+                )
+            )
+        except aiohttp.ClientResponseError as e:
+            raise create_api_error_from_http(e.message, status=e.status) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("turn detector connection timed out") from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to turn detector") from e
+        return ws
+
+    def _process_message(self, msg: TurnDetectorServerMessage) -> None:
+        match msg.WhichOneof("message"):
+            case "eou_prediction":
+                request_id = msg.request_id
+                if request_id != self._active_request_id:
+                    return
+
+                prediction: EouPrediction = msg.eou_prediction
+                probability = prediction.probability
+                stats = msg.eou_prediction.processing_stats
+                fut = self._active_request_fut
+                if fut is not None:
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        fut.set_result(probability)
+
+                current_time = Timestamp()
+                current_time.GetCurrentTime()
+                detection_delay_ms = (
+                    current_time.ToMilliseconds() - stats.latest_client_created_at.ToMilliseconds()
+                )
+                inference_duration_ms = (
+                    stats.batching_wait_duration.ToMilliseconds()
+                    + stats.preprocessing_duration.ToMilliseconds()
+                    + stats.inference_duration.ToMilliseconds()
+                )
+
+                logger.trace(
+                    "turn detection result received",
+                    extra={
+                        "probability": probability,
+                        "detection_delay_ms": detection_delay_ms or 0.0,
+                        "inference_duration_ms": inference_duration_ms or 0.0,
+                        "request_id": request_id,
+                        "queued": not self.is_active,
+                    },
+                )
+
+                self._event_ch.send_nowait(
+                    TurnDetectionEvent(
+                        type="eou_prediction",
+                        last_speaking_time=time.time(),
+                        end_of_turn_probability=probability,
+                    )
+                )
+                # Reset the future for the next prediction
+                if fut is not None and probability < 0.3:
+                    self._active_request_fut = asyncio.Future[float]()
+            case (
+                "session_created"
+                | "session_finalized"
+                | "session_closed"
+                | "inference_started"
+                | "inference_stopped"
+            ):
+                current_time = Timestamp()
+                current_time.GetCurrentTime()
+                if (
+                    transport_latency := current_time.ToMilliseconds()
+                    - msg.client_created_at.ToMilliseconds()
+                ) > 500 and msg.client_created_at.ToMilliseconds() > 0:
+                    logger.warning(
+                        "turn detection transport latency is too high: %sms",
+                        transport_latency,
+                    )
+
+            case "error":
+                raise APIStatusError(
+                    f"turn detector returned error: {msg.error.message}",
+                    status_code=msg.error.code,
+                    request_id=msg.request_id,
+                )
+            case _:
+                logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))
+
+    # endregion
+
+    # region: state management
     def warmup(self) -> asyncio.Future[float]:
         if not self.is_inference_running:
             self._warmup()
@@ -295,7 +412,6 @@ class TurnDetectionStream:
         self._warming_up = True
         self._active = False
         self._flushed = False
-        self._active_evt.clear()
         request_id = utils.shortuuid("turn_request_")
         self._active_request_id = request_id
         self._active_request_fut = asyncio.Future[float]()
@@ -313,7 +429,6 @@ class TurnDetectionStream:
         self._warming_up = False
         self._active = True
         self._flushed = False
-        self._active_evt.set()
 
     def _deactivate(self) -> None:
         if not self._active:
@@ -326,44 +441,6 @@ class TurnDetectionStream:
         self._active = False
         self._flushed = False
         self._warming_up = False
-        self._active_evt.clear()
-
-    def _send_message_sync(self, msg: TurnDetectorClientMessage) -> None:
-        if self._ws is None or self._ws.closed:
-            return
-        created_at = Timestamp()
-        created_at.GetCurrentTime()
-        msg.created_at.CopyFrom(created_at)
-        task = asyncio.create_task(self._ws.send_bytes(msg.SerializeToString()))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _send_message_async(self, msg: TurnDetectorClientMessage) -> None:
-        if self._ws is None or self._ws.closed:
-            return
-        created_at = Timestamp()
-        created_at.GetCurrentTime()
-        msg.created_at.CopyFrom(created_at)
-        return await self._ws.send_bytes(msg.SerializeToString())
-
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._audio_ch.closed:
-            return
-        for resampled_frame in self._resample_audio_frame(frame):
-            self._audio_ch.send_nowait(resampled_frame)
-
-    def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        """
-        Update the assistant messages if needed for the active request.
-        It should start when either the assistant finishes speaking or when the user starts speaking.
-
-        Returns:
-            A future that will be set to the end-of-turn probability.
-        """
-        self._messages = _extract_messages(chat_ctx)
-        self._send_message_sync(
-            TurnDetectorClientMessage(input_chat_context=InputChatContext(messages=self._messages))
-        )
 
     def flush(self, reason: str | None = None) -> None:
         if self._audio_ch.closed:
@@ -400,6 +477,27 @@ class TurnDetectionStream:
         created_at.GetCurrentTime()
         msg = TurnDetectorClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message_sync(msg)
+
+    # endregion
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._audio_ch.closed:
+            return
+        for resampled_frame in self._resample_audio_frame(frame):
+            self._audio_ch.send_nowait(resampled_frame)
+
+    def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        """
+        Update the assistant messages if needed for the active request.
+        It should start when either the assistant finishes speaking or when the user starts speaking.
+
+        Returns:
+            A future that will be set to the end-of-turn probability.
+        """
+        self._messages = _extract_messages(chat_ctx)
+        self._send_message_sync(
+            TurnDetectorClientMessage(input_chat_context=InputChatContext(messages=self._messages))
+        )
 
     def end_input(self) -> None:
         self.flush()
@@ -490,110 +588,6 @@ class TurnDetectionStream:
             self._ws = None
             if ws is not None:
                 await ws.close()
-
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        base_url = self._opts.base_url
-        if base_url.startswith(("http://", "https://")):
-            base_url = base_url.replace("http", "ws", 1)
-
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    f"{base_url}/turn-detector",
-                    headers=self._build_auth_headers(),
-                ),
-                self._conn_options.timeout,
-            )
-            await self._send_message_async(
-                TurnDetectorClientMessage(
-                    session_create=SessionCreate(
-                        settings=SessionSettings(
-                            sample_rate=self._opts.sample_rate,
-                        ),
-                        model=self._detector.model,
-                    )
-                )
-            )
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError("turn detector connection timed out") from e
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to turn detector") from e
-        return ws
-
-    def _process_message(self, msg: TurnDetectorServerMessage) -> None:
-        match msg.WhichOneof("message"):
-            case "eou_prediction":
-                request_id = msg.request_id
-                if request_id != self._active_request_id:
-                    return
-
-                prediction: EouPrediction = msg.eou_prediction
-                probability = prediction.probability
-                stats = msg.eou_prediction.processing_stats
-                fut = self._active_request_fut
-                if fut is not None:
-                    with contextlib.suppress(asyncio.InvalidStateError):
-                        fut.set_result(probability)
-
-                current_time = Timestamp()
-                current_time.GetCurrentTime()
-                detection_delay_ms = (
-                    current_time.ToMilliseconds() - stats.latest_client_created_at.ToMilliseconds()
-                )
-                inference_duration_ms = (
-                    stats.batching_wait_duration.ToMilliseconds()
-                    + stats.preprocessing_duration.ToMilliseconds()
-                    + stats.inference_duration.ToMilliseconds()
-                )
-
-                logger.trace(
-                    "turn prediction result received",
-                    extra={
-                        "probability": probability,
-                        "detection_delay_ms": detection_delay_ms or 0.0,
-                        "inference_duration_ms": inference_duration_ms or 0.0,
-                        "request_id": request_id,
-                        "queued": not self.is_admitting_results,
-                    },
-                )
-
-                self._event_ch.send_nowait(
-                    TurnDetectionEvent(
-                        type="eou_prediction",
-                        last_speaking_time=time.time(),
-                        end_of_turn_probability=probability,
-                    )
-                )
-                # Reset the future for the next prediction
-                if fut is not None and probability < 0.3:
-                    self._active_request_fut = asyncio.Future[float]()
-            case (
-                "session_created"
-                | "session_finalized"
-                | "session_closed"
-                | "inference_started"
-                | "inference_stopped"
-            ):
-                current_time = Timestamp()
-                current_time.GetCurrentTime()
-                if (
-                    transport_latency := current_time.ToMilliseconds()
-                    - msg.client_created_at.ToMilliseconds()
-                ) > 200 and msg.client_created_at.ToMilliseconds() > 0:
-                    logger.warning(
-                        "turn detection transport latency is too high: %sms",
-                        transport_latency,
-                    )
-            case "error":
-                raise APIStatusError(
-                    f"turn detector returned error: {msg.error.message}",
-                    status_code=msg.error.code,
-                    request_id=msg.request_id,
-                )
-            case _:
-                logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))
 
     async def aclose(self) -> None:
         self.end_input()
