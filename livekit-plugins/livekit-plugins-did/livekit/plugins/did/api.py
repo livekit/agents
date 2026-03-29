@@ -58,7 +58,7 @@ class DIDAPI:
 
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._api_url}/{endpoint}"
-        for attempt in range(self._conn_options.max_retry):
+        for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._session.post(
                     url,
