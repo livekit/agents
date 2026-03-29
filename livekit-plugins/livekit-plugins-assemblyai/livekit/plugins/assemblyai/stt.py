@@ -587,7 +587,7 @@ class SpeechStream(stt.SpeechStream):
             self._event_ch.send_nowait(interim_event)
             logger.debug("interim transcript end_of_turn_confidence=%s", end_of_turn_confidence)
 
-        if utterance:
+        if utterance and timed_words:
             if self._last_preflight_start_time == 0.0:
                 self._last_preflight_start_time = start_time
 
@@ -602,12 +602,19 @@ class SpeechStream(stt.SpeechStream):
                 len(utterance_words), 1
             )
 
+            # Use the cumulative words text (same as INTERIM) instead of the
+            # chunk-based utterance field.  Both INTERIM and PREFLIGHT events
+            # flow through on_interim_transcript in the framework and are
+            # rendered in replacement mode (is_delta_stream=False).  Using the
+            # chunk-based utterance here would cause the displayed text to
+            # regress/jump when the shorter chunk overwrites the longer
+            # cumulative text for the same segment ID.  See #4779.
             final_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
                 alternatives=[
                     stt.SpeechData(
                         language=language,
-                        text=utterance,
+                        text=interim_text,
                         start_time=self._last_preflight_start_time,
                         end_time=end_time,
                         words=utterance_words,
