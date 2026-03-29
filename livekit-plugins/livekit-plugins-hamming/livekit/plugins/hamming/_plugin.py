@@ -6,7 +6,7 @@ import inspect
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MethodType
 from typing import TYPE_CHECKING, Any, TypedDict, cast
@@ -79,6 +79,13 @@ SUPPORTED_STREAMING_MODES = {
     STREAMING_MODE_TRACK_EGRESS,
 }
 
+SESSION_MODE_MONITORING = "monitoring"
+SESSION_MODE_TESTING = "testing"
+SUPPORTED_SESSION_MODES = {
+    SESSION_MODE_MONITORING,
+    SESSION_MODE_TESTING,
+}
+
 TEST_CASE_RUN_ID_METADATA_KEYS = (
     "test_case_run_id",
     "testCaseRunId",
@@ -135,6 +142,13 @@ class LiveKitConfigInput(TypedDict, total=False):
     url: str
     api_key: str
     api_secret: str
+
+
+class ExternalLinkInput(TypedDict, total=False):
+    label: str
+    url: str
+    source: str
+    description: str
 
 
 @dataclass(frozen=True)
@@ -237,6 +251,9 @@ class _SessionMonitor:
         participant_identity: str | None,
         participant_metadata: str | None,
         external_agent_id: str,
+        customer_metadata: Mapping[str, Any] | None = None,
+        external_links: Sequence[ExternalLinkInput] | None = None,
+        session_mode: str = SESSION_MODE_MONITORING,
         job_ctx: JobContext | None,
         session_key: int,
         recording_context: RecordingContext | None,
@@ -246,6 +263,13 @@ class _SessionMonitor:
         self._participant_identity = participant_identity
         self._participant_metadata = participant_metadata
         self._external_agent_id = external_agent_id
+        self._customer_metadata = (
+            _normalize_json_object(customer_metadata, field_name="customer_metadata")
+            if customer_metadata
+            else None
+        )
+        self._external_links = _normalize_external_links(external_links)
+        self._session_mode = _normalize_session_mode(session_mode)
         self._job_ctx = job_ctx
         self._session_key = session_key
         self._recording_context = (
@@ -415,6 +439,9 @@ class _SessionMonitor:
                 call_id_metadata_key=self._runtime.config.call_id_metadata_key,
                 resolve_call_id=self._runtime.config.resolve_call_id,
                 capture_manifest=_build_capture_manifest(self._runtime.config),
+                customer_metadata=self._customer_metadata,
+                external_links=self._external_links,
+                session_mode=self._session_mode,
             ),
             report=report,
             participant_identity=self._participant_identity,
@@ -422,10 +449,6 @@ class _SessionMonitor:
             recording_context=self._recording_context,
             close_event=close_event,
         )
-
-        enable_test_case_matching_override = _env_optional_bool("HAMMING_ENABLE_TEST_CASE_MATCHING")
-        if enable_test_case_matching_override is not None:
-            envelope["enableTestCaseMatching"] = enable_test_case_matching_override
         return envelope
 
     def _should_skip_for_sampling(
@@ -961,6 +984,9 @@ class HammingRuntime:
         participant_identity: str | None = None,
         participant_metadata: str | None = None,
         external_agent_id: str | None = None,
+        customer_metadata: Mapping[str, Any] | None = None,
+        external_links: Sequence[ExternalLinkInput] | None = None,
+        session_mode: str = SESSION_MODE_MONITORING,
         recording_context: RecordingContext | None = None,
     ) -> None:
         session_key = id(session)
@@ -991,6 +1017,9 @@ class HammingRuntime:
             participant_identity=resolved_participant_identity,
             participant_metadata=resolved_participant_metadata,
             external_agent_id=resolved_external_agent_id,
+            customer_metadata=customer_metadata,
+            external_links=external_links,
+            session_mode=session_mode,
             job_ctx=resolved_job_ctx,
             session_key=session_key,
             recording_context=recording_context,
@@ -1052,6 +1081,9 @@ def attach_session(
     participant_identity: str | None = None,
     participant_metadata: str | None = None,
     external_agent_id: str | None = None,
+    customer_metadata: Mapping[str, Any] | None = None,
+    external_links: Sequence[ExternalLinkInput] | None = None,
+    session_mode: str = SESSION_MODE_MONITORING,
     recording_context: RecordingContext | None = None,
 ) -> None:
     runtime = get_runtime()
@@ -1064,6 +1096,9 @@ def attach_session(
         participant_identity=participant_identity,
         participant_metadata=participant_metadata,
         external_agent_id=external_agent_id,
+        customer_metadata=customer_metadata,
+        external_links=external_links,
+        session_mode=session_mode,
         recording_context=recording_context,
     )
 
@@ -1344,13 +1379,6 @@ def _env_float(name: str, *, default: float) -> float:
         return default
 
 
-def _env_optional_bool(name: str) -> bool | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    return _env_flag(name, default=False)
-
-
 def _default_auto_recording_options() -> dict[str, bool]:
     return {
         "audio": True,
@@ -1601,6 +1629,66 @@ def _normalize_string_list(values: object) -> tuple[str, ...]:
             if candidate:
                 normalized_values.append(candidate)
     return tuple(normalized_values)
+
+
+def _normalize_json_object(value: object, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object")
+
+    try:
+        normalized = json.loads(json.dumps(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be JSON serializable") from exc
+
+    if not isinstance(normalized, dict):
+        raise ValueError(f"{field_name} must be a JSON object")
+
+    return normalized
+
+
+def _normalize_external_links(
+    external_links: Sequence[ExternalLinkInput] | None,
+) -> list[dict[str, str]] | None:
+    if external_links is None:
+        return None
+
+    normalized_links: list[dict[str, str]] = []
+    for index, link in enumerate(external_links):
+        if not isinstance(link, dict):
+            raise ValueError(f"external_links[{index}] must be an object")
+
+        label = _normalize_optional_string(link.get("label"))
+        url = _normalize_optional_string(link.get("url"))
+        if not label or not url:
+            continue
+
+        normalized_link = {
+            "label": label,
+            "url": url,
+        }
+        source = _normalize_optional_string(link.get("source"))
+        if source:
+            normalized_link["source"] = source
+
+        description = _normalize_optional_string(link.get("description"))
+        if description:
+            normalized_link["description"] = description
+
+        normalized_links.append(normalized_link)
+
+    return normalized_links
+
+
+def _normalize_session_mode(session_mode: object) -> str:
+    normalized_mode = _normalize_lower_string(session_mode, fallback=SESSION_MODE_MONITORING)
+    if normalized_mode not in SUPPORTED_SESSION_MODES:
+        raise ValueError(
+            "Unsupported session_mode. Expected one of: "
+            f"{', '.join(sorted(SUPPORTED_SESSION_MODES))}."
+        )
+    return normalized_mode
 
 
 def _normalize_recording_source(value: object, *, fallback: str) -> str:
