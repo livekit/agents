@@ -86,6 +86,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     sample_rate: int
     num_channels: int
+    phrase_replacement_config_id: str | None
 
 
 class TTS(tts.TTS):
@@ -99,6 +100,7 @@ class TTS(tts.TTS):
         voice_id: str = DEFAULT_VOICE_ID,
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         num_channels: int = DEFAULT_NUM_CHANNELS,
+        phrase_replacement_config_id: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
@@ -119,6 +121,7 @@ class TTS(tts.TTS):
                 - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
             sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
+            phrase_replacement_config_id: Optional ID for phrase replacement configuration
             word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
         """
         super().__init__(
@@ -159,6 +162,9 @@ class TTS(tts.TTS):
             word_tokenizer=resolved_word_tokenizer,
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
+            phrase_replacement_config_id=phrase_replacement_config_id
+            if is_given(phrase_replacement_config_id)
+            else None,
         )
 
         self._client: WebSocketClient | None = None
@@ -281,13 +287,16 @@ class WebSocketClient:
         self.active_requests[request_id] = True
 
         # Build message
-        message = {
+        message: dict[str, Any] = {
             "type": "synthesize",
             "requestId": request_id,
             "text": text,
             "voiceId": self.opts.voice_settings.voice_id,
             "outputFormat": self.opts.voice_settings.output_format,
         }
+
+        if self.opts.phrase_replacement_config_id:
+            message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
 
         logger.debug(f"Sending synthesis request {request_id[:8]} for text: '{text[:50]}...'")
 
