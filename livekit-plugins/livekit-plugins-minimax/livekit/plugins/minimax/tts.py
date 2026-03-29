@@ -556,7 +556,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 body=None,
             ) from e
         except Exception as e:
-            if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
+            if not isinstance(e, APIStatusError | APITimeoutError | APIConnectionError):
                 logger.error(
                     f"MiniMax WebSocket unexpected error: {type(e).__name__}: {e}, trace_id={trace_id}",
                     exc_info=True,
@@ -676,7 +676,7 @@ class ChunkedStream(tts.ChunkedStream):
                 body=None,
             ) from e
         except Exception as e:
-            if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
+            if not isinstance(e, APIStatusError | APITimeoutError | APIConnectionError):
                 logger.error(
                     f"Minimax TTS unexpected error: {type(e).__name__}: {e}", exc_info=True
                 )

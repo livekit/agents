@@ -1343,7 +1343,7 @@ class RealtimeSession(
                 tool
                 for tool in tools
                 if (
-                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    isinstance(tool, llm.FunctionTool | llm.RawFunctionTool)
                     and tool.info.name in retained_tool_names
                 )
                 or isinstance(tool, llm.ProviderTool)

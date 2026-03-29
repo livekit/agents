@@ -673,11 +673,11 @@ class RealtimeSession(
 
                 # Determine if error is recoverable based on type
                 is_recoverable = False
-                if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
+                if isinstance(e, aiohttp.ClientConnectionError | asyncio.TimeoutError):
                     is_recoverable = True
 
                 # Convert to appropriate API error type
-                if isinstance(e, (APIConnectionError, APIError)):
+                if isinstance(e, APIConnectionError | APIError):
                     error = e
                 elif isinstance(e, aiohttp.ClientResponseError):
                     error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)

@@ -435,7 +435,7 @@ class ChatContext:
             for tool in tools:
                 if isinstance(tool, str):
                     yield tool
-                elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                elif isinstance(tool, FunctionTool | RawFunctionTool):
                     yield tool.info.name
                 elif isinstance(tool, Toolset):
                     yield from get_tool_names(tool.tools)
@@ -727,7 +727,7 @@ class ChatContext:
                 text = (item.text_content or "").strip()
                 if text:
                     to_summarize.append(item)
-            elif isinstance(item, (FunctionCall, FunctionCallOutput)):
+            elif isinstance(item, FunctionCall | FunctionCallOutput):
                 to_summarize.append(item)
 
         if not to_summarize:
@@ -736,7 +736,7 @@ class ChatContext:
         # Render items to XML format and collect the contents.
         contents: list[str] = []
         for m in to_summarize:
-            if isinstance(m, (FunctionCall, FunctionCallOutput)):
+            if isinstance(m, FunctionCall | FunctionCallOutput):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
                 contents.append(to_xml(m.role, (m.text_content or "").strip()))
@@ -790,7 +790,7 @@ class ChatContext:
         for it in head_items:
             if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-            if isinstance(it, (FunctionCall, FunctionCallOutput)):
+            if isinstance(it, FunctionCall | FunctionCallOutput):
                 continue
             preserved.append(it)
 

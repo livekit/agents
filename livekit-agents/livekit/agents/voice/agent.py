@@ -189,7 +189,7 @@ class Agent:
         """
         valid_tools: list[llm.Tool | llm.Toolset] = []
         for tool in tools:
-            if isinstance(tool, (llm.Tool, llm.Toolset)):
+            if isinstance(tool, llm.Tool | llm.Toolset):
                 valid_tools.append(tool)
             elif resolved_tool := llm.tool_context._resolve_wrapped_tool(tool):
                 valid_tools.append(resolved_tool)

@@ -341,13 +341,13 @@ def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
     if not callable(tool):
         return None
 
-    if isinstance(tool, (FunctionTool, RawFunctionTool)):
+    if isinstance(tool, FunctionTool | RawFunctionTool):
         return tool
 
     resolved_tool: FunctionTool | RawFunctionTool | None = None
     if (
         hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
-        and isinstance(tool.__wrapped__, (FunctionTool, RawFunctionTool))
+        and isinstance(tool.__wrapped__, FunctionTool | RawFunctionTool)
     ):
         wrapped = tool.__wrapped__
         resolved_tool = wrapped.__class__(tool, wrapped.info)  # type: ignore
@@ -378,7 +378,7 @@ def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
     methods: list[FunctionTool | RawFunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
-        if isinstance(member, (FunctionTool, RawFunctionTool)):
+        if isinstance(member, FunctionTool | RawFunctionTool):
             methods.append(member)
         elif normalized_tool := _resolve_wrapped_tool(member):
             methods.append(normalized_tool)
@@ -390,7 +390,7 @@ def get_fnc_tool_names(tools: Sequence[Tool | Toolset]) -> list[str]:
     """Get names of all function and raw function tools in the list, unwrapping tool sets."""
     names = []
     for tool in tools:
-        if isinstance(tool, (FunctionTool, RawFunctionTool)):
+        if isinstance(tool, FunctionTool | RawFunctionTool):
             names.append(tool.info.name)
         elif isinstance(tool, Toolset):
             names.extend(get_fnc_tool_names(tool.tools))
@@ -469,7 +469,7 @@ class ToolContext:
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
 
-            elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+            elif isinstance(tool, FunctionTool | RawFunctionTool):
                 if tool.info.name in self._fnc_tools_map:
                     raise ValueError(f"duplicate function name: {tool.info.name}")
                 self._fnc_tools_map[tool.info.name] = tool

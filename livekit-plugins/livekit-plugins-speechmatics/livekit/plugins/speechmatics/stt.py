@@ -889,7 +889,7 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
 
     # Diarization
     if "diarization_sensitivity" in kwargs and isinstance(
-        kwargs["diarization_sensitivity"], (int, float)
+        kwargs["diarization_sensitivity"], int | float
     ):
         if opts.speaker_sensitivity is None:
             logger.warning(

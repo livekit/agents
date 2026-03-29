@@ -202,7 +202,7 @@ def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
     Also tolerate direct token-like values for robustness.
     """
     # Already a token-like thing?
-    if isinstance(item, (BaseMessageChunk, str)):
+    if isinstance(item, BaseMessageChunk | str):
         return item
 
     if not isinstance(item, tuple):

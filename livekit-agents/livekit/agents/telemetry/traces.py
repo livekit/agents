@@ -205,7 +205,7 @@ def _setup_cloud_tracer(
         tracer_provider: trace_api.TracerProvider
         if isinstance(
             tracer._tracer_provider,
-            (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
+            trace_api.ProxyTracerProvider | trace_api.NoOpTracerProvider,
         ):
             tracer_provider = trace_sdk.TracerProvider(resource=resource)
             set_tracer_provider(tracer_provider)

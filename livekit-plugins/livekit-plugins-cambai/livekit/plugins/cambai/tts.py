@@ -244,6 +244,6 @@ class ChunkedStream(tts.ChunkedStream):
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except Exception as e:
-            if isinstance(e, (APIStatusError, APIConnectionError, APITimeoutError)):
+            if isinstance(e, APIStatusError | APIConnectionError | APITimeoutError):
                 raise
             raise APIConnectionError() from e

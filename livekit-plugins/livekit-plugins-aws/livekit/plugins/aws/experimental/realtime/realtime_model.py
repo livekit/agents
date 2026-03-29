@@ -1402,11 +1402,11 @@ class RealtimeSession(  # noqa: F811
             completed_ts = self._current_generation._completed_timestamp
 
             # Calculate TTFT (time to first token)
-            if first_token_ts is not None and isinstance(created_ts, (int, float)):
+            if first_token_ts is not None and isinstance(created_ts, int | float):
                 ttft = first_token_ts - created_ts
 
             # Calculate duration (total time from creation to completion)
-            if completed_ts is not None and isinstance(created_ts, (int, float)):
+            if completed_ts is not None and isinstance(created_ts, int | float):
                 duration = completed_ts - created_ts
 
             # Calculate tokens per second

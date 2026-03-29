@@ -1042,7 +1042,7 @@ def _format_events(events: list[RunEvent], *, selected_index: int | None = None)
         if selected_index is not None:
             prefix = ">>>" if i == selected_index else "   "
 
-        if isinstance(event, (ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent)):
+        if isinstance(event, ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent):
             item_repr = event.item.model_dump(
                 exclude_none=True,
                 exclude_defaults=True,

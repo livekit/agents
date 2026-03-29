@@ -1030,7 +1030,7 @@ class AudioEmitter:
 
                 if not segment_ctx:
                     if self._streaming:
-                        if isinstance(data, (AudioEmitter._EndSegment, AudioEmitter._FlushSegment)):
+                        if isinstance(data, AudioEmitter._EndSegment | AudioEmitter._FlushSegment):
                             continue  # empty segment, ignore
 
                         raise RuntimeError(

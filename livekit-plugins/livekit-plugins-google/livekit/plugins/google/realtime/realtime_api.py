@@ -729,9 +729,7 @@ class RealtimeSession(llm.RealtimeSession):
                 text_to_send = f"[model]: {instructions}\n[user]: ."
             else:
                 text_to_send = "."
-            self._send_client_event(
-                types.LiveClientRealtimeInput(text=text_to_send)
-            )
+            self._send_client_event(types.LiveClientRealtimeInput(text=text_to_send))
         else:
             turns = []
             if is_given(instructions):
@@ -950,20 +948,24 @@ class RealtimeSession(llm.RealtimeSession):
                         # Convert to send_realtime_input with text content.
                         # Preserve role context so the model knows who said what.
                         text_parts = []
-                        for turn in (msg.turns or []):
+                        for turn in msg.turns or []:
                             role = turn.role or "user"
-                            for part in (turn.parts or []):
+                            for part in turn.parts or []:
                                 if part.text:
                                     text_parts.append(f"[{role}]: {part.text}")
                         if text_parts:
                             combined_text = "\n".join(text_parts)
                             await session.send_realtime_input(text=combined_text)
                         else:
-                            logger.warning("Skipping LiveClientContent with no text parts (realtime-input-only model)")
+                            logger.warning(
+                                "Skipping LiveClientContent with no text parts (realtime-input-only model)"
+                            )
                     else:
                         await session.send_client_content(
                             turns=msg.turns,  # type: ignore
-                            turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
+                            turn_complete=msg.turn_complete
+                            if msg.turn_complete is not None
+                            else True,
                         )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)

@@ -91,7 +91,7 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
 class JsonFormatter(logging.Formatter):
     class JsonEncoder(json.JSONEncoder):
         def default(self, o: Any) -> Any:
-            if isinstance(o, (date, datetime, time)):
+            if isinstance(o, date | datetime | time):
                 return o.isoformat()
             elif istraceback(o):
                 return "".join(traceback.format_tb(o)).strip()

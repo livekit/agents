@@ -60,7 +60,7 @@ def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
             word, boost = item
             if not isinstance(word, str):
                 raise ValueError("RTZR keyword boosting keywords must be strings")
-            if not isinstance(boost, (int, float)):
+            if not isinstance(boost, int | float):
                 raise ValueError("RTZR keyword boost must be a number")
             if not word:
                 raise ValueError("RTZR keyword boosting keywords must be non-empty")
@@ -176,7 +176,7 @@ class RTZROpenAPIClient:
                     raise RTZRStatusError("Invalid token response payload")
                 access_token = data.get("access_token")
                 expire_at = data.get("expire_at")
-                if not isinstance(access_token, str) or not isinstance(expire_at, (int, float)):
+                if not isinstance(access_token, str) or not isinstance(expire_at, int | float):
                     raise RTZRStatusError("Invalid token response payload")
                 self._token = {"access_token": access_token, "expire_at": float(expire_at)}
                 logger.debug("Successfully refreshed RTZR access token")

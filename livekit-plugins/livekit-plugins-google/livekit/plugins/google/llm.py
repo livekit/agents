@@ -281,7 +281,7 @@ class LLM(llm.LLM):
             elif tool_choice == "required":
                 tool_names = []
                 for tool in tools or []:
-                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
+                    if isinstance(tool, llm.FunctionTool | llm.RawFunctionTool):
                         tool_names.append(tool.info.name)
 
                 gemini_tool_choice = types.ToolConfig(
