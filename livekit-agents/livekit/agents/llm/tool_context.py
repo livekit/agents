@@ -514,7 +514,9 @@ class ToolContext:
     def parse_function_tools(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
 
     @overload
-    def parse_function_tools(self, format: Literal["anthropic"]) -> list[dict[str, Any]]: ...
+    def parse_function_tools(
+        self, format: Literal["anthropic"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
 
     def parse_function_tools(
         self,

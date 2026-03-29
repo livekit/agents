@@ -30,6 +30,7 @@ from livekit.plugins import (
     hume,
     inworld,
     lmnt,
+    mistralai,
     neuphonic,
     resemble,
     rime,
@@ -237,6 +238,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-cartesia",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": mistralai.TTS(),
+            "proxy-upstream": "api.mistral.ai:443",
+        },
+        id="mistralai",
     ),
 ]
 

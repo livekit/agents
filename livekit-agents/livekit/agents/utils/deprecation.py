@@ -4,7 +4,7 @@ import functools
 import inspect
 from collections import defaultdict
 from collections.abc import Callable
-from typing import ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar, cast
 
 from ..log import logger
 from ..types import NOT_GIVEN
@@ -12,13 +12,14 @@ from .misc import is_given
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_F = TypeVar("_F", bound=Callable)
 
 
 def deprecate_params(
     mapping: dict[str, str],
     *,
     target_version: str | None = None,
-) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+) -> Callable[[_F], _F]:
     """
     Args:
         mapping: {old_param: suggestion}
@@ -59,4 +60,4 @@ def deprecate_params(
 
         return wrapper
 
-    return decorator
+    return cast(Callable[[_F], _F], decorator)
