@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from collections import Counter
 from collections.abc import Sequence
@@ -37,6 +38,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -623,6 +625,7 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
+        start_time = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -631,12 +634,17 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            ws_connection_time = time.perf_counter() - start_time
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+            )
             logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
+                "Deepgram STT WebSocket connected (new)",
+                extra={"headers": ws_headers, "connection_time": ws_connection_time},
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e

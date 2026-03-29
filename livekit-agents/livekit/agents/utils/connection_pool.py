@@ -3,12 +3,26 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from ..log import logger
 from . import aio
 
 T = TypeVar("T")
+
+
+@dataclass
+class ConnectionResult(Generic[T]):
+    """Result of getting a connection from the pool, including timing metadata."""
+
+    connection: T
+    connect_time: float
+    from_pool: bool
+
+    @property
+    def status(self) -> str:
+        return "reused" if self.from_pool else "new"
 
 
 class ConnectionPool(Generic[T]):
@@ -89,14 +103,42 @@ class ConnectionPool(Generic[T]):
         else:
             self.put(conn)
 
+    @asynccontextmanager
+    async def connection_with_timing(
+        self, *, timeout: float
+    ) -> AsyncGenerator[ConnectionResult[T], None]:
+        """Get a connection from the pool with timing metadata.
+
+        Yields:
+            A ConnectionResult containing the connection and timing information
+        """
+        result = await self.get_with_timing(timeout=timeout)
+        try:
+            yield result
+        except BaseException:
+            self.remove(result.connection)
+            raise
+        else:
+            self.put(result.connection)
+
     async def get(self, *, timeout: float) -> T:
         """Get an available connection or create a new one if needed.
 
         Returns:
             An active connection object
         """
+        result = await self.get_with_timing(timeout=timeout)
+        return result.connection
+
+    async def get_with_timing(self, *, timeout: float) -> ConnectionResult[T]:
+        """Get an available connection or create a new one if needed, with timing metadata.
+
+        Returns:
+            A ConnectionResult containing the connection and timing information
+        """
         async with self._connect_lock:
             await self._drain_to_close()
+            start_time = time.perf_counter()
             now = time.time()
 
             # try to reuse an available connection that hasn't expired
@@ -108,11 +150,22 @@ class ConnectionPool(Generic[T]):
                 ):
                     if self._mark_refreshed_on_get:
                         self._connections[conn] = now
-                    return conn
+                    connect_time = time.perf_counter() - start_time
+                    return ConnectionResult(
+                        connection=conn,
+                        connect_time=connect_time,
+                        from_pool=True,
+                    )
                 # connection expired; mark it for resetting.
                 self.remove(conn)
 
-            return await self._connect(timeout)
+            conn = await self._connect(timeout)
+            connect_time = time.perf_counter() - start_time
+            return ConnectionResult(
+                connection=conn,
+                connect_time=connect_time,
+                from_pool=False,
+            )
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.

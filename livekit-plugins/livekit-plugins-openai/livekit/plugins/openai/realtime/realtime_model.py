@@ -20,6 +20,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -907,11 +908,22 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        start_time = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            ws_connection_time = time.perf_counter() - start_time
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+            )
+            logger.debug(
+                "OpenAI Realtime API WebSocket connected (new)",
+                extra={"connection_time": ws_connection_time},
+            )
+            return ws
         except aiohttp.ClientError as e:
             raise APIConnectionError("OpenAI Realtime API client connection error") from e
         except asyncio.TimeoutError as e:

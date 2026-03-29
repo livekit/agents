@@ -17,6 +17,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -349,7 +350,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        async with self._tts._pool.connection_with_timing(
+            timeout=self._conn_options.timeout
+        ) as conn_result:
+            ws = conn_result.connection
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+            )
+            logger.debug(
+                "Deepgram TTS WebSocket connected (%s)",
+                conn_result.status,
+                extra={"connection_time": conn_result.connect_time, "segment_id": segment_id},
+            )
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

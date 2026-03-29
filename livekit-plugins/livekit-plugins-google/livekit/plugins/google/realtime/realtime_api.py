@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -790,9 +791,19 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                connect_start_time = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    ws_connection_time = time.perf_counter() - connect_start_time
+                    from opentelemetry import trace
+                    trace.get_current_span().set_attribute(
+                        trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+                    )
+                    logger.debug(
+                        "Gemini Realtime API WebSocket connected (new)",
+                        extra={"connection_time": ws_connection_time},
+                    )
                     async with self._session_lock:
                         self._active_session = session
 

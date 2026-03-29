@@ -44,6 +44,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -854,7 +855,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             audio_pushed = False
             try:
-                async with self._pool.connection(timeout=self._conn_options.timeout) as client:
+                async with self._pool.connection_with_timing(
+                    timeout=self._conn_options.timeout
+                ) as conn_result:
+                    client = conn_result.connection
+                    from opentelemetry import trace
+                    trace.get_current_span().set_attribute(
+                        trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+                    )
+                    logger.debug(
+                        "Google STT connected (%s)",
+                        conn_result.status,
+                        extra={"connection_time": conn_result.connect_time},
+                    )
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

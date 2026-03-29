@@ -54,6 +54,9 @@ ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
 ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 
+# websocket connection
+ATTR_WS_CONNECTION_TIME = "lk.ws.connection_time"
+
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"

@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -37,6 +38,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -270,21 +272,26 @@ class TTS(tts.TTS):
             self._current_connection.mark_non_current()
             self._current_connection = None
 
-    async def current_connection(self) -> _Connection:
-        """Get the current connection, creating one if needed"""
+    async def current_connection(self) -> tuple[_Connection, bool]:
+        """Get the current connection, creating one if needed.
+
+        Returns:
+            A tuple of (_Connection, is_reused) where is_reused is True if the
+            connection was reused from the pool.
+        """
         async with self._connection_lock:
             if (
                 self._current_connection
                 and self._current_connection.is_current
                 and not self._current_connection._closed
             ):
-                return self._current_connection
+                return self._current_connection, True  # reused connection
 
             session = self._ensure_session()
             conn = _Connection(self._opts, session)
             await conn.connect()
             self._current_connection = conn
-            return conn
+            return conn, False  # new connection
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -406,8 +413,21 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
-            connection = await asyncio.wait_for(
+            start_time = time.perf_counter()
+            connection, is_reused = await asyncio.wait_for(
                 self._tts.current_connection(), self._conn_options.timeout
+            )
+            total_time = time.perf_counter() - start_time
+            ws_connection_time = connection._connect_time or total_time
+            status = "reused" if is_reused else "new"
+            from opentelemetry import trace
+            trace.get_current_span().set_attribute(
+                trace_types.ATTR_WS_CONNECTION_TIME, ws_connection_time
+            )
+            logger.debug(
+                "ElevenLabs TTS WebSocket connected (%s)",
+                status,
+                extra={"connection_time": ws_connection_time, "context_id": self._context_id},
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -545,6 +565,9 @@ class _Connection:
         self._recv_task: asyncio.Task | None = None
         self._closed = False
 
+        # WebSocket connection timing
+        self._connect_time: float | None = None
+
     @property
     def voice_id(self) -> str:
         return self._opts.voice_id
@@ -579,7 +602,13 @@ class _Connection:
 
         url = _multi_stream_url(self._opts)
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
+        start_time = time.perf_counter()
         self._ws = await self._session.ws_connect(url, headers=headers)
+        self._connect_time = time.perf_counter() - start_time
+        logger.debug(
+            "established ElevenLabs TTS WebSocket connection",
+            extra={"connection_time": self._connect_time},
+        )
 
         self._send_task = asyncio.create_task(self._send_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())

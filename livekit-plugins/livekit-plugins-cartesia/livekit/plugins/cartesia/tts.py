@@ -36,6 +36,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -514,7 +515,22 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cartesia_context_id = utils.shortuuid()
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection_with_timing(
+                timeout=self._conn_options.timeout
+            ) as conn_result:
+                ws = conn_result.connection
+                from opentelemetry import trace
+                trace.get_current_span().set_attribute(
+                    trace_types.ATTR_WS_CONNECTION_TIME, conn_result.connect_time
+                )
+                logger.debug(
+                    "Cartesia TTS WebSocket connected (%s)",
+                    conn_result.status,
+                    extra={
+                        "connection_time": conn_result.connect_time,
+                        "cartesia_context_id": cartesia_context_id,
+                    },
+                )
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
