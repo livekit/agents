@@ -104,16 +104,18 @@ class SessionCreated(_message.Message):
     def __init__(self) -> None: ...
 
 class ProcessingStats(_message.Message):
-    __slots__ = ("preprocessing_duration", "inference_duration", "earliest_client_created_at", "latest_client_created_at")
-    PREPROCESSING_DURATION_FIELD_NUMBER: _ClassVar[int]
-    INFERENCE_DURATION_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("earliest_client_created_at", "latest_client_created_at", "batching_wait_duration", "preprocessing_duration", "inference_duration")
     EARLIEST_CLIENT_CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     LATEST_CLIENT_CREATED_AT_FIELD_NUMBER: _ClassVar[int]
-    preprocessing_duration: _duration_pb2.Duration
-    inference_duration: _duration_pb2.Duration
+    BATCHING_WAIT_DURATION_FIELD_NUMBER: _ClassVar[int]
+    PREPROCESSING_DURATION_FIELD_NUMBER: _ClassVar[int]
+    INFERENCE_DURATION_FIELD_NUMBER: _ClassVar[int]
     earliest_client_created_at: _timestamp_pb2.Timestamp
     latest_client_created_at: _timestamp_pb2.Timestamp
-    def __init__(self, preprocessing_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., inference_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., earliest_client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., latest_client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    batching_wait_duration: _duration_pb2.Duration
+    preprocessing_duration: _duration_pb2.Duration
+    inference_duration: _duration_pb2.Duration
+    def __init__(self, earliest_client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., latest_client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., batching_wait_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., preprocessing_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., inference_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class EouPrediction(_message.Message):
     __slots__ = ("probability", "language", "processing_stats")
@@ -150,7 +152,7 @@ class TurnDetectorError(_message.Message):
     def __init__(self, message: _Optional[str] = ..., code: _Optional[int] = ...) -> None: ...
 
 class TurnDetectorServerMessage(_message.Message):
-    __slots__ = ("session_created", "inference_started", "inference_stopped", "eou_prediction", "session_finalized", "session_closed", "error", "request_id", "client_created_at")
+    __slots__ = ("session_created", "inference_started", "inference_stopped", "eou_prediction", "session_finalized", "session_closed", "error", "request_id", "server_created_at", "client_created_at")
     SESSION_CREATED_FIELD_NUMBER: _ClassVar[int]
     INFERENCE_STARTED_FIELD_NUMBER: _ClassVar[int]
     INFERENCE_STOPPED_FIELD_NUMBER: _ClassVar[int]
@@ -159,6 +161,7 @@ class TurnDetectorServerMessage(_message.Message):
     SESSION_CLOSED_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    SERVER_CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     CLIENT_CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     session_created: SessionCreated
     inference_started: InferenceStarted
@@ -168,5 +171,6 @@ class TurnDetectorServerMessage(_message.Message):
     session_closed: SessionClosed
     error: TurnDetectorError
     request_id: str
+    server_created_at: _timestamp_pb2.Timestamp
     client_created_at: _timestamp_pb2.Timestamp
-    def __init__(self, session_created: _Optional[_Union[SessionCreated, _Mapping]] = ..., inference_started: _Optional[_Union[InferenceStarted, _Mapping]] = ..., inference_stopped: _Optional[_Union[InferenceStopped, _Mapping]] = ..., eou_prediction: _Optional[_Union[EouPrediction, _Mapping]] = ..., session_finalized: _Optional[_Union[SessionFinalized, _Mapping]] = ..., session_closed: _Optional[_Union[SessionClosed, _Mapping]] = ..., error: _Optional[_Union[TurnDetectorError, _Mapping]] = ..., request_id: _Optional[str] = ..., client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    def __init__(self, session_created: _Optional[_Union[SessionCreated, _Mapping]] = ..., inference_started: _Optional[_Union[InferenceStarted, _Mapping]] = ..., inference_stopped: _Optional[_Union[InferenceStopped, _Mapping]] = ..., eou_prediction: _Optional[_Union[EouPrediction, _Mapping]] = ..., session_finalized: _Optional[_Union[SessionFinalized, _Mapping]] = ..., session_closed: _Optional[_Union[SessionClosed, _Mapping]] = ..., error: _Optional[_Union[TurnDetectorError, _Mapping]] = ..., request_id: _Optional[str] = ..., server_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., client_created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...

@@ -28,6 +28,7 @@ from .._utils import create_access_token
 from .detector import INFERENCE_TIMEOUT, TurnDetectionEvent, TurnDetectorOptions
 from .proto.livekit_agent_turn_detector_pb2 import (
     TD_CHAT_ROLE_ASSISTANT,
+    TD_CHAT_ROLE_USER,
     EouPrediction,
     InferenceStart,
     InferenceStop,
@@ -42,19 +43,27 @@ from .proto.livekit_agent_turn_detector_pb2 import (
     TurnDetectorServerMessage,
 )
 
+MAX_HISTORY_TURNS = 6
+
 if TYPE_CHECKING:
     from .detector import MultiModalTurnDetector
 
 
-def _extract_last_assistant_message(chat_ctx: ChatContext) -> list[PbChatMessage]:
+def _extract_messages(chat_ctx: ChatContext) -> list[PbChatMessage]:
     """Extract only the last assistant message from the chat context."""
+    messages: list[PbChatMessage] = []
     for msg in reversed(chat_ctx.messages()):
-        if msg.role != "assistant":
-            continue
         text = " ".join([part for part in msg.content if isinstance(part, str)]).strip()
         if text:
-            return [PbChatMessage(role=TD_CHAT_ROLE_ASSISTANT, content=text)]
-    return []
+            messages.append(
+                PbChatMessage(
+                    role=TD_CHAT_ROLE_ASSISTANT if msg.role == "assistant" else TD_CHAT_ROLE_USER,
+                    content=text,
+                )
+            )
+        if len(messages) == MAX_HISTORY_TURNS:
+            break
+    return messages
 
 
 class TurnDetectionStream:
@@ -86,7 +95,7 @@ class TurnDetectionStream:
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._tasks: set[asyncio.Task[None]] = set()
 
-        self._assistant_messages: list[PbChatMessage] = []
+        self._messages: tuple[list[PbChatMessage], str | None] = ([], None)
 
         # Turn detection states:
         #
@@ -112,6 +121,8 @@ class TurnDetectionStream:
         self._flushed = False
         self._active_request_id: str | None = None
         self._active_request_fut: asyncio.Future[float] | None = None
+        # make sure the VAD EOS is always observed before emitting any turn detection results
+        self._active_evt = asyncio.Event()
 
     @property
     def model(self) -> str:
@@ -124,6 +135,10 @@ class TurnDetectionStream:
     @property
     def is_active(self) -> bool:
         return self._active
+    
+    @property
+    def active_evt(self) -> asyncio.Event:
+        return self._active_evt
 
     @property
     def is_inference_running(self) -> bool:
@@ -256,7 +271,7 @@ class TurnDetectionStream:
         if self._active_request_id is not None:
             self._send_message_sync(
                 TurnDetectorClientMessage(
-                    input_chat_context=InputChatContext(messages=self._assistant_messages)
+                    input_chat_context=InputChatContext(messages=self._messages)
                 )
             )
         assert self._active_request_fut is not None
@@ -280,6 +295,7 @@ class TurnDetectionStream:
         self._warming_up = True
         self._active = False
         self._flushed = False
+        self._active_evt.clear()
         request_id = utils.shortuuid("turn_request_")
         self._active_request_id = request_id
         self._active_request_fut = asyncio.Future[float]()
@@ -297,6 +313,7 @@ class TurnDetectionStream:
         self._warming_up = False
         self._active = True
         self._flushed = False
+        self._active_evt.set()
 
     def _deactivate(self) -> None:
         if not self._active:
@@ -309,6 +326,7 @@ class TurnDetectionStream:
         self._active = False
         self._flushed = False
         self._warming_up = False
+        self._active_evt.clear()
 
     def _send_message_sync(self, msg: TurnDetectorClientMessage) -> None:
         if self._ws is None or self._ws.closed:
@@ -342,7 +360,10 @@ class TurnDetectionStream:
         Returns:
             A future that will be set to the end-of-turn probability.
         """
-        self._assistant_messages = _extract_last_assistant_message(chat_ctx)
+        self._messages = _extract_messages(chat_ctx)
+        self._send_message_sync(
+            TurnDetectorClientMessage(input_chat_context=InputChatContext(messages=self._messages))
+        )
 
     def flush(self, reason: str | None = None) -> None:
         if self._audio_ch.closed:
@@ -361,7 +382,7 @@ class TurnDetectionStream:
         msg = TurnDetectorClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message_sync(msg)
 
-    def set_active(self, active: bool) -> None:
+    def set_active(self, active: bool, trigger: str | None = None) -> None:
         """Start inference when the user stops talking."""
         ws = self._ws
         if ws is None or ws.closed:
@@ -369,11 +390,11 @@ class TurnDetectionStream:
 
         if active:
             if not self.is_active:
-                logger.trace("turn detection activated")
+                logger.trace("turn detection activated", extra={"trigger": trigger})
                 self._activate()
             return
 
-        logger.trace("turn detection deactivated")
+        logger.trace("turn detection deactivated", extra={"trigger": trigger})
         self._deactivate()
         created_at = Timestamp()
         created_at.GetCurrentTime()
@@ -504,11 +525,13 @@ class TurnDetectionStream:
     def _process_message(self, msg: TurnDetectorServerMessage) -> None:
         match msg.WhichOneof("message"):
             case "eou_prediction":
-                prediction: EouPrediction = msg.eou_prediction
-                probability = prediction.probability
                 request_id = msg.request_id
                 if request_id != self._active_request_id:
                     return
+
+                prediction: EouPrediction = msg.eou_prediction
+                probability = prediction.probability
+                stats = msg.eou_prediction.processing_stats
                 fut = self._active_request_fut
                 if fut is not None:
                     with contextlib.suppress(asyncio.InvalidStateError):
@@ -516,17 +539,20 @@ class TurnDetectionStream:
 
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
-                stats = msg.eou_prediction.processing_stats
-                rtt_duration_ms = (
+                detection_delay_ms = (
                     current_time.ToMilliseconds() - stats.latest_client_created_at.ToMilliseconds()
                 )
-                inference_duration_ms = stats.inference_duration.ToMilliseconds()
+                inference_duration_ms = (
+                    stats.batching_wait_duration.ToMilliseconds()
+                    + stats.preprocessing_duration.ToMilliseconds()
+                    + stats.inference_duration.ToMilliseconds()
+                )
 
                 logger.trace(
                     "turn prediction result received",
                     extra={
                         "probability": probability,
-                        "rtt_duration_ms": rtt_duration_ms or 0.0,
+                        "detection_delay_ms": detection_delay_ms or 0.0,
                         "inference_duration_ms": inference_duration_ms or 0.0,
                         "request_id": request_id,
                         "queued": not self.is_admitting_results,
@@ -577,7 +603,7 @@ class TurnDetectionStream:
                 self._active_request_fut.set_result(0.0)
         self._active_request_fut = None
         self._active_request_id = None
-        self._assistant_messages = []
         self._active = False
         self._flushed = False
         self._warming_up = False
+        self._messages = []
