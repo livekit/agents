@@ -569,6 +569,48 @@ async def test_aec_warmup() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
 
 
+async def test_interruption_holdoff() -> None:
+    """Interruption holdoff should not interfere with VAD-based interruption when adaptive
+    detection is not active. The holdoff timer runs but has no effect on the VAD path.
+
+    This validates that the holdoff_duration config is properly handled and doesn't
+    regress normal interruption behavior. Adaptive-specific gating
+    (suppressing on_interruption during holdoff) requires a live inference service.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(15.0)  # playout starts at ~3.5s
+    # user speaks at 4.0-5.0s — within the 1s warmup window (3.5 + 1.0 = 4.5s expiry)
+    # VAD interruption at 4.0 + 0.5 = 4.5s (warmup does NOT block VAD)
+    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"aec_warmup_duration": None},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    # VAD interruption fires normally at ~4.5s (warmup doesn't block VAD path)
+    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
+    check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
