@@ -67,12 +67,12 @@ class TestDrainTimeoutSkipsAclose:
                 server,
                 "drain",
                 new_callable=AsyncMock,
-                side_effect=TimeoutError("drain timed out"),
+                side_effect=asyncio.TimeoutError("drain timed out"),
             ),
             patch.object(server, "aclose", new_callable=AsyncMock) as mock_aclose,
             patch.object(server, "run", new_callable=AsyncMock),
         ):
-            with pytest.raises(TimeoutError):
+            with pytest.raises(asyncio.TimeoutError):
                 _run_worker(
                     server,
                     args=CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None),
@@ -112,7 +112,7 @@ class TestDrainTimeoutSkipsAclose:
 
         # Suppress the _update_worker_status call which needs a websocket
         with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
-            with pytest.raises(TimeoutError):
+            with pytest.raises(asyncio.TimeoutError):
                 asyncio.get_event_loop().run_until_complete(server.drain())
 
     def test_aclose_skipped_on_any_non_exitcli_exception(self) -> None:
