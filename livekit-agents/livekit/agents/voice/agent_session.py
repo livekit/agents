@@ -605,6 +605,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started_at = time.time()
 
             # configure observability first
+            record_is_given = is_given(record)
             job_ctx: JobContext | None = None
             try:
                 # defer to server-side setting for recording
@@ -620,17 +621,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             is_primary = True
             if job_ctx:
-                job_ctx.init_recording(self._recording_options)
-
+                # set the primary session
                 if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
                     if any(self._recording_options.values()):
-                        raise RuntimeError(
-                            "Only one `AgentSession` can be the primary at a time. "
-                            "If you want to ignore primary designation, use session.start(record=False)."
-                        )
+                        if record_is_given:
+                            raise RuntimeError(
+                                "Only one `AgentSession` can be the primary at a time. "
+                                "If you want to ignore primary designation, "
+                                "use session.start(record=False)."
+                            )
+                        else:
+                            # auto-disable recording for non-primary sessions when record is not given
+                            self._recording_options = _resolve_recording_options(False)
+
+                job_ctx.init_recording(self._recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
