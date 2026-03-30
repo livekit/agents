@@ -5,7 +5,7 @@ import json
 import math
 import time
 from collections import deque
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -185,6 +185,12 @@ class AudioRecognition:
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         self._agent_speaking: bool = False
 
+        self._interruption_holdoff_duration: float | None = session.options.interruption.get(
+            "holdoff_duration"
+        )
+        self._interruption_holdoff_timer: asyncio.TimerHandle | None = None
+        self._interruption_holdoff_done_callback: Callable[[], None] | None = None
+
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
@@ -236,14 +242,53 @@ class AudioRecognition:
             and not self._interruption_ch.closed
         )
 
+    # region: interruption holdoff
+
+    @property
+    def interruption_holdoff_active(self) -> bool:
+        return self._interruption_holdoff_timer is not None
+
+    @property
+    def interruption_holdoff_cb(self) -> Callable[[], None] | None:
+        return self._interruption_holdoff_done_callback
+
+    @interruption_holdoff_cb.setter
+    def interruption_holdoff_cb(self, cb: Callable[[], None] | None) -> None:
+        self._interruption_holdoff_done_callback = cb
+
+    def _on_interruption_holdoff_expired(self) -> None:
+        self._interruption_holdoff_timer = None
+        cb, self._interruption_holdoff_done_callback = (
+            self._interruption_holdoff_done_callback,
+            None,
+        )
+        if cb is not None:
+            cb()
+
+    def cancel_interruption_holdoff(self) -> None:
+        if self._interruption_holdoff_timer is not None:
+            self._interruption_holdoff_timer.cancel()
+            self._interruption_holdoff_timer = None
+        self._interruption_holdoff_done_callback = None
+
+    # endregion
+
     def on_start_of_agent_speech(self, started_at: float) -> None:
         self._agent_speaking = True
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
+
+        if self._interruption_holdoff_duration:
+            self.cancel_interruption_holdoff()
+            self._interruption_holdoff_timer = asyncio.get_running_loop().call_later(
+                self._interruption_holdoff_duration, self._on_interruption_holdoff_expired
+            )
 
         if self.adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
+        self.cancel_interruption_holdoff()
+
         if self._agent_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=time.time())
 
@@ -554,6 +599,7 @@ class AudioRecognition:
             self._tasks.add(task)
             self._interruption_atask = None
             self._interruption_ch = None
+            self.cancel_interruption_holdoff()
 
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
@@ -886,6 +932,10 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
+        if self.interruption_holdoff_active:
+            logger.trace("ignoring overlap speech event during interruption holdoff")
+            return
+
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
 

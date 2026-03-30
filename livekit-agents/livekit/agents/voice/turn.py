@@ -100,6 +100,10 @@ class InterruptionOptions(TypedDict, total=False):
     false_interruption_timeout: float | None
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
+    holdoff_duration: float | None
+    """Seconds to suppress adaptive interruption handling after the agent
+    starts speaking each turn to allow for easier turn correction.
+    ``None`` disables. Defaults to ``1.0``."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -109,6 +113,7 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
+    "holdoff_duration": 1.0,
 }
 
 
