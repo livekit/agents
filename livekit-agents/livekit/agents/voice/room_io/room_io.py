@@ -122,6 +122,7 @@ class RoomIO:
                 num_channels=input_audio_options.num_channels,
                 frame_size_ms=input_audio_options.frame_size_ms,
                 noise_cancellation=input_audio_options.noise_cancellation,
+                auto_gain_control=input_audio_options.auto_gain_control,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 

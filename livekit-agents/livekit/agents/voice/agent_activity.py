@@ -49,6 +49,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _STTPipeline,
 )
 from .endpointing import create_endpointing
 from .events import (
@@ -80,6 +81,7 @@ from .turn import EndpointingOptions, TurnDetectionMode
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession
+
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
@@ -142,7 +144,7 @@ class AgentActivity(RecognitionHooks):
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
-        self._mcp_tools: list[mcp.MCPTool] = []
+        self._mcp_tools: list[mcp.MCPToolset] = []
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -509,7 +511,7 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self) -> None:
+    async def start(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -534,7 +536,7 @@ class AgentActivity(RecognitionHooks):
                         self.tts.prewarm()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
                 self._started = True
 
                 @tracer.start_as_current_span(
@@ -558,7 +560,24 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _start_session(self) -> None:
+    async def _detach_stt_pipeline_if_reusable(
+        self, new_activity: AgentActivity
+    ) -> _STTPipeline | None:
+        """Detach and return the STT pipeline if it can be handed off to *new_activity*.
+
+        Requires the same STT instance and the same stt_node implementation.
+        """
+        if (
+            self._audio_recognition
+            and self.stt is not None
+            and type(self.agent).stt_node is type(new_activity.agent).stt_node
+            and self.stt is new_activity.stt
+        ):
+            return await self._audio_recognition.detach_stt()
+
+        return None
+
+    async def _start_session(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
         if isinstance(self.llm, llm.LLM):
@@ -582,32 +601,28 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if self.mcp_servers:
+            from ..llm.mcp import MCPToolset
+
+            logger.warning(
+                "passing MCP servers to AgentSession or Agent is deprecated "
+                "and will be removed in a future version. Use `MCPToolset` instead."
+            )
+            self._mcp_tools = [
+                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
+                for server in self.mcp_servers
+            ]
+
+        toolsets = [tool for tool in self.tools if isinstance(tool, llm.Toolset)]
+        if toolsets:
 
             @utils.log_exceptions(logger=logger)
-            async def _list_mcp_tools_task(
-                mcp_server: mcp.MCPServer,
-            ) -> list[mcp.MCPTool]:
-                if not mcp_server.initialized:
-                    await mcp_server.initialize()
+            async def _setup_toolset(toolset: llm.Toolset) -> None:
+                await toolset.setup()
 
-                return await mcp_server.list_tools()
-
-            gathered = await asyncio.gather(
-                *(_list_mcp_tools_task(s) for s in self.mcp_servers),
+            await asyncio.gather(
+                *(_setup_toolset(toolset) for toolset in toolsets),
                 return_exceptions=True,
             )
-            tools: list[mcp.MCPTool] = []
-            for mcp_server, res in zip(self.mcp_servers, gathered, strict=False):
-                if isinstance(res, BaseException):
-                    logger.error(
-                        f"failed to list tools from MCP server {mcp_server}",
-                        exc_info=res,
-                    )
-                    continue
-
-                tools.extend(res)
-
-            self._mcp_tools = tools
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._rt_session = self.llm.session()
@@ -682,7 +697,11 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
-        self._audio_recognition.start()
+        if reuse_stt_pipeline is not None:
+            logger.debug("reusing STT pipeline from previous activity")
+            self._audio_recognition.start(stt_pipeline=reuse_stt_pipeline)
+        else:
+            self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -743,7 +762,7 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self) -> None:
+    async def resume(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
@@ -752,7 +771,7 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
             finally:
                 span.end()
 
@@ -822,9 +841,14 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
 
-        if self.mcp_servers:
+        # close the toolsets created internally and the ones from the agent
+        # leave the ones from the session open, they will be closed by the session
+        toolsets = self._mcp_tools + [
+            tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
+        ]
+        if toolsets:
             await asyncio.gather(
-                *(mcp_server.aclose() for mcp_server in self.mcp_servers), return_exceptions=True
+                *(toolset.aclose() for toolset in toolsets), return_exceptions=True
             )
 
         await self._cancel_speech_pause(
