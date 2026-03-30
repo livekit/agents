@@ -603,6 +603,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started_at = time.time()
 
             # configure observability first
+            record_is_given = is_given(record)
             job_ctx: JobContext | None = None
             try:
                 # defer to server-side setting for recording
@@ -616,7 +617,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
 
+            is_primary = True
             if job_ctx:
+                # set the primary session
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
+                    job_ctx._primary_agent_session = self
+                else:
+                    is_primary = False
+                    if any(self._recording_options.values()):
+                        if record_is_given:
+                            raise RuntimeError(
+                                "Only one `AgentSession` can be the primary at a time. "
+                                "If you want to ignore primary designation, "
+                                "use session.start(record=False)."
+                            )
+                        else:
+                            # auto-disable recording for non-primary sessions when record is not given
+                            self._recording_options = _resolve_recording_options(False)
+
                 job_ctx.init_recording(self._recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
@@ -685,14 +703,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                transport = RoomSessionTransport(room)
-                self._session_host = SessionHost(transport)
-                self._session_host.register_session(self)
+                if is_primary:
+                    # only the primary session can have a session host
+                    transport = RoomSessionTransport(room)
+                    self._session_host = SessionHost(transport)
+                    self._session_host.register_session(self)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
                     self._room_io.register_text_input(text_input_opts.text_input_cb)
-                    self._session_host.register_text_input(text_input_opts.text_input_cb)
+                    if self._session_host is not None:
+                        self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -709,14 +730,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                                 )
                             )
                             tasks.append(task)
-
-                if job_ctx._primary_agent_session is None:
-                    job_ctx._primary_agent_session = self
-                elif any(self._recording_options.values()):
-                    raise RuntimeError(
-                        "Only one `AgentSession` can be the primary at a time. "
-                        "If you want to ignore primary designation, use session.start(record=False)."
-                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
