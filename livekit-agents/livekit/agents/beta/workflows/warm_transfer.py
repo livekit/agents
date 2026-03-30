@@ -13,7 +13,7 @@ from ...job import get_job_context
 from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...log import logger
-from ...types import NOT_GIVEN, NotGiven, NotGivenOr
+from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice import room_io
 from ...voice.agent import Agent, AgentTask
@@ -25,41 +25,10 @@ from ...voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
-from .utils import InstructionParts, build_instructions
+from .utils import InstructionParts
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
-
-
-# instructions
-ROLE = """\
-# Identity
-
-You are an agent that is reaching out to a human agent for help. There has been a previous conversation
-between you and a caller, the conversation history is included below.
-
-# Goal
-
-Your main goal is to give the human agent sufficient context about why the caller had called in,
-so that the human agent could gain sufficient knowledge to help the caller directly."""
-
-CONTEXT = """\
-# Context
-
-In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
-Remember, you are not speaking to the caller right now, you are speaking to the human agent.
-
-## Conversation history with caller
-{conversation_history}
-## End of conversation history with caller
-"""
-
-# internal directive — coupled to tool names and conversation history, not user-customizable.
-_DIRECTIVE = """\
-Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.
-
-You are talking to the human agent now, start by giving them a summary of the conversation so far, and answer any questions they might have.
-"""
 
 
 @dataclass
@@ -68,8 +37,6 @@ class WarmTransferResult:
 
 
 class WarmTransferTask(AgentTask[WarmTransferResult]):
-    INSTRUCTION_PARTS = InstructionParts(role=ROLE, context=CONTEXT)
-
     def __init__(
         self,
         sip_call_to: NotGivenOr[str] = NOT_GIVEN,
@@ -111,21 +78,20 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 that are used to summarize the conversation history.
         """
 
-        if is_given(instructions) and extra_instructions:
+        if not is_given(instructions):
+            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+        elif extra_instructions:
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
-        if isinstance(instructions, InstructionParts | NotGiven):
-            default = self.INSTRUCTION_PARTS.copy()
-            if is_given(default.context):
-                default.context = default.context.format(
-                    conversation_history=self._format_conversation_history(chat_ctx)
-                )
-            instructions = build_instructions(
-                parts=instructions or InstructionParts(extra=extra_instructions),
-                defaults=default,
-                directive=_DIRECTIVE,
+        if isinstance(instructions, InstructionParts):
+            conversation_history = self._format_conversation_history(chat_ctx)
+            instructions = INSTRUCTIONS_TEMPLATE.format(
+                persona=instructions.persona,
+                extra=instructions.extra,
+                _conversation_history=conversation_history,
             )
 
+        assert is_given(instructions)  # for type checking
         super().__init__(
             instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
@@ -412,3 +378,35 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             )
         if output.video:
             output.set_video_enabled(enabled and self._original_io_state["video_output"])
+
+
+# instructions
+PERSONA = """\
+# Identity
+
+You are an agent that is reaching out to a human agent for help. There has been a previous conversation
+between you and a caller, the conversation history is included below.
+
+# Goal
+
+Your main goal is to give the human agent sufficient context about why the caller had called in,
+so that the human agent could gain sufficient knowledge to help the caller directly."""
+
+INSTRUCTIONS_TEMPLATE = """\
+{persona}
+
+# Context
+
+In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
+Remember, you are not speaking to the caller right now, you are speaking to the human agent.
+
+## Conversation history with caller
+{_conversation_history}
+## End of conversation history with caller
+
+Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.
+
+You are talking to the human agent now, start by giving them a summary of the conversation so far, and answer any questions they might have.
+
+{extra}
+"""

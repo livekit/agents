@@ -42,9 +42,9 @@ class MyAgent(Agent):
 
         email_result = await beta.workflows.GetEmailTask(
             instructions=beta.workflows.InstructionParts(
-                role=(
-                    "You are a single step in a broader system, responsible solely for capturing an email address "
-                    "for the event registration."
+                persona=(
+                    "You are capturing the email address of the user for the event registration. "
+                    "You are only a single step in a broader system responsible solely for capturing an email address."
                 )
             )
         )
