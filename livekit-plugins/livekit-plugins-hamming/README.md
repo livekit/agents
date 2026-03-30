@@ -1,6 +1,6 @@
 # Hamming plugin for LiveKit Agents
 
-Post-call monitoring for LiveKit Agents with Hamming.
+Post-call monitoring and session export for LiveKit Agents with Hamming.
 
 ## Installation
 
@@ -38,7 +38,87 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     session = AgentSession()
-    hamming.attach_session(session, job_ctx=ctx)
+    hamming.attach_session(
+        session,
+        job_ctx=ctx,
+        customer_metadata={
+            "deployment": {
+                "environment": "prod",
+                "prompt_version": "v17",
+            },
+            "experiment": {
+                "variant": "B",
+            },
+        },
+        external_links=[
+            {
+                "label": "CRM Contact",
+                "url": "https://crm.example.com/contact/123",
+                "source": "salesforce",
+            }
+        ],
+        session_mode="testing",
+    )
+```
+
+## Unified Responsibilities
+
+The Hamming plugin is intentionally focused on one responsibility:
+
+- post-call session export for Call Review and testing workflows
+
+Use `attach_session(...)` for per-call review/testing context:
+
+- `customer_metadata`
+- `external_links`
+- `session_mode`
+
+## Call Review And Testing Fields
+
+### `customer_metadata`
+
+Use `customer_metadata` for filterable customer-owned metadata:
+
+```python
+hamming.attach_session(
+    session,
+    job_ctx=ctx,
+    customer_metadata={
+        "deployment": {"environment": "prod"},
+        "experiment": {"variant": "B"},
+    },
+)
+```
+
+### `external_links`
+
+Use `external_links` for click-through operator links:
+
+```python
+hamming.attach_session(
+    session,
+    job_ctx=ctx,
+    external_links=[
+        {
+            "label": "CRM Contact",
+            "url": "https://crm.example.com/contact/123",
+            "source": "salesforce",
+            "description": "Primary customer record",
+        }
+    ],
+)
+```
+
+### `session_mode`
+
+Use `session_mode="testing"` when the call is part of a testing workflow:
+
+```python
+hamming.attach_session(
+    session,
+    job_ctx=ctx,
+    session_mode="testing",
+)
 ```
 
 ## Recording Modes

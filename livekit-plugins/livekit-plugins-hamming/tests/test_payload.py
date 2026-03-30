@@ -76,6 +76,46 @@ class PayloadEnvelopeTests(unittest.TestCase):
 
         self.assertEqual(envelope["payload"]["test_case_run_id"], "conv-123")
 
+    def test_envelope_includes_customer_metadata_external_links_and_session_mode(self) -> None:
+        envelope = build_livekit_monitoring_envelope(
+            config=PayloadBuildConfig(
+                external_agent_id="agent-123",
+                plugin_api_version="1.0.0",
+                plugin_version="0.1.0",
+                payload_schema_version="2026-03-02",
+                customer_metadata={"experiment": {"variant": "B"}},
+                external_links=[
+                    {
+                        "label": "CRM Contact",
+                        "url": "https://crm.example.com/contact/123",
+                        "source": "salesforce",
+                    }
+                ],
+                session_mode="testing",
+            ),
+            report=_FakeReport(),
+            participant_identity=None,
+            participant_metadata_raw=None,
+            recording_context=None,
+            close_event=None,
+        )
+
+        self.assertEqual(
+            envelope["customer_metadata"],
+            {"experiment": {"variant": "B"}},
+        )
+        self.assertEqual(
+            envelope["external_links"],
+            [
+                {
+                    "label": "CRM Contact",
+                    "url": "https://crm.example.com/contact/123",
+                    "source": "salesforce",
+                }
+            ],
+        )
+        self.assertEqual(envelope["session_mode"], "testing")
+
 
 if __name__ == "__main__":
     unittest.main()
