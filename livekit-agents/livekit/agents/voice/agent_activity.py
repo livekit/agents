@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
 
@@ -966,6 +966,7 @@ class AgentActivity(RecognitionHooks):
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        instructions_mode: Literal["inline", "append"] = "inline",
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
@@ -1040,7 +1041,7 @@ class AgentActivity(RecognitionHooks):
             # instructions used inside generate_reply are "extra" instructions.
             # this matches the behavior of the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
+            if instructions and instructions_mode == "inline":
                 instructions = self._agent.instructions + "\n" + instructions
 
             task = self._create_speech_task(
@@ -1050,6 +1051,7 @@ class AgentActivity(RecognitionHooks):
                     tools=tools,
                     new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
+                    instructions_mode=instructions_mode,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
                         if utils.is_given(tool_choice) or self._tool_choice is None
@@ -2119,6 +2121,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
+        instructions_mode: Literal["inline", "append"] = "inline",
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -2137,6 +2140,7 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 new_message=new_message,
                 instructions=instructions,
+                instructions_mode=instructions_mode,
                 _previous_user_metrics=_previous_user_metrics,
                 _previous_tools_messages=_previous_tools_messages,
             )
@@ -2150,6 +2154,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
+        instructions_mode: Literal["inline", "append"] = "inline",
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
@@ -2178,10 +2183,13 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            if instructions_mode == "append":
+                chat_ctx.add_message(role="system", content=instructions)
+            else:
+                try:
+                    update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
+                except ValueError:
+                    logger.exception("failed to update the instructions")
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
