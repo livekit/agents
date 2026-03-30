@@ -78,11 +78,30 @@ class Instructions(str):
 
     def format(self, *args: object, **kwargs: object) -> Instructions:
         """Format the instructions with the given keyword arguments."""
+
+        any_instructions = any(isinstance(arg, Instructions) for arg in args) or any(
+            isinstance(v, Instructions) for v in kwargs.values()
+        )
+        if any_instructions:
+            audio_args = tuple(arg.audio if isinstance(arg, Instructions) else arg for arg in args)
+            text_args = tuple(arg.text if isinstance(arg, Instructions) else arg for arg in args)
+            audio_kwargs = {
+                k: v.audio if isinstance(v, Instructions) else v for k, v in kwargs.items()
+            }
+            text_kwargs = {
+                k: v.text if isinstance(v, Instructions) else v for k, v in kwargs.items()
+            }
+        else:
+            audio_args = text_args = args
+            audio_kwargs = text_kwargs = kwargs
+
         return Instructions(
-            audio=self._audio_variant.format(*args, **kwargs),
-            text=self._text_variant.format(*args, **kwargs)
-            if self._text_variant is not None
-            else None,
+            audio=self.audio.format(*audio_args, **audio_kwargs),
+            text=(
+                self.text.format(*text_args, **text_kwargs)
+                if any_instructions or self._text_variant is not None
+                else None
+            ),
             _represent=str(self).format(*args, **kwargs),
         )
 

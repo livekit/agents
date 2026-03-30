@@ -46,25 +46,14 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
         if isinstance(instructions, InstructionParts):
-            persona = instructions.persona if is_given(instructions.persona) else PERSONA
-            extra = instructions.extra
-
-            instructions = Instructions(
-                audio=INSTRUCTIONS_TEMPLATE.format(
-                    persona=persona,
-                    extra=extra,
-                    _modality_specific=AUDIO_SPECIFIC,
-                    # confirmation is enabled by default
-                    _confirmation=(
-                        CONFIRMATION_INSTRUCTION if require_confirmation is not False else ""
-                    ),
-                ),
-                text=INSTRUCTIONS_TEMPLATE.format(
-                    persona=persona,
-                    extra=extra,
-                    _modality_specific=TEXT_SPECIFIC,
-                    # confirmation is disabled by default
-                    _confirmation=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
+                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
+                extra=instructions.extra,
+                _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
+                _confirmation=Instructions(
+                    # confirmation is enabled by default for audio, disabled by default for text
+                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
+                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
                 ),
             )
 
