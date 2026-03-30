@@ -7,3 +7,4 @@ class PersonaConfig:
 
     name: str
     avatarId: str
+    avatarModel: str | None = None
