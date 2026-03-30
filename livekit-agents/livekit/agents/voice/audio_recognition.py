@@ -826,6 +826,14 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            if self._vad:
+                if self._speaking:
+                    logger.warning(
+                        "stt end of speech received while user is speaking, resetting vad"
+                    )
+                self.update_vad(self._vad)
+
             self._speaking = False
             self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
