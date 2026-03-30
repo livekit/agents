@@ -2504,7 +2504,12 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            if fnc_executed_ev._reply_required:
+            if fnc_executed_ev._reply_required and not fnc_executed_ev._handoff_required:
+                # Skip follow-up LLM call when a handoff is in progress (#5150).
+                # Creating a pipeline reply task after update_agent() races against the
+                # handoff: the old agent sends tool results back to the LLM, receives an
+                # empty response, and loops — preventing on_enter() from firing on the
+                # new agent. When handing off, the old agent has no more work to do.
                 chat_ctx.items.extend(tool_messages)
 
                 # refresh instructions in chat_ctx so that any update_instructions()
