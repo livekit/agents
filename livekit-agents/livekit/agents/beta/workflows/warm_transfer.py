@@ -84,11 +84,12 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
         if isinstance(instructions, InstructionParts):
+            persona = instructions.persona if is_given(instructions.persona) else PERSONA
+            extra = instructions.extra
+
             conversation_history = self._format_conversation_history(chat_ctx)
             instructions = INSTRUCTIONS_TEMPLATE.format(
-                persona=instructions.persona,
-                extra=instructions.extra,
-                _conversation_history=conversation_history,
+                persona=persona, extra=extra, _conversation_history=conversation_history
             )
 
         assert is_given(instructions)  # for type checking
