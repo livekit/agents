@@ -89,6 +89,10 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra=metadata
             | {
                 "audio_duration": round(metrics.audio_duration, 2),
+                "input_tokens": metrics.input_tokens,
+                "output_tokens": metrics.output_tokens,
+                "total_tokens": metrics.total_tokens,
+                "input_audio_tokens": metrics.input_audio_tokens,
             },
         )
     elif isinstance(metrics, InterruptionMetrics):
