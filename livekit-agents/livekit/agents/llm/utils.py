@@ -115,13 +115,18 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
-def is_context_type(ty: type) -> bool:
+def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
     from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is RunContext or origin is RunContext
 
-    return is_call_context
+    if not allow_subclasses:
+        return ty is RunContext or origin is RunContext
+
+    try:
+        return issubclass(ty, RunContext) or (origin is not None and issubclass(origin, RunContext))
+    except TypeError:
+        return False
 
 
 @dataclass
@@ -317,7 +322,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     for param_name, param in signature.parameters.items():
         type_hint = type_hints[param_name]
 
-        if is_context_type(type_hint):
+        if is_context_type(type_hint, allow_subclasses=True):
             continue
 
         default_value = param.default if param.default is not param.empty else ...
