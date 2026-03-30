@@ -93,7 +93,6 @@ async def test_tee_cancelled_error_does_not_propagate_to_peers():
     assert peer1_results == items
 
 
-
 @pytest.mark.asyncio
 async def test_tee_empty_iterator():
     tee = Tee(_async_iter([]), n=2)
