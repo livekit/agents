@@ -230,10 +230,29 @@ class STSSession(llm.RealtimeSession):
         await self._ws.send_str(json.dumps(session_create))
 
         msg = await self._ws.receive(timeout=10)
+        if msg.type in (
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSING,
+            aiohttp.WSMsgType.ERROR,
+        ):
+            raise APIConnectionError(
+                f"STS connection closed during session creation: {msg.type}"
+            )
+
         if msg.type == aiohttp.WSMsgType.TEXT:
             data = json.loads(msg.data)
-            if data.get("type") == "error":
-                raise APIError(f"STS session creation failed: {data.get('message', '')}")
+            msg_type = data.get("type", "")
+            if msg_type == "error":
+                raise APIError(
+                    f"STS session creation failed: {data.get('message', data.get('error', {}).get('message', ''))}"
+                )
+            if msg_type != "session.created":
+                logger.warning(
+                    "STS: expected session.created, got %s", msg_type
+                )
+        else:
+            logger.warning("STS: unexpected message type during session creation: %s", msg.type)
 
         self._connected = True
         self._recv_task = asyncio.create_task(self._recv_loop())
@@ -569,7 +588,10 @@ class STSSession(llm.RealtimeSession):
         })
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        self._chat_ctx = chat_ctx
+        logger.warning(
+            "STS: update_chat_ctx is not supported by the STS realtime model; "
+            "conversation history is managed server-side"
+        )
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_defs: list[dict[str, Any]] = []
