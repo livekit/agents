@@ -35,8 +35,7 @@ def _azure_model() -> openai.realtime.RealtimeModel:
     return openai.realtime.RealtimeModel(
         azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        api_version=os.environ["AZURE_OPENAI_API_VERSION"],
-        base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai",
+        base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai/v1",
         voice="alloy",
     )
 

@@ -28,17 +28,15 @@ def test_process_base_url():
         process_base_url(
             "https://test.azure.com/openai",
             "gpt-4",
-            is_azure=True,
             azure_deployment="my-deployment",
-            api_version="2025-04-12",
         )
-        == "wss://test.azure.com/openai/realtime?api-version=2025-04-12&deployment=my-deployment"
+        == "wss://test.azure.com/openai/realtime?model=my-deployment"
     )
+
     assert (
         process_base_url(
             "https://test.azure.com/custom/path",
             "gpt-4",
-            api_version="2025-04-12",
         )
         == "wss://test.azure.com/custom/path?model=gpt-4"
     )

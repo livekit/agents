@@ -368,7 +368,7 @@ class RealtimeModel(llm.RealtimeModel):
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
             entra_token (str | None): Azure Entra token auth (alternative to api_key).
-            api_version (str | None): Azure OpenAI API version appended as query parameter.
+            api_version (str | None): Deprecated. The GA endpoint does not use an api-version query parameter. This argument is ignored.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             conn_options (APIConnectOptions): Retry/backoff and connection settings.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
@@ -412,6 +412,12 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
+        if api_version is not None:
+            logger.warning(
+                "api_version is deprecated for Azure OpenAI Realtime GA endpoint and will be ignored. "
+                "The GA endpoint does not accept an api-version query parameter."
+            )
+
         is_azure = (
             api_version is not None or entra_token is not None or azure_deployment is not None
         )
@@ -433,7 +439,7 @@ class RealtimeModel(llm.RealtimeModel):
                         "Missing Azure endpoint. Please pass base_url "
                         "or set AZURE_OPENAI_ENDPOINT environment variable."
                     )
-                base_url_val = f"{azure_endpoint.rstrip('/')}/openai"
+                base_url_val = f"{azure_endpoint.rstrip('/')}/openai/v1"
             else:
                 base_url_val = OPENAI_BASE_URL
 
@@ -504,7 +510,7 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
             azure_endpoint (str | None): Azure endpoint URL; if None, taken from AZURE_OPENAI_ENDPOINT.
-            api_version (str | None): Azure API version; if None, taken from OPENAI_API_VERSION.
+            api_version (str | None): Deprecated. The GA endpoint does not use an api-version query parameter. This argument is ignored.
             api_key (str | None): Azure API key; if None, taken from AZURE_OPENAI_API_KEY. Omit if using `entra_token`.
             entra_token (str | None): Azure Entra token for AAD auth. Provide instead of `api_key`.
             base_url (str | None): Explicit base URL. Mutually exclusive with `azure_endpoint`. If provided, used as-is.
@@ -522,46 +528,20 @@ class RealtimeModel(llm.RealtimeModel):
             RealtimeModel: Configured client for Azure OpenAI Realtime.
 
         Raises:
-            ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
+            ValueError: If credentials are missing, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
 
         Examples:
-            Azure usage with api-version 2024-10-01-preview:
+            Azure usage with GA endpoint:
 
-            ```python
-            from livekit.plugins.openai.realtime import RealtimeModel
-            from openai.types.beta import realtime
-
-            model = openai.realtime.RealtimeModel.with_azure(
-                azure_deployment="gpt-realtime",
-                azure_endpoint="https://yourendpoint.azure.com",
-                api_version="2024-10-01-preview",
-                api_key="your-api-key",
-                modalities=["text", "audio"],
-                input_audio_transcription=realtime.session.InputAudioTranscription(
-                    model="gpt-4o-transcribe",
-                ),
-                input_audio_noise_reduction=realtime.session.InputAudioNoiseReduction(
-                    type="near_field",
-                ),
-                turn_detection=realtime.session.TurnDetection(
-                    type="semantic_vad",
-                    create_response=True,
-                    eagerness="auto",
-                    interrupt_response=True,
-                ),
-            )
-            ```
-
-            Azure usage with api-version 2025-08-28:
             ```python
             from livekit.plugins.openai.realtime import RealtimeModel
             from openai.types import realtime
 
-            model = RealtimeModel(
+            model = RealtimeModel.with_azure(
                 azure_deployment="gpt-realtime",
                 azure_endpoint="https://yourendpoint.azure.com",
-                api_version="2024-10-01-preview",
                 api_key="your-api-key",
+                modalities=["text", "audio"],
                 input_audio_transcription=realtime.AudioTranscription(
                     model="gpt-4o-transcribe",
                 ),
@@ -582,13 +562,6 @@ class RealtimeModel(llm.RealtimeModel):
                 "or the `AZURE_OPENAI_API_KEY` environment variable."
             )
 
-        api_version = api_version or os.getenv("OPENAI_API_VERSION")
-        if api_version is None:
-            raise ValueError(
-                "Must provide either the `api_version` argument or the "
-                "`OPENAI_API_VERSION` environment variable"
-            )
-
         if base_url is None:
             azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
             if azure_endpoint is None:
@@ -597,7 +570,7 @@ class RealtimeModel(llm.RealtimeModel):
                     "parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
                 )
 
-            base_url = f"{azure_endpoint.rstrip('/')}/openai"
+            base_url = f"{azure_endpoint.rstrip('/')}/openai/v1"
         elif azure_endpoint is not None:
             raise ValueError("base_url and azure_endpoint are mutually exclusive")
 
@@ -706,9 +679,7 @@ class RealtimeModel(llm.RealtimeModel):
 def process_base_url(
     url: str,
     model: str,
-    is_azure: bool = False,
     azure_deployment: str | None = None,
-    api_version: str | None = None,
 ) -> str:
     if url.startswith("http"):
         url = url.replace("http", "ws", 1)
@@ -722,20 +693,11 @@ def process_base_url(
     else:
         path = parsed_url.path
 
-    if is_azure:
-        if api_version:
-            query_params["api-version"] = [api_version]
-        if azure_deployment:
-            query_params["deployment"] = [azure_deployment]
-
-    else:
-        if "model" not in query_params:
-            query_params["model"] = [model]
+    if "model" not in query_params:
+        query_params["model"] = [azure_deployment or model]
 
     new_query = urlencode(query_params, doseq=True)
-    new_url = urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
-
-    return new_url
+    return urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
 
 
 class RealtimeSession(
@@ -899,8 +861,6 @@ class RealtimeSession(
         url = process_base_url(
             self._realtime_model._opts.base_url,
             self._realtime_model._opts.model,
-            is_azure=self._realtime_model._opts.is_azure,
-            api_version=self._realtime_model._opts.api_version,
             azure_deployment=self._realtime_model._opts.azure_deployment,
         )
 
