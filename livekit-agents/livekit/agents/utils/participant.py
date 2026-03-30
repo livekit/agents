@@ -93,7 +93,6 @@ async def wait_for_participant(
         return p.kind == kind
 
     def _on_participant_active(p: rtc.RemoteParticipant) -> None:
-        print("participant_active", p.identity)
         if (identity is None or p.identity == identity) and kind_match(p):
             if not fut.done():
                 fut.set_result(p)
@@ -114,7 +113,7 @@ async def wait_for_participant(
 
         return await fut
     finally:
-        room.off("participant_connected", _on_participant_active)
+        room.off("participant_active", _on_participant_active)
         room.off("connection_state_changed", _on_connection_state_changed)
 
 
