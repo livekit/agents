@@ -210,6 +210,10 @@ class ServerOptions:
     """Maximum amount of time to wait for a job to shut down gracefully"""
     initialize_process_timeout: float = 10.0
     """Maximum amount of time to wait for a process to initialize/prewarm"""
+    ping_interval: float = 5.0
+    """Interval in seconds to send a ping to the worker."""
+    ping_timeout: float = 60.0
+    """Maximum amount of time to wait for a pong response from the worker."""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
@@ -307,6 +311,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
         max_retry: int = 16,
+        ping_interval: float = 5.0,
+        ping_timeout: float = 60.0,
         ws_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -341,6 +347,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
         self._max_retry = max_retry
+        self._ping_interval = ping_interval
+        self._ping_timeout = ping_timeout
         self._prometheus_port = prometheus_port
         self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
@@ -409,6 +417,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
+            ping_interval=options.ping_interval,
+            ping_timeout=options.ping_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
             ws_url=options.ws_url,
@@ -577,8 +587,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     close_timeout=5,
                     memory_warn_mb=2000,
                     memory_limit_mb=0,  # no limit
-                    ping_interval=5,
-                    ping_timeout=60,
+                    ping_interval=self._ping_interval,
+                    ping_timeout=self._ping_timeout,
                     high_ping_threshold=2.5,
                     mp_ctx=self._mp_ctx,
                     loop=self._loop,
@@ -596,6 +606,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                ping_interval=self._ping_interval,
+                ping_timeout=self._ping_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
