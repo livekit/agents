@@ -66,6 +66,7 @@ class ThreadJobExecutor:
         self._closing = False
         self._lock = asyncio.Lock()
 
+        self._thread: threading.Thread | None = None
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = utils.shortuuid("THEXEC_")
@@ -111,31 +112,45 @@ class ThreadJobExecutor:
             # to simplify the runners implementation, we also use a duplex in the threaded executor
             # (ThreadedRunners), so we can use the same protocol
             mp_pch, mp_cch = socket.socketpair()
-            self._pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+            pch: duplex_unix._AsyncDuplex | None = None
+            try:
+                pch = await duplex_unix._AsyncDuplex.open(mp_pch)
+                self._pch = pch
 
-            self._join_fut = asyncio.Future[None]()
+                self._join_fut = asyncio.Future[None]()
 
-            def _on_join() -> None:
-                with contextlib.suppress(RuntimeError):
-                    self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+                def _on_join() -> None:
+                    with contextlib.suppress(RuntimeError):
+                        self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
 
-            targs = job_proc_lazy_main.ThreadStartArgs(
-                mp_cch=mp_cch,
-                initialize_process_fnc=self._opts.initialize_process_fnc,
-                job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
-                session_end_fnc=self._opts.session_end_fnc,
-                user_arguments=self._user_args,
-                join_fnc=_on_join,
-            )
+                targs = job_proc_lazy_main.ThreadStartArgs(
+                    mp_cch=mp_cch,
+                    initialize_process_fnc=self._opts.initialize_process_fnc,
+                    job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
+                    session_end_fnc=self._opts.session_end_fnc,
+                    user_arguments=self._user_args,
+                    join_fnc=_on_join,
+                )
 
-            self._thread = t = threading.Thread(
-                target=job_proc_lazy_main.thread_main,
-                args=(targs,),
-                name="job_thread_runner",
-            )
-            t.start()
+                self._thread = t = threading.Thread(
+                    target=job_proc_lazy_main.thread_main,
+                    args=(targs,),
+                    name="job_thread_runner",
+                )
+                t.start()
 
-            self._main_atask = asyncio.create_task(self._main_task())
+                self._main_atask = asyncio.create_task(self._main_task())
+            except Exception:
+                with contextlib.suppress(OSError):
+                    mp_cch.close()
+                with contextlib.suppress(OSError):
+                    mp_pch.close()
+
+                if pch is not None:
+                    with contextlib.suppress(duplex_unix.DuplexClosed):
+                        await pch.aclose()
+
+                raise
 
     async def join(self) -> None:
         """wait for the thread to finish"""
@@ -298,7 +313,7 @@ class ThreadJobExecutor:
 
     def logging_extra(self) -> dict[str, Any]:
         extra: dict[str, Any] = {
-            "tid": self._thread.native_id,
+            "tid": self._thread.native_id if self._thread else None,
         }
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
