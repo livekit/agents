@@ -1,20 +1,8 @@
-# Copyright 2023 LiveKit, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
+import asyncio
 import os
+import weakref
 from dataclasses import dataclass
 
 from livekit import rtc
@@ -25,8 +13,10 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     stt,
+    utils,
 )
 from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -34,51 +24,107 @@ from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 from mistralai.client import Mistral
 from mistralai.client.errors import SDKError
+from mistralai.client.models import (
+    RealtimeTranscriptionError,
+    RealtimeTranscriptionSessionCreated,
+    TranscriptionStreamDone,
+    TranscriptionStreamLanguage,
+    TranscriptionStreamTextDelta,
+)
+from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
 
+from .log import logger
 from .models import STTModels
+
+
+def _is_realtime(model: str) -> bool:
+    return "realtime" in model
+
+
+SAMPLE_RATE: int = 16000
+NUM_CHANNELS: int = 1
+
+DEFAULT_MODEL: STTModels = "voxtral-mini-latest"
+DEFAULT_LANGUAGE: str = "en"
+
+_DELTA_TRANSCRIPT_INTERVAL: float = 0.5
 
 
 @dataclass
 class _STTOptions:
     model: STTModels | str
     language: LanguageCode | None
+    target_streaming_delay_ms: int | None
 
 
 class STT(stt.STT):
     def __init__(
         self,
-        *,
-        language: str | None = "en",
-        model: STTModels | str = "voxtral-mini-latest",
+        model: STTModels | str = DEFAULT_MODEL,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
+        language: str = DEFAULT_LANGUAGE,
+        target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Create a new instance of MistralAI STT.
 
         Args:
-            language: The language code to use for transcription (e.g., "en" for English). Segment timestamps will only be available if set to None.
-            model: The MistralAI model to use for transcription, default is voxtral-mini-latest.
+            model: The MistralAI model to use for transcription, default is "voxtral-mini-latest".
             api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
+            language: The language code to use for transcription (e.g., "fr" for French), default is "en".
+            target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
         """
+        is_realtime = _is_realtime(model)
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=False,
-                interim_results=False,
+                streaming=is_realtime,
+                interim_results=is_realtime,
                 aligned_transcript=False,
+                offline_recognize=not is_realtime,
             )
         )
         self._opts = _STTOptions(
-            language=LanguageCode(language) if language else None,
+            language=LanguageCode(language) if is_given(language) else None,
             model=model,
+            target_streaming_delay_ms=target_streaming_delay_ms
+            if is_given(target_streaming_delay_ms)
+            else None,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
+        self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
+        self._pool = utils.ConnectionPool[RealtimeConnection](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+
+    async def _connect_ws(self, timeout: float) -> RealtimeConnection:
+        rt = RealtimeTranscription(self._client.sdk_configuration)
+        return await asyncio.wait_for(
+            rt.connect(
+                model=self._opts.model,
+                target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
+            ),
+            timeout=timeout,
+        )
+
+    async def _close_ws(self, conn: RealtimeConnection) -> None:
+        await conn.close()
+        ws = conn._websocket
+        if ws.keepalive_task is not None:
+            ws.keepalive_task.cancel()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
+    async def aclose(self) -> None:
+        await self._pool.aclose()
 
     @property
     def model(self) -> str:
@@ -90,22 +136,29 @@ class STT(stt.STT):
 
     def update_options(
         self,
-        *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
-        Update the options for the STT.
+        Update the STT options.
 
         Args:
-            language: The language to transcribe in.
-            detect_language: Whether to automatically detect the language.
             model: The model to use for transcription.
+            language: The language code to use for transcription.
+            target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode.
         """
         if is_given(model):
             self._opts.model = model
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(target_streaming_delay_ms):
+            self._opts.target_streaming_delay_ms = target_streaming_delay_ms
+
+        if is_given(model) or is_given(language) or is_given(target_streaming_delay_ms):
+            self._pool.invalidate()
+            for stream in self._streams:
+                stream._reconnect_event.set()
 
     async def _recognize_impl(
         self,
@@ -119,11 +172,10 @@ class STT(stt.STT):
                 self._opts.language = LanguageCode(language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
-            # MistralAI transcription API call
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language if self._opts.language else None,
+                language=self._opts.language or None,
                 timestamp_granularities=None if self._opts.language else ["segment"],
             )
 
@@ -150,9 +202,209 @@ class STT(stt.STT):
             )
 
         except SDKError as e:
-            if e.status_code in (408, 504):  # Request Timeout, Gateway Timeout
+            if e.status_code in (408, 504):
                 raise APITimeoutError() from e
+            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SpeechStream:
+        if is_given(language):
+            self._opts.language = LanguageCode(language)
+        stream = SpeechStream(
+            stt=self,
+            pool=self._pool,
+            conn_options=conn_options,
+        )
+        self._streams.add(stream)
+        return stream
+
+
+class SpeechStream(stt.RecognizeStream):
+    """Realtime speech recognition stream for Voxtral Realtime."""
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        pool: utils.ConnectionPool[RealtimeConnection],
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(
+            stt=stt,
+            conn_options=conn_options,
+            sample_rate=SAMPLE_RATE,
+        )
+        self._pool = pool
+        self._opts = stt._opts
+        self._reconnect_event = asyncio.Event()
+        self._request_id = ""
+        self._audio_duration = 0.0
+        self._speaking = False
+        self._detected_language: LanguageCode | None = self._opts.language
+
+    async def _send_task(self, connection: RealtimeConnection) -> None:
+        samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            samples_per_channel=samples_per_chunk,
+        )
+
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                for frame in audio_bstream.flush():
+                    await connection.send_audio(frame.data.tobytes())
+                await connection.flush_audio()
             else:
-                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+                data_bytes = data.data.tobytes()
+                bytes_per_second = SAMPLE_RATE * NUM_CHANNELS * 2
+                self._audio_duration += len(data_bytes) / bytes_per_second
+                for frame in audio_bstream.write(data.data.tobytes()):
+                    await connection.send_audio(frame.data.tobytes())
+
+        await connection.end_audio()
+
+    async def _recv_task(self, connection: RealtimeConnection) -> None:
+        current_text = ""
+        detected_language: LanguageCode = self._opts.language or LanguageCode("")
+
+        async for event in connection.events():
+            self._process_event(event, current_text, detected_language)
+            if isinstance(event, TranscriptionStreamTextDelta):
+                current_text += event.text
+            elif isinstance(event, TranscriptionStreamLanguage):
+                if event.audio_language:
+                    detected_language = LanguageCode(event.audio_language)
+            elif isinstance(event, TranscriptionStreamDone):
+                break
+
+    def _process_event(
+        self,
+        event: object,
+        current_text: str,
+        detected_language: LanguageCode,
+    ) -> None:
+        if isinstance(event, RealtimeTranscriptionSessionCreated):
+            if event.session:
+                self._request_id = event.session.request_id
+
+        elif isinstance(event, TranscriptionStreamLanguage):
+            if event.audio_language:
+                self._detected_language = LanguageCode(event.audio_language)
+
+        elif isinstance(event, TranscriptionStreamTextDelta):
+            text = current_text + event.text
+
+            if not self._speaking:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                )
+                self._speaking = True
+
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            text=text,
+                            language=detected_language,
+                        )
+                    ],
+                )
+            )
+
+        elif isinstance(event, TranscriptionStreamDone):
+            final_language = LanguageCode(
+                event.language or self._detected_language or self._opts.language or ""
+            )
+            words = (
+                [
+                    TimedString(
+                        text=seg.text,
+                        start_time=seg.start + self.start_time_offset,
+                        end_time=seg.end + self.start_time_offset,
+                    )
+                    for seg in event.segments
+                ]
+                if event.segments
+                else None
+            )
+
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            text=event.text,
+                            language=final_language,
+                            words=words,
+                        )
+                    ],
+                )
+            )
+
+            audio_duration = (
+                event.usage.prompt_audio_seconds if event.usage.prompt_audio_seconds else 0
+            )
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    request_id=self._request_id,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=audio_duration,
+                        input_tokens=event.usage.prompt_tokens or 0,
+                        output_tokens=event.usage.completion_tokens or 0,
+                    ),
+                )
+            )
+
+        elif isinstance(event, RealtimeTranscriptionError):
+            raise APIStatusError(
+                message=str(event.error.message), status_code=event.error.code, body=event.error
+            )
+
+    @utils.log_exceptions(logger=logger)
+    async def _run(self) -> None:
+        try:
+            while True:
+                async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
+                    tasks = [
+                        asyncio.create_task(self._send_task(connection)),
+                        asyncio.create_task(self._recv_task(connection)),
+                    ]
+                    tasks_group = asyncio.gather(*tasks)
+                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
+
+                    try:
+                        done, _ = await asyncio.wait(
+                            (tasks_group, wait_reconnect),
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+
+                        for task in done:
+                            if task != wait_reconnect:
+                                task.result()
+
+                        if wait_reconnect not in done:
+                            break
+
+                        self._reconnect_event.clear()
+                    finally:
+                        await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
+                        tasks_group.cancel()
+                        tasks_group.exception()
+
+        except SDKError as e:
+            if e.status_code in (408, 504):
+                raise APITimeoutError() from e
+            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
         except Exception as e:
             raise APIConnectionError() from e

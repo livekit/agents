@@ -5,8 +5,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, cast
 
-import httpx
-
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
     ChatChunk,
@@ -30,37 +28,39 @@ from mistralai.client.models import (
 
 from .models import ChatModels
 
+DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
+
 
 @dataclass
 class _LLMOptions:
     model: str
-    temperature: NotGivenOr[float]
-    max_completion_tokens: NotGivenOr[int]
 
 
-# Mistral LLM Class
 class LLM(llm.LLM):
     def __init__(
         self,
-        model: str | ChatModels = "ministral-8b-latest",
-        api_key: str | None = None,
+        model: ChatModels | str = DEFAULT_MODEL,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
     ) -> None:
+        """
+        Create a new instance of MistralAI LLM.
+
+        Args:
+            model: The MistralAI model to use for completions, default is "ministral-8b-latest".
+            api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
+            client: Optional pre-configured MistralAI client instance.
+        """
+
         super().__init__()
         self._opts = _LLMOptions(
             model=model,
-            temperature=temperature,
-            max_completion_tokens=max_completion_tokens,
         )
-        mistral_api_key = api_key or os.environ.get("MISTRAL_API_KEY")
+
+        mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
-            raise ValueError(
-                "Mistral API key is required, either as argument or set"
-                " MISTRAL_API_KEY environment variable"
-            )
+            raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
     @property
@@ -70,6 +70,19 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def update_options(
+        self,
+        model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
+    ) -> None:
+        """
+        Update the LLM options.
+
+        Args:
+            model: The model to use for completions
+        """
+        if is_given(model):
+            self._opts.model = model
 
     def chat(
         self,
@@ -86,12 +99,6 @@ class LLM(llm.LLM):
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
-
-        if is_given(self._opts.max_completion_tokens):
-            extra["max_tokens"] = self._opts.max_completion_tokens
-
-        if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
 
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
@@ -113,7 +120,6 @@ class LLM(llm.LLM):
         )
 
 
-# Mistral LLM STREAM
 class LLMStream(llm.LLMStream):
     def __init__(
         self,

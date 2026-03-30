@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import os
-import struct
 import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -23,54 +21,44 @@ from mistralai.client.errors import SDKError
 
 from .models import TTSModels, TTSVoices
 
-
-def _f32le_to_s16le(data: bytes) -> bytes:
-    n = len(data) // 4
-    floats = struct.unpack(f"<{n}f", data)
-    return struct.pack(f"<{n}h", *(max(-32768, min(32767, int(s * 32767))) for s in floats))
-
-
-SAMPLE_RATE = 24000
-NUM_CHANNELS = 1
-
-DEFAULT_MODEL: TTSModels = "voxtral-mini-tts-2603"
+DEFAULT_MODEL: TTSModels = "voxtral-mini-tts-latest"
 DEFAULT_VOICE: TTSVoices = "en_paul_neutral"
 
-RESPONSE_FORMATS = Literal["mp3", "wav", "pcm", "opus", "flac"]
-DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMATS = "pcm"
+SAMPLE_RATE: int = 24000
+NUM_CHANNELS: int = 1
+
+RESPONSE_FORMATS = Literal["mp3", "wav", "opus", "flac"]
+DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMATS = "wav"
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str | None
-    ref_audio: str | None
     response_format: RESPONSE_FORMATS
+    ref_audio: str | None
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
-        *,
         model: TTSModels | str = DEFAULT_MODEL,
-        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
-        ref_audio: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
+        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        ref_audio: NotGivenOr[str] = NOT_GIVEN,
         response_format: RESPONSE_FORMATS = DEFAULT_RESPONSE_FORMAT,
     ) -> None:
         """
         Create a new instance of MistralAI TTS.
 
         Args:
-            model: The MistralAI TTS model to use, default is voxtral-mini-tts-2603.
-            voice: The voice ID to use for synthesis. Mutually exclusive with
-                ``ref_audio``. Defaults to ``en_paul_neutral`` when neither is given.
-            ref_audio: Base64-encoded audio sample (3–25 s) for zero-shot voice
-                cloning. Mutually exclusive with ``voice``.
-            api_key: Your MistralAI API key. If not provided, will use the
-                MISTRAL_API_KEY environment variable.
+            model: The MistralAI model to use for text-to-speech, default is "voxtral-mini-tts-latest".
+            api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
+            voice: The voice ID to use for synthesis. Mutually exclusive with ``ref_audio``. Defaults to ``en_paul_neutral`` when neither is given.
+            ref_audio: Base64-encoded audio sample (3–25 s) for zero-shot voice cloning. Mutually exclusive with ``voice``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``opus`` or ``flac``. Defaults to ``wav``.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -81,8 +69,8 @@ class TTS(tts.TTS):
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
 
-        resolved_voice: TTSVoices | str | None = voice if is_given(voice) else None
-        resolved_ref_audio: str | None = ref_audio if is_given(ref_audio) else None
+        resolved_voice = voice if is_given(voice) else None
+        resolved_ref_audio = ref_audio if is_given(ref_audio) else None
         if resolved_voice is None and resolved_ref_audio is None:
             resolved_voice = DEFAULT_VOICE
 
@@ -108,7 +96,6 @@ class TTS(tts.TTS):
 
     def update_options(
         self,
-        *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
         ref_audio: NotGivenOr[str] = NOT_GIVEN,
@@ -118,11 +105,10 @@ class TTS(tts.TTS):
         Update the TTS options.
 
         Args:
-            model: The MistralAI TTS model to use.
-            voice: The voice ID to use for synthesis. Clears ``ref_audio``.
-            ref_audio: Base64-encoded audio sample for zero-shot voice cloning.
-                Clears ``voice``.
-            response_format: The audio format of the synthesized speech.
+            model: The model to use for text-to-speech. Clears ``ref_audio``.
+            voice: The voice ID to use for synthesis.
+            ref_audio: Base64-encoded audio sample for zero-shot voice cloning. Clears ``voice``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``opus`` or ``flac``. Defaults to ``wav``.
         """
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
@@ -180,10 +166,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
             async for ev in stream:
                 if ev.event == "speech.audio.delta":
-                    data = base64.b64decode(ev.data.audio_data)
-                    if self._opts.response_format == "pcm":
-                        data = _f32le_to_s16le(data)
-                    output_emitter.push(data)
+                    output_emitter.push(ev.data.audio_data)
                 elif ev.event == "speech.audio.done":
                     self._set_token_usage(
                         input_tokens=ev.data.usage.prompt_tokens,
