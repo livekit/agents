@@ -46,8 +46,10 @@ async def tee_peer(
                     except StopAsyncIteration:
                         break
                     except BaseException as e:
-                        # store the exception so other peers can see it
-                        exception[0] = e
+                        # CancelledError is task-specific, not an upstream failure.
+                        # Don't store it — let it propagate only to the cancelled task.
+                        if not isinstance(e, asyncio.CancelledError):
+                            exception[0] = e
                         raise
                     else:
                         for peer_buffer in peers:
