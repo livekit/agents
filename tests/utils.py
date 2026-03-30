@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import pathlib
+import wave
 from collections.abc import AsyncGenerator
 
 import jiwer as tr
@@ -111,3 +113,15 @@ async def fake_llm_stream(
     for tok_id in token_ids:
         yield enc.decode([tok_id])
         await asyncio.sleep(sleep_time)
+
+
+def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
+    buffer = utils.merge_frames(frames)
+    io_buffer = io.BytesIO()
+    with wave.open(io_buffer, "wb") as wav:
+        wav.setnchannels(buffer.num_channels)
+        wav.setsampwidth(2)  # 16-bit
+        wav.setframerate(buffer.sample_rate)
+        wav.writeframes(buffer.data)
+
+    return io_buffer.getvalue()
