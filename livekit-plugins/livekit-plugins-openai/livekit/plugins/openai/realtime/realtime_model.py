@@ -843,9 +843,7 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
-            self._close_current_generation(
-                "in-progress generation discarded due to session reconnection"
-            )
+            self._close_current_generation("session reconnection")
 
             logger.debug("reconnected to OpenAI Realtime API")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
@@ -1515,7 +1513,7 @@ class RealtimeSession(
         self._msg_ch.close()
         await self._main_atask
 
-    def _close_current_generation(self, reason: str) -> None:
+    def _close_current_generation(self, reason: str | None = None) -> None:
         """Close all channels and resolve _done_fut for the current generation.
 
         This prevents consumers from hanging indefinitely when a generation is
@@ -1534,8 +1532,11 @@ class RealtimeSession(
         self._current_generation.message_ch.close()
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._current_generation._done_fut.set_exception(llm.RealtimeError(reason))
+            self._current_generation._done_fut.set_result(None)
         self._current_generation = None
+
+        if reason:
+            logger.warning(f"in-progress generation discarded due to {reason}")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
