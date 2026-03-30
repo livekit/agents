@@ -94,6 +94,20 @@ async def test_tee_cancelled_error_does_not_propagate_to_peers():
 
 
 @pytest.mark.asyncio
+async def test_tee_upstream_cancelled_error_propagates_to_peers():
+    """CancelledError raised by the upstream iterator should propagate to all peers."""
+    err = asyncio.CancelledError()
+    tee = Tee(_failing_iter([1, 2], err), n=2)
+
+    for peer in tee:
+        result = []
+        with pytest.raises(asyncio.CancelledError):
+            async for item in peer:
+                result.append(item)
+        assert result == [1, 2]
+
+
+@pytest.mark.asyncio
 async def test_tee_empty_iterator():
     tee = Tee(_async_iter([]), n=2)
     for peer in tee:

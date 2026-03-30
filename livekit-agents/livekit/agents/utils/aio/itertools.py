@@ -46,9 +46,11 @@ async def tee_peer(
                     except StopAsyncIteration:
                         break
                     except BaseException as e:
-                        # CancelledError is task-specific, not an upstream failure.
-                        # Don't store it — let it propagate only to the cancelled task.
-                        if not isinstance(e, asyncio.CancelledError):
+                        # skip storing CancelledError when the current task was cancelled,
+                        # if the upstream iterator itself raised CancelledError, still store it.
+                        if not isinstance(e, asyncio.CancelledError) or (
+                            (task := asyncio.current_task()) and not task.cancelled()
+                        ):
                             exception[0] = e
                         raise
                     else:
