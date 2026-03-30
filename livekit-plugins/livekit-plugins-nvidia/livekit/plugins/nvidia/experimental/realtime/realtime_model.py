@@ -43,6 +43,8 @@ DEFAULT_SILENCE_THRESHOLD_MS = 500
 MAX_RETRY_DELAY = 30.0
 INITIAL_RETRY_DELAY = 1.0
 
+_DEFAULT_SPEECH_VOLUME_THRESHOLD = 0.001
+
 
 @dataclass
 class _PersonaplexOptions:
@@ -51,6 +53,7 @@ class _PersonaplexOptions:
     text_prompt: str
     seed: int | None
     silence_threshold_ms: int
+    speech_volume_threshold: float
     use_ssl: bool = False
 
 
@@ -89,22 +92,25 @@ class RealtimeModel(llm.RealtimeModel):
         text_prompt: str = "You are a helpful assistant.",
         seed: int | None = None,
         silence_threshold_ms: int = DEFAULT_SILENCE_THRESHOLD_MS,
+        speech_volume_threshold: float = _DEFAULT_SPEECH_VOLUME_THRESHOLD,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialize the PersonaPlex RealtimeModel.
 
         Args:
-            base_url: WebSocket URL of the PersonaPlex server
+            base_url (str): WebSocket URL of the PersonaPlex server
                 (e.g. "ws://localhost:8998"). If not set, reads from
                 PERSONAPLEX_URL env var. Defaults to "ws://localhost:8998".
-            voice: Voice prompt to use. One of the 18 available voices
-                (e.g. "NATF2", "NATM0", "VARF1").
-            text_prompt: System instruction / persona description for
-                the model. Set at connection time.
-            seed: Optional seed for reproducible generation.
-            silence_threshold_ms: Duration of silence (no audio from server)
-                before finalizing a generation. Default 500ms.
-            http_session: Optional aiohttp session to reuse.
+            voice (str): Voice prompt to use. One of the 18 available voices
+                (e.g. "NATF2", "NATM0", "VARF1"). Defaults to "NATF2".
+            text_prompt (str): System instruction / persona description for
+                the model. Set at connection time. Defaults to "You are a helpful assistant.".
+            seed (int | None): Optional seed for reproducible generation.
+            silence_threshold_ms (int): Duration of silence (no audio from server)
+                before finalizing a generation. Defaults to 500ms.
+            speech_volume_threshold (float): Peak volume (0.0–1.0) below which an
+                audio frame is treated as a filler frame and ignored. Defaults to 0.001.
+            http_session (aiohttp.ClientSession | None): Optional aiohttp session to reuse.
         """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -131,6 +137,7 @@ class RealtimeModel(llm.RealtimeModel):
             text_prompt=text_prompt,
             seed=seed,
             silence_threshold_ms=silence_threshold_ms,
+            speech_volume_threshold=speech_volume_threshold,
             use_ssl=use_ssl,
         )
 
@@ -429,7 +436,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         # Queued frames are sent immediately — they're the first audio the
         # server's recv_loop will see.
         await self._handshake_event.wait()
-
         async for msg in self._msg_ch:
             if self._session_should_close.is_set():
                 break
@@ -531,6 +537,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             if pcm_float is None or len(pcm_float) == 0:
                 return
 
+            peak = float(np.abs(pcm_float).max())
+            if peak < self._opts.speech_volume_threshold:
+                return
+
             # Convert float32 to int16 PCM
             pcm_int16 = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
             pcm_bytes = pcm_int16.tobytes()
@@ -542,7 +552,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             gen = self._current_generation
             assert gen is not None
 
-            if gen._first_token_timestamp is None and len(pcm_bytes) > 0:
+            if gen._first_token_timestamp is None:
                 gen._first_token_timestamp = time.time()
 
             frame = rtc.AudioFrame(
@@ -554,7 +564,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             with contextlib.suppress(utils.aio.channel.ChanClosed):
                 gen.audio_ch.send_nowait(frame)
 
-            # Reset silence timer on every audio frame
             self._reset_silence_timer()
 
         except Exception as e:
@@ -716,7 +725,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     def _on_silence_timeout(self) -> None:
         if self._current_generation and not self._current_generation._done:
-            logger.debug("Silence detected, finalizing generation")
             self._finalize_generation(interrupted=False)
 
     # -- Internal: audio resampling --
