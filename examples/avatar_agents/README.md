@@ -12,16 +12,17 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[Avatario](./avatario/)** - [Platform](https://avatario.ai/) | [Integration Guide](https://avatario.ai/docs/integrations/livekit)
 - **[Beyond Presence (Bey)](./bey/)** - [Platform](https://bey.dev/) | [Integration Guide](https://docs.bey.dev/integration/livekit)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
-- **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/api-reference/livekit-agent-integration)
+- **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/self-managed/livekit-agent-integration)
 - **[LiveAvatar](./liveavatar/)** - [Platform](https://www.liveavatar.com/)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
+- **[TruGen](./trugen/)** - [Platform](https://app.trugen.ai/)
 
 ### 🖼️ Cloud-Based with Image Upload
 
 These providers allow direct image upload to create custom avatars:
 
-- **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/api-reference/livekit-agent-integration)
+- **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/self-managed/livekit-agent-integration)
 - **[Hedra](./hedra/)** - [Platform](https://www.hedra.com/)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
 

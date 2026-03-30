@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +15,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
+from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
 from ..types import (
@@ -51,7 +52,7 @@ class SpeechEventType(str, Enum):
 
 @dataclass
 class SpeechData:
-    language: str
+    language: LanguageCode
     text: str
     start_time: float = 0.0
     end_time: float = 0.0
@@ -59,11 +60,32 @@ class SpeechData:
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
+    source_languages: list[LanguageCode] | None = None
+    """the source languages spoken by the user. populated by STT services that support translation,
+    where `language` holds the target language and `source_languages` holds the original spoken language(s).
+    may contain multiple entries when a single utterance spans multiple source languages."""
+    source_texts: list[str] | None = None
+    """the original transcription segments in the source language(s), when translation is active.
+    each entry corresponds to the same-indexed entry in `source_languages`."""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
+            self.language = LanguageCode(self.language)
+        if self.source_languages is not None:
+            self.source_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.source_languages
+            ]
 
 
 @dataclass
 class RecognitionUsage:
     audio_duration: float
+    """Incremental audio duration/usage in seconds"""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -98,7 +120,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -191,10 +213,9 @@ class STT(
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._label,
+                            "stt": self._label,
                             "attempt": i + 1,
                             "streamed": False,
                         },
@@ -272,7 +293,7 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
@@ -329,10 +350,9 @@ class RecognizeStream(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to recognize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
-                            "tts": self._stt._label,
+                            "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },
@@ -371,6 +391,8 @@ class RecognizeStream(ABC):
                     duration=0.0,
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
+                    input_tokens=ev.recognition_usage.input_tokens,
+                    output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider

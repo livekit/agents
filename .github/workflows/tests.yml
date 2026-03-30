@@ -18,6 +18,29 @@ permissions:
   actions: write
 
 jobs:
+  blockguard-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install blockguard
+        run: pip install livekit-plugins/livekit-blockguard/
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run blockguard tests
+        working-directory: livekit-plugins/livekit-blockguard
+        run: python -m pytest test_blockguard.py -v
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -35,21 +58,13 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Run tests
+      - name: Download NLTK data
+        run: uv run python -c "import nltk; nltk.download('punkt_tab')"
 
+      - name: Run tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-        run: uv run pytest tests/test_agent_session.py
-          tests/test_tts_fallback.py
-          tests/test_stt_fallback.py
-          tests/test_aio.py
-          tests/test_chat_ctx.py
-          tests/test_config.py
-          tests/test_schema_gemini.py
-          tests/test_tokenizer.py
-          tests/test_transcription_filter.py
-          tests/test_tools.py
+        run: make unit-tests
 
   evaluation:
     # don't run tests for PRs on forks

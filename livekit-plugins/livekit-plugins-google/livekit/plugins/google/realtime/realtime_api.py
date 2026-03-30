@@ -10,11 +10,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, LanguageCode, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -48,8 +49,6 @@ lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
         "gemini-live-2.5-flash-native-audio",
-        "gemini-live-2.5-flash-preview-native-audio-09-2025",
-        "gemini-live-2.5-flash-preview-native-audio",
     }
 )
 
@@ -57,9 +56,9 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
-        "gemini-2.0-flash-exp",
     }
 )
 
@@ -124,7 +123,7 @@ class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     response_modalities: list[types.Modality]
     vertexai: bool
     project: str | None
@@ -151,6 +150,7 @@ class _RealtimeOptions:
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    credentials: google.auth.credentials.Credentials | None = None
 
 
 @dataclass
@@ -218,6 +218,7 @@ class RealtimeModel(llm.RealtimeModel):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -318,6 +319,11 @@ class RealtimeModel(llm.RealtimeModel):
         else:
             gcp_project = None
             gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -344,7 +350,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
-            language=language,
+            language=LanguageCode(language) if isinstance(language, str) else language,
             image_encode_options=image_encode_options,
             enable_affective_dialog=enable_affective_dialog,
             proactivity=proactivity,
@@ -357,6 +363,7 @@ class RealtimeModel(llm.RealtimeModel):
             http_options=http_options,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            credentials=credentials,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -455,6 +462,7 @@ class RealtimeSession(llm.RealtimeSession):
             vertexai=self._opts.vertexai,
             project=self._opts.project,
             location=self._opts.location,
+            credentials=self._opts.credentials,
             http_options=http_options,
         )
 
@@ -540,14 +548,33 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
-            self._mark_restart_needed()
+
+            async with self._session_lock:
+                if not self._active_session:
+                    # No active session yet — restart will pick up new instructions via _build_connect_config
+                    self._mark_restart_needed()
+                    return
+
+            # Active session exists — send mid-session system instruction update (no reconnect needed)
+            logger.debug("Updating instructions mid-session")
+            self._send_client_event(
+                types.LiveClientContent(
+                    turns=[
+                        types.Content(
+                            parts=[types.Part(text=instructions)],
+                            # Vertex AI ignores role=None or role="system" and only works with role="model".
+                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
+                            role="model" if self._opts.vertexai else None,
+                        )
+                    ],
+                    turn_complete=False,
+                )
+            )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
-            1
-            for item in chat_ctx.items
-            if item.type == "message" and item.role in ["system", "developer"]
+            1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
         )
         if system_msg_count > 0:
             logger.warning(
@@ -558,7 +585,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
         chat_ctx = chat_ctx.copy(
-            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
         )
         async with self._session_lock:
             if not self._active_session:
@@ -630,12 +660,10 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[
-                        types.Blob(
-                            data=nf.data.tobytes(),
-                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                        )
-                    ]
+                    audio=types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                    )
                 )
                 self._send_client_event(realtime_input)
 
@@ -644,7 +672,7 @@ class RealtimeSession(llm.RealtimeSession):
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
         realtime_input = types.LiveClientRealtimeInput(
-            media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
+            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
         )
         self._send_client_event(realtime_input)
 
@@ -771,8 +799,8 @@ class RealtimeSession(llm.RealtimeSession):
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
                             1
-                            for item in self._chat_ctx.items
-                            if item.type == "message" and item.role in ["system", "developer"]
+                            for msg in self._chat_ctx.messages()
+                            if msg.role in ("system", "developer")
                         )
                         if system_msg_count > 0:
                             logger.warning(
@@ -788,6 +816,7 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_handoff=True,
                             exclude_instructions=True,
                             exclude_empty_message=True,
+                            exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
@@ -876,9 +905,12 @@ class RealtimeSession(llm.RealtimeSession):
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
-                    if msg.media_chunks:
-                        for media_chunk in msg.media_chunks:
-                            await session.send_realtime_input(media=media_chunk)
+                    if msg.audio:
+                        await session.send_realtime_input(audio=msg.audio)
+                    elif msg.video:
+                        await session.send_realtime_input(video=msg.video)
+                    elif msg.text:
+                        await session.send_realtime_input(text=msg.text)
                     elif msg.activity_start:
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
@@ -894,7 +926,9 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientRealtimeInput,
                     ),
                 ):
-                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (
+                        msg.audio or msg.video or msg.text
+                    ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
                             extra={"content": msg.model_dump(exclude_defaults=True)},
@@ -1312,9 +1346,6 @@ class RealtimeSession(llm.RealtimeSession):
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Gemini Realtime API.")
 
-    def commit_user_turn(self) -> None:
-        logger.warning("commit_user_turn is not supported by Gemini Realtime API.")
-
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
@@ -1354,11 +1385,16 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription is not None)
-            or (sc.input_transcription and sc.input_transcription is not None)
-            or (sc.generation_complete is not None)
-            or (sc.turn_complete is not None)
+            or (
+                sc.output_transcription and sc.output_transcription and sc.output_transcription.text
+            )
+            or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
+            # or (sc.generation_complete is not None)
+            # or (sc.turn_complete is not None)
         ):
+            # Some Gemini models send a `generation_complete` event after tool calls, but others do not.
+            # We mark the generation as done after a tool call and need to ignore any empty transcriptions or generation_complete events.
+            # This prevents new empty generations from starting and interrupting tool execution.
             return True
 
         return False

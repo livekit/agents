@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, cast
 
+import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
@@ -116,6 +117,7 @@ class LLM(llm.LLM):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -175,6 +177,11 @@ class LLM(llm.LLM):
         else:
             gcp_project = None
             gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
             if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
@@ -219,6 +226,7 @@ class LLM(llm.LLM):
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
+            credentials=credentials,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
@@ -252,9 +260,7 @@ class LLM(llm.LLM):
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        tool_choice = (
-            cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-        )
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         retrieval_config = (
             self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
         )
@@ -308,7 +314,7 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
@@ -334,7 +340,7 @@ class LLM(llm.LLM):
 
             # Extract both parameters
             _budget = None
-            _level = None
+            _level: str | types.ThinkingLevel | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
@@ -468,9 +474,6 @@ class LLMStream(llm.LLMStream):
 
                 candidate = response.candidates[0]
 
-                if not candidate.content or not candidate.content.parts:
-                    continue
-
                 if candidate.finish_reason is not None:
                     finish_reason = candidate.finish_reason
                     if candidate.finish_reason in BLOCKED_REASONS:
@@ -479,6 +482,9 @@ class LLMStream(llm.LLMStream):
                             retryable=False,
                             request_id=request_id,
                         )
+
+                if not candidate.content or not candidate.content.parts:
+                    continue
 
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
@@ -533,6 +539,8 @@ class LLMStream(llm.LLMStream):
                 request_id=request_id,
                 retryable=retryable,
             ) from e
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"gemini llm: error generating content {str(e)}",
@@ -560,7 +568,7 @@ class LLMStream(llm.LLMStream):
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     tool_calls=[tool_call],
-                    content=part.text,
+                    content=None,
                 ),
             )
             return chat_chunk

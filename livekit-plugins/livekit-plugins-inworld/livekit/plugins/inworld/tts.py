@@ -19,10 +19,12 @@ import base64
 import json
 import os
 import time
+import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Literal, Union, cast
+from typing import Any, Literal, cast, get_args
 from urllib.parse import urljoin
 
 import aiohttp
@@ -44,23 +46,43 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
+from .version import __version__
+
+USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
-DEFAULT_ENCODING = "OGG_OPUS"
-DEFAULT_MODEL = "inworld-tts-1"
-DEFAULT_SAMPLE_RATE = 48000
+DEFAULT_ENCODING: Encoding = "PCM"
+DEFAULT_MODEL = "inworld-tts-1.5-max"
+DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
-DEFAULT_TEMPERATURE = 1.1
+DEFAULT_TEMPERATURE = 1.0
 DEFAULT_SPEAKING_RATE = 1.0
 DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"], str]
+Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
-TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+_TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+TextNormalization = _TextNormalizationStr | bool
+TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
+
+DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
+
+
+def _validate_str_param(value: object, name: str, literal_type: Any) -> None:
+    valid = get_args(literal_type)
+    if not isinstance(value, str) or value not in valid:
+        raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
+
+
+def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
+    if isinstance(value, bool):
+        return "ON" if value else "OFF"
+    _validate_str_param(value, "text_normalization", _TextNormalizationStr)
+    return cast(_TextNormalizationStr, value)
 
 
 @dataclass
@@ -74,19 +96,20 @@ class _TTSOptions:
     temperature: float
     timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
+    timestamp_transport_strategy: TimestampTransportStrategy = DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY
     buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
 
     @property
     def mime_type(self) -> str:
-        if self.encoding == "MP3":
+        if self.encoding == "PCM":
+            return "audio/pcm"
+        elif self.encoding == "MP3":
             return "audio/mpeg"
         elif self.encoding == "OGG_OPUS":
             return "audio/ogg"
         elif self.encoding == "FLAC":
             return "audio/flac"
-        elif self.encoding in ("ALAW", "MULAW"):
-            return "audio/basic"
         else:
             return "audio/wav"
 
@@ -105,8 +128,15 @@ class _ContextInfo:
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
     segment_started: bool = False
+    flush_after_push: bool = False
     created_at: float = field(default_factory=time.time)
     close_started_at: float | None = None
+    # Cumulative timestamp tracking for monotonic timestamps across generations.
+    # When auto_mode is enabled or flush_context() is called, the server resets
+    # timestamps to 0 after each generation. We add cumulative_time to maintain
+    # monotonically increasing timestamps within an agent turn.
+    cumulative_time: float = 0.0
+    generation_end_time: float = 0.0
 
 
 @dataclass
@@ -131,7 +161,7 @@ class _CloseContextMsg:
     context_id: str
 
 
-_OutboundMessage = Union[_CreateContextMsg, _SendTextMsg, _FlushContextMsg, _CloseContextMsg]
+_OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseContextMsg
 
 
 class _InworldConnection:
@@ -223,10 +253,19 @@ class _InworldConnection:
                 return
 
             url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
+            request_id = str(uuid.uuid4())
             self._ws = await self._session.ws_connect(
-                url, headers={"Authorization": self._authorization}
+                url,
+                headers={
+                    "Authorization": self._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": request_id,
+                },
             )
-            logger.debug("Established Inworld TTS WebSocket connection (shared)")
+            logger.debug(
+                "Established Inworld TTS WebSocket connection (shared)",
+                extra={"request_id": request_id},
+            )
 
             self._send_task = asyncio.create_task(self._send_loop())
             self._recv_task = asyncio.create_task(self._recv_loop())
@@ -271,6 +310,7 @@ class _InworldConnection:
                         state=_ContextState.CREATING,
                         emitter=emitter,
                         waiter=waiter,
+                        flush_after_push=opts.encoding == "PCM",
                     )
                     self._contexts[ctx_id] = ctx_info
                     # Release reservation now that we have a real context
@@ -310,6 +350,14 @@ class _InworldConnection:
         except asyncio.QueueFull:
             logger.warning("Outbound queue full, dropping flush")
 
+    def _release_context(self, context_id: str) -> None:
+        """Remove a context and signal that capacity is available."""
+        self._contexts.pop(context_id, None)
+        self._last_activity = time.time()
+        self._context_available.set()
+        if self._on_capacity_available:
+            self._on_capacity_available()
+
     def close_context(self, context_id: str) -> None:
         """Queue a close message for a context (removes from pool)."""
         ctx = self._contexts.get(context_id)
@@ -348,6 +396,7 @@ class _InworldConnection:
                             "temperature": opts.temperature,
                             "bufferCharThreshold": opts.buffer_char_threshold,
                             "maxBufferDelayMs": opts.max_buffer_delay_ms,
+                            "timestampTransportStrategy": opts.timestamp_transport_strategy,
                         },
                         "contextId": msg.context_id,
                     }
@@ -355,6 +404,8 @@ class _InworldConnection:
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    # Always enable auto_mode since we always use SentenceTokenizer
+                    pkt["create"]["autoMode"] = True
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -398,6 +449,18 @@ class _InworldConnection:
                     continue
 
                 data = json.loads(msg.data)
+
+                # Check for errors that are not associated with a context
+                if err_obj := data.get("error"):
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "error_code": err_obj.get("code", 0),
+                            "error_message": err_obj.get("message", "Unknown error"),
+                        },
+                    )
+                    continue
+
                 result = data.get("result", {})
                 context_id = result.get("contextId")
 
@@ -406,16 +469,22 @@ class _InworldConnection:
                 # Check for errors in status
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
-                    error = APIError(f"Inworld error: {status.get('message', 'Unknown error')}")
+                    error_msg = status.get("message", "Unknown error")
+                    error = APIError(f"Inworld error: {error_msg}")
+                    logger.warning(
+                        "Received error from Inworld",
+                        extra={
+                            "context_id": context_id,
+                            "error_code": status.get("code"),
+                            "error_message": error_msg,
+                            "context_state": ctx.state.value if ctx else "unknown",
+                            "context_known": ctx is not None,
+                        },
+                    )
                     if ctx:
                         if ctx.waiter and not ctx.waiter.done():
                             ctx.waiter.set_exception(error)
-                        # Release the stuck context and signal capacity
-                        self._contexts.pop(context_id, None)
-                        self._last_activity = time.time()
-                        self._context_available.set()
-                        if self._on_capacity_available:
-                            self._on_capacity_available()
+                        self._release_context(context_id)
                     continue
 
                 if not ctx:
@@ -423,6 +492,10 @@ class _InworldConnection:
 
                 if "contextCreated" in result:
                     ctx.state = _ContextState.ACTIVE
+                    logger.info(
+                        "Context created confirmed by server",
+                        extra={"context_id": context_id},
+                    )
                     continue
 
                 if audio_chunk := result.get("audioChunk"):
@@ -431,26 +504,73 @@ class _InworldConnection:
                             ctx.emitter.start_segment(segment_id=context_id)
                             ctx.segment_started = True
 
+                        # Adjust timestamps for cumulative offset
                         if timestamp_info := audio_chunk.get("timestampInfo"):
-                            timed_strings = _parse_timestamp_info(timestamp_info)
+                            if word_align := timestamp_info.get("wordAlignment"):
+                                raw_words = word_align.get("words", [])
+                                raw_starts = word_align.get("wordStartTimeSeconds", [])
+                                raw_ends = word_align.get("wordEndTimeSeconds", [])
+                                logger.debug(
+                                    "Raw timestamps from server",
+                                    extra={
+                                        "context_id": context_id,
+                                        "cumulative_offset": ctx.cumulative_time,
+                                        "raw_words": raw_words,
+                                        "raw_starts": raw_starts,
+                                        "raw_ends": raw_ends,
+                                    },
+                                )
+
+                            timed_strings = _parse_timestamp_info(
+                                timestamp_info, cumulative_time=ctx.cumulative_time
+                            )
+                            # Track generation end time from last word for cumulative offset
+                            if timed_strings:
+                                last_ts = timed_strings[-1]
+                                if utils.is_given(last_ts.end_time):
+                                    ctx.generation_end_time = last_ts.end_time
+
+                                logger.debug(
+                                    "Adjusted timestamps (with cumulative offset)",
+                                    extra={
+                                        "context_id": context_id,
+                                        "words": [str(ts) for ts in timed_strings],
+                                        "adjusted_starts": [ts.start_time for ts in timed_strings],
+                                        "adjusted_ends": [ts.end_time for ts in timed_strings],
+                                        "generation_end_time": ctx.generation_end_time,
+                                    },
+                                )
+
                             for ts in timed_strings:
                                 ctx.emitter.push_timed_transcript(ts)
 
                         if audio_content := audio_chunk.get("audioContent"):
                             ctx.emitter.push(base64.b64decode(audio_content))
+                            if ctx.flush_after_push:
+                                ctx.emitter.flush()
                     continue
 
                 if "flushCompleted" in result:
+                    # Signals the end of a generation, subsequent timestampes from the server
+                    # will reset offset to 0. We need to update the cumulative time to the
+                    # generation end time to maintain monotonically increasing timestamps
+                    # within the agent turn.
+                    if ctx.generation_end_time > 0:
+                        logger.debug(
+                            "flushCompleted - updating cumulative time",
+                            extra={
+                                "context_id": context_id,
+                                "old_cumulative_time": ctx.cumulative_time,
+                                "new_cumulative_time": ctx.generation_end_time,
+                            },
+                        )
+                        ctx.cumulative_time = ctx.generation_end_time
                     continue
 
                 if "contextClosed" in result:
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(context_id, None)
-                    self._last_activity = time.time()
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(context_id)
                     continue
 
         except Exception as e:
@@ -468,14 +588,9 @@ class _InworldConnection:
                 # Use close_started_at if available, otherwise fall back to created_at
                 close_time = ctx.close_started_at or ctx.created_at
                 if ctx.state == _ContextState.CLOSING and now - close_time > 120.0:
-                    # Resolve waiter before evicting
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
-                    self._contexts.pop(ctx.context_id, None)
-                    self._last_activity = now
-                    self._context_available.set()
-                    if self._on_capacity_available:
-                        self._on_capacity_available()
+                    self._release_context(ctx.context_id)
 
     async def _handle_connection_error(self, error: Exception) -> None:
         """Handle connection-level error by failing all active contexts."""
@@ -711,6 +826,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
@@ -728,20 +844,24 @@ class TTS(tts.TTS):
             api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
-            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
-            encoding (str, optional): The encoding to use. Defaults to "OGG_OPUS".
+            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1.5-max".
+            encoding (str, optional): The encoding to use. Defaults to "PCM".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 48000.
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
                 Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
-                tokens to generate the response. Range [0, 2]. Defaults to 1.1.
+                tokens to generate the response. Range (0, 2]. Defaults to 1.0.
             timestamp_type (str, optional): Controls timestamp metadata returned with the audio.
                 Use "WORD" for word-level timestamps or "CHARACTER" for character-level.
                 Useful for karaoke-style captions, word highlighting, and lipsync.
             text_normalization (str, optional): Controls text normalization. When "ON", numbers,
                 dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
                 text is read exactly as written. Defaults to automatic.
+            timestamp_transport_strategy (str, optional): Controls how timestamp info is
+                transported relative to audio data. "SYNC" returns timestamps in the same
+                message as audio data. "ASYNC" allows timestamps to return in trailing
+                messages after the audio data. Defaults to "ASYNC".
             buffer_char_threshold (int, optional): For streaming, the minimum number of characters
                 in the buffer that automatically triggers audio generation. Defaults to 1000.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
@@ -774,12 +894,28 @@ class TTS(tts.TTS):
 
         key = api_key if is_given(api_key) else os.getenv("INWORLD_API_KEY")
         if not key:
-            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
+            raise ValueError(
+                "Inworld API key is required, either as argument or set"
+                " INWORLD_API_KEY environment variable"
+            )
 
         self._authorization = f"Basic {key}"
         self._base_url = base_url
         self._ws_url = ws_url
         self._session = http_session
+
+        if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
+        if is_given(timestamp_type):
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+        if is_given(text_normalization):
+            text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
 
         self._opts = _TTSOptions(
             voice=voice if is_given(voice) else DEFAULT_VOICE,
@@ -791,6 +927,9 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
+            timestamp_transport_strategy=timestamp_transport_strategy
+            if is_given(timestamp_transport_strategy)
+            else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
             buffer_char_threshold=buffer_char_threshold
             if is_given(buffer_char_threshold)
             else DEFAULT_BUFFER_CHAR_THRESHOLD,
@@ -845,6 +984,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -862,6 +1002,8 @@ class TTS(tts.TTS):
                 tokens to generate the response.
             timestamp_type (str, optional): Controls timestamp metadata ("WORD" or "CHARACTER").
             text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
+            timestamp_transport_strategy (str, optional): Controls timestamp transport strategy
+                ("SYNC" or "ASYNC").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
         """
@@ -870,6 +1012,7 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
         if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
             self._opts.encoding = encoding
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
@@ -880,9 +1023,17 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
-            self._opts.timestamp_type = cast(TimestampType, timestamp_type)
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+            self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            self._opts.text_normalization = cast(TextNormalization, text_normalization)
+            self._opts.text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
+            self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
@@ -939,7 +1090,11 @@ class TTS(tts.TTS):
 
         async with self._ensure_session().get(
             url,
-            headers={"Authorization": self._authorization},
+            headers={
+                "Authorization": self._authorization,
+                "X-User-Agent": USER_AGENT,
+                "X-Request-Id": str(uuid.uuid4()),
+            },
             params=params,
         ) as resp:
             if not resp.ok:
@@ -981,11 +1136,15 @@ class ChunkedStream(tts.ChunkedStream):
                 body_params["timestampType"] = self._opts.timestamp_type
             if utils.is_given(self._opts.text_normalization):
                 body_params["applyTextNormalization"] = self._opts.text_normalization
+            body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
+            x_request_id = str(uuid.uuid4())
             async with self._tts._ensure_session().post(
                 urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
                 headers={
                     "Authorization": self._tts._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": x_request_id,
                 },
                 json=body_params,
                 timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
@@ -1022,19 +1181,20 @@ class ChunkedStream(tts.ChunkedStream):
 
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
-                            output_emitter.flush()
+                            if self._opts.encoding == "PCM":
+                                output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
                             message=error.get("message"),
                             status_code=error.get("code"),
-                            request_id=request_id,
+                            request_id=x_request_id,
                             body=None,
                         )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message=e.message, status_code=e.status, request_id=x_request_id, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
@@ -1080,7 +1240,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
                     self._mark_started()
-                connection.flush_context(context_id)
+            connection.flush_context(context_id)
             connection.close_context(context_id)
 
         tasks = [
@@ -1108,8 +1268,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
 
-def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
-    """Parse timestamp info from API response into TimedString objects."""
+def _parse_timestamp_info(
+    timestamp_info: dict[str, Any], cumulative_time: float = 0.0
+) -> list[TimedString]:
+    """Parse timestamp info from API response into TimedString objects.
+
+    Args:
+        timestamp_info: The timestamp info from the API response.
+        cumulative_time: Offset to add to all timestamps for monotonic ordering
+            across multiple generations within a single context.
+    """
     timed_strings: list[TimedString] = []
 
     # Handle word-level alignment
@@ -1118,8 +1286,17 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         starts = word_align.get("wordStartTimeSeconds", [])
         ends = word_align.get("wordEndTimeSeconds", [])
 
-        for word, start, end in zip(words, starts, ends):
-            timed_strings.append(TimedString(word, start_time=start, end_time=end))
+        for word, start, end in zip(words, starts, ends, strict=False):
+            # Each word gets a trailing space so that when the synchronizer concatenates
+            # them via `pushed_text += text`, the transcript reads naturally.
+            text = f"{word} "
+            timed_strings.append(
+                TimedString(
+                    text,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     # Handle character-level alignment
     if char_align := timestamp_info.get("characterAlignment"):
@@ -1127,7 +1304,13 @@ def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
         starts = char_align.get("characterStartTimeSeconds", [])
         ends = char_align.get("characterEndTimeSeconds", [])
 
-        for char, start, end in zip(chars, starts, ends):
-            timed_strings.append(TimedString(char, start_time=start, end_time=end))
+        for char, start, end in zip(chars, starts, ends, strict=False):
+            timed_strings.append(
+                TimedString(
+                    char,
+                    start_time=cumulative_time + start,
+                    end_time=cumulative_time + end,
+                )
+            )
 
     return timed_strings

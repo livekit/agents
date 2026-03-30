@@ -42,6 +42,7 @@ class PreResponseAgent(Agent):
             exclude_instructions=True,
             exclude_function_call=True,
             exclude_handoff=True,
+            exclude_config_update=True,
         ).truncate(max_items=3)
         fast_llm_ctx.items.insert(0, self._fast_llm_prompt)
         fast_llm_ctx.items.append(new_message)

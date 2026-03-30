@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import aiohttp
 
@@ -32,21 +33,25 @@ class AvatarSession:
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
     ) -> None:
         self._agent_id = agent_id
         self._agent_image_url = agent_image_url
         self._agent_prompt = agent_prompt
+        self._agent_idle_prompt = agent_idle_prompt
         self._idle_timeout = idle_timeout
         self._api_url = api_url
         self._api_key = api_key
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+        self._extra_payload: NotGivenOr[dict[str, Any]] = kwargs if kwargs else NOT_GIVEN
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
@@ -59,7 +64,7 @@ class AvatarSession:
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
+    ) -> str:
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -88,13 +93,15 @@ class AvatarSession:
             conn_options=self._conn_options,
             session=self._http_session,
         ) as lemonslice_api:
-            await lemonslice_api.start_agent_session(
+            session_id = await lemonslice_api.start_agent_session(
                 agent_id=self._agent_id,
                 agent_image_url=self._agent_image_url,
                 agent_prompt=self._agent_prompt,
+                agent_idle_prompt=self._agent_idle_prompt,
                 idle_timeout=self._idle_timeout,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
+                extra_payload=self._extra_payload,
             )
 
         agent_session.output.audio = DataStreamAudioOutput(
@@ -104,3 +111,5 @@ class AvatarSession:
             wait_remote_track=rtc.TrackKind.KIND_VIDEO,
             clear_buffer_timeout=None,
         )
+
+        return session_id

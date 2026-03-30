@@ -12,7 +12,9 @@ from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_SIMULATOR,
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
+    TOPIC_CHAT,
     NotGivenOr,
 )
 from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
@@ -32,6 +34,8 @@ from .types import (
     RoomInputOptions,
     RoomOptions,
     RoomOutputOptions,
+    TextInputCallback,
+    TextInputEvent,
 )
 
 
@@ -75,12 +79,27 @@ class RoomIO:
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[Any] | asyncio.Future[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
+
+        self._text_input_cb: TextInputCallback | None = None
+        self._chat_handler_registered = False
+
+    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
+        self._text_input_cb = text_input_cb
+
+        if not self._chat_handler_registered:
+            try:
+                self._room.register_text_stream_handler(TOPIC_CHAT, self._on_chat_text_stream)
+                self._chat_handler_registered = True
+            except ValueError:
+                logger.warning(
+                    f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
+                )
 
     async def start(self) -> None:
         # -- create inputs --
@@ -103,6 +122,7 @@ class RoomIO:
                 num_channels=input_audio_options.num_channels,
                 frame_size_ms=input_audio_options.frame_size_ms,
                 noise_cancellation=input_audio_options.noise_cancellation,
+                auto_gain_control=input_audio_options.auto_gain_control,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 
@@ -186,6 +206,13 @@ class RoomIO:
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
 
+        if self._chat_handler_registered:
+            self._chat_handler_registered = False
+            try:
+                self._room.unregister_text_stream_handler(TOPIC_CHAT)
+            except ValueError:
+                pass
+
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
 
@@ -210,6 +237,16 @@ class RoomIO:
 
         if self._audio_output:
             await self._audio_output.aclose()
+
+        if (task := self._delete_room_task) is not None:
+            try:
+                await asyncio.wait_for(task, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "automatic room deletion timed out",
+                    extra={"room": self._room.name},
+                )
+                self._tasks.add(task)
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
@@ -403,6 +440,39 @@ class RoomIO:
             self._update_state_atask.cancel()
 
         self._update_state_atask = asyncio.create_task(_set_state())
+
+    def _on_chat_text_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
+        linked = self.linked_participant
+        if linked and participant_identity != linked.identity:
+            return
+
+        participant = self._room.remote_participants.get(participant_identity)
+        if not participant:
+            logger.warning("participant not found, ignoring text input")
+            return
+
+        if self._text_input_cb is None:
+            logger.error("text input callback is not set, ignoring text input")
+            return
+
+        text_input_cb = self._text_input_cb
+        session = self._agent_session
+
+        async def _read_text() -> None:
+            try:
+                text = await reader.read_all()
+                result = text_input_cb(
+                    session,
+                    TextInputEvent(text=text, info=reader.info, participant=participant),
+                )
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning("failed to handle chat text stream", exc_info=True)
+
+        task = asyncio.create_task(_read_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _on_agent_session_close(self, ev: CloseEvent) -> None:
         def _on_delete_room_task_done(task: asyncio.Future[api.DeleteRoomResponse]) -> None:

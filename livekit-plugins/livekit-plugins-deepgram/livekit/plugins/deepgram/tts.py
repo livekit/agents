@@ -251,9 +251,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -264,23 +264,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _tokenize_input() -> None:
-            # Converts incoming text into WordStreams and sends them into _segments_ch
+            # Converts incoming text into WordStreams and sends them into segments_ch
             word_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
+                        segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for word_stream in self._segments_ch:
+            async for word_stream in segments_ch:
                 await self._run_ws(word_stream, output_emitter)
 
         tasks = [

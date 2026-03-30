@@ -72,6 +72,8 @@ def write_new_version(f: pathlib.Path, new_version: str) -> None:
 
 def bump_version(cur: str, bump_type: str) -> str:
     v = Version(cur)
+    if bump_type == "release":
+        return v.base_version
     if bump_type == "patch":
         return f"{v.major}.{v.minor}.{v.micro + 1}"
     if bump_type == "minor":
@@ -257,9 +259,9 @@ def update_prerelease(prerelease_type: str) -> None:
 )
 @click.option(
     "--bump-type",
-    type=click.Choice(["patch", "minor", "major"]),
+    type=click.Choice(["patch", "minor", "major", "release"]),
     default="patch",
-    help="Type of version bump to apply when ignoring changesets. Defaults to patch."
+    help="Type of version bump to apply when ignoring changesets. Use 'release' to strip pre-release suffixes. Defaults to patch."
 )
 def bump(pre: str, ignore_changesets: bool, bump_type: str) -> None:
     """

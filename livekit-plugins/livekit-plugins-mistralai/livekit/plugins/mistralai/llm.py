@@ -21,10 +21,10 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given, shortuuid
-from mistralai import (
-    ChatCompletionStreamRequestMessagesTypedDict,
+from mistralai.client import Mistral
+from mistralai.client.models import (
+    ChatCompletionStreamRequestMessageTypedDict,
     CompletionResponseStreamChoice,
-    Mistral,
     ToolTypedDict,
 )
 
@@ -42,7 +42,7 @@ class _LLMOptions:
 class LLM(llm.LLM):
     def __init__(
         self,
-        model: str | ChatModels = "ministral-8b-2410",
+        model: str | ChatModels = "ministral-8b-latest",
         api_key: str | None = None,
         client: Mistral | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -55,7 +55,13 @@ class LLM(llm.LLM):
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
         )
-        self._client = Mistral(api_key=api_key or os.environ.get("MISTRAL_API_KEY"))
+        mistral_api_key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if not client and not mistral_api_key:
+            raise ValueError(
+                "Mistral API key is required, either as argument or set"
+                " MISTRAL_API_KEY environment variable"
+            )
+        self._client = client or Mistral(api_key=mistral_api_key)
 
     @property
     def model(self) -> str:
@@ -78,8 +84,11 @@ class LLM(llm.LLM):
     ) -> LLMStream:
         extra: dict[str, Any] = {}
 
+        if is_given(extra_kwargs):
+            extra.update(extra_kwargs)
+
         if is_given(self._opts.max_completion_tokens):
-            extra["max_completion_tokens"] = self._opts.max_completion_tokens
+            extra["max_tokens"] = self._opts.max_completion_tokens
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
@@ -134,7 +143,7 @@ class LLMStream(llm.LLMStream):
             tools = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             async_response = await self._client.chat.stream_async(
-                messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),
+                messages=cast(list[ChatCompletionStreamRequestMessageTypedDict], messages),
                 tools=cast(list[ToolTypedDict], tools),
                 model=self._model,
                 timeout_ms=int(self._conn_options.timeout * 1000),

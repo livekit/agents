@@ -4,7 +4,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from dotenv import load_dotenv
 from mock_bank_service import (
@@ -53,9 +52,9 @@ class TaskOutcome(str, Enum):
 
 @dataclass
 class SessionState:
-    customer_id: Optional[str] = None  # noqa: UP007
-    customer_name: Optional[str] = None  # noqa: UP007
-    branch_name: Optional[str] = None  # noqa: UP007
+    customer_id: str | None = None  # noqa: UP007
+    customer_name: str | None = None  # noqa: UP007
+    branch_name: str | None = None  # noqa: UP007
     deposit_cache: dict[str, tuple[DepositAccount, ...]] = field(default_factory=dict)
     card_cache: dict[str, tuple[CreditCard, ...]] = field(default_factory=dict)
     loan_cache: dict[str, tuple[LoanAccount, ...]] = field(default_factory=dict)
@@ -80,7 +79,10 @@ async def collect_digits(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
                 chat_ctx=agent.chat_ctx.copy(
-                    exclude_instructions=True, exclude_function_call=True, exclude_handoff=True
+                    exclude_instructions=True,
+                    exclude_function_call=True,
+                    exclude_handoff=True,
+                    exclude_config_update=True,
                 ),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "
@@ -645,16 +647,12 @@ async def bank_ivr_session(ctx: JobContext) -> None:
         userdata=state,
     )
 
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
     async def log_usage() -> None:
-        summary = usage_collector.get_summary()
-        logger.info("Usage summary: %s", summary)
+        logger.info("Usage summary: %s", session.usage)
 
     ctx.add_shutdown_callback(log_usage)
 

@@ -4,7 +4,6 @@ import os
 import sys
 from dataclasses import dataclass
 from itertools import cycle
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -42,10 +41,10 @@ RESET = "\033[0m"  # Reset color
 class Chunk:
     stream_id: str
     participant_identity: str
-    track_id: Optional[str]
+    track_id: str | None
     segment_id: str
     content: str
-    final: Optional[bool] = None
+    final: bool | None = None
 
 
 class TextStreamPrinter:

@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -44,8 +43,8 @@ class StoryData:
     # Shared data that's used by the storyteller agent.
     # This structure is passed as a parameter to function calls.
 
-    name: Optional[str] = None
-    location: Optional[str] = None
+    name: str | None = None
+    location: str | None = None
 
 
 class IntroAgent(Agent):
@@ -92,7 +91,7 @@ class IntroAgent(Agent):
 
 
 class StoryAgent(Agent):
-    def __init__(self, name: str, location: str, *, chat_ctx: Optional[ChatContext] = None) -> None:
+    def __init__(self, name: str, location: str, *, chat_ctx: ChatContext | None = None) -> None:
         super().__init__(
             instructions=f"{common_instructions}. You should use the user's information in "
             "order to make the story personalized."
@@ -152,16 +151,12 @@ async def entrypoint(ctx: JobContext):
     )
 
     # log metrics as they are emitted, and total usage after session is over
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
     async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        logger.info(f"Usage: {session.usage}")
 
     ctx.add_shutdown_callback(log_usage)
 
