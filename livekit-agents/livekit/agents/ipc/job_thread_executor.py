@@ -243,12 +243,15 @@ class ThreadJobExecutor:
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        init_failed = False
         try:
             await self._initialize_fut
         except asyncio.TimeoutError:
-            pass  # this happens when the initialization takes longer than self._initialize_timeout
+            logger.warning("job initialization timed out")
+            init_failed = True
         except Exception:
-            pass  # initialization failed
+            logger.warning("job initialization failed", exc_info=True)
+            init_failed = True
 
         ping_task = asyncio.create_task(self._ping_task())
         monitor_task = asyncio.create_task(self._monitor_task())
@@ -260,7 +263,7 @@ class ThreadJobExecutor:
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
 
-        self._job_status = JobStatus.SUCCESS
+        self._job_status = JobStatus.FAILED if init_failed else JobStatus.SUCCESS
 
     @utils.log_exceptions(logger=logger)
     async def _monitor_task(self) -> None:
