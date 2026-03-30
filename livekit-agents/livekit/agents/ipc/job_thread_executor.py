@@ -143,12 +143,13 @@ class ThreadJobExecutor:
             except Exception:
                 with contextlib.suppress(OSError):
                     mp_cch.close()
-                with contextlib.suppress(OSError):
-                    mp_pch.close()
 
                 if pch is not None:
                     with contextlib.suppress(duplex_unix.DuplexClosed):
                         await pch.aclose()
+                else:
+                    with contextlib.suppress(OSError):
+                        mp_pch.close()
 
                 raise
 
