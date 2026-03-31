@@ -683,6 +683,13 @@ class RealtimeSession(llm.RealtimeSession):
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.cancel()
+            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
