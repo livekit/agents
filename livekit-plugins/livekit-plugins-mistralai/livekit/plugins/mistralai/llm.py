@@ -33,34 +33,46 @@ DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
 
 @dataclass
 class _LLMOptions:
-    model: str
+    model: ChatModels | str
+    max_completion_tokens: int | None
+    temperature: float | None
 
 
 class LLM(llm.LLM):
     def __init__(
         self,
-        model: ChatModels | str = DEFAULT_MODEL,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of MistralAI LLM.
 
         Args:
-            model: The MistralAI model to use for completions, default is "ministral-8b-latest".
-            api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
+            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
+            model: The Mistral AI model to use for completions, default is "ministral-8b-latest".
+            max_completion_tokens: The max. number of tokens the LLM can output.
+            temperature: The temperature to use the LLM with.
         """
 
+        resolved_model = model if is_given(model) else DEFAULT_MODEL
+        resolved_max_completion_tokens = (
+            max_completion_tokens if is_given(max_completion_tokens) else None
+        )
+        resolved_temperature = temperature if is_given(temperature) else None
         super().__init__()
         self._opts = _LLMOptions(
-            model=model,
+            model=resolved_model,
+            max_completion_tokens=resolved_max_completion_tokens,
+            temperature=resolved_temperature,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
-            raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
+            raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
     @property
@@ -74,15 +86,23 @@ class LLM(llm.LLM):
     def update_options(
         self,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the LLM options.
 
         Args:
             model: The model to use for completions
+            max_completion_tokens: The max. number of tokens the LLM can output.
+            temperature: The temperature to use the LLM with.
         """
         if is_given(model):
             self._opts.model = model
+        if is_given(max_completion_tokens):
+            self._opts.max_completion_tokens = max_completion_tokens
+        if is_given(temperature):
+            self._opts.temperature = temperature
 
     def chat(
         self,
@@ -136,6 +156,7 @@ class LLMStream(llm.LLMStream):
         self._model = model
         self._client = client
         self._llm = llm_v
+        self._opts = llm_v._opts
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
 
@@ -152,6 +173,8 @@ class LLMStream(llm.LLMStream):
                 messages=cast(list[ChatCompletionStreamRequestMessageTypedDict], messages),
                 tools=cast(list[ToolTypedDict], tools),
                 model=self._model,
+                max_tokens=self._opts.max_completion_tokens,
+                temperature=self._opts.temperature,
                 timeout_ms=int(self._conn_options.timeout * 1000),
                 **self._extra_kwargs,
             )

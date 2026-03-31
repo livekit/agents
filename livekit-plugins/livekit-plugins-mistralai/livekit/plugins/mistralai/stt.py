@@ -42,29 +42,29 @@ def _is_realtime(model: str) -> bool:
     return "realtime" in model
 
 
-SAMPLE_RATE: int = 16000
-NUM_CHANNELS: int = 1
-
 DEFAULT_MODEL: STTModels = "voxtral-mini-latest"
 DEFAULT_LANGUAGE: str = "en"
 
-_DELTA_TRANSCRIPT_INTERVAL: float = 0.5
+SAMPLE_RATE: int = 16000
+NUM_CHANNELS: int = 1
 
 
 @dataclass
 class _STTOptions:
     model: STTModels | str
     language: LanguageCode | None
+    context_bias: list[str] | None
     target_streaming_delay_ms: int | None
 
 
 class STT(stt.STT):
     def __init__(
         self,
-        model: STTModels | str = DEFAULT_MODEL,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
-        language: str = DEFAULT_LANGUAGE,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         vad: vad.VAD | None = None,
     ):
@@ -72,17 +72,23 @@ class STT(stt.STT):
         Create a new instance of MistralAI STT.
 
         Args:
-            model: The MistralAI model to use for transcription, default is "voxtral-mini-latest".
-            api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
+            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
+            model: The Mistral AI model to use for transcription, default is "voxtral-mini-latest".
             language: The language code to use for transcription (e.g., "fr" for French), default is "en".
+            context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
+                Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
-            vad: Voice Activity Detector used to trigger audio flush for realtime models
-                (which lack server-side endpointing). When not provided, Silero VAD is
-                auto-loaded with default settings. Only used with realtime models.
+            vad: Voice Activity Detector used to trigger audio flush for realtime models (which lack server-side endpointing).
+                When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
-        is_realtime = _is_realtime(model)
-
+        resolved_model = model if is_given(model) else DEFAULT_MODEL
+        resolved_language = LanguageCode(language) if is_given(language) else None
+        resolved_context_bias = context_bias if is_given(context_bias) else None
+        resolved_target_streaming_delay_ms = (
+            target_streaming_delay_ms if is_given(target_streaming_delay_ms) else None
+        )
+        is_realtime = _is_realtime(resolved_model)
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=is_realtime,
@@ -92,11 +98,10 @@ class STT(stt.STT):
             )
         )
         self._opts = _STTOptions(
-            language=LanguageCode(language) if is_given(language) else None,
-            model=model,
-            target_streaming_delay_ms=target_streaming_delay_ms
-            if is_given(target_streaming_delay_ms)
-            else None,
+            language=resolved_language,
+            model=resolved_model,
+            context_bias=resolved_context_bias,
+            target_streaming_delay_ms=resolved_target_streaming_delay_ms,
         )
 
         if is_realtime and vad is None:
@@ -106,15 +111,13 @@ class STT(stt.STT):
                 vad = SileroVAD.load()
             except ImportError as e:
                 raise ImportError(
-                    "livekit-plugins-silero is required for Voxtral realtime models "
-                    "(no server-side endpointing). "
-                    "Install it with: pip install livekit-plugins-silero"
+                    "livekit-plugins-silero is required for Voxtral realtime models (no server-side endpointing)."
                 ) from e
         self._vad = vad
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
-            raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
+            raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
         self._pool = utils.ConnectionPool[RealtimeConnection](
@@ -156,6 +159,7 @@ class STT(stt.STT):
         self,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
@@ -164,15 +168,18 @@ class STT(stt.STT):
         Args:
             model: The model to use for transcription.
             language: The language code to use for transcription.
-            target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode.
+            context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
+                Only used with batch models.
+            target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
         """
         if is_given(model):
             self._opts.model = model
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(context_bias):
+            self._opts.context_bias = context_bias
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
-
         if is_given(model) or is_given(language) or is_given(target_streaming_delay_ms):
             self._pool.invalidate()
             for stream in self._streams:
@@ -193,7 +200,8 @@ class STT(stt.STT):
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language or None,
+                language=self._opts.language,
+                context_bias=self._opts.context_bias,
                 timestamp_granularities=None if self._opts.language else ["segment"],
             )
 
@@ -371,7 +379,7 @@ class SpeechStream(stt.RecognizeStream):
 
         elif isinstance(event, TranscriptionStreamDone):
             final_language = LanguageCode(
-                event.language or self._detected_language or self._opts.language or ""
+                event.language or self._detected_language or self._opts.language or "en"
             )
             words = (
                 [

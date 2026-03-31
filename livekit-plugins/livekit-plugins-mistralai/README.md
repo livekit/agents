@@ -1,6 +1,6 @@
 # Mistral AI Plugin for LiveKit Agents
 
-Support for MistralAI STT, TTS, and LLM services.
+Support for Mistral AI STT, TTS, and LLM services.
 
 ## Installation
 
@@ -31,7 +31,13 @@ export MISTRAL_API_KEY=your_api_key_here
 ```python
 from livekit.plugins import mistralai
 
-stt = mistralai.STT(model="voxtral-mini-latest")
+stt = mistralai.STT()
+
+# With context biasing
+stt = mistralai.STT(
+    model="voxtral-mini-latest",
+    context_bias=["LiveKit", "Voxtral", "Mistral"]
+)
 ```
 
 #### Realtime streaming transcription
@@ -74,5 +80,12 @@ tts = mistralai.TTS(ref_audio=ref_audio_b64)
 ```python
 from livekit.plugins import mistralai
 
-llm = mistralai.LLM(model="mistral-large-latest")
+llm = mistralai.LLM()
+
+# With custom temperature/max. tokens
+llm = mistralai.LLM(
+    model="mistral-large-latest",
+    temperature=0.7,
+    max_completion_tokens=150
+)
 ```
