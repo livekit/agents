@@ -53,7 +53,9 @@ class _RealtimeOptions:
     welcome_message: NotGivenOr[str | None]
     generate_welcome_message: NotGivenOr[bool | None]
     project: NotGivenOr[str | None]
-    languages: NotGivenOr[list[str]]
+    default_language: NotGivenOr[str]
+    additional_languages: NotGivenOr[list[str]]
+    multilingual_mode: NotGivenOr[Literal["auto", "request"]]
     audio_speed: NotGivenOr[float]
     phonic_tools: NotGivenOr[list[str]]
     boosted_keywords: NotGivenOr[list[str]]
@@ -100,7 +102,9 @@ class RealtimeModel(llm.RealtimeModel):
         welcome_message: NotGivenOr[str | None] = NOT_GIVEN,
         generate_welcome_message: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str | None] = NOT_GIVEN,
-        languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        default_language: NotGivenOr[str] = NOT_GIVEN,
+        additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -123,7 +127,11 @@ class RealtimeModel(llm.RealtimeModel):
             generate_welcome_message: When True, the welcome message is automatically generated
                 and ``welcome_message`` is ignored.
             project: Project name to use for the conversation.
-            languages: ISO 639-1 language codes the agent should recognize and speak.
+            default_language: ISO 639-1 default language for recognition and speech.
+            additional_languages: Further ISO 639-1 codes the agent may use (must not include
+                ``default_language``).
+            multilingual_mode: ``\"auto\"`` to detect language per utterance, ``\"request\"`` to
+                switch only when the user asks (recommended).
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
@@ -159,7 +167,9 @@ class RealtimeModel(llm.RealtimeModel):
             welcome_message=welcome_message,
             generate_welcome_message=generate_welcome_message,
             project=project,
-            languages=languages,
+            default_language=default_language,
+            additional_languages=additional_languages,
+            multilingual_mode=multilingual_mode,
             audio_speed=audio_speed,
             phonic_tools=phonic_tools,
             boosted_keywords=boosted_keywords,
@@ -491,7 +501,9 @@ class RealtimeSession(llm.RealtimeSession):
                 "voice_id": self._opts.voice,
                 "input_format": "pcm_44100",
                 "output_format": "pcm_44100",
-                "recognized_languages": self._opts.languages,
+                "default_language": self._opts.default_language,
+                "additional_languages": self._opts.additional_languages,
+                "multilingual_mode": self._opts.multilingual_mode,
                 "audio_speed": self._opts.audio_speed,
                 "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
                 "boosted_keywords": self._opts.boosted_keywords,
