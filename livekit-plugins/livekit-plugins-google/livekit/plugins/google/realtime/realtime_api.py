@@ -688,7 +688,11 @@ class RealtimeSession(llm.RealtimeSession):
                 "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
             )
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.cancel()
+            fut.set_exception(
+                llm.RealtimeError(
+                    "generate_reply is not compatible with 'gemini-3.1-flash-live-preview'"
+                )
+            )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
