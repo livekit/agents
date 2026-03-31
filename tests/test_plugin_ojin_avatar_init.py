@@ -11,12 +11,9 @@ from livekit.plugins.ojin import AvatarSession, OjinException
 def test_requires_api_key_and_config_id():
     """Missing api_key and config_id (no env) should raise OjinException(retryable=False)."""
     with patch.dict(os.environ, {}, clear=True):
-        # Remove any OJIN_ env vars that might be set
-        env = {k: v for k, v in os.environ.items() if not k.startswith("OJIN_")}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(OjinException) as exc_info:
-                AvatarSession()
-            assert exc_info.value.retryable is False
+        with pytest.raises(OjinException) as exc_info:
+            AvatarSession()
+        assert exc_info.value.retryable is False
 
 
 def test_accepts_explicit_args():
