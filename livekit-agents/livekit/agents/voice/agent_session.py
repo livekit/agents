@@ -400,7 +400,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
-        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
+        self._input = io.AgentInput(
+            self._on_video_input_changed,
+            self._on_audio_input_changed,
+            audio_enabled_cb=self._on_audio_enabled_changed,
+        )
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -1513,6 +1517,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 created_at=last_speaking_time or time.time(),
             ),
         )
+
+    def _on_audio_enabled_changed(self, enabled: bool) -> None:
+        """End user speaking state when audio is disabled by default."""
+        if not enabled and self._user_state == "speaking":
+            if self._activity is not None:
+                self._activity.on_end_of_speech(None)
+            else:
+                self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self.user_state == "away" and ev.is_final:
