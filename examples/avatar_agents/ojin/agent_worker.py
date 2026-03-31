@@ -39,6 +39,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="ash"),
+        resume_false_interruption=False,
     )
 
     # Create and start the Ojin avatar session
@@ -50,6 +51,7 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="You are a helpful assistant with an avatar."),
         room=ctx.room,
     )
+    session.generate_reply(instructions="say hello to the user")
 
 
 if __name__ == "__main__":
