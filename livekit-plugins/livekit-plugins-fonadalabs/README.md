@@ -5,7 +5,7 @@ A LiveKit plugin that integrates FonadaLabs TTS API using WebSocket, enabling hi
 ## Features
 
 - 🎙️ **High-Quality TTS**: Uses FonadaLabs TTS API for natural-sounding speech
-- 🇮🇳 **Rich Indian Voices**: 70+ voices across Hindi, Tamil, Telugu, and English
+- 🇮🇳 **Rich Indian Voices**: 110+ voices across Hindi, Tamil, Telugu, and English
 - ⚡ **Real-time Streaming**: WebSocket-based streaming for low-latency audio
 - 🔒 **Secure**: API key authentication
 - 🚀 **Easy Integration**: Simple plugin interface for LiveKit agents
@@ -27,25 +27,14 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 > **Note:** The full list of supported languages and voices is fetched dynamically from the FonadaLabs API at runtime (`https://api.fonada.ai/supported-voices`). The list below reflects the currently available voices.
 
-### 🇮🇳 Hindi (default) — 70 voices
+### 🇮🇳 Hindi (default) — 18 voices
 
 | | | | | |
 |---|---|---|---|---|
-| Naad | Dhwani | Vaanee *(default)* | Swara | Taal |
-| Laya | Raaga | Geetika | Swarini | Geet |
-| Sangeeta | Raagini | Madhura | Komal | Sangeet |
-| Meghra | Gandhar | Madhyam | Shruti | Pancham |
-| Dhaivat | Nishad | Tara | Shadja | Komalika |
-| Rishabh | Mandra | Tarana | Swarika | Komala |
-| Geetini | Teevra | Chaitra | Madhur | Raagika |
-| Swarita | Vibhaag | Gitanjali | Aalap | Sangeeti |
-| Taan | Meend | Raagita | Gamak | Murki |
-| Khatka | Andolan | Sparsh | Kampan | Shrutika |
-| Swaranjali | Nada | Lahar | Tarang | Dhwaniya |
-| Shrutini | Swar | Geetanjali | Raaginika | Sangeetika |
-| Ninada | Swaroopa | Geetimala | Naadayana | Swarayana |
-| Layakari | Taalayana | Raag | Swaranjana | Naadanika |
-| Dhwanika | Swaraka | Sangeetara | Layabaddha | |
+| Dhruv | Vaanee *(default)* | Swastik | Laksh | Raag |
+| Sarvagya | Komal | Meghra | Pancham | Tara |
+| Sharad | Kritika | Mandra | Karn | Gauri |
+| Ruhi | Roshini | Parikshit | | |
 
 ---
 
@@ -55,8 +44,8 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 |---|---|---|---|---|
 | Vaani | Isai | Thalam | Swaram | Madhuram |
 | Naadham | Ragam | Pallavi | Komalam | Raagamalika |
-| Geetham | Taalam | Dhwani | Sangeetham | Raagaratna |
-| Shruti | | | | |
+| Geetham | Taalam | Dhruv | Sangeetham | Raagaratna |
+| Pancham | | | | |
 
 ---
 
@@ -64,40 +53,29 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 | | | | | |
 |---|---|---|---|---|
-| Naadamu | Dhwani | Taalam | Geetamu | Raagamalika |
+| Naadamu | Dhruv | Taalam | Geetamu | Raagamalika |
 | Sangeetamu | Vaani | Swaramu | Layamu | Taalabaddha |
-| Raagapriya | Swarajathi | Raagini | Komala | Naada |
-| Meghamalini | Sangeetapriya | Raagamala | Dhwaniya | Shruti |
+| Raagapriya | Swarajathi | Raagini | Karn | Naada |
+| Meghamalini | Sangeetapriya | Raagamala | Dhairy | Shruti |
 | Tara | Komalavani | Mandara | Taana | Swarajati |
-| Raagaanjali | Raagika | Swaranjali | Geetika | Swaramala |
-| Aalapana | Raagaratnam | Meghavani | Swarita | Geetavani |
-| Taala | Layakari | Murki | Sangeetavani | Geetamala |
-| Naadapriya | Dhwanika | Dhwanimala | Sangeetanjali | Gamaka |
-| Raagasudha | Sangeetaratna | Taalamani | Sangeetasundari | Naadayana |
+| Raagaanjali | Ruhi | Shweta | Geetika | Swaramala |
+| Aalapana | Raagaratnam | Meghavani | Sanskar | Geetavani |
+| Taala | Hardik | Mridul | Sangeetavani | Geetamala |
+| Naadapriya | Abhishek | Dhwanimala | Sangeetanjali | Gamaka |
+| Raagasudha | Sangeetaratna | Taalamani | Sangeetasundari | Nishchay |
 | Raagavalli | Swarasudha | Sangeetaswarna | Raagamanjari | Swaravara |
 | Naadeshwara | Dhwanividya | Taalapala | Dhwanipala | Swarapala |
 
 ---
 
-### 🌐 English — 70 voices
+### 🌐 English — 18 voices
 
 | | | | | |
 |---|---|---|---|---|
-| Naad | Dhwani | Vaanee *(default)* | Swara | Taal |
-| Laya | Raaga | Geetika | Swarini | Geet |
-| Sangeeta | Raagini | Madhura | Komal | Sangeet |
-| Meghra | Gandhar | Madhyam | Shruti | Pancham |
-| Dhaivat | Nishad | Tara | Shadja | Komalika |
-| Rishabh | Mandra | Tarana | Swarika | Komala |
-| Geetini | Teevra | Chaitra | Madhur | Raagika |
-| Swarita | Vibhaag | Gitanjali | Aalap | Sangeeti |
-| Taan | Meend | Raagita | Gamak | Murki |
-| Khatka | Andolan | Sparsh | Kampan | Shrutika |
-| Swaranjali | Nada | Lahar | Tarang | Dhwaniya |
-| Shrutini | Swar | Geetanjali | Raaginika | Sangeetika |
-| Meghra | Swaroopa | Geetimala | Naadayana | Swarayana |
-| Layakari | Taalayana | Raag | Swaranjana | Naadanika |
-| Dhwanika | Swaraka | Sangeetara | Layabaddha | |
+| Dhruv | Vaanee *(default)* | Swastik | Laksh | Raag |
+| Sarvagya | Komal | Meghra | Pancham | Tara |
+| Sharad | Kritika | Mandra | Karn | Gauri |
+| Ruhi | Roshini | Parikshit | | |
 
 ---
 

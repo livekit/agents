@@ -38,6 +38,10 @@ _LANG_CODE_TO_NAME: dict[str, str] = {
     "te": "Telugu",
 }
 
+# Language codes returned by the API that we intentionally do not expose.
+# "en-US" is an alias for "en" — exposing both would cause confusion.
+_EXCLUDED_LANG_CODES: frozenset[str] = frozenset({"en-US"})
+
 
 @dataclass
 class _Catalog:
@@ -117,6 +121,8 @@ async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
         tts_langs: dict[str, Any] = data.get("tts_languages", {}).get("fonadalabs", {})
         voices: dict[str, list[str]] = {}
         for code, info in tts_langs.items():
+            if code in _EXCLUDED_LANG_CODES:
+                continue
             voice_map = info.get("voices", {})
             # API format: {internal_id: display_name} — we want display names
             voices[code] = list(voice_map.values())
