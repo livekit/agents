@@ -121,8 +121,12 @@ class FakeLLMStream(LLMStream):
         item = items[-1]
 
         # for user message and generate_reply(instructions=...)
-        if item.type == "message" and item.role in ("user", "system"):
-            return item.text_content
+        if (
+            item.type == "message"
+            and item.role in ("user", "system")
+            and (text := item.text_content)
+        ):
+            return text
 
         # if the last item is a function call output, use the tool output
         if item.type == "function_call_output":
