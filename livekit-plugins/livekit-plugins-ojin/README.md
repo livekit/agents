@@ -11,6 +11,7 @@ pip install livekit-plugins-ojin
 ## Usage
 
 ```python
+from livekit.agents import AgentSession
 from livekit.plugins import ojin
 
 avatar = ojin.AvatarSession(
@@ -18,8 +19,11 @@ avatar = ojin.AvatarSession(
     config_id="your-config-id",
 )
 
+# In your agent entrypoint function:
 await avatar.start(agent_session, room)
 ```
+
+See the [examples](../../examples/avatar_agents/ojin/) for a complete working implementation.
 
 ## Environment Variables
 
