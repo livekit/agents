@@ -455,6 +455,7 @@ class RealtimeSession(
             turn_detection=self._realtime_model._opts.turn_detection,
             input_audio_transcription=input_audio_transcription,
             tools=tools_list if tools_list else None,  # type: ignore[arg-type]
+            tool_choice=self._realtime_model._opts.tool_choice,
             temperature=self._realtime_model._opts.temperature,
             max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
         )
