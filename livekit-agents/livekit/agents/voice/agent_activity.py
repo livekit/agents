@@ -2178,10 +2178,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            chat_ctx.add_message(role="system", content=[instructions])
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
