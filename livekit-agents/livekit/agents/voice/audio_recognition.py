@@ -513,6 +513,11 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
 
+        if self._interruption_holdoff_timer is not None:
+            self._interruption_holdoff_timer.cancel()
+            self._interruption_holdoff_timer = None
+            self._interruption_holdoff_done_callback = None
+
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
         if pipeline is None and stt is not None:
