@@ -435,6 +435,10 @@ class SynthesizeStream(ABC):
         self._started_time: float = 0
         self._pushed_text: str = ""
 
+        # buffered input events for retry replay
+        self._input_buffer: list[str | SynthesizeStream._FlushSentinel] = []
+        self._input_ended = False
+
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
         self._mtc_text = ""
@@ -492,18 +496,45 @@ class SynthesizeStream(ABC):
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
 
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                pushed_duration = output_emitter.pushed_duration()
+                should_retry = (
+                    e.retryable
+                    and pushed_duration == 0.0
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+
+                if not should_retry:
+                    if pushed_duration > 0.0:
+                        logger.error(
+                            "TTS failed after partial audio was already sent to the user, skip retrying.",
+                            extra={
+                                "tts": self._tts._label,
+                                "streamed": True,
+                                "pushed_duration": pushed_duration,
+                            },
+                        )
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
-                    )
+
+                retry_interval = self._conn_options._interval_for_retry(i)
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    "failed to synthesize speech: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                )
 
                 await asyncio.sleep(retry_interval)
+
+                # replay buffered input into a fresh channel for retry
+                self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                for event in self._input_buffer:
+                    self._input_ch.send_nowait(event)
+                if self._input_ended:
+                    self._input_ch.close()
+
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
             finally:
@@ -610,6 +641,7 @@ class SynthesizeStream(ABC):
 
         self._mtc_text += token
         self._input_ch.send_nowait(token)
+        self._input_buffer.append(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
@@ -620,12 +652,15 @@ class SynthesizeStream(ABC):
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._input_ch.send_nowait(self._FlushSentinel())
+        sentinel = self._FlushSentinel()
+        self._input_ch.send_nowait(sentinel)
+        self._input_buffer.append(sentinel)
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
         self._input_ch.close()
+        self._input_ended = True
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
