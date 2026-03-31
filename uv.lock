@@ -2576,23 +2576,14 @@ name = "livekit-plugins-mistralai"
 source = { editable = "livekit-plugins/livekit-plugins-mistralai" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "mistralai" },
-]
-
-[package.optional-dependencies]
-realtime = [
-    { name = "livekit-plugins-silero" },
     { name = "mistralai", extra = ["realtime"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-plugins-silero", marker = "extra == 'realtime'", editable = "livekit-plugins/livekit-plugins-silero" },
-    { name = "mistralai", specifier = ">=2.0.0,<3.0.0" },
-    { name = "mistralai", extras = ["realtime"], marker = "extra == 'realtime'", specifier = ">=2.0.0,<3.0.0" },
+    { name = "mistralai", extras = ["realtime"], specifier = ">=2.0.0,<3.0.0" },
 ]
-provides-extras = ["realtime"]
 
 [[package]]
 name = "livekit-plugins-murf"

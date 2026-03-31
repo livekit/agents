@@ -8,10 +8,10 @@ Support for Mistral AI STT, TTS, and LLM services.
 pip install livekit-plugins-mistralai
 ```
 
-For streaming STT (Voxtral Realtime), also install `realtime` dependenies.
+For streaming STT (Voxtral Realtime), also install `silero` plugin.
 
 ```bash
-pip install livekit-plugins-mistralai[realtime]
+pip install livekit-plugins-silero
 ```
 
 ## Pre-requisites

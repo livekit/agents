@@ -19,7 +19,7 @@ ChatModels = Literal[
 ]
 
 STTModels = Literal[
-    "voxtral-mini-trancribe-realtime-2602",
+    "voxtral-mini-transcribe-realtime-2602",
     "voxtral-mini-latest",
     "voxtral-mini-2602",
     "voxtral-mini-2507",

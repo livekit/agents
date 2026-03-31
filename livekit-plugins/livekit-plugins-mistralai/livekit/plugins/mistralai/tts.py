@@ -65,7 +65,9 @@ class TTS(tts.TTS):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
 
         resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_voice = voice if is_given(voice) else DEFAULT_VOICE
+        resolved_voice = (
+            voice if is_given(voice) else (None if is_given(ref_audio) else DEFAULT_VOICE)
+        )
         resolved_ref_audio = ref_audio if is_given(ref_audio) else None
         resolved_response_format = (
             response_format if is_given(response_format) else DEFAULT_RESPONSE_FORMAT
@@ -97,6 +99,7 @@ class TTS(tts.TTS):
 
     def update_options(
         self,
+        *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
         ref_audio: NotGivenOr[str] = NOT_GIVEN,

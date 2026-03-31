@@ -83,7 +83,9 @@ class STT(stt.STT):
                 When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_language = LanguageCode(language) if is_given(language) else None
+        resolved_language = (
+            LanguageCode(language) if is_given(language) else LanguageCode(DEFAULT_LANGUAGE)
+        )
         resolved_context_bias = context_bias if is_given(context_bias) else None
         resolved_target_streaming_delay_ms = (
             target_streaming_delay_ms if is_given(target_streaming_delay_ms) else None
@@ -157,6 +159,7 @@ class STT(stt.STT):
 
     def update_options(
         self,
+        *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -423,8 +426,9 @@ class SpeechStream(stt.RecognizeStream):
                 )
             )
 
-            self._speaking = False
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif isinstance(event, RealtimeTranscriptionError):
             raise APIStatusError(
@@ -469,6 +473,8 @@ class SpeechStream(stt.RecognizeStream):
                         if vad_stream is not None:
                             await vad_stream.aclose()
 
+        except (APIStatusError, APITimeoutError, APIConnectionError):
+            raise
         except SDKError as e:
             if e.status_code in (408, 504):
                 raise APITimeoutError() from e

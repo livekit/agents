@@ -85,6 +85,7 @@ class LLM(llm.LLM):
 
     def update_options(
         self,
+        *,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -119,15 +120,16 @@ class LLM(llm.LLM):
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
-
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
-
         if is_given(tool_choice):
             extra["tool_choice"] = tool_choice
-
         if is_given(response_format):
             extra["response_format"] = response_format
+        if self._opts.max_completion_tokens is not None:
+            extra["max_tokens"] = self._opts.max_completion_tokens
+        if self._opts.temperature is not None:
+            extra["temperature"] = self._opts.temperature
 
         return LLMStream(
             self,
@@ -156,7 +158,6 @@ class LLMStream(llm.LLMStream):
         self._model = model
         self._client = client
         self._llm = llm_v
-        self._opts = llm_v._opts
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
 
@@ -173,8 +174,6 @@ class LLMStream(llm.LLMStream):
                 messages=cast(list[ChatCompletionStreamRequestMessageTypedDict], messages),
                 tools=cast(list[ToolTypedDict], tools),
                 model=self._model,
-                max_tokens=self._opts.max_completion_tokens,
-                temperature=self._opts.temperature,
                 timeout_ms=int(self._conn_options.timeout * 1000),
                 **self._extra_kwargs,
             )
