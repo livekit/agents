@@ -6,11 +6,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
-from livekit.plugins.ojin.avatar import (
-    _HIGH_WATERMARK_FRAMES,
-    _LOW_WATERMARK_FRAMES,
-    OjinVideoGenerator,
-)
+from livekit.plugins.ojin.avatar import OjinVideoGenerator
 
 
 def _make_mock_client():
@@ -78,73 +74,26 @@ async def test_push_audio_starts_interaction():
 
 
 @pytest.mark.asyncio
-async def test_idle_detection_uses_frame_type_not_index():
-    """Drop mode should check FrameType.IDLE, never use index == 0."""
-    from ojin.ojin_client_messages import FrameType, OjinInteractionResponseMessage
-
+async def test_interrupted_yields_audio_segment_end():
+    """After clear_buffer, _stream_impl should yield AudioSegmentEnd when client returns None."""
     client = _make_mock_client()
     gen = OjinVideoGenerator(client)
 
-    # Force drop mode ON
-    gen._drop_mode = True
-    gen._pending_frames = _HIGH_WATERMARK_FRAMES
-
-    # Create a mock response with IDLE frame type
-    msg = MagicMock()
-    msg.frame_type = FrameType.IDLE
-    msg.video_frame_bytes = b"some_data"
-    msg.audio_frame_bytes = b"some_audio"
-    msg.is_final_response = False
-
-    # isinstance checks need the right type: OjinInteractionResponseMessage
-    msg.__class__ = OjinInteractionResponseMessage
-
-    # Set up: return one IDLE response and then stop the stream cleanly.
     calls = 0
 
     async def _receive_message():
         nonlocal calls
         calls += 1
         if calls == 1:
-            return msg
+            return None  # simulates cancelled client after clear_buffer
         gen._closed = True
         return None
 
     client.receive_message = AsyncMock(side_effect=_receive_message)
+    gen._interrupted = True  # simulates clear_buffer having been called
 
-    # The idle frame should be dropped (not yielded).
     frames = [frame async for frame in gen]
 
-    # IDLE frames should be dropped in drop mode
-    assert len(frames) == 0
-
-
-@pytest.mark.asyncio
-async def test_drop_mode_uses_hysteresis():
-    """Drop mode should enable at HIGH_WATERMARK and disable at LOW_WATERMARK."""
-    client = _make_mock_client()
-    gen = OjinVideoGenerator(client)
-
-    # Below high watermark: not in drop mode
-    gen._pending_frames = _HIGH_WATERMARK_FRAMES - 1
-    assert gen._drop_mode is False
-
-    # At high watermark: enters drop mode
-    gen._pending_frames = _HIGH_WATERMARK_FRAMES
-    # Simulate what _stream_impl does
-    gen._pending_frames += 1
-    if gen._pending_frames >= _HIGH_WATERMARK_FRAMES:
-        gen._drop_mode = True
-    assert gen._drop_mode is True
-
-    # Above low watermark: stays in drop mode
-    gen._pending_frames = _LOW_WATERMARK_FRAMES + 1
-    if gen._pending_frames <= _LOW_WATERMARK_FRAMES:
-        gen._drop_mode = False
-    assert gen._drop_mode is True
-
-    # At low watermark: exits drop mode
-    gen._pending_frames = _LOW_WATERMARK_FRAMES
-    if gen._pending_frames <= _LOW_WATERMARK_FRAMES:
-        gen._drop_mode = False
-    assert gen._drop_mode is False
+    assert len(frames) == 1
+    assert isinstance(frames[0], AudioSegmentEnd)
+    assert gen._interrupted is False  # flag cleared after delivery

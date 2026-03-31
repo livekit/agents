@@ -21,11 +21,8 @@ async def test_clear_buffer_triggers_cancel_and_immediate_segment_end():
         # Should have sent cancel message
         client.send_message.assert_awaited_once_with(mock_cancel)
 
-    # Should have queued an AudioSegmentEnd in the output channel
-    # Verify by checking that pending state is reset
-    assert gen._pending_frames == 0
-    assert gen._drop_mode is False
     assert gen._interaction_started is False
+    assert gen._interrupted is True
 
 
 @pytest.mark.asyncio
