@@ -7,10 +7,6 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
-[options]
-exclude-newer = "2026-03-25T10:57:08.147438Z"
-exclude-newer-span = "P3D"
-
 [manifest]
 members = [
     "livekit-agents",
