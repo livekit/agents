@@ -1,12 +1,6 @@
-# MistralAI Plugin for LiveKit Agents
+# Mistral AI Plugin for LiveKit Agents
 
-Support for MistralAI services:
-
-- **LLM** — Chat completion with Mistral models
-- **STT** — Speech-to-text with Voxtral
-- **TTS** — Text-to-speech with Voxtral (supports saved voices and zero-shot voice cloning via `ref_audio`)
-
-See [https://docs.livekit.io/agents/integrations/mistral/](https://docs.livekit.io/agents/integrations/mistral/) for more information.
+Support for MistralAI STT, TTS, and LLM services.
 
 ## Installation
 
@@ -14,9 +8,15 @@ See [https://docs.livekit.io/agents/integrations/mistral/](https://docs.livekit.
 pip install livekit-plugins-mistralai
 ```
 
+For streaming STT (Voxtral Realtime), also install `realtime` dependenies.
+
+```bash
+pip install livekit-plugins-mistralai[realtime]
+```
+
 ## Pre-requisites
 
-You'll need an API key from MistralAI. It can be set as an environment variable:
+You'll need an API key from Mistral AI. It can be set as an environment variable:
 
 ```bash
 export MISTRAL_API_KEY=your_api_key_here
@@ -24,7 +24,38 @@ export MISTRAL_API_KEY=your_api_key_here
 
 ## Usage
 
-### TTS
+### Speech-to-Text (STT)
+
+#### Offline transcription
+
+```python
+from livekit.plugins import mistralai
+
+stt = mistralai.STT(model="voxtral-mini-latest")
+```
+
+#### Realtime streaming transcription
+
+Voxtral Realtime streams interim transcripts over a WebSocket connection. Since this
+model has no server-side endpointing, the plugin runs an internal Silero VAD to detect
+when the user stops speaking and flush the audio — producing final transcripts and
+driving the end-of-turn pipeline.
+
+```python
+from livekit.plugins import mistralai
+from livekit.plugins.silero import VAD
+
+# Using Silero VAD with default settings (550ms silence threshold)
+stt = mistralai.STT(model="voxtral-mini-transcribe-realtime-2602")
+
+# Using custom VAD settings (e.g. shorter silence threshold for faster responses)
+stt = mistralai.STT(
+    model="voxtral-mini-transcribe-realtime-2602",
+    vad=VAD.load(min_silence_duration=0.3),
+)
+```
+
+### Text-to-Speech (TTS)
 
 ```python
 from livekit.plugins import mistralai
@@ -36,4 +67,12 @@ tts = mistralai.TTS(voice="en_paul_neutral")
 import base64
 ref_audio_b64 = base64.b64encode(open("sample.mp3", "rb").read()).decode()
 tts = mistralai.TTS(ref_audio=ref_audio_b64)
+```
+
+### LLM
+
+```python
+from livekit.plugins import mistralai
+
+llm = mistralai.LLM(model="mistral-large-latest")
 ```

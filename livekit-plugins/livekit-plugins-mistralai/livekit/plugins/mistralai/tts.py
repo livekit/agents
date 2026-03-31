@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import uuid
 from dataclasses import dataclass, replace
@@ -166,7 +167,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
             async for ev in stream:
                 if ev.event == "speech.audio.delta":
-                    output_emitter.push(ev.data.audio_data)
+                    output_emitter.push(base64.b64decode(ev.data.audio_data))
                 elif ev.event == "speech.audio.done":
                     self._set_token_usage(
                         input_tokens=ev.data.usage.prompt_tokens,
