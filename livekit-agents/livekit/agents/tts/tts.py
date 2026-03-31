@@ -982,13 +982,24 @@ class AudioEmitter:
                     _do_send(frame, is_final=True)
                 elif segment_ctx.audio_duration > 0:
                     # no frame but segment had audio — send a tiny empty marker
+                    # without updating duration tracking (it's synthetic silence)
                     marker = rtc.AudioFrame(
                         data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
                         sample_rate=self._sample_rate,
                         num_channels=self._num_channels,
                         samples_per_channel=self._sample_rate // 100,
                     )
-                    _do_send(marker, is_final=True)
+                    marker.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
+                    timed_transcripts = []
+                    _send_audio(
+                        SynthesizedAudio(
+                            frame=marker,
+                            request_id=self._request_id,
+                            segment_id=segment_ctx.segment_id,
+                            is_final=True,
+                        ),
+                        flush_if_delayed=False,
+                    )
                 return
 
             if frame is None:
