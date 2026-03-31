@@ -1138,6 +1138,7 @@ class AudioEmitter:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
                             _flush_frame()
+                            audio_byte_stream.clear()  # reset progressive for next burst
 
                         elif isinstance(data, AudioEmitter._EndSegment):
                             for f in audio_byte_stream.flush():
