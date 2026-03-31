@@ -105,6 +105,7 @@ class RealtimeModel(llm.RealtimeModel):
         default_language: NotGivenOr[str] = NOT_GIVEN,
         additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -132,6 +133,9 @@ class RealtimeModel(llm.RealtimeModel):
                 ``default_language``).
             multilingual_mode: ``\"auto\"`` to detect language per utterance, ``\"request\"`` to
                 switch only when the user asks (recommended).
+            languages: Deprecated. Use ``default_language`` and ``additional_languages`` instead.
+                When both of those are omitted and this is set, ``languages[0]`` is the default
+                language and ``languages[1:]`` are additional languages.
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
@@ -159,6 +163,16 @@ class RealtimeModel(llm.RealtimeModel):
                 "Phonic API key is required. Provide `api_key` or "
                 "set PHONIC_API_KEY environment variable."
             )
+
+        if (
+            is_given(languages)
+            and not is_given(default_language)
+            and not is_given(additional_languages)
+        ):
+            if languages:
+                default_language = languages[0]
+            if len(languages) > 1:
+                additional_languages = languages[1:]
 
         self._opts = _RealtimeOptions(
             api_key=api_key,
