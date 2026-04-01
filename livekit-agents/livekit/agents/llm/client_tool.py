@@ -244,7 +244,7 @@ def client_tool(name: str) -> ClientTool:
         elif len(tool.advertisers) == 1:
             destination = tool.advertisers[0]
         else:
-            raise ToolError(f"Client tool '{name}' has no advertisers.")
+            raise ToolError(f"Client tool '{name}' has no participants advertising the tool.")
 
         payload = json.dumps(args_to_send)
         try:
