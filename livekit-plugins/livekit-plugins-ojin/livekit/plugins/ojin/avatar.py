@@ -57,6 +57,7 @@ class OjinVideoGenerator(VideoGenerator):
         self._closed = False
         self._interaction_started = False
         self._interrupted = False
+        self._receive_message_atask: asyncio.Task[Any] | None = None
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Push an audio frame to Ojin or signal end of segment."""
@@ -88,7 +89,13 @@ class OjinVideoGenerator(VideoGenerator):
         """Receive messages from Ojin client and yield decoded frames."""
         while not self._closed:
             try:
-                msg = await self._client.receive_message()
+                receive_task = asyncio.create_task(self._client.receive_message())
+                self._receive_message_atask = receive_task
+                msg = await receive_task
+            except asyncio.CancelledError:
+                if self._closed:
+                    return
+                raise
             except Exception as e:
                 if self._closed:
                     return
@@ -98,6 +105,8 @@ class OjinVideoGenerator(VideoGenerator):
                     code="RECEIVE_ERROR",
                     origin="stream",
                 ) from e
+            finally:
+                self._receive_message_atask = None
 
             if msg is None:
                 # Returned when client is cancelled (e.g. after clear_buffer)
@@ -137,6 +146,8 @@ class OjinVideoGenerator(VideoGenerator):
     async def aclose(self) -> None:
         """Close the generator."""
         self._closed = True
+        if self._receive_message_atask is not None:
+            await utils.aio.cancel_and_wait(self._receive_message_atask)
 
 
 class AvatarSession:
