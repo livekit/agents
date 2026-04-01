@@ -909,10 +909,13 @@ class AudioEmitter:
                 self.flush()
                 logger.debug("flush audio emitter due to slow audio generation")
 
-            if flush_if_delayed:
-                # force flush the buffer if the audio comes slower than realtime
+            if flush_if_delayed and sent_duration > 0.15:
+                # force flush the buffer if the audio comes slower than realtime.
+                # skip during the initial progressive ramp-up where sent_duration
+                # is too small for a meaningful slow-generation check.
                 delay = sent_duration - (event_loop.time() - sent_start) - 0.02
-                flush_timer = event_loop.call_later(delay, _flush)
+                if delay > 0:
+                    flush_timer = event_loop.call_later(delay, _flush)
 
         # Number of samples held back in last_frame so we can tag is_final
         # on the very last audio of a segment.  10 ms is small enough to be
