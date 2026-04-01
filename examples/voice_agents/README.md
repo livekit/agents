@@ -23,6 +23,7 @@ session = AgentSession(
 ### 🚀 Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent using LiveKit Inference with metrics collection
+- [`mistral_realtime_stt_agent.py`](./mistral_realtime_stt_agent.py) - Minimal pipeline agent using Mistral realtime STT and Mistral TTS, with OpenAI as the LLM fallback
 
 ### 🛠️ Tool Integration & Function Calling
 
