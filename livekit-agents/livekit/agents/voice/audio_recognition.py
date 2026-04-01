@@ -1099,6 +1099,13 @@ class AudioRecognition:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
 
+            # reset the speaking state to prevent stuck user speaking state during handoff
+            if self._speaking:
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
+                self._speaking = False
+                self._vad_speech_started = False
+
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
         self,
