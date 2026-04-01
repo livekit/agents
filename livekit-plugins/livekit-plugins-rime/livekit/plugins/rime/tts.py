@@ -53,9 +53,6 @@ class _Mistv3Options:
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
-    inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN
-    no_text_normalization: NotGivenOr[bool] = NOT_GIVEN
-    save_oovs: NotGivenOr[bool] = NOT_GIVEN
 
 
 @dataclass
@@ -109,10 +106,6 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
-        # Mistv3 options
-        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
-        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -164,9 +157,6 @@ class TTS(tts.TTS):
                 speed_alpha=speed_alpha,
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
-                inline_speed_alpha=inline_speed_alpha,
-                no_text_normalization=no_text_normalization,
-                save_oovs=save_oovs,
             )
         self._session = http_session
         self._base_url = base_url
@@ -214,10 +204,6 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
-        # Mistv3 parameters
-        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
-        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(base_url):
@@ -274,12 +260,6 @@ class TTS(tts.TTS):
                 self._opts.mistv3_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mistv3_options.phonemize_between_brackets = phonemize_between_brackets
-            if is_given(inline_speed_alpha):
-                self._opts.mistv3_options.inline_speed_alpha = inline_speed_alpha
-            if is_given(no_text_normalization):
-                self._opts.mistv3_options.no_text_normalization = no_text_normalization
-            if is_given(save_oovs):
-                self._opts.mistv3_options.save_oovs = save_oovs
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -341,12 +321,6 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["pauseBetweenBrackets"] = mistv3_opts.pause_between_brackets
             if is_given(mistv3_opts.phonemize_between_brackets):
                 payload["phonemizeBetweenBrackets"] = mistv3_opts.phonemize_between_brackets
-            if is_given(mistv3_opts.inline_speed_alpha):
-                payload["inlineSpeedAlpha"] = mistv3_opts.inline_speed_alpha
-            if is_given(mistv3_opts.no_text_normalization):
-                payload["noTextNormalization"] = mistv3_opts.no_text_normalization
-            if is_given(mistv3_opts.save_oovs):
-                payload["saveOovs"] = mistv3_opts.save_oovs
 
         try:
             async with self._tts._ensure_session().post(
