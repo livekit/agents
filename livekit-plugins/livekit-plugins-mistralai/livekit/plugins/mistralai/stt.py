@@ -239,6 +239,8 @@ class STT(stt.STT):
 
         try:
             await conn.end_audio()
+        except Exception:
+            logger.warning("failed to send end_audio before closing WebSocket", exc_info=True)
         finally:
             await conn.close()
 
@@ -265,15 +267,14 @@ class STT(stt.STT):
                     request_id=None,
                     body=None,
                 )
-            if is_given(language):
-                self._opts.language = LanguageCode(language)
+            lang = LanguageCode(language) if is_given(language) else self._opts.language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language or None,
-                timestamp_granularities=None if self._opts.language else ["segment"],
+                language=lang or None,
+                timestamp_granularities=None if lang else ["segment"],
             )
 
             return stt.SpeechEvent(
@@ -281,7 +282,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=LanguageCode(self._opts.language if self._opts.language else ""),
+                        language=LanguageCode(lang if lang else ""),
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
@@ -455,7 +456,7 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(retryable=not self._data_sent) from e
 
     def _release_connection(self, connection: RealtimeConnection) -> None:
-        if connection.is_closed or self._speaking or bool(self._partial_text.strip()):
+        if connection.is_closed or self._speaking or self._partial_text.strip():
             self._pool.remove(connection)
             return
 
@@ -463,6 +464,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _send_task(self, connection: RealtimeConnection) -> None:
         samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
+        bytes_per_second = self._opts.sample_rate * NUM_CHANNELS * 2
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=NUM_CHANNELS,
@@ -475,7 +477,6 @@ class SpeechStream(stt.RecognizeStream):
 
             if isinstance(data, rtc.AudioFrame):
                 data_bytes = data.data.tobytes()
-                bytes_per_second = self._opts.sample_rate * NUM_CHANNELS * 2
                 self._audio_duration += len(data_bytes) / bytes_per_second
                 for frame in audio_bstream.write(data_bytes):
                     await connection.send_audio(frame.data.tobytes())
@@ -655,7 +656,7 @@ class SpeechStream(stt.RecognizeStream):
 
         if isinstance(event, RealtimeTranscriptionError):
             error = event.error
-            logger.debug(
+            logger.warning(
                 "[EVENT:Error] code=%s | message=%s",
                 error.code,
                 error.message,
@@ -680,8 +681,7 @@ class SpeechStream(stt.RecognizeStream):
         if not self._speaking:
             self._speaking = True
             self._has_sent_final_for_turn = False
-            if self._usage_emitted:
-                self._usage_emitted = False
+            self._usage_emitted = False
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
             self._data_sent = True
 
@@ -768,11 +768,7 @@ class SpeechStream(stt.RecognizeStream):
         if not self._has_sent_final_for_turn or not self._last_final_text:
             return False
 
-        return (
-            text == self._last_final_text
-            or text.endswith(self._last_final_text)
-            or self._last_final_text.endswith(text)
-        )
+        return text == self._last_final_text or text.endswith(self._last_final_text)
 
     def _is_duplicate_final(self, text: str) -> bool:
         if not self._last_final_text:
