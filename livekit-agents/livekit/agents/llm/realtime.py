@@ -216,3 +216,13 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def start_user_activity(self) -> None:
         """notifies the model that user activity has started"""
         pass
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement say(). use a TTS model instead"
+        )

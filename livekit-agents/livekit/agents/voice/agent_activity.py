@@ -917,16 +917,9 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if (
-            not is_given(audio)
-            and not self.tts
-            and self._session.output.audio
-            and self._session.output.audio_enabled
-        ):
-            raise RuntimeError("trying to generate speech from text without a TTS model")
-
-        if (
             isinstance(self.llm, llm.RealtimeModel)
             and self.llm.capabilities.turn_detection
+            and self.tts
             and allow_interruptions is False
         ):
             logger.warning(
@@ -934,6 +927,20 @@ class AgentActivity(RecognitionHooks):
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
             )
             allow_interruptions = NOT_GIVEN
+
+        if (
+            not is_given(audio)
+            and not self.tts
+            and self._rt_session is None
+            and self._session.output.audio
+            and self._session.output.audio_enabled
+        ):
+            model_info = (
+                "a RealtimeSession that implements say()"
+                if isinstance(self.llm, llm.RealtimeModel)
+                else "a TTS model"
+            )
+            raise RuntimeError(f"trying to generate speech from text without {model_info}")
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
@@ -945,17 +952,30 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        task = self._create_speech_task(
-            self._tts_task(
+        if self._rt_session is not None and not is_given(audio) and not self.tts:
+            task = self._create_speech_task(
+                self._realtime_say_task(
+                    speech_handle=handle,
+                    text=text,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=ModelSettings(),
+                ),
                 speech_handle=handle,
-                text=text,
-                audio=audio or None,
-                add_to_chat_ctx=add_to_chat_ctx,
-                model_settings=ModelSettings(),
-            ),
-            speech_handle=handle,
-            name="AgentActivity.tts_say",
-        )
+                name="AgentActivity.realtime_say",
+            )
+        else:
+            task = self._create_speech_task(
+                self._tts_task(
+                    speech_handle=handle,
+                    text=text,
+                    audio=audio or None,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=ModelSettings(),
+                ),
+                speech_handle=handle,
+                name="AgentActivity.tts_say",
+            )
+
         task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
@@ -2546,6 +2566,44 @@ class AgentActivity(RecognitionHooks):
                 # add the tool calls and outputs to the chat context even no reply is generated
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
+
+    @utils.log_exceptions(logger=logger)
+    async def _realtime_say_task(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        text: str | AsyncIterable[str],
+        add_to_chat_ctx: bool,
+        model_settings: ModelSettings,
+    ) -> None:
+        assert self._rt_session is not None, "rt_session is not available"
+
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(*authorization_tasks)
+            return
+
+        try:
+            generation_ev = await self._rt_session.say(
+                text, allow_interruptions=speech_handle.allow_interruptions
+            )
+        except NotImplementedError:
+            logger.error(
+                "say() is not implemented for %s; use a TTS model instead",
+                self._rt_session.realtime_model.provider,
+            )
+            return
+
+        await self._realtime_generation_task(
+            speech_handle=speech_handle,
+            generation_ev=generation_ev,
+            model_settings=model_settings,
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(

@@ -7,6 +7,7 @@ import os
 import time
 import typing
 import weakref
+from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -374,6 +375,58 @@ class RealtimeSession(llm.RealtimeSession):
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("push_video is not supported by the Phonic realtime model.")
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if self._generate_reply_task and not self._generate_reply_task.done():
+            self._generate_reply_task.cancel()
+        self._generate_reply_task = asyncio.create_task(
+            self._send_say(text, allow_interruptions=allow_interruptions), name="phonic-say"
+        )
+
+        self._close_current_generation(interrupted=False)
+
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generate_reply_fut = fut
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("say() timed out."))
+
+        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
+        return fut
+
+    async def _send_say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
+
+        if isinstance(text, str):
+            full_text = text
+        else:
+            chunks: list[str] = []
+            async for chunk in text:
+                chunks.append(chunk)
+            full_text = "".join(chunks)
+
+        if self._socket:
+            payload: dict = {"type": "say", "text": full_text}
+            if is_given(allow_interruptions):
+                payload["interruptible"] = allow_interruptions
+            await self._socket._send(payload)
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
