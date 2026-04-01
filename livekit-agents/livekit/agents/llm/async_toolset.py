@@ -24,15 +24,10 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
-    from ..voice.speech_handle import SpeechHandle
 
-
-PENDING_TEMPLATE = """The tool `{function_name}` is running in background, message: {message}
-The task is still running, so DON'T make up or give information not included in the message above."""
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
-
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {running_fnc_calls}
@@ -40,8 +35,11 @@ If you want to cancel the existing one, call `cancel_task` with call_id."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 {running_fnc_calls}
-Re-call with `confirm_duplicate=True` to run a duplicate if needed,
+Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `cancel_task` with call_id."""
+
+REPLY_INSTRUCTIONS = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
+Summarize these results to the user naturally. Do NOT repeat information you have already told the user."""
 
 
 class AsyncRunContext(RunContext[Userdata_T]):
@@ -57,30 +55,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self._pending_fut = asyncio.Future[Any]()
         self._step_idx: int = 0
 
-    def pending(self, message: str | Any, *, template: str = PENDING_TEMPLATE) -> SpeechHandle:
-        """Set the message returned to the LLM when the tool is first called.
-
-        Args:
-            message: The pending message for the LLM (e.g. "Searching flights...").
-        """
-        if self._pending_fut.done():
-            raise ValueError("Pending message already set")
-
-        if isinstance(message, str):
-            message = template.format(
-                function_name=self.function_call.name,
-                call_id=self.function_call.call_id,
-                message=message,
-            )
-
-        self._pending_fut.set_result(message)
-
-        # make the speech handle awaitable in the rest of the function
-        self._function_call.extra["__livekit_agents_tool_pending"] = True
-
-        return self.speech_handle
-
-    async def update(self, message: str, *, _template: str = UPDATE_TEMPLATE) -> None:
+    async def update(self, message: str | Any, *, _template: str = UPDATE_TEMPLATE) -> None:
         """Push an intermediate progress update into the conversation.
 
         Updates the chat context immediately and enqueues a speech delivery
@@ -90,16 +65,24 @@ class AsyncRunContext(RunContext[Userdata_T]):
         Args:
             message: The update message for the LLM (e.g. "Found 3 flights, selecting the best option...").
         """
-        formatted = _template.format(
-            function_name=self.function_call.name,
-            call_id=self.function_call.call_id,
-            message=message,
-        )
+        if isinstance(message, str):
+            message = _template.format(
+                function_name=self.function_call.name,
+                call_id=self.function_call.call_id,
+                message=message,
+            )
+
+        if not self._pending_fut.done():
+            # first update will mark the tool execution in AgentActivity done
+            self._pending_fut.set_result(message)
+            # make the speech handle awaitable in the rest of the function
+            self._function_call.extra["__livekit_agents_tool_pending"] = True
+            return
 
         self._step_idx += 1
 
         tool_output = self._make_tool_output(
-            formatted, call_id=f"{self.function_call.call_id}/update_{self._step_idx}"
+            message, call_id=f"{self.function_call.call_id}/update_{self._step_idx}"
         )
         if tool_output.fnc_call_out is None:
             return
@@ -144,7 +127,7 @@ class AsyncToolset(Toolset):
     Example::
         @function_tool
         async def book_flight(ctx: AsyncRunContext, origin: str, destination: str) -> dict:
-            ctx.pending(f"Looking up flights from {origin} to {destination}...")
+            await ctx.update(f"Looking up flights from {origin} to {destination}...")
 
             flights = await search_flights(origin, destination)
             await ctx.update(f"Found {len(flights)} flights, picking the best one...")
@@ -331,8 +314,13 @@ class AsyncToolset(Toolset):
             # TODO: use a LLM to verify if another reply is needed?
             return
 
-        # TODO: add instructions to emphasize the pending tools
-        session.generate_reply(tool_choice="none")
+        pending_call_ids = [
+            item.call_id for item in pending_items if item.type == "function_call_output"
+        ]
+        session.generate_reply(
+            instructions=REPLY_INSTRUCTIONS.format(pending_call_ids=pending_call_ids),
+            tool_choice="none",
+        )
 
     async def _check_duplicate(self, fnc_name: str, confirm_duplicate: bool) -> str | None:
         """Check for duplicate running tasks. Returns a message if blocked, None otherwise."""

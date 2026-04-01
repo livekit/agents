@@ -46,7 +46,7 @@ class TravelToolset(AsyncToolset):
             destination: Arrival city or airport code.
             date: Travel date (e.g. "2026-04-15").
         """
-        ctx.pending(
+        await ctx.update(
             f"Searching flights from {origin} to {destination} on {date}. "
             "This will take a couple of minutes."
         )
@@ -87,7 +87,7 @@ class TravelToolset(AsyncToolset):
             destination: The city or area the user is visiting.
             interests: What the user is interested in (e.g. "street food and temples", "museums and nightlife", "family-friendly activities").
         """
-        ctx.pending(f"Looking up the best spots in {destination} for you.")
+        await ctx.update(f"Looking up the best spots in {destination} for you.")
 
         sources = await self._search(destination, interests, chat_ctx=ctx.session.history)
 
