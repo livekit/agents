@@ -255,6 +255,27 @@ class STT(stt.STT):
         await self._pool.aclose()
         await super().aclose()
 
+    async def recognize(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.SpeechEvent:
+        if self._is_realtime_model(self._opts.model):
+            raise APIStatusError(
+                message="Realtime model requires streaming; use stream()",
+                status_code=400,
+                request_id=None,
+                body=None,
+            )
+
+        return await super().recognize(
+            buffer,
+            language=language,
+            conn_options=conn_options,
+        )
+
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
@@ -648,6 +669,12 @@ class SpeechStream(stt.RecognizeStream):
             )
             if event.language:
                 self._detected_language = LanguageCode(event.language)
+
+            if not self._speaking and not self._partial_text.strip():
+                # Done-only turns bypass _ensure_speaking(), so reset per-turn
+                # bookkeeping here before processing the new final.
+                self._has_sent_final_for_turn = False
+                self._usage_emitted = False
 
             done_text = event.text.strip()
             if done_text and not self._is_redundant_done_text(done_text):

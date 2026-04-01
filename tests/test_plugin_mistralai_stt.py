@@ -8,7 +8,7 @@ from mistralai.client.models.transcriptionstreamdone import TranscriptionStreamD
 from mistralai.client.models.usageinfo import UsageInfo
 
 from livekit import rtc
-from livekit.agents import LanguageCode
+from livekit.agents import APIStatusError, LanguageCode
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.aio.channel import ChanEmpty
 
@@ -311,6 +311,50 @@ async def test_usage_metrics_are_emitted_for_each_completed_turn():
         ]
 
     assert usage_durations == [1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_usage_metrics_are_emitted_for_done_only_turns():
+    from livekit.plugins.mistralai import STT
+
+    stt = STT(client=object(), model="voxtral-mini-transcribe-realtime-2602")
+    stt._pool = _FakePool(_IdleConnection())
+
+    async with stt.stream(conn_options=TEST_CONNECT_OPTIONS) as stream:
+        stream._process_event(
+            TranscriptionStreamDone(
+                model="voxtral-mini-transcribe-realtime-2602",
+                text="hello",
+                usage=UsageInfo(prompt_audio_seconds=1),
+                language="en",
+            )
+        )
+        stream._process_event(
+            TranscriptionStreamDone(
+                model="voxtral-mini-transcribe-realtime-2602",
+                text="world",
+                usage=UsageInfo(prompt_audio_seconds=2),
+                language="en",
+            )
+        )
+
+        usage_durations = [
+            ev.recognition_usage.audio_duration
+            for ev in _drain_events(stream)
+            if ev.type == SpeechEventType.RECOGNITION_USAGE and ev.recognition_usage is not None
+        ]
+
+    assert usage_durations == [1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_recognize_with_realtime_model_fails_fast():
+    from livekit.plugins.mistralai import STT
+
+    stt = STT(client=object(), model="voxtral-mini-transcribe-realtime-2602")
+
+    with pytest.raises(APIStatusError, match="use stream\\(\\)"):
+        await stt.recognize([_audio_frame()], conn_options=TEST_CONNECT_OPTIONS)
 
 
 @pytest.mark.asyncio
