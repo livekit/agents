@@ -40,6 +40,7 @@ from .proto import (
     InitializeRequest,
     ShutdownRequest,
     StartJobRequest,
+    UserEntrypointDone,
 )
 
 
@@ -351,6 +352,8 @@ class _JobProc:
         # TODO(theomonnom): move this code?
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()
+
+        await self._client.send(UserEntrypointDone())
 
         if self._session_end_fnc:
             try:

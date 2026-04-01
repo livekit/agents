@@ -70,6 +70,7 @@ class ThreadJobExecutor:
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = utils.shortuuid("THEXEC_")
+        self._user_entrypoint_done_fut: asyncio.Future[None] | None = None
 
     @property
     def id(self) -> str:
@@ -204,14 +205,16 @@ class ThreadJobExecutor:
             return
 
         self._closing = True
+        self._user_entrypoint_done_fut = asyncio.Future[None]()
+
         with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
 
         try:
-            if self._main_atask:
-                await asyncio.wait_for(
-                    asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
-                )
+            await asyncio.wait_for(
+                asyncio.shield(self._user_entrypoint_done_fut),
+                timeout=self._opts.close_timeout,
+            )
         except asyncio.TimeoutError:
             logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
 
@@ -296,6 +299,10 @@ class ThreadJobExecutor:
 
             if isinstance(msg, proto.Exiting):
                 logger.debug("job exiting", extra={"reason": msg.reason, **self.logging_extra()})
+
+            if isinstance(msg, proto.UserEntrypointDone):
+                if self._user_entrypoint_done_fut and not self._user_entrypoint_done_fut.done():
+                    self._user_entrypoint_done_fut.set_result(None)
 
             if isinstance(msg, proto.InferenceRequest):
                 task = asyncio.create_task(self._do_inference_task(msg))
