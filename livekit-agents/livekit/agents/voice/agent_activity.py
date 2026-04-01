@@ -1037,12 +1037,6 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
-            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
-                instructions = self._agent.instructions + "\n" + instructions
-
             task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
@@ -2178,10 +2172,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            chat_ctx.add_message(role="system", content=[instructions])
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
