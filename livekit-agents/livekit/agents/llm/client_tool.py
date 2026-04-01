@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from livekit import rtc
 
@@ -74,7 +72,7 @@ class ClientTool(RawFunctionTool):
         self._client_name = client_name
         self._required = required
         self._advertisers: list[str] = []  # participant identities
-        self._base_manifest: dict[str, Any] | None = None
+        self._base_manifest: Optional[dict[str, Any]] = None
 
     @property
     def client_name(self) -> str:
@@ -211,13 +209,20 @@ def client_tool(
     """
 
     async def _execute(
-        raw_arguments: dict[str, object], context: RunContext
+        raw_arguments: dict[str, object],
+        # This is a RunContext, but typed as Any because:
+        # 1. voice.events imports from llm, so importing RunContext here creates a circular import
+        # 2. get_type_hints() (used by prepare_function_arguments in llm/utils.py) evaluates
+        #    annotations at runtime and fails if the type isn't in module globals
+        # 3. Using from __future__ import annotations doesn't help since get_type_hints still
+        #    tries to resolve the string back to the real type
+        context: Any,
     ) -> str:
         if not context.session._agent:
             raise ToolError("Agent state missing from context")
 
         # Find our ClientTool instance
-        tool: ClientTool | None = None
+        tool: Optional[ClientTool] = None
         for t in context.session._agent._tools:
             if isinstance(t, ClientTool) and t.client_name == name:
                 tool = t
@@ -271,6 +276,13 @@ def client_tool(
 
         return response
 
+    # Patch the annotation for `context` so the framework's get_type_hints() resolves
+    # it as RunContext (needed for automatic RunContext injection in prepare_function_arguments).
+    # We can't use RunContext in the annotation directly due to circular imports.
+    from ..voice.events import RunContext as _RunContext
+
+    _execute.__annotations__["context"] = _RunContext
+
     info = RawFunctionToolInfo(
         name=name,
         raw_schema=_generate_default_schema(name),
@@ -296,7 +308,7 @@ class ClientToolWatcher:
     Created and started by ``AgentSession`` when client tools are present.
     """
 
-    def __init__(self, agent: Agent, room_io: RoomIO) -> None:
+    def __init__(self, agent: "Agent", room_io: "RoomIO") -> None:
         self._agent = agent
         self._room_io = room_io
         self._room = room_io.room
@@ -369,7 +381,7 @@ class ClientToolWatcher:
 
     def _parse_manifest(
         self, tool_name: str, attr_value: str
-    ) -> dict[str, Any] | None:
+    ) -> Optional[dict[str, Any]]:
         """Parse and validate a client tool manifest from an attribute value."""
         if not attr_value:
             return None
