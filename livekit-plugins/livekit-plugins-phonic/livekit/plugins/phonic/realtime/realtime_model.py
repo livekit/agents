@@ -19,7 +19,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import audio as audio_utils, is_given
-from phonic import AsyncPhonic, PhonicEnvironment
+from phonic import AsyncPhonic
 from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
@@ -27,9 +27,11 @@ from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
+    ConfigOptions,
     ConfigPayload,
     GenerateReplyPayload,
     InputTextPayload,
+    ResetPayload,
     ToolCallInterruptedPayload,
     ToolCallOutputPayload,
     ToolCallPayload,
@@ -214,8 +216,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._input_resampler_rate: int | None = None
 
         self._client = AsyncPhonic(
-            api_key=self._opts.api_key,
-            environment=PhonicEnvironment(base="http://localhost:3520/v1", production="ws://localhost:3520"),
+            api_key=self._opts.api_key
         )
 
         self._socket: AsyncConversationsSocketClient | None = None
@@ -494,6 +495,34 @@ class RealtimeSession(llm.RealtimeSession):
         history = "\n".join(f"{m.role}: {m.text_content}" for m in messages)
         return history.strip() or None
 
+    def _build_session_config_options_dict(
+        self,
+        *,
+        system_prompt: str,
+        tools_payload: list[dict | str],
+    ) -> dict[str, typing.Any]:
+        raw = {
+            "agent": self._opts.phonic_agent,
+            "project": self._opts.project,
+            "welcome_message": self._opts.welcome_message,
+            "generate_welcome_message": self._opts.generate_welcome_message,
+            "system_prompt": system_prompt,
+            "voice_id": self._opts.voice,
+            "input_format": "pcm_44100",
+            "output_format": "pcm_44100",
+            "default_language": self._opts.default_language,
+            "additional_languages": self._opts.additional_languages,
+            "multilingual_mode": self._opts.multilingual_mode,
+            "audio_speed": self._opts.audio_speed,
+            "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
+            "boosted_keywords": self._opts.boosted_keywords,
+            "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
+            "no_input_poke_sec": self._opts.no_input_poke_sec,
+            "no_input_poke_text": self._opts.no_input_poke_text,
+            "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
+        }
+        return {k: v for k, v in raw.items() if v is not NOT_GIVEN}
+
     def _schedule_config_update(self, **kwargs: typing.Any) -> None:
         if not self._pending_config_update:
             self._pending_config_update = {}
@@ -529,34 +558,12 @@ class RealtimeSession(llm.RealtimeSession):
             tools_payload.extend(self._opts.phonic_tools)
         tools_payload.extend(update.get("tools", self._tool_definitions))
 
-        config = {
-            "type": "reset",
-            "config": {
-                k: v
-                for k, v in {
-                    "agent": self._opts.phonic_agent,
-                    "project": self._opts.project,
-                    "welcome_message": self._opts.welcome_message,
-                    "generate_welcome_message": self._opts.generate_welcome_message,
-                    "system_prompt": system_prompt,
-                    "voice_id": self._opts.voice,
-                    "input_format": "pcm_44100",
-                    "output_format": "pcm_44100",
-                    "recognized_languages": self._opts.languages,
-                    "audio_speed": self._opts.audio_speed,
-                    "tools": tools_payload if tools_payload else NOT_GIVEN,
-                    "boosted_keywords": self._opts.boosted_keywords,
-                    "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
-                    "no_input_poke_sec": self._opts.no_input_poke_sec,
-                    "no_input_poke_text": self._opts.no_input_poke_text,
-                    "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
-                }.items()
-                if v is not NOT_GIVEN
-            },
-        }
-
+        config_options = self._build_session_config_options_dict(
+            system_prompt=system_prompt,
+            tools_payload=tools_payload,
+        )
         logger.info("Sending mid-session reset")
-        await self._socket._websocket.send(json.dumps(config))
+        await self._socket.send_reset(ResetPayload(config=ConfigOptions(**config_options)))
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -584,31 +591,11 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("Instructions are not set. Phonic will not start a conversation.")
                 return
 
-            config = {
-                "type": "config",
-                "agent": self._opts.phonic_agent,
-                "project": self._opts.project,
-                "welcome_message": self._opts.welcome_message,
-                "generate_welcome_message": self._opts.generate_welcome_message,
-                "system_prompt": self._opts.instructions + self._system_prompt_postfix,
-                "voice_id": self._opts.voice,
-                "input_format": "pcm_44100",
-                "output_format": "pcm_44100",
-                "recognized_languages": self._opts.languages,
-                "audio_speed": self._opts.audio_speed,
-                "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
-                "boosted_keywords": self._opts.boosted_keywords,
-                "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
-                "no_input_poke_sec": self._opts.no_input_poke_sec,
-                "no_input_poke_text": self._opts.no_input_poke_text,
-                "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
-            }
-            # Filter out NOT_GIVEN values
-            config_filtered = typing.cast(
-                dict[str, typing.Any],
-                {k: v for k, v in config.items() if v is not NOT_GIVEN},
+            config_options = self._build_session_config_options_dict(
+                system_prompt=self._opts.instructions + self._system_prompt_postfix,
+                tools_payload=tools_payload,
             )
-            await self._socket.send_config(ConfigPayload(**config_filtered))
+            await self._socket.send_config(ConfigPayload(**config_options))
 
             recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
             send_task = asyncio.create_task(self._send_task(self._socket), name="phonic-send")
