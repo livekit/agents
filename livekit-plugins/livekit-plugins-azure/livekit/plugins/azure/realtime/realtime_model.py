@@ -440,7 +440,7 @@ class RealtimeSession(
                     locale=language if language else None,
                 )
 
-        session_config = RequestSession(
+        session_config = RequestSession(  # type: ignore[misc]
             modalities=list(self._realtime_model._opts.modalities),
             instructions=self._instructions or "You are a helpful assistant.",
             voice=voice_config,
