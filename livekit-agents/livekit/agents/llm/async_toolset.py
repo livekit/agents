@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
@@ -12,11 +11,10 @@ from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
     Tool,
-    ToolError,
     Toolset,
     function_tool,
 )
-from ..llm.utils import function_arguments_to_pydantic_model
+from ..llm.utils import function_arguments_to_pydantic_model, prepare_function_arguments
 from ..log import logger
 from ..voice.agent import _pass_through_activity_task_info
 from ..voice.events import RunContext, Userdata_T
@@ -231,8 +229,10 @@ class AsyncToolset(Toolset):
 
             async def _execute_tool() -> Any:
                 try:
-                    tool_kwargs = _prepare_tool_kwargs(tool, raw_arguments, async_ctx)
-                    output = await tool(**tool_kwargs)
+                    fnc_args, fnc_kwargs = prepare_function_arguments(
+                        fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
+                    )
+                    output = await tool(*fnc_args, **fnc_kwargs)
                 except asyncio.CancelledError:
                     logger.debug(
                         "async tool cancelled", extra={"call_id": call_id, "function": fnc_name}
@@ -240,7 +240,7 @@ class AsyncToolset(Toolset):
                     if not async_ctx._pending_fut.done():
                         async_ctx._pending_fut.set_result(None)
                     return
-                except BaseException as e:
+                except Exception as e:
                     output = e
                     logger.exception(
                         "error in async tool", extra={"call_id": call_id, "function": fnc_name}
@@ -382,36 +382,3 @@ def _build_raw_schema(tool: FunctionTool | RawFunctionTool) -> dict[str, Any]:
         "description": tool.info.description or "",
         "parameters": model.model_json_schema(),
     }
-
-
-def _prepare_tool_kwargs(
-    tool: FunctionTool | RawFunctionTool,
-    raw_arguments: dict[str, Any],
-    async_ctx: AsyncRunContext,
-) -> dict[str, Any]:
-    """Build kwargs to call the original tool, injecting AsyncRunContext."""
-    sig = inspect.signature(tool)
-    try:
-        type_hints = get_type_hints(tool)
-    except Exception:
-        type_hints = {}
-
-    kwargs: dict[str, Any] = {}
-    missing_params: list[str] = []
-    for param_name, param in sig.parameters.items():
-        hint = type_hints.get(param_name)
-        if hint is not None and _is_async_context_type(hint):
-            kwargs[param_name] = async_ctx
-        elif param_name == "raw_arguments" and isinstance(tool, RawFunctionTool):
-            kwargs["raw_arguments"] = raw_arguments
-        elif param_name in raw_arguments:
-            kwargs[param_name] = raw_arguments[param_name]
-        elif param.default is not inspect.Parameter.empty:
-            kwargs[param_name] = param.default
-        else:
-            missing_params.append(param_name)
-
-    if missing_params:
-        raise ToolError(f"Missing required parameters: {missing_params}")
-
-    return kwargs

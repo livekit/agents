@@ -367,7 +367,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str,  # raw function output from the LLM
+    json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
@@ -377,9 +377,13 @@ def prepare_function_arguments(
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-    args_dict = from_json(json_arguments)
-    if args_dict is None:
-        args_dict = {}
+
+    if isinstance(json_arguments, str):
+        args_dict = from_json(json_arguments)
+        if args_dict is None:
+            args_dict = {}
+    else:
+        args_dict = json_arguments
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
@@ -412,12 +416,21 @@ def prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext if needed
+    # inject RunContext (or subclasses like AsyncRunContext) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if is_context_type(type_hint) and call_ctx is not None:
+        if not is_context_type(type_hint, allow_subclasses=True) or call_ctx is None:
+            continue
+
+        expected_type = get_origin(type_hint) or type_hint
+        if isinstance(call_ctx, expected_type):
             context_dict[param_name] = call_ctx
+        else:
+            logger.error(
+                f"context type mismatch for parameter '{param_name}': "
+                f"expected {expected_type.__name__}, got {type(call_ctx).__name__}"
+            )
 
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
