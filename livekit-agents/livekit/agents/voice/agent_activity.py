@@ -64,6 +64,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -105,6 +106,15 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
+
+
+@dataclass
+class _PipelineGeneration:
+    chat_ctx: llm.ChatContext
+    llm_gen_data: _LLMGenerationData
+    tts_gen_data: _TTSGenerationData | None
+    tasks: list[asyncio.Task[Any]]
+    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -1224,6 +1234,32 @@ class AgentActivity(RecognitionHooks):
 
             if self._scheduling_paused and len(to_wait) == 0:
                 break
+
+    async def _wait_for_inactive(self) -> None:
+        agent_active = True
+        user_active = True
+        while agent_active or user_active:
+            if self._current_speech is None and not self._speech_q:
+                agent_active = False
+            else:
+                agent_active = True
+                if (speech := self._current_speech) and speech._generations:
+                    await speech._wait_for_generation()
+                await asyncio.sleep(0)
+
+            if self._user_silence_event.is_set():
+                user_active = False
+            else:
+                user_active = True
+                await self._user_silence_event.wait()
+
+            if (
+                self._audio_recognition
+                and (eou_task := self._audio_recognition._end_of_turn_task)
+                and not eou_task.done()
+            ):
+                user_active = True
+                await eou_task
 
     # -- Realtime Session events --
 
