@@ -56,6 +56,7 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
     }
@@ -686,6 +687,17 @@ class RealtimeSession(llm.RealtimeSession):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(
+                    "generate_reply is not compatible with 'gemini-3.1-flash-live-preview'"
+                )
+            )
+            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."

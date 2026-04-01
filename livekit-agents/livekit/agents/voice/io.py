@@ -342,12 +342,16 @@ class VideoOutput(ABC):
 
 class AgentInput:
     def __init__(
-        self, video_changed: Callable[[], None], audio_changed: Callable[[], None]
+        self,
+        video_changed: Callable[[], None],
+        audio_changed: Callable[[], None],
+        audio_enabled_cb: Callable[[bool], None] | None = None,
     ) -> None:
         self._video_stream: VideoInput | None = None
         self._audio_stream: AudioInput | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
+        self._audio_enabled_cb = audio_enabled_cb
 
         # enabled by default
         self._audio_enabled = True
@@ -361,6 +365,9 @@ class AgentInput:
             return
 
         self._audio_enabled = enable
+
+        if self._audio_enabled_cb is not None:
+            self._audio_enabled_cb(enable)
 
         if not self._audio_stream:
             return

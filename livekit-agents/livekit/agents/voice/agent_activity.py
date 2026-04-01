@@ -49,6 +49,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _STTPipeline,
 )
 from .endpointing import create_endpointing
 from .events import (
@@ -510,7 +511,7 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self) -> None:
+    async def start(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -535,7 +536,7 @@ class AgentActivity(RecognitionHooks):
                         self.tts.prewarm()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
                 self._started = True
 
                 @tracer.start_as_current_span(
@@ -559,7 +560,24 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _start_session(self) -> None:
+    async def _detach_stt_pipeline_if_reusable(
+        self, new_activity: AgentActivity
+    ) -> _STTPipeline | None:
+        """Detach and return the STT pipeline if it can be handed off to *new_activity*.
+
+        Requires the same STT instance and the same stt_node implementation.
+        """
+        if (
+            self._audio_recognition
+            and self.stt is not None
+            and type(self.agent).stt_node is type(new_activity.agent).stt_node
+            and self.stt is new_activity.stt
+        ):
+            return await self._audio_recognition.detach_stt()
+
+        return None
+
+    async def _start_session(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
         if isinstance(self.llm, llm.LLM):
@@ -679,7 +697,11 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
-        self._audio_recognition.start()
+        if reuse_stt_pipeline is not None:
+            logger.debug("reusing STT pipeline from previous activity")
+            self._audio_recognition.start(stt_pipeline=reuse_stt_pipeline)
+        else:
+            self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -740,7 +762,7 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self) -> None:
+    async def resume(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
@@ -749,7 +771,7 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
             finally:
                 span.end()
 
@@ -1015,12 +1037,6 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
-            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
-                instructions = self._agent.instructions + "\n" + instructions
-
             task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
@@ -2156,10 +2172,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            chat_ctx.add_message(role="system", content=[instructions])
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)

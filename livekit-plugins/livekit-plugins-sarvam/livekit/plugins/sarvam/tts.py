@@ -56,6 +56,13 @@ SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
+ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
+    "mp3",
+    "opus",
+    "flac",
+    "aac",
+    "wav",
+}
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -305,6 +312,7 @@ class SarvamTTSOptions:
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
+    output_audio_codec: str = "mp3"
 
 
 class TTS(tts.TTS):
@@ -331,6 +339,7 @@ class TTS(tts.TTS):
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
+        output_audio_codec: Optionally choose the output codec format (mp3)
     """
 
     def __init__(
@@ -354,6 +363,7 @@ class TTS(tts.TTS):
         ws_url: str = SARVAM_TTS_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
+        output_audio_codec: str = "mp3",
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -398,6 +408,10 @@ class TTS(tts.TTS):
             raise ValueError("max_chunk_length must be between 50 and 500")
         if speech_sample_rate not in [8000, 16000, 22050, 24000]:
             raise ValueError("Sample rate must be 8000, 16000, 22050, or 24000 Hz")
+        if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+            raise ValueError(
+                f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+            )
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -428,6 +442,7 @@ class TTS(tts.TTS):
             ws_url=ws_url,
             word_tokenizer=word_tokenizer,
             send_completion_event=send_completion_event,
+            output_audio_codec=output_audio_codec,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -499,6 +514,7 @@ class TTS(tts.TTS):
         max_chunk_length: int | None = None,
         enable_preprocessing: bool | None = None,
         send_completion_event: bool | None = None,
+        output_audio_codec: str | None = None,
     ) -> None:
         """Update TTS options with validation."""
         if target_language_code is not None:
@@ -576,6 +592,14 @@ class TTS(tts.TTS):
         if send_completion_event is not None:
             self._opts.send_completion_event = send_completion_event
 
+        if output_audio_codec is not None:
+            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+                raise ValueError(
+                    "output_audio_codec must be one of "
+                    f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+                )
+            self._opts.output_audio_codec = output_audio_codec
+
     # Implement the abstract synthesize method
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions | None = None
@@ -624,6 +648,7 @@ class ChunkedStream(tts.ChunkedStream):
             "output_audio_bitrate": self._opts.output_audio_bitrate,
             "min_buffer_size": self._opts.min_buffer_size,
             "max_chunk_length": self._opts.max_chunk_length,
+            "output_audio_codec": self._opts.output_audio_codec,
         }
         # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
@@ -638,6 +663,7 @@ class ChunkedStream(tts.ChunkedStream):
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -667,7 +693,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=request_id or "unknown",
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/wav",
+                    mime_type=mime_type,
                 )
                 # handle multiple audio chunks
                 for b64 in audios:
@@ -703,11 +729,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
             num_channels=1,
-            mime_type="audio/wav",
+            mime_type=mime_type,
             stream=True,
             frame_size_ms=50,
         )
@@ -785,11 +812,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data["pitch"] = self._opts.pitch
                     data["loudness"] = self._opts.loudness
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
+                    data["output_audio_codec"] = self._opts.output_audio_codec
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
                     data["output_audio_bitrate"] = self._opts.output_audio_bitrate
                     data["min_buffer_size"] = self._opts.min_buffer_size
                     data["max_chunk_length"] = self._opts.max_chunk_length
+                    data["output_audio_codec"] = self._opts.output_audio_codec
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
