@@ -365,10 +365,10 @@ class RealtimeSession(llm.RealtimeSession):
             self._start_new_assistant_turn()
 
         if self._pending_config_update:
-            turn_history = self._build_turn_history(chat_ctx)
-            if turn_history:
+            pending_history = self._build_turn_history(chat_ctx)
+            if pending_history:
                 self._schedule_config_update(
-                    system_prompt_postfix=_CONVERSATION_HISTORY_PREFIX + turn_history
+                    system_prompt_postfix=_CONVERSATION_HISTORY_PREFIX + pending_history
                 )
         elif not sent_tool_call_output and not sent_system_message:
             logger.warning(
