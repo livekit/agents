@@ -4,13 +4,13 @@ import asyncio
 from collections import deque
 
 import pytest
+from mistralai.client.models.transcriptionstreamdone import TranscriptionStreamDone
+from mistralai.client.models.usageinfo import UsageInfo
 
 from livekit import rtc
 from livekit.agents import LanguageCode
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.aio.channel import ChanEmpty
-from mistralai.client.models.transcriptionstreamdone import TranscriptionStreamDone
-from mistralai.client.models.usageinfo import UsageInfo
 
 from .conftest import TEST_CONNECT_OPTIONS
 
