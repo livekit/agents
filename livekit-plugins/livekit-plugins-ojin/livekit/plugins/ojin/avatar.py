@@ -61,8 +61,8 @@ class OjinVideoGenerator(VideoGenerator):
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Push an audio frame to Ojin or signal end of segment."""
         if isinstance(frame, AudioSegmentEnd):
-            self._interaction_started = False
             await self._client.send_message(OjinEndInteractionMessage())
+            self._interaction_started = False
             return
 
         if not self._interaction_started:
@@ -73,9 +73,9 @@ class OjinVideoGenerator(VideoGenerator):
 
     async def clear_buffer(self) -> None:
         """Cancel current interaction and signal interruption to the stream."""
-        self._interaction_started = False
         self._interrupted = True
         await self._client.send_message(OjinCancelInteractionMessage())
+        self._interaction_started = False
 
     def __aiter__(
         self,
