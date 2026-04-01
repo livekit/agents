@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 import weakref
@@ -60,7 +59,6 @@ from mistralai.client.models.transcriptionstreamtextdelta import (
 from mistralai.extra.realtime.connection import (
     RealtimeConnection,
     UnknownRealtimeEvent,
-    parse_realtime_event,
 )
 from mistralai.extra.realtime.transcription import RealtimeTranscription
 
@@ -179,14 +177,18 @@ class STT(stt.STT):
                 interim_results=self._opts.interim_results,
             )
 
-        if (
-            is_given(model)
-            or is_given(language)
-            or is_given(sample_rate)
-            or is_given(interim_results)
-        ):
+        reconnect_needed = is_given(model) or is_given(sample_rate)
+        if reconnect_needed:
+            self._pool.invalidate()
+
+        if reconnect_needed or is_given(language) or is_given(interim_results):
             for stream in self._streams:
-                stream._reconnect_event.set()
+                stream.update_options(
+                    model=model,
+                    language=language,
+                    sample_rate=sample_rate,
+                    interim_results=interim_results,
+                )
 
     @staticmethod
     def _build_capabilities(
@@ -241,7 +243,8 @@ class STT(stt.STT):
             await conn.close()
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        if self._is_realtime_model(self._opts.model):
+            self._pool.prewarm()
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -354,6 +357,32 @@ class SpeechStream(stt.RecognizeStream):
         self._has_sent_final_for_turn = False
         self._usage_emitted = False
 
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
+        reconnect_needed = False
+
+        if is_given(model):
+            self._opts.model = model
+            reconnect_needed = True
+        if is_given(language):
+            self._opts.language = LanguageCode(language)
+        if is_given(sample_rate):
+            self._opts.sample_rate = sample_rate
+            self._needed_sr = sample_rate
+            self._resampler = None
+            reconnect_needed = True
+        if is_given(interim_results):
+            self._opts.interim_results = interim_results
+
+        if reconnect_needed:
+            self._reconnect_event.set()
+
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         try:
@@ -375,14 +404,18 @@ class SpeechStream(stt.RecognizeStream):
                             return_when=asyncio.FIRST_COMPLETED,
                         )
 
-                        for task in done:
-                            if task is reconnect_wait:
-                                continue
-                            task.result()
-
                         if reconnect_wait in done:
+                            for task in done:
+                                if task is reconnect_wait:
+                                    continue
+                                task.result()
                             self._reconnect_event.clear()
                         else:
+                            if send_task in done:
+                                send_task.result()
+                                await recv_task
+                            else:
+                                recv_task.result()
                             closing = True
                     except asyncio.CancelledError:
                         self._release_connection(connection)
@@ -461,35 +494,8 @@ class SpeechStream(stt.RecognizeStream):
             await connection.flush_audio()
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
-        initial_events = getattr(connection, "_initial_events", None)
-        while initial_events:
-            event = initial_events.popleft()
+        async for event in connection:
             self._process_event(event)
-
-        websocket = getattr(connection, "_websocket", None)
-        if websocket is None:
-            raise APIConnectionError("Realtime websocket unavailable")
-
-        async for msg in websocket:
-            text = msg if isinstance(msg, str) else bytes(msg).decode("utf-8", errors="replace")
-            try:
-                data = json.loads(text)
-            except Exception:
-                continue
-
-            event = parse_realtime_event(data)
-            self._process_event(event)
-
-        # WebSocket closed — expected when the connection is being torn down
-        # after send_task finishes, unexpected otherwise.
-        close_code = getattr(websocket, "close_code", None)
-        if close_code and close_code != 1000:
-            raise APIStatusError(
-                message="Mistral realtime connection closed unexpectedly",
-                status_code=close_code,
-                request_id=self._request_id or None,
-                retryable=not self._data_sent,
-            )
 
     async def _finalization_checker(self) -> None:
         """Fallback finalization via idle detection.
@@ -554,6 +560,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
             )
             self._usage_emitted = True
+            self._audio_duration = 0.0
 
     @staticmethod
     def _provider_audio_duration(
@@ -673,6 +680,8 @@ class SpeechStream(stt.RecognizeStream):
         if not self._speaking:
             self._speaking = True
             self._has_sent_final_for_turn = False
+            if self._usage_emitted:
+                self._usage_emitted = False
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
             self._data_sent = True
 
