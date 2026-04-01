@@ -357,8 +357,18 @@ class SpeechStream(stt.SpeechStream):
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 while True:
-                    await ws.ping()
-                    await asyncio.sleep(30)
+                    # scribe_v2_realtime model requires a keepalive message instead of a ping
+                    await asyncio.sleep(10)
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                            }
+                        )
+                    )
             except Exception:
                 return
 
@@ -565,10 +575,10 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(interim_event)
 
-        # 11labs sends both when include_timestamps is True
-        elif (
-            message_type == "committed_transcript" and not self._opts.include_timestamps
-        ) or message_type == "committed_transcript_with_timestamps":
+        # 11labs sends both when include_timestamps is True or when the model is scribe_v2_realtime :(
+        elif (message_type == "committed_transcript" and not self._opts.include_timestamps) or (
+            message_type == "committed_transcript_with_timestamps" and self._opts.include_timestamps
+        ):
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
             if text:
@@ -620,5 +630,10 @@ class SpeechStream(stt.SpeechStream):
                 details_suffix,
             )
             raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
+        elif (
+            message_type == "committed_transcript_with_timestamps"
+            and not self._opts.include_timestamps
+        ):
+            pass
         else:
             logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)

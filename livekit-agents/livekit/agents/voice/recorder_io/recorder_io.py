@@ -478,6 +478,7 @@ class RecorderAudioOutput(io.AudioOutput):
             if pause_pos <= playback_position:
                 buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
+        buf = [f for f in buf if f.duration > 0.0]
         if buf:
             if trailing_silence_duration > 0.0:
                 buf.append(

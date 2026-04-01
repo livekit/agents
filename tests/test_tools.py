@@ -1,10 +1,16 @@
 import enum
+import json
+from typing import Any, Literal
 
 import pytest
+from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    build_legacy_openai_schema,
+    build_strict_openai_schema,
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
@@ -392,3 +398,188 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestNoParametersSchema:
+    """Test that functions with no parameters generate valid JSON schema."""
+
+    def test_legacy_schema_no_parameters_has_no_required(self):
+        """Legacy schema for no-param function must not include 'required'."""
+        params = build_legacy_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
+
+    def test_strict_schema_no_parameters_has_no_required(self):
+        """Strict schema for no-param function must not include 'required'."""
+        params = build_strict_openai_schema(mock_tool_3)["function"]["parameters"]
+        assert "properties" in params
+        assert params["properties"] == {}
+        assert "required" not in params
+
+
+class _NullableEnumModel(BaseModel):
+    status: Literal["active", "inactive"] | None = Field(None)
+
+
+class _NullableBoolModel(BaseModel):
+    flag: bool | None = Field(None)
+
+
+class _NonNullableEnumModel(BaseModel):
+    status: Literal["active", "inactive"] = Field(...)
+
+
+class TestStrictJsonSchema:
+    def test_nullable_enum_includes_null_in_enum(self):
+        schema = to_strict_json_schema(_NullableEnumModel)
+        status = schema["properties"]["status"]
+        assert None in status["enum"], f"enum should contain None: {status}"
+        assert "null" in status["type"], f"type should contain 'null': {status}"
+
+    def test_nullable_bool_has_null_type(self):
+        schema = to_strict_json_schema(_NullableBoolModel)
+        flag = schema["properties"]["flag"]
+        assert "enum" not in flag, f"bool field should not have enum: {flag}"
+        assert "null" in flag["type"], f"type should contain 'null': {flag}"
+
+    def test_non_nullable_enum_excludes_null(self):
+        schema = to_strict_json_schema(_NonNullableEnumModel)
+        status = schema["properties"]["status"]
+        assert None not in status["enum"], f"enum should not contain None: {status}"
+        assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
+
+
+class _OpenEnumModel(BaseModel):
+    """Simulates a codegen'd "open enum" pattern (e.g. Fern Python SDK).
+    Union[Literal["a", "b"], Any] produces an anyOf with a bare {} entry."""
+
+    preference: Literal["a", "b"] | Any | None = None
+
+
+class _NestedOpenEnumModel(BaseModel):
+    items: list[_OpenEnumModel]
+
+
+def _has_empty_schema(schema: object) -> bool:
+    """Recursively check if any dict in the schema tree is an empty {}."""
+    if isinstance(schema, dict):
+        if schema == {}:
+            return True
+        return any(_has_empty_schema(v) for v in schema.values())
+    if isinstance(schema, list):
+        return any(_has_empty_schema(v) for v in schema)
+    return False
+
+
+class TestEmptySchemaStripping:
+    """Test that empty {} entries are stripped from anyOf/oneOf."""
+
+    def test_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_OpenEnumModel)
+        assert not _has_empty_schema(schema), (
+            f"schema should not contain empty {{}}: {json.dumps(schema, indent=2)}"
+        )
+
+    def test_nested_open_enum_strips_empty_anyof(self):
+        schema = to_strict_json_schema(_NestedOpenEnumModel)
+        assert not _has_empty_schema(schema), (
+            f"nested schema should not contain empty {{}}: {json.dumps(schema, indent=2)}"
+        )
+
+    def test_single_variant_after_strip_is_unwrapped(self):
+        """When stripping {} leaves a single variant, anyOf should be unwrapped."""
+        schema = to_strict_json_schema(_OpenEnumModel)
+        pref = schema["properties"]["preference"]
+        # After stripping {}, the union should be simplified (no single-element anyOf)
+        any_of = pref.get("anyOf")
+        if any_of is not None:
+            assert len(any_of) != 1, (
+                f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
+            )
+
+
+class TestExecuteFunctionCallValidationErrors:
+    """Test that argument validation errors are surfaced to the LLM."""
+
+    @pytest.mark.asyncio
+    async def test_missing_required_arg_surfaces_error(self):
+        """When the LLM omits a required argument, the error details should be
+        returned as a ToolError (is_error=True) instead of 'An internal error occurred'."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{}",  # missing required 'arg1'
+            call_id="test-call-1",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # The error message should contain details about what went wrong,
+        # NOT the generic "An internal error occurred"
+        assert "An internal error occurred" not in result.fnc_call_out.output
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_wrong_type_arg_surfaces_error(self):
+        """When the LLM provides an argument with the wrong type, the validation
+        error details should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_2])
+        tool_call = FunctionToolCall(
+            name="mock_tool_2",
+            arguments='{"arg1": 12345}',  # should be a MockOption string, not int
+            call_id="test-call-2",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        assert "An internal error occurred" not in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_valid_args_still_work(self):
+        """Verify that valid arguments still execute successfully."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments='{"arg1": "hello"}',
+            call_id="test-call-3",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_surfaces_error(self):
+        """When the LLM provides invalid JSON, the error should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{not valid json}",
+            call_id="test-call-4",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # Should contain error details, not generic message
+        assert "An internal error occurred" not in result.fnc_call_out.output

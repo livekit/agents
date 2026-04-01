@@ -39,28 +39,30 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, ConnectionPool, is_given
 from livekit.agents.voice.io import TimedString
-from mistralai import Mistral
+from mistralai.client import Mistral
+from mistralai.client.errors import SDKError
+from mistralai.client.models import AudioFormat
+from mistralai.client.models.realtimetranscriptionerror import RealtimeTranscriptionError
+from mistralai.client.models.realtimetranscriptionsessioncreated import (
+    RealtimeTranscriptionSessionCreated,
+)
+from mistralai.client.models.realtimetranscriptionsessionupdated import (
+    RealtimeTranscriptionSessionUpdated,
+)
 from mistralai.extra.realtime.connection import (
     RealtimeConnection,
     UnknownRealtimeEvent,
     parse_realtime_event,
 )
 from mistralai.extra.realtime.transcription import RealtimeTranscription
-from mistralai.models import AudioFormat
-from mistralai.models.realtimetranscriptionerror import RealtimeTranscriptionError
-from mistralai.models.realtimetranscriptionsessioncreated import (
-    RealtimeTranscriptionSessionCreated,
-)
-from mistralai.models.realtimetranscriptionsessionupdated import (
-    RealtimeTranscriptionSessionUpdated,
-)
-from mistralai.models.sdkerror import SDKError
-from mistralai.models.transcriptionstreamdone import TranscriptionStreamDone
-from mistralai.models.transcriptionstreamlanguage import TranscriptionStreamLanguage
-from mistralai.models.transcriptionstreamsegmentdelta import (
+from mistralai.client.models.transcriptionstreamdone import TranscriptionStreamDone
+from mistralai.client.models.transcriptionstreamlanguage import TranscriptionStreamLanguage
+from mistralai.client.models.transcriptionstreamsegmentdelta import (
     TranscriptionStreamSegmentDelta,
 )
-from mistralai.models.transcriptionstreamtextdelta import TranscriptionStreamTextDelta
+from mistralai.client.models.transcriptionstreamtextdelta import (
+    TranscriptionStreamTextDelta,
+)
 
 from .log import logger
 from .models import STTModels
@@ -128,7 +130,7 @@ class STT(stt.STT):
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
-        if not mistral_api_key:
+        if not client and not mistral_api_key:
             raise ValueError("MistralAI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
         self._pool = ConnectionPool[RealtimeConnection](

@@ -378,18 +378,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._context_id = utils.shortuuid()
-        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+        self._context_id = ""
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
         self._durations_ms: list[int] = []
         self._connection: _Connection | None = None
 
     async def aclose(self) -> None:
-        await self._sent_tokenizer_stream.aclose()
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._context_id = utils.shortuuid()
+        self._text_buffer = ""
+        self._start_times_ms = []
+        self._durations_ms = []
+
+        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+
         output_emitter.initialize(
             request_id=self._context_id,
             sample_rate=self._opts.sample_rate,
@@ -415,10 +420,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
             flush_on_chunk = (
@@ -427,7 +432,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 and self._opts.auto_mode
             )
             xml_content: list[str] = []
-            async for data in self._sent_tokenizer_stream:
+            async for data in sent_tokenizer_stream:
                 text = data.token
                 # send xml tags fully formed
                 xml_start_tokens = ["<phoneme", "<break"]
@@ -477,6 +482,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+            await sent_tokenizer_stream.aclose()
 
 
 @dataclass
@@ -560,7 +566,7 @@ class _Connection:
                 preferred_alignment = "original"
             else:
                 preferred_alignment = "normalized"
-        return preferred_alignment  # type: ignore[return-value]
+        return preferred_alignment
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
@@ -877,6 +883,9 @@ def _to_timed_words(
     timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], text
+
     timed_words = []
     _, start_indices, _ = zip(*words, strict=False)
     end = 0

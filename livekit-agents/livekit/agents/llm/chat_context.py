@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
@@ -31,6 +32,121 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
+
+
+class Instructions(str):
+    """Instructions that adapt based on the user's input modality (audio vs. text).
+
+    ``str(self)`` is what providers see when treating this as a plain string.
+    By default it equals the ``audio`` variant; after :meth:`as_modality` it
+    equals the chosen variant.
+
+    ``_audio_variant`` and ``_text_variant`` are always preserved so
+    :meth:`as_modality` can be called again for a different modality (e.g.,
+    when the same ``ChatContext`` is reused across tool-call turns).
+    """
+
+    _audio_variant: str
+    _text_variant: str | None
+
+    def __new__(
+        cls, audio: str, *, text: str | None = None, _represent: str | None = None
+    ) -> Instructions:
+        """Create an Instructions object.
+
+        Args:
+            audio: The audio (voice) variant.
+            text: The text variant.  Falls back to ``audio`` when omitted.
+        """
+        instance = super().__new__(cls, _represent if _represent is not None else audio)
+        instance._audio_variant = audio
+        instance._text_variant = text
+        return instance
+
+    @property
+    def audio(self) -> str:
+        """The audio (voice) variant of the instructions."""
+        return self._audio_variant
+
+    @property
+    def text(self) -> str:
+        """The text variant of the instructions.
+
+        Falls back to the audio variant when no text variant was provided.
+        """
+        return self._text_variant if self._text_variant is not None else self._audio_variant
+
+    def as_modality(self, modality: Literal["audio", "text"]) -> Instructions:
+        """Return a copy whose ``str`` value is the correct variant for *modality*.
+
+        Both ``_audio_variant`` and ``_text_variant`` are preserved so this can
+        be called again for a different modality (e.g. across tool-call turns).
+        """
+        return Instructions(
+            audio=self._audio_variant,
+            text=self._text_variant,
+            _represent=self.audio if modality == "audio" else self.text,
+        )
+
+    def __add__(self, other: object) -> Instructions:
+        """Concatenate, propagating both variants and the current str value."""
+        if isinstance(other, Instructions):
+            has_text = self._text_variant is not None or other._text_variant is not None
+            return Instructions(
+                audio=self.audio + other.audio,
+                text=(self.text + other.text) if has_text else None,
+                _represent=str(self) + str(other),
+            )
+        if isinstance(other, str):
+            return Instructions(
+                audio=self.audio + other,
+                text=(self._text_variant + other) if self._text_variant is not None else None,
+                _represent=str(self) + other,
+            )
+        raise TypeError(f"Cannot add Instructions and {type(other)}")
+
+    def __radd__(self, other: object) -> Instructions:
+        """Support ``plain_str + Instructions``, propagating both variants."""
+        if isinstance(other, str):
+            return Instructions(
+                audio=other + self.audio,
+                text=(other + self._text_variant) if self._text_variant is not None else None,
+                _represent=other + str(self),
+            )
+        raise TypeError(f"Cannot add {type(other)} and Instructions")
+
+    def __repr__(self) -> str:
+        return f"Instructions({str(self)!r})"
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+        from pydantic_core import core_schema
+
+        def validate_python(v: Any) -> Instructions:
+            if isinstance(v, Instructions):
+                return v
+            if isinstance(v, dict) and v.get("type") == "instructions":
+                return cls(v["audio"], text=v.get("text"))
+            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
+
+        def validate_json(v: Any) -> Instructions:
+            if isinstance(v, dict) and v.get("type") == "instructions":
+                return cls(v["audio"], text=v.get("text"))
+            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
+
+        def serialize(v: Instructions) -> dict[str, Any]:
+            d: dict[str, Any] = {"type": "instructions", "audio": v.audio}
+            if v._text_variant is not None:
+                d["text"] = v._text_variant
+            return d
+
+        return core_schema.json_or_python_schema(
+            python_schema=core_schema.no_info_plain_validator_function(validate_python),
+            json_schema=core_schema.no_info_plain_validator_function(validate_json),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                serialize, info_arg=False
+            ),
+        )
 
 
 class ImageContent(BaseModel):
@@ -173,7 +289,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+ChatContent: TypeAlias = ImageContent | AudioContent | Instructions | str
 
 
 class FunctionCall(BaseModel):
@@ -214,7 +330,7 @@ class AgentConfigUpdate(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
-    instructions: str | None = None
+    instructions: Instructions | str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
 
@@ -490,7 +606,11 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["google"],
+        *,
+        inject_dummy_user_message: bool = True,
+        thought_signatures: dict[str, bytes] | None = None,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
@@ -557,46 +677,99 @@ class ChatContext:
 
         return 0
 
+    def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
+        """Update an item with the same ID if it exists, otherwise append it."""
+        idx = self.index_by_id(item.id)
+        if idx is not None:
+            if not allow_type_mismatch and item.type != self._items[idx].type:
+                raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
+            self._items[idx] = item
+        else:
+            self._items.append(item)
+
     async def _summarize(
         self,
         llm_v: LLM,
         *,
         keep_last_turns: int = 2,
     ) -> ChatContext:
-        to_summarize: list[ChatMessage] = []
-        for msg in self.messages():
-            if msg.role not in ("user", "assistant"):
-                continue
-            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
-                continue
+        # Split self.items into head/tail. Walk backward, counting only
+        # user/assistant ChatMessages toward the keep_last_turns budget (each
+        # turn = one user + one assistant message, so budget = keep_last_turns * 2).
+        # Everything from the split point onward — including any interleaved
+        # FunctionCall/FunctionCallOutput items — is preserved as-is in the tail.
+        msg_budget = keep_last_turns * 2
+        split_idx = len(self.items)
 
-            text = (msg.text_content or "").strip()
-            if text:
-                to_summarize.append(msg)
+        if msg_budget > 0:
+            msg_count = 0
+            for i in range(len(self.items) - 1, -1, -1):
+                item = self.items[i]
+                if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
+                    msg_count += 1
+                    if msg_count >= msg_budget:
+                        split_idx = i
+                        break
+            else:
+                # Not enough messages to fill the budget — nothing to summarize
+                return self
+
+        if split_idx == 0:
+            return self
+
+        head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
+
+        # Build summarization input from head_items only.
+        to_summarize: list[ChatMessage | FunctionCall | FunctionCallOutput] = []
+        for item in head_items:
+            if isinstance(item, ChatMessage):
+                if item.role not in ("user", "assistant"):
+                    continue
+                if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+                    continue
+
+                text = (item.text_content or "").strip()
+                if text:
+                    to_summarize.append(item)
+            elif isinstance(item, (FunctionCall, FunctionCallOutput)):
+                to_summarize.append(item)
+
         if not to_summarize:
             return self
 
-        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
-        if tail_n == 0:
-            head, tail = to_summarize, []
-        else:
-            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+        # Render items to XML format and collect the contents.
+        contents: list[str] = []
+        for m in to_summarize:
+            if isinstance(m, (FunctionCall, FunctionCallOutput)):
+                contents.append(_function_call_item_to_message(m).text_content or "")
+            else:
+                contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
-        if not head:
-            return self
+        source_text = "\n".join(contents).strip()
 
-        source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
         if not source_text:
             return self
 
         chat_ctx = ChatContext()
         chat_ctx.add_message(
             role="system",
-            content=(
-                "Compress older chat history into a short, faithful summary.\n"
-                "Focus on user goals, constraints, decisions, key facts/preferences/entities, and pending tasks.\n"
-                "Exclude chit-chat and greetings. Be concise."
-            ),
+            content=textwrap.dedent("""\
+                Compress older conversation history into a short, faithful summary.
+
+                The conversation is formatted as XML. Here is how to read it:
+                - <user>…</user>  — something the user said.
+                - <assistant>…</assistant>  — something the assistant said.
+                - <function_call name="…" call_id="…">…</function_call>  — the assistant invoked an action.
+                - <function_call_output name="…" call_id="…">…</function_call_output>  — the result of that \
+                action. May contain <error>…</error> if it failed.
+
+                Guidelines:
+                - Distill the *information learned* from function call outputs into the summary. \
+                Do not mention that a tool/function was called — just preserve the knowledge gained.
+                - Focus on: user goals, constraints, decisions, key facts, preferences, entities, \
+                and any pending or unresolved tasks.
+                - Omit greetings, filler, and chit-chat.
+                - Be concise."""),
         )
         chat_ctx.add_message(
             role="user",
@@ -613,33 +786,31 @@ class ChatContext:
         if not summary:
             return self
 
-        tail_start_ts = tail[0].created_at if tail else float("inf")
-
+        # Rebuild self._items. From head_items, keep only structural
+        # items (system messages, agent handoffs, config updates, prior
+        # summaries) — everything summarizable is replaced by the summary.
+        # Tail items are appended as-is.
         preserved: list[ChatItem] = []
-        for it in self.items:
-            if (
-                it.type in ("function_call", "function_call_output")
-                and it.created_at < tail_start_ts
-            ):
+        for it in head_items:
+            if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-
-            if it.type == "message" and it.role in ("user", "assistant"):
+            if isinstance(it, (FunctionCall, FunctionCallOutput)):
                 continue
-
             preserved.append(it)
 
         self._items = preserved
 
-        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
+        created_at_hint = (
+            (tail_items[0].created_at - 1e-6) if tail_items else (head_items[-1].created_at + 1e-6)
+        )
         self.add_message(
             role="assistant",
-            content=f"[history summary]\n{summary}",
+            content=to_xml("chat_history_summary", summary),
             created_at=created_at_hint,
             extra={"is_summary": True},
         )
 
-        for msg in tail:
-            self._items.append(msg)
+        self._items.extend(tail_items)
 
         return self
 
@@ -721,3 +892,63 @@ class _ReadOnlyChatContext(ChatContext):
     @property
     def readonly(self) -> bool:
         return True
+
+
+def _to_attrs_str(attrs: dict[str, Any] | None = None) -> str | None:
+    if attrs:
+        return " ".join([f'{k}="{v}"' for k, v in attrs.items()])
+    return None
+
+
+def to_xml(
+    tag_name: str,
+    content: str | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> str:
+    attrs_str = _to_attrs_str(attrs)
+
+    if content:
+        return "\n".join(
+            [
+                f"<{tag_name} {attrs_str}>" if attrs_str else f"<{tag_name}>",
+                content,
+                f"</{tag_name}>",
+            ]
+        )
+    else:
+        return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"
+
+
+def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> ChatMessage:
+    if isinstance(item, FunctionCall):
+        return ChatMessage(
+            role="user",
+            content=[
+                to_xml(
+                    "function_call",
+                    item.arguments,
+                    attrs={
+                        "name": item.name,
+                        "call_id": item.call_id,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call": True},
+        )
+    elif isinstance(item, FunctionCallOutput):
+        return ChatMessage(
+            role="assistant",
+            content=[
+                to_xml(
+                    "function_call_output",
+                    item.output if not item.is_error else to_xml("error", item.output),
+                    attrs={
+                        "call_id": item.call_id,
+                        "name": item.name,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call_output": True},
+        )

@@ -24,6 +24,7 @@ import base64
 import enum
 import json
 import os
+import platform
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -37,12 +38,15 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    __version__ as livekit_version,
     tokenize,
     tts,
     utils,
 )
 
 from .log import logger
+
+USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -52,6 +56,13 @@ SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
+ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
+    "mp3",
+    "opus",
+    "flac",
+    "aac",
+    "wav",
+}
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -301,6 +312,7 @@ class SarvamTTSOptions:
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
+    output_audio_codec: str = "mp3"
 
 
 class TTS(tts.TTS):
@@ -327,6 +339,7 @@ class TTS(tts.TTS):
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
+        output_audio_codec: Optionally choose the output codec format (mp3)
     """
 
     def __init__(
@@ -350,6 +363,7 @@ class TTS(tts.TTS):
         ws_url: str = SARVAM_TTS_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
+        output_audio_codec: str = "mp3",
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -394,6 +408,10 @@ class TTS(tts.TTS):
             raise ValueError("max_chunk_length must be between 50 and 500")
         if speech_sample_rate not in [8000, 16000, 22050, 24000]:
             raise ValueError("Sample rate must be 8000, 16000, 22050, or 24000 Hz")
+        if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+            raise ValueError(
+                f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+            )
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -424,6 +442,7 @@ class TTS(tts.TTS):
             ws_url=ws_url,
             word_tokenizer=word_tokenizer,
             send_completion_event=send_completion_event,
+            output_audio_codec=output_audio_codec,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -439,7 +458,7 @@ class TTS(tts.TTS):
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
-            "User-Agent": "LiveKit-Sarvam-TTS/1.0",
+            "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
@@ -495,6 +514,7 @@ class TTS(tts.TTS):
         max_chunk_length: int | None = None,
         enable_preprocessing: bool | None = None,
         send_completion_event: bool | None = None,
+        output_audio_codec: str | None = None,
     ) -> None:
         """Update TTS options with validation."""
         if target_language_code is not None:
@@ -572,6 +592,14 @@ class TTS(tts.TTS):
         if send_completion_event is not None:
             self._opts.send_completion_event = send_completion_event
 
+        if output_audio_codec is not None:
+            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+                raise ValueError(
+                    "output_audio_codec must be one of "
+                    f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+                )
+            self._opts.output_audio_codec = output_audio_codec
+
     # Implement the abstract synthesize method
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions | None = None
@@ -620,6 +648,7 @@ class ChunkedStream(tts.ChunkedStream):
             "output_audio_bitrate": self._opts.output_audio_bitrate,
             "min_buffer_size": self._opts.min_buffer_size,
             "max_chunk_length": self._opts.max_chunk_length,
+            "output_audio_codec": self._opts.output_audio_codec,
         }
         # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
@@ -632,7 +661,9 @@ class ChunkedStream(tts.ChunkedStream):
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         }
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -647,7 +678,7 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message="Sarvam TTS API Error",
+                        message=f"Sarvam TTS API Error ({res.status}): {error_text}",
                         status_code=res.status,
                         body=error_text,
                     )
@@ -662,7 +693,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=request_id or "unknown",
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/mp3",
+                    mime_type=mime_type,
                 )
                 # handle multiple audio chunks
                 for b64 in audios:
@@ -698,11 +729,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
             num_channels=1,
-            mime_type="audio/mp3",
+            mime_type=mime_type,
             stream=True,
             frame_size_ms=50,
         )
@@ -742,6 +774,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -749,7 +783,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(f"TTS stream failed: {e}") from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
             output_emitter.end_input()
@@ -760,7 +794,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        logger.info("Starting TTS WebSocket session", extra=self._build_log_context())
+        logger.info(
+            "Starting TTS WebSocket session",
+            extra={**self._build_log_context(), "user-agent": USER_AGENT},
+        )
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -770,16 +807,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
-                    "output_audio_bitrate": self._opts.output_audio_bitrate,
-                    "min_buffer_size": self._opts.min_buffer_size,
-                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
                     data["loudness"] = self._opts.loudness
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
+                    data["output_audio_codec"] = self._opts.output_audio_codec
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
+                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
+                    data["min_buffer_size"] = self._opts.min_buffer_size
+                    data["max_chunk_length"] = self._opts.max_chunk_length
+                    data["output_audio_codec"] = self._opts.output_audio_codec
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
@@ -818,8 +857,38 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
+                        close_code = ws.close_code if ws.close_code is not None else msg.data
+                        close_reason = msg.extra
+                        is_expected_close = close_code in (1000, 1001, None)
+                        if not is_expected_close:
+                            logger.error(
+                                "WebSocket connection closed by server",
+                                extra={
+                                    **self._build_log_context(),
+                                    "close_code": close_code,
+                                    "close_reason": close_reason,
+                                },
+                            )
+                            raw_close = {
+                                "msg_type": str(msg.type),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            }
+                            raise APIStatusError(
+                                message=(
+                                    "Sarvam TTS WebSocket closed with non-graceful status: "
+                                    f"{json.dumps(raw_close, ensure_ascii=False)}"
+                                ),
+                                status_code=int(close_code) if isinstance(close_code, int) else -1,
+                                body=raw_close,
+                            )
                         logger.info(
-                            "WebSocket connection closed by server", extra=self._build_log_context()
+                            "WebSocket connection closed by server",
+                            extra={
+                                **self._build_log_context(),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            },
                         )
                         break
 
@@ -877,6 +946,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._connection_state = ConnectionState.FAILED
             logger.error(f"Connection failed: {e}", extra=self._build_log_context())
             raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            self._connection_state = ConnectionState.FAILED
+            raise
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
             logger.error(
@@ -928,13 +1000,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 extra={**self._build_log_context(), "raw_data": msg_data[:200]},
             )
             return True  # Continue processing
+        except (APIStatusError, APIConnectionError):
+            # Preserve provider-originated status/body/retry metadata.
+            raise
         except Exception as e:
             logger.error(
                 f"Error processing WebSocket message: {e}",
                 extra=self._build_log_context(),
                 exc_info=True,
             )
-            raise APIStatusError(f"Message processing error: {e}") from e
+            raise APIStatusError(
+                message=f"Message processing error: {e}. Raw server message: {msg_data}",
+                body={"raw_message": msg_data},
+            ) from e
 
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
@@ -959,6 +1037,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         error_data = resp.get("data", {})
         error_msg = error_data.get("message", "Unknown error")
         error_code = error_data.get("code", "unknown")
+        raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
 
         logger.error(
             f"TTS API error: {error_msg}",
@@ -966,6 +1045,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_message": error_msg,
+                "raw_message": resp,
             },
         )
 
@@ -974,9 +1054,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         is_recoverable = any(err in str(error_msg).lower() for err in recoverable_errors)
 
         if is_recoverable:
-            raise APIConnectionError(f"Recoverable TTS API error: {error_msg}")
+            raise APIConnectionError(f"Recoverable TTS API error from Sarvam: {raw_error_message}")
         else:
-            raise APIStatusError(message=f"TTS API error: {error_msg}", status_code=500)
+            raise APIStatusError(
+                message=f"TTS API error from Sarvam: {raw_error_message}",
+                status_code=500,
+                body=resp,
+            )
 
     async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""

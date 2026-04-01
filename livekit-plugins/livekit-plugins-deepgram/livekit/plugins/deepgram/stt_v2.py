@@ -84,7 +84,7 @@ class STTv2(stt.STT):
             model: The Deepgram model to use for speech recognition. Defaults to "flux-general-en".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
-            eot_threshold: The threshold for end of speech detection. Defaults to 0.7.
+            eot_threshold: The threshold for end of speech detection, ranges 0.5-0.9. Defaults to 0.7. If using eager_eot_threshold, set this higher to allow a higher eager value.
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
@@ -120,6 +120,14 @@ class STTv2(stt.STT):
                 "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
             )
             keyterm = keyterms
+
+        if is_given(eager_eot_threshold):
+            effective_eot = eot_threshold if is_given(eot_threshold) else 0.7
+            if eager_eot_threshold > effective_eot:
+                raise ValueError(
+                    f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
+                    f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
+                )
 
         self._opts = STTOptions(
             model=model,
@@ -192,6 +200,18 @@ class STTv2(stt.STT):
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        effective_eager = (
+            eager_eot_threshold if is_given(eager_eot_threshold) else self._opts.eager_eot_threshold
+        )
+        effective_eot = (
+            eot_threshold
+            if is_given(eot_threshold)
+            else (self._opts.eot_threshold if is_given(self._opts.eot_threshold) else 0.7)
+        )
+        if is_given(effective_eager) and effective_eager > effective_eot:
+            raise ValueError(
+                f"eager_eot_threshold ({effective_eager}) must be less than or equal to eot_threshold ({effective_eot})"
+            )
         if is_given(model):
             self._opts.model = model
         if is_given(sample_rate):
@@ -551,6 +571,7 @@ def _parse_transcription(
                 text=word.get("word", ""),
                 start_time=word.get("start", 0) + start_time_offset,
                 end_time=word.get("end", 0) + start_time_offset,
+                confidence=word["confidence"],
                 start_time_offset=start_time_offset,
             )
             for word in words

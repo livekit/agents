@@ -1,9 +1,18 @@
 import os
+from typing import Any
 
 import pytest
 
-from livekit.agents.llm import AgentHandoff, FunctionCall, FunctionCallOutput, utils
-from livekit.plugins import openai
+from livekit.agents import inference
+from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+
+from .fake_llm import FakeLLM, FakeLLMResponse
 
 
 def ai_function1(a: int, b: str = "default") -> None:
@@ -17,7 +26,7 @@ def ai_function1(a: int, b: str = "default") -> None:
 
 
 def skip_if_no_credentials():
-    required_vars = ["OPENAI_API_KEY"]
+    required_vars = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
     missing = [var for var in required_vars if not os.getenv(var)]
     return pytest.mark.skipif(
         bool(missing), reason=f"Missing environment variables: {', '.join(missing)}"
@@ -36,9 +45,17 @@ def test_args_model():
 
 def test_dict():
     from livekit import rtc
+    from livekit.agents.beta import Instructions
     from livekit.agents.llm import ChatContext, ImageContent
 
     chat_ctx = ChatContext()
+    chat_ctx.add_message(
+        role="system",
+        content=Instructions(
+            "You are a helpful assistant in audio mode.",
+            text="You are a helpful assistant in text mode.",
+        ),
+    )
     chat_ctx.add_message(
         role="user",
         content="Hello, world!",
@@ -236,10 +253,210 @@ async def test_summarize():
 
     import json
 
-    async with openai.LLM(model="gpt-4o") as llm:
+    async with inference.LLM(model="openai/gpt-4.1-mini") as llm:
         summary = await chat_ctx._summarize(llm, keep_last_turns=1)
         print("\n=== Summary ===\n")
         print(json.dumps(summary.to_dict(), indent=2))
+
+
+# --- summarize unit tests (no credentials required) ---
+
+
+class _FixedSummaryLLM(FakeLLM):
+    """FakeLLM that returns a fixed summary string for any input."""
+
+    def __init__(self, summary: str) -> None:
+        super().__init__()
+        self._summary = summary
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: Any = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: Any = NOT_GIVEN,
+        extra_kwargs: Any = NOT_GIVEN,
+    ):
+        last_msg = chat_ctx.items[-1]
+        input_text = last_msg.text_content
+        self._fake_response_map[input_text] = FakeLLMResponse(
+            input=input_text,
+            content=self._summary,
+            ttft=0.0,
+            duration=0.0,
+        )
+        return super().chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+        )
+
+
+CANNED_SUMMARY = "User asked about earbuds. Agent resolved the issue."
+
+
+def _build_conversation_ctx() -> ChatContext:
+    """Build a ChatContext with system, user/assistant pairs, and interleaved tool calls."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="You are a helpful assistant.")
+    ctx.add_message(role="user", content="Hi, my earbuds are broken.")
+    ctx.add_message(role="assistant", content="Can you share your order number?")
+    ctx.add_message(role="user", content="Order #123.")
+    ctx.items.append(FunctionCall(name="lookup_order", call_id="c1", arguments='{"order": "123"}'))
+    ctx.items.append(
+        FunctionCallOutput(
+            name="lookup_order", call_id="c1", output='{"status":"delivered"}', is_error=False
+        )
+    )
+    ctx.add_message(role="assistant", content="Found your order. Let me check warranty.")
+    ctx.add_message(role="user", content="Thanks.")
+    ctx.add_message(role="assistant", content="You are under warranty.")
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_summarize_head_tail_split_basic():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="msg1")
+    ctx.add_message(role="assistant", content="reply1")
+    ctx.add_message(role="user", content="msg2")
+    ctx.add_message(role="assistant", content="reply2")
+    ctx.add_message(role="user", content="msg3")
+    ctx.add_message(role="assistant", content="reply3")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    tail_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(tail_msgs) == 2
+    assert tail_msgs[0].text_content == "msg3"
+    assert tail_msgs[1].text_content == "reply3"
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+    assert CANNED_SUMMARY in summaries[0].text_content
+
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_head_tail_split_with_renderables():
+    ctx = _build_conversation_ctx()
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=2)
+
+    # With keep_last_turns=2, the backward walk counts 4 ChatMessages:
+    #   "You are under warranty." (1), "Thanks." (2),
+    #   "Found your order..." (3), "Order #123." (4) ← split here
+    # The FunctionCall + FunctionCallOutput between "Order #123." and
+    # "Found your order..." fall inside the tail and must be preserved.
+    tail_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(tail_msgs) == 4
+    assert tail_msgs[0].text_content == "Order #123."
+    assert tail_msgs[1].text_content == "Found your order. Let me check warranty."
+    assert tail_msgs[2].text_content == "Thanks."
+    assert tail_msgs[3].text_content == "You are under warranty."
+
+    fn_items = [it for it in result.items if it.type in ("function_call", "function_call_output")]
+    assert len(fn_items) == 2
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_keep_last_turns_zero():
+    ctx = _build_conversation_ctx()
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=0)
+
+    raw_msgs = [
+        it
+        for it in result.items
+        if it.type == "message"
+        and it.role in ("user", "assistant")
+        and not it.extra.get("is_summary")
+    ]
+    assert len(raw_msgs) == 0
+
+    fn_items = [it for it in result.items if it.type in ("function_call", "function_call_output")]
+    assert len(fn_items) == 0
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    assert len(summaries) == 1
+
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_preserves_structural_items():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="Hello.")
+    ctx.add_message(role="assistant", content="Hi there.")
+    ctx.items.append(AgentHandoff(old_agent_id="AgentA", new_agent_id="AgentB"))
+    ctx.add_message(role="user", content="Transfer me.")
+    ctx.add_message(role="assistant", content="Done.")
+    ctx.add_message(role="user", content="Thanks.")
+    ctx.add_message(role="assistant", content="Welcome.")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    # system message preserved
+    system_msgs = [it for it in result.items if it.type == "message" and it.role == "system"]
+    assert len(system_msgs) == 1
+
+    # agent handoff preserved
+    handoffs = [it for it in result.items if it.type == "agent_handoff"]
+    assert len(handoffs) == 1
+    assert handoffs[0].old_agent_id == "AgentA"
+    assert handoffs[0].new_agent_id == "AgentB"
+
+
+@pytest.mark.asyncio
+async def test_summarize_skips_when_not_enough_messages():
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(role="user", content="Hello.")
+    ctx.add_message(role="assistant", content="Hi there.")
+
+    original_items = list(ctx.items)
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    # budget covers all messages, so nothing to summarize — early return
+    assert len(result.items) == len(original_items)
+    for a, b in zip(result.items, original_items, strict=True):
+        assert a.id == b.id
 
 
 # --- truncate tests ---
@@ -317,3 +534,127 @@ def test_truncate_multiple_instructions():
     # first instruction is the system msg
     assert ctx.items[0].role == "system"
     assert ctx.items[0].content == ["first"]
+
+
+def test_instructions_serialization():
+    """Instructions must survive Pydantic validation, to_dict, and from_dict round-trips."""
+    from livekit.agents.beta import Instructions
+    from livekit.agents.llm import ChatContext, ChatMessage
+
+    # Pydantic preserves Instructions type
+    instr = Instructions("audio variant", text="text variant")
+    msg = ChatMessage(role="system", content=[instr])
+    assert isinstance(msg.content[0], Instructions)
+    assert msg.content[0].text == "text variant"
+
+    # to_dict serializes both variants as a dict
+    ctx = ChatContext([ChatMessage(role="system", content=[instr])])
+    data = ctx.to_dict()
+    serialized = data["items"][0]["content"][0]
+    assert isinstance(serialized, dict)
+    assert serialized["audio"] == "audio variant"
+    assert serialized["text"] == "text variant"
+
+    # from_dict reconstructs Instructions
+    restored = ChatContext.from_dict(ctx.to_dict())
+    restored_content = restored.items[0].content[0]
+    assert isinstance(restored_content, Instructions)
+    assert restored_content.audio == "audio variant"
+    assert restored_content.text == "text variant"
+
+    # Plain str content stays as str after round-trip
+    plain_ctx = ChatContext([ChatMessage(role="user", content=["hello"])])
+    plain_restored = ChatContext.from_dict(plain_ctx.to_dict())
+    assert type(plain_restored.items[0].content[0]) is str
+
+    # Instructions without text variant round-trips (falls back to audio)
+    audio_only = Instructions("audio only")
+    audio_ctx = ChatContext([ChatMessage(role="system", content=[audio_only])])
+    audio_restored = ChatContext.from_dict(audio_ctx.to_dict())
+    audio_content = audio_restored.items[0].content[0]
+    assert isinstance(audio_content, Instructions)
+    assert audio_content.audio == "audio only"
+    assert audio_content.text == "audio only"
+
+
+def test_instructions_string_operations():
+    """Instructions supports + and r+ operations, propagating both variants."""
+    from livekit.agents.beta import Instructions
+
+    # Instructions + Instructions
+    a = Instructions("audio A", text="text A")
+    b = Instructions("audio B", text="text B")
+    result = a + b
+    assert isinstance(result, Instructions)
+    assert result.audio == "audio Aaudio B"
+    assert result.text == "text Atext B"
+
+    # Instructions + str
+    instr = Instructions("audio", text="text")
+    result = instr + " suffix"
+    assert result.audio == "audio suffix"
+    assert result.text == "text suffix"
+
+    # str + Instructions (radd)
+    result = "prefix " + instr
+    assert result.audio == "prefix audio"
+    assert result.text == "prefix text"
+
+    # Adding to Instructions without text variant keeps text=None
+    audio_only = Instructions("audio only")
+    result = audio_only + " more"
+    assert result._text_variant is None
+    assert result.audio == "audio only more"
+
+    # One side has text variant, other doesn't
+    a = Instructions("audio A", text="text A")
+    b = Instructions("audio B")
+    result = a + " " + b
+    assert result.audio == "audio A audio B"
+    assert result.text == "text A audio B"
+
+
+def test_instructions_as_modality():
+    """as_modality() bakes the correct variant into str() while preserving both variants."""
+    from livekit.agents.beta import Instructions
+    from livekit.agents.llm import ChatContext, ChatMessage
+    from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
+
+    instr = Instructions("audio instructions", text="text instructions")
+
+    # as_modality('audio')
+    resolved = instr.as_modality("audio")
+    assert str(resolved) == "audio instructions"
+    assert resolved.audio == "audio instructions"
+    assert resolved.text == "text instructions"
+
+    # as_modality('text')
+    resolved = instr.as_modality("text")
+    assert str(resolved) == "text instructions"
+
+    # Can switch modality after resolving
+    resolved_text = instr.as_modality("text")
+    resolved_audio = resolved_text.as_modality("audio")
+    assert str(resolved_audio) == "audio instructions"
+
+    # Instructions without text variant returns audio for both modalities
+    audio_only = Instructions("audio only")
+    assert str(audio_only.as_modality("audio")) == "audio only"
+    assert str(audio_only.as_modality("text")) == "audio only"
+
+    # apply_instructions_modality() on ChatContext
+    ctx = ChatContext([ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])])
+    apply_instructions_modality(ctx, modality="audio")
+    assert str(ctx.items[0].content[0]) == "audio instructions"
+    apply_instructions_modality(ctx, modality="text")
+    assert str(ctx.items[0].content[0]) == "text instructions"
+
+    # Re-applying after copy
+    base_ctx = ChatContext(
+        [ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])]
+    )
+    turn1_ctx = base_ctx.copy()
+    apply_instructions_modality(turn1_ctx, modality="text")
+    turn2_ctx = turn1_ctx.copy()
+    apply_instructions_modality(turn2_ctx, modality="audio")
+    assert str(turn2_ctx.items[0].content[0]) == "audio instructions"

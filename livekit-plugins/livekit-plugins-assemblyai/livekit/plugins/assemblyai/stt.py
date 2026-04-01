@@ -62,6 +62,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
+    domain: NotGivenOr[str] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -87,6 +88,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
+        domain: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -112,6 +114,7 @@ class STT(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                diarization=is_given(speaker_labels) and speaker_labels is True,
             ),
         )
         if model == "u3-pro":
@@ -160,6 +163,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
+            domain=domain,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -276,6 +280,21 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._session_id: str | None = None
+        self._expires_at: int | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        """The AssemblyAI session ID. Set when the WebSocket connection is established
+        (before any speech events). None until the connection completes.
+        Share this with the AssemblyAI team when reporting issues."""
+        return self._session_id
+
+    @property
+    def expires_at(self) -> int | None:
+        """Unix timestamp when the AssemblyAI session expires. Set alongside session_id
+        when the WebSocket connection is established."""
+        return self._expires_at
 
     def update_options(
         self,
@@ -467,6 +486,7 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.speaker_labels)
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
+            "domain": self._opts.domain if is_given(self._opts.domain) else None,
         }
 
         headers = {
@@ -487,18 +507,43 @@ class SpeechStream(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
 
+        if message_type == "Begin":
+            self._session_id = data.get("id")
+            self._expires_at = data.get("expires_at")
+            logger.info(
+                "AssemblyAI session started id=%s expires_at=%s",
+                self._session_id,
+                self._expires_at,
+            )
+            return
+
         if message_type == "SpeechStarted":
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            return
+
+        if message_type == "Termination":
+            audio_duration = data.get("audio_duration_seconds")
+            session_duration = data.get("session_duration_seconds")
+            logger.debug(
+                "AssemblyAI session terminated audio_duration=%ss session_duration=%ss",
+                audio_duration,
+                session_duration,
+            )
             return
 
         if message_type != "Turn":
             return
         words = data.get("words", [])
         end_of_turn = data.get("end_of_turn", False)
+        end_of_turn_confidence = data.get("end_of_turn_confidence")
         turn_is_formatted = data.get("turn_is_formatted", False)
         utterance = data.get("utterance", "")
         transcript = data.get("transcript", "")
         language = LanguageCode(data.get("language_code", "en"))
+
+        # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
+        speaker_label = data.get("speaker_label")
+        speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
 
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
@@ -535,10 +580,12 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=timed_words,
                         confidence=confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
             self._event_ch.send_nowait(interim_event)
+            logger.debug("interim transcript end_of_turn_confidence=%s", end_of_turn_confidence)
 
         if utterance:
             if self._last_preflight_start_time == 0.0:
@@ -565,10 +612,12 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=utterance_words,
                         confidence=utterance_confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
             self._event_ch.send_nowait(final_event)
+            logger.debug("preflight transcript end_of_turn_confidence=%s", end_of_turn_confidence)
             self._last_preflight_start_time = end_time
 
         if end_of_turn and (
@@ -584,10 +633,20 @@ class SpeechStream(stt.SpeechStream):
                         end_time=end_time,
                         words=timed_words,
                         confidence=confidence,
+                        speaker_id=speaker_id,
                     )
                 ],
             )
             self._event_ch.send_nowait(final_event)
+            logger.debug("final transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+
+            if words:
+                first_word_start = words[0].get("start", 0)
+                last_word_end = words[-1].get("end", 0)
+                logger.debug(
+                    "turn speech_duration=%.3fs (from word timestamps)",
+                    (last_word_end - first_word_start) / 1000,
+                )
 
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 

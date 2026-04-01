@@ -23,3 +23,38 @@ STTModels = Literal[
     "voxtral-small-latest",
     "voxtral-mini-transcribe-realtime-2602",
 ]
+
+TTSModels = Literal["voxtral-mini-tts-2603", "voxtral-mini-tts-latest"]
+
+TTSVoices = Literal[
+    "gb_jane_confident",
+    "gb_jane_confused",
+    "gb_jane_curious",
+    "gb_jane_frustrated",
+    "gb_jane_jealousy",
+    "gb_jane_neutral",
+    "gb_jane_sad",
+    "gb_jane_sarcasm",
+    "gb_jane_shameful",
+    "fr_marie_angry",
+    "fr_marie_curious",
+    "fr_marie_excited",
+    "fr_marie_happy",
+    "fr_marie_neutral",
+    "fr_marie_sad",
+    "gb_oliver_angry",
+    "gb_oliver_cheerful",
+    "gb_oliver_confident",
+    "gb_oliver_curious",
+    "gb_oliver_excited",
+    "gb_oliver_neutral",
+    "gb_oliver_sad",
+    "en_paul_angry",
+    "en_paul_cheerful",
+    "en_paul_confident",
+    "en_paul_excited",
+    "en_paul_frustrated",
+    "en_paul_happy",
+    "en_paul_neutral",
+    "en_paul_sad",
+]
