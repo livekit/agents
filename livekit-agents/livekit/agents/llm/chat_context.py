@@ -606,7 +606,11 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["google"],
+        *,
+        inject_dummy_user_message: bool = True,
+        thought_signatures: dict[str, bytes] | None = None,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload

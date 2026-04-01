@@ -1221,6 +1221,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
+    async def wait_for_inactive(self) -> None:
+        if self._activity is not None:
+            await self._activity._wait_for_inactive()
+
     async def _update_activity(
         self,
         agent: Agent,

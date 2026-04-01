@@ -343,30 +343,33 @@ class BackgroundAudioPlayer:
         stopped = False
 
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
-            async for frame in sound:
-                if stopped:
-                    break
+            try:
+                async for frame in sound:
+                    if stopped:
+                        break
 
-                if volume != 1.0:
-                    data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                    data *= 10 ** (np.log10(volume))
-                    np.clip(data, -32768, 32767, out=data)
-                    yield rtc.AudioFrame(
-                        data=data.astype(np.int16).tobytes(),
-                        sample_rate=frame.sample_rate,
-                        num_channels=frame.num_channels,
-                        samples_per_channel=frame.samples_per_channel,
-                    )
-                else:
-                    yield frame
-
-            # TODO(theomonnom): the wait_for_playout() may be innaccurate by 400ms
-            play_handle._mark_playout_done()
+                    if volume != 1.0:
+                        data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+                        data *= 10 ** (np.log10(volume))
+                        np.clip(data, -32768, 32767, out=data)
+                        yield rtc.AudioFrame(
+                            data=data.astype(np.int16).tobytes(),
+                            sample_rate=frame.sample_rate,
+                            num_channels=frame.num_channels,
+                            samples_per_channel=frame.samples_per_channel,
+                        )
+                    else:
+                        yield frame
+            finally:
+                # use try/finally because the mixer's asyncio.wait_for can cancel
+                # __anext__, which finalizes the generator and skips code after
+                # the async for loop
+                play_handle._mark_playout_done()
 
         gen = _gen_wrapper()
         try:
             self._audio_mixer.add_stream(gen)
-            await play_handle.wait_for_playout()  # wait for playout or interruption
+            await play_handle.wait_for_playout()
         finally:
             self._audio_mixer.remove_stream(gen)
             play_handle._mark_playout_done()
