@@ -65,12 +65,10 @@ class ClientTool(RawFunctionTool):
         info: RawFunctionToolInfo,
         *,
         client_name: str,
-        required: bool,
         instance: Any = None,
     ) -> None:
         super().__init__(func, info, instance)
         self._client_name = client_name
-        self._required = required
         self._advertisers: list[str] = []  # participant identities
         self._base_manifest: Optional[dict[str, Any]] = None
 
@@ -78,11 +76,6 @@ class ClientTool(RawFunctionTool):
     def client_name(self) -> str:
         """The tool name as registered by the client."""
         return self._client_name
-
-    @property
-    def required(self) -> bool:
-        """Whether this client tool must be advertised by the client."""
-        return self._required
 
     @property
     def resolved(self) -> bool:
@@ -184,11 +177,7 @@ class ClientTool(RawFunctionTool):
         )
 
 
-def client_tool(
-    name: str,
-    *,
-    required: bool = False,
-) -> ClientTool:
+def client_tool(name: str) -> ClientTool:
     """Declare a client-fulfilled tool by name.
 
     The tool's description, parameter schema, and implementation are all provided by a
@@ -199,13 +188,6 @@ def client_tool(
     Args:
         name: The tool name. Must match the tool name registered by the client.
             Case-sensitive, typically camelCase.
-        required: If ``True``, the framework logs a warning when the linked participant is
-            connected but hasn't advertised this tool, and returns a ``ToolError`` to the
-            LLM if it tries to call the missing tool. If ``False`` (default), the tool is
-            silently unavailable until the client advertises it. Use ``required=True`` for
-            tools that your agent's workflow depends on. Use ``required=False`` (default)
-            for tools that may be registered dynamically later or that only some clients
-            implement.
     """
 
     async def _execute(
@@ -289,7 +271,7 @@ def client_tool(
         flags=ToolFlag.NONE,
     )
 
-    return ClientTool(_execute, info, client_name=name, required=required)
+    return ClientTool(_execute, info, client_name=name)
 
 
 class ClientToolWatcher:
@@ -332,9 +314,6 @@ class ClientToolWatcher:
         # Initial scan of all current participants
         for participant in self._room.remote_participants.values():
             self._sync_participant(participant)
-
-        # Check for missing required tools after initial scan
-        self._check_required()
 
     def stop(self) -> None:
         if not self._started:
@@ -428,12 +407,3 @@ class ClientToolWatcher:
             else:
                 tool._add_advertiser(participant.identity, manifest)
 
-    def _check_required(self) -> None:
-        """Log warnings for required tools with no advertisers."""
-        for tool in self._get_client_tools():
-            if tool.required and not tool.advertisers:
-                logger.warning(
-                    f"Required client tool '{tool.client_name}' is not "
-                    f"advertised by any participant. "
-                    f"Ensure a client registers this tool."
-                )
