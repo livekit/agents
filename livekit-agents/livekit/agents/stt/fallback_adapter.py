@@ -68,11 +68,18 @@ class FallbackAdapter(
                 StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
             ]
 
+        # Use the primary STT's aligned_transcript if all providers support it, since
+        # the SDK only checks truthiness, not the specific granularity.
+        aligned_transcript: Literal["word", "chunk", False] = False
+        if all(t.capabilities.aligned_transcript for t in stt):
+            aligned_transcript = stt[0].capabilities.aligned_transcript
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=True,
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
+                aligned_transcript=aligned_transcript,
             )
         )
 
