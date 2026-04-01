@@ -31,6 +31,7 @@ from phonic.types import (
     ConfigPayload,
     GenerateReplyPayload,
     InputTextPayload,
+    SayPayload,
     ToolCallInterruptedPayload,
     ToolCallOutputPayload,
     ToolCallPayload,
@@ -423,10 +424,12 @@ class RealtimeSession(llm.RealtimeSession):
             full_text = "".join(chunks)
 
         if self._socket:
-            payload: dict = {"type": "say", "text": full_text}
-            if is_given(allow_interruptions):
-                payload["interruptible"] = allow_interruptions
-            await self._socket._send(payload)
+            await self._socket.send_say(
+                SayPayload(
+                    text=full_text,
+                    interruptible=allow_interruptions if is_given(allow_interruptions) else None,
+                )
+            )
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
