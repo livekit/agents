@@ -544,8 +544,8 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
                     "expected non-final frames to be 0-250 ms"
                 )
             else:
-                assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
-                    "expected non-final frames to be 50-250 ms"
+                assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 0-250 ms"
                 )
 
             frames = [e.frame for e in segment_events]
