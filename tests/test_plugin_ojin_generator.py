@@ -1,5 +1,6 @@
 """Tests for OjinVideoGenerator behavior."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -97,3 +98,33 @@ async def test_interrupted_yields_audio_segment_end():
     assert len(frames) == 1
     assert isinstance(frames[0], AudioSegmentEnd)
     assert gen._interrupted is False  # flag cleared after delivery
+
+
+@pytest.mark.asyncio
+async def test_aclose_interrupts_pending_receive_message():
+    """aclose() should stop an active stream even without closing the client."""
+    client = _make_mock_client()
+    gen = OjinVideoGenerator(client)
+
+    receive_started = asyncio.Event()
+    receive_cancelled = asyncio.Event()
+
+    async def _receive_message():
+        receive_started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            receive_cancelled.set()
+            raise
+
+    client.receive_message = AsyncMock(side_effect=_receive_message)
+
+    next_frame_task = asyncio.create_task(anext(gen.__aiter__()))
+    await receive_started.wait()
+
+    await gen.aclose()
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(next_frame_task, timeout=1.0)
+
+    assert receive_cancelled.is_set()
