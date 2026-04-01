@@ -909,7 +909,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 api.AccessToken(self._api_key, self._api_secret)
                 .with_identity(agent_identity)
                 .with_kind("agent")
-                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .with_grants(
+                    api.VideoGrants(
+                        room_join=True, room=room, agent=True, can_update_own_metadata=True
+                    )
+                )
                 .to_jwt()
             )
             running_info = RunningJobInfo(
