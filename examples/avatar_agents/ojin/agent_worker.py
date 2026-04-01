@@ -23,6 +23,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    TurnHandlingOptions,
     cli,
 )
 from livekit.plugins import ojin, openai
@@ -39,7 +40,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="ash"),
-        resume_false_interruption=False,
+        turn_handling=TurnHandlingOptions(
+            interruption={"resume_false_interruption": False},
+        ),
     )
 
     # Create and start the Ojin avatar session
