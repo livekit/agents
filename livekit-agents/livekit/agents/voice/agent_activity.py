@@ -957,7 +957,6 @@ class AgentActivity(RecognitionHooks):
                 self._realtime_say_task(
                     speech_handle=handle,
                     text=text,
-                    add_to_chat_ctx=add_to_chat_ctx,
                     model_settings=ModelSettings(),
                 ),
                 speech_handle=handle,
@@ -2573,7 +2572,6 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         text: str | AsyncIterable[str],
-        add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
@@ -2597,6 +2595,10 @@ class AgentActivity(RecognitionHooks):
                 "say() is not implemented for %s; use a TTS model instead",
                 self._rt_session.realtime_model.provider,
             )
+            return
+        except llm.RealtimeError as e:
+            logger.error("failed to say text: %s", str(e))
+            self._session._update_agent_state("listening")
             return
 
         await self._realtime_generation_task(
