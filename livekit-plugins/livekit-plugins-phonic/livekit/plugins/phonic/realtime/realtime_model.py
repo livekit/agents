@@ -248,9 +248,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._input_resampler: rtc.AudioResampler | None = None
         self._input_resampler_rate: int | None = None
 
-        self._client = AsyncPhonic(
-            api_key=self._opts.api_key
-        )
+        self._client = AsyncPhonic(api_key=self._opts.api_key)
 
         self._socket: AsyncConversationsSocketClient | None = None
         self._socket_ctx: typing.AsyncContextManager[AsyncConversationsSocketClient] | None = None
@@ -319,9 +317,7 @@ class RealtimeSession(llm.RealtimeSession):
                         "update_chat_ctx called with messages prior to config being sent to "
                         "Phonic. Including conversation state in system instructions."
                     )
-                    self._system_prompt_postfix = (
-                        _CONVERSATION_HISTORY_PREFIX + turn_history
-                    )
+                    self._system_prompt_postfix = _CONVERSATION_HISTORY_PREFIX + turn_history
                 self._chat_ctx = chat_ctx.copy()
             return
 
@@ -349,7 +345,11 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     sent_tool_call_output = True
 
-            if not self._pending_config_update and isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
+            if (
+                not self._pending_config_update
+                and isinstance(item, llm.ChatMessage)
+                and item.role in ("system", "developer")
+            ):
                 text = item.text_content
                 if text:
                     logger.debug(f"Sending add system message: {text}")
@@ -515,9 +515,7 @@ class RealtimeSession(llm.RealtimeSession):
         messages = [
             item
             for item in chat_ctx.items
-            if isinstance(item, llm.ChatMessage)
-            and item.text_content
-            and item.text_content.strip()
+            if isinstance(item, llm.ChatMessage) and item.text_content and item.text_content.strip()
         ]
         if not messages:
             return None
@@ -575,9 +573,8 @@ class RealtimeSession(llm.RealtimeSession):
         if not update or not self._socket:
             return
 
-        system_prompt = (
-            (update.get("instructions") or self._opts.instructions or "")
-            + (update.get("system_prompt_postfix") or "")
+        system_prompt = (update.get("instructions") or self._opts.instructions or "") + (
+            update.get("system_prompt_postfix") or ""
         )
 
         self._close_current_generation(interrupted=True)
