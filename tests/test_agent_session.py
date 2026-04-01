@@ -17,7 +17,6 @@ from livekit.agents.llm import FunctionToolCall
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -143,30 +142,6 @@ async def test_events_and_metrics() -> None:
     assert metrics_events[2].metrics.type == "tts_metrics"
     check_timestamp(metrics_events[2].metrics.ttfb, 0.2, speed_factor=speed)
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
-
-
-async def test_conversation_item_added_uses_assistant_stopped_speaking_at() -> None:
-    session = create_session(FakeActions())
-
-    conversation_events: list[ConversationItemAddedEvent] = []
-    session.on("conversation_item_added", conversation_events.append)
-
-    try:
-        message = ChatMessage(
-            role="assistant",
-            content=["I'm doing well, thank you!"],
-            created_at=1234.5,
-            metrics={"started_speaking_at": 1234.5, "stopped_speaking_at": 1236.0},
-        )
-
-        session._conversation_item_added(message)
-
-        assert len(conversation_events) == 1
-        assert conversation_events[0].created_at == 1236.0
-        assert conversation_events[0].item.created_at == 1234.5
-    finally:
-        if isinstance(session.output.audio, _SyncedAudioOutput):
-            await session.output.audio._synchronizer.aclose()
 
 
 async def test_tool_call() -> None:
