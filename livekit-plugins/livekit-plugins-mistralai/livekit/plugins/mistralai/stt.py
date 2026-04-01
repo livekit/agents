@@ -65,17 +65,20 @@ from mistralai.extra.realtime.transcription import RealtimeTranscription
 from .log import logger
 from .models import STTModels
 
-# Voxtral recommended config (docs.mistral.ai/capabilities/audio_transcription):
-#   encoding: pcm_s16le, 16kHz mono, 100ms chunks
-#   model processes in 80ms token boundaries; 1 text token = 80ms audio
-#   server-side transcription_delay_ms: 480ms recommended (range: 80-2400, multiples of 80)
-#   not configurable from this plugin — uses Mistral API default
+# Current Mistral realtime guidance, to the best of our verification:
+# - Audio format: pcm_s16le
+# - 16 kHz mono remains the safest default for API usage/examples
+# - Voxtral Realtime delay tuning is exposed by the SDK as target_streaming_delay_ms
+# - Official guidance still points to 480 ms as the latency/accuracy sweet spot
+# - Delay tuning follows 80 ms granularity; current guidance mentions 80..1200 ms,
+#   with 2400 ms as a special higher-latency option
+# - 100 ms chunks are a plugin choice, not a currently verified Mistral recommendation
 DEFAULT_SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 CHUNK_DURATION_MS = 100
 DEFAULT_FINALIZE_DELAY_MS = 100  # fallback idle finalize delay
 # Idle threshold: fallback finalization when no FlushSentinel / flush_audio() is used.
-# Must exceed the model's transcription_delay_ms (default 480ms). 650ms gives ~170ms margin.
+# Must exceed the common 480 ms delay target. 650 ms gives ~170 ms margin.
 MIN_IDLE_FINALIZE_MS = 650
 
 
