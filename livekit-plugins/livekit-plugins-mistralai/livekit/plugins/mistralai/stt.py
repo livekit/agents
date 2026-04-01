@@ -49,12 +49,6 @@ from mistralai.client.models.realtimetranscriptionsessioncreated import (
 from mistralai.client.models.realtimetranscriptionsessionupdated import (
     RealtimeTranscriptionSessionUpdated,
 )
-from mistralai.extra.realtime.connection import (
-    RealtimeConnection,
-    UnknownRealtimeEvent,
-    parse_realtime_event,
-)
-from mistralai.extra.realtime.transcription import RealtimeTranscription
 from mistralai.client.models.transcriptionstreamdone import TranscriptionStreamDone
 from mistralai.client.models.transcriptionstreamlanguage import TranscriptionStreamLanguage
 from mistralai.client.models.transcriptionstreamsegmentdelta import (
@@ -63,6 +57,12 @@ from mistralai.client.models.transcriptionstreamsegmentdelta import (
 from mistralai.client.models.transcriptionstreamtextdelta import (
     TranscriptionStreamTextDelta,
 )
+from mistralai.extra.realtime.connection import (
+    RealtimeConnection,
+    UnknownRealtimeEvent,
+    parse_realtime_event,
+)
+from mistralai.extra.realtime.transcription import RealtimeTranscription
 
 from .log import logger
 from .models import STTModels
