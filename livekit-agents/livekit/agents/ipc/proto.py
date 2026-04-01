@@ -206,12 +206,19 @@ class DumpStackTraceRequest:
 
 
 @dataclass
-class UserEntrypointDone:
-    """sent by the subprocess when the user's entrypoint has finished and shutdown begins.
-    This signals that the shutdown timeout should stop - the remaining work (on_session_end)
-    should not be subject to the timeout."""
-
+class ShutdownRequestAck:
     MSG_ID: ClassVar[int] = 10
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
+@dataclass
+class ShuttingDown:
+    MSG_ID: ClassVar[int] = 11
 
     def write(self, b: io.BytesIO) -> None:
         pass
@@ -231,5 +238,6 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
-    UserEntrypointDone.MSG_ID: UserEntrypointDone,
+    ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
+    ShuttingDown.MSG_ID: ShuttingDown,
 }

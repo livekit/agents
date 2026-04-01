@@ -109,7 +109,8 @@ class SupervisedProc(ABC):
         self._kill_sent = False
         self._initialize_fut = asyncio.Future[None]()
         self._lock = asyncio.Lock()
-        self._user_entrypoint_done_fut: asyncio.Future[None] | None = None
+        self._shutdown_ack_fut = asyncio.Future[None]()
+        self._shutting_down_fut = asyncio.Future[None]()
 
     @abstractmethod
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process: ...
@@ -271,23 +272,34 @@ class SupervisedProc(ABC):
             return
 
         self._closing = True
-        self._user_entrypoint_done_fut = asyncio.Future[None]()
-
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
 
         try:
-            await asyncio.wait_for(
-                asyncio.shield(self._user_entrypoint_done_fut),
-                timeout=self._opts.close_timeout,
-            )
+            await asyncio.wait_for(self._shutdown_ack_fut, timeout=self._opts.close_timeout)
         except asyncio.TimeoutError:
             logger.error(
-                "process did not exit in time, killing process",
+                "process did not ack shutdown in time, killing process",
                 extra=self.logging_extra(),
             )
             await self._send_dump_signal()
             await self._send_kill_signal()
+
+        if not self._shutting_down_fut.done():
+            await self._shutting_down_fut
+
+        if self._supervise_atask and not self._supervise_atask.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._supervise_atask), timeout=self._opts.close_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "process did not exit in time, killing process",
+                    extra=self.logging_extra(),
+                )
+                await self._send_dump_signal()
+                await self._send_kill_signal()
 
         async with self._lock:
             if self._supervise_atask:
@@ -416,17 +428,27 @@ class SupervisedProc(ABC):
                 with contextlib.suppress(aio.SleepFinished):
                     pong_timeout.reset()
 
+            if isinstance(msg, proto.ShutdownRequestAck):
+                if not self._shutdown_ack_fut.done():
+                    self._shutdown_ack_fut.set_result(None)
+
+            if isinstance(msg, proto.ShuttingDown):
+                if not self._shutting_down_fut.done():
+                    self._shutting_down_fut.set_result(None)
+
             if isinstance(msg, proto.Exiting):
                 logger.info(
                     "process exiting",
                     extra={"reason": msg.reason, **self.logging_extra()},
                 )
 
-            if isinstance(msg, proto.UserEntrypointDone):
-                if self._user_entrypoint_done_fut and not self._user_entrypoint_done_fut.done():
-                    self._user_entrypoint_done_fut.set_result(None)
-
             ipc_ch.send_nowait(msg)
+
+        # resolve pending futures when the channel closes (process exited)
+        if not self._shutdown_ack_fut.done():
+            self._shutdown_ack_fut.set_result(None)
+        if not self._shutting_down_fut.done():
+            self._shutting_down_fut.set_result(None)
 
     @log_exceptions(logger=logger)
     async def _ping_pong_task(self, pong_timeout: aio.Sleep) -> None:

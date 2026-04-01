@@ -25,6 +25,7 @@ class _ProcOpts:
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     initialize_timeout: float
     close_timeout: float
+    session_end_timeout: float
     ping_interval: float
     high_ping_threshold: float
     http_proxy: str | None
@@ -40,6 +41,7 @@ class ThreadJobExecutor:
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
+        session_end_timeout: float,
         ping_interval: float,
         high_ping_threshold: float,
         http_proxy: str | None,
@@ -52,6 +54,7 @@ class ThreadJobExecutor:
             session_end_fnc=session_end_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
+            session_end_timeout=session_end_timeout,
             ping_interval=ping_interval,
             high_ping_threshold=high_ping_threshold,
             http_proxy=http_proxy,
@@ -65,12 +68,13 @@ class ThreadJobExecutor:
         self._initialize_fut = asyncio.Future[None]()
         self._closing = False
         self._lock = asyncio.Lock()
+        self._shutdown_ack_fut = asyncio.Future[None]()
+        self._shutting_down_fut = asyncio.Future[None]()
 
         self._thread: threading.Thread | None = None
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = utils.shortuuid("THEXEC_")
-        self._user_entrypoint_done_fut: asyncio.Future[None] | None = None
 
     @property
     def id(self) -> str:
@@ -129,6 +133,7 @@ class ThreadJobExecutor:
                     initialize_process_fnc=self._opts.initialize_process_fnc,
                     job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
                     session_end_fnc=self._opts.session_end_fnc,
+                    session_end_timeout=self._opts.session_end_timeout,
                     user_arguments=self._user_args,
                     join_fnc=_on_join,
                 )
@@ -205,16 +210,22 @@ class ThreadJobExecutor:
             return
 
         self._closing = True
-        self._user_entrypoint_done_fut = asyncio.Future[None]()
-
         with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
 
         try:
-            await asyncio.wait_for(
-                asyncio.shield(self._user_entrypoint_done_fut),
-                timeout=self._opts.close_timeout,
-            )
+            await asyncio.wait_for(self._shutdown_ack_fut, timeout=self._opts.close_timeout)
+        except asyncio.TimeoutError:
+            logger.error("job did not ack shutdown in time", extra=self.logging_extra())
+
+        if not self._shutting_down_fut.done():
+            await self._shutting_down_fut
+
+        try:
+            if self._main_atask:
+                await asyncio.wait_for(
+                    asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
+                )
         except asyncio.TimeoutError:
             logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
 
@@ -297,17 +308,25 @@ class ThreadJobExecutor:
                         extra={"delay": delay, **self.logging_extra()},
                     )
 
+            if isinstance(msg, proto.ShutdownRequestAck):
+                if not self._shutdown_ack_fut.done():
+                    self._shutdown_ack_fut.set_result(None)
+
+            if isinstance(msg, proto.ShuttingDown):
+                if not self._shutting_down_fut.done():
+                    self._shutting_down_fut.set_result(None)
+
             if isinstance(msg, proto.Exiting):
                 logger.debug("job exiting", extra={"reason": msg.reason, **self.logging_extra()})
-
-            if isinstance(msg, proto.UserEntrypointDone):
-                if self._user_entrypoint_done_fut and not self._user_entrypoint_done_fut.done():
-                    self._user_entrypoint_done_fut.set_result(None)
 
             if isinstance(msg, proto.InferenceRequest):
                 task = asyncio.create_task(self._do_inference_task(msg))
                 self._inference_tasks.add(task)
                 task.add_done_callback(self._inference_tasks.discard)
+
+        # resolve pending futures when the channel closes
+        if not self._shutdown_ack_fut.done():
+            self._shutdown_ack_fut.set_result(None)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:
