@@ -18,6 +18,9 @@ from azure.ai.voicelive.models import (
     OutputTextContentPart,
     ServerVad,
     SystemMessageItem,
+    ToolChoiceFunctionSelection,
+    ToolChoiceLiteral,
+    ToolChoiceSelection,
     TurnDetection,
     UserMessageItem,
 )
@@ -86,6 +89,22 @@ def to_audio_transcription(
         return None
 
     return audio_transcription
+
+
+DEFAULT_TOOL_CHOICE: ToolChoiceLiteral | ToolChoiceSelection = ToolChoiceLiteral.AUTO
+
+
+def to_azure_tool_choice(
+    tool_choice: llm.ToolChoice | None,
+) -> ToolChoiceLiteral | ToolChoiceSelection:
+    """Convert a LiveKit ToolChoice to Azure's tool_choice format."""
+    if isinstance(tool_choice, str):
+        return ToolChoiceLiteral(tool_choice)
+
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return ToolChoiceFunctionSelection(name=tool_choice["function"]["name"])
+
+    return DEFAULT_TOOL_CHOICE
 
 
 def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:

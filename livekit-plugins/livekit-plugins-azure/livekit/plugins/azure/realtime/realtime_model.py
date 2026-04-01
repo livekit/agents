@@ -5,10 +5,9 @@ import base64
 import contextlib
 import os
 import time
-import wave
 import weakref
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from azure.ai.voicelive.aio import connect
@@ -46,6 +45,7 @@ from .utils import (
     livekit_item_to_azure_item,
     livekit_tool_to_azure_tool,
     to_audio_transcription,
+    to_azure_tool_choice,
     to_turn_detection,
 )
 
@@ -71,7 +71,6 @@ class _RealtimeOptions:
     api_key: str | None
     use_default_credential: bool
     conn_options: APIConnectOptions
-    save_audio_per_turn: bool
 
 
 @dataclass
@@ -102,8 +101,6 @@ class _ResponseGeneration:
     _done_fut: asyncio.Future[None]
     _created_timestamp: float
     _first_token_timestamp: float | None = None
-    _audio_data: bytearray = field(default_factory=bytearray)  # Store audio data for saving to file
-    _response_id: str = ""  # Response ID for file naming
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -122,14 +119,13 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         use_default_credential: bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        save_audio_per_turn: bool = False,
     ) -> None:
         """
         Initialize Azure Voice Live Realtime model.
 
         Args:
-            endpoint: Azure Voice Live endpoint URL (wss://...). If None, reads from AZURE_VOICELIVE_ENDPOINT.
-            model: Model name. If None, reads from AZURE_VOICELIVE_MODEL (default: "gpt-realtime").
+            endpoint: Azure Voice Live endpoint URL (wss://...). If None, reads from AZURE_VOICE_LIVE_ENDPOINT.
+            model: Model name. If None, reads from AZURE_VOICE_LIVE_MODEL (default: "gpt-realtime").
             voice: Voice for audio responses (default: "en-US-AvaMultilingualNeural").
             input_audio_transcription: Configuration for input audio transcription. If NOT_GIVEN,
                 uses default config (whisper-1). Set to None to disable transcription.
@@ -140,10 +136,9 @@ class RealtimeModel(llm.RealtimeModel):
             tool_choice: Tool selection policy.
             temperature: Sampling temperature (default: 0.8).
             max_output_tokens: Maximum output tokens (default: 4096).
-            api_key: Azure API key. If None, reads from AZURE_VOICELIVE_API_KEY.
+            api_key: Azure API key. If None, reads from AZURE_VOICE_LIVE_API_KEY.
             use_default_credential: Use DefaultAzureCredential for auth instead of API key.
             conn_options: Connection retry and timeout options.
-            save_audio_per_turn: Save audio to file for each turn (default: False).
 
         Example:
             ```python
@@ -152,8 +147,8 @@ class RealtimeModel(llm.RealtimeModel):
 
             # English-only session (recommended for reliable language detection)
             model = RealtimeModel(
-                endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
-                api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
+                endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
+                api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
                 voice="en-US-AvaNeural",
                 input_audio_transcription=AudioInputTranscriptionOptions(
                     model="whisper-1",
@@ -164,8 +159,8 @@ class RealtimeModel(llm.RealtimeModel):
 
             # Multi-language session with auto-detection
             model = RealtimeModel(
-                endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
-                api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
+                endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
+                api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
                 voice="en-US-AvaMultilingualNeural",
                 input_audio_transcription=AudioInputTranscriptionOptions(
                     model="whisper-1",
@@ -204,24 +199,24 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
         # Get endpoint from environment if not provided
-        endpoint_val = endpoint or os.environ.get("AZURE_VOICELIVE_ENDPOINT")
+        endpoint_val = endpoint or os.environ.get("AZURE_VOICE_LIVE_ENDPOINT")
         if not endpoint_val:
             raise ValueError(
                 "Azure Voice Live endpoint must be provided via 'endpoint' parameter "
-                "or AZURE_VOICELIVE_ENDPOINT environment variable"
+                "or AZURE_VOICE_LIVE_ENDPOINT environment variable"
             )
 
         # Get model from environment if not provided
-        model_val = model or os.environ.get("AZURE_VOICELIVE_MODEL") or "gpt-realtime"
+        model_val = model or os.environ.get("AZURE_VOICE_LIVE_MODEL") or "gpt-realtime"
 
         # Get API key if not using default credential
         api_key_val = api_key
         if not use_default_credential:
-            api_key_val = api_key or os.environ.get("AZURE_VOICELIVE_API_KEY")
+            api_key_val = api_key or os.environ.get("AZURE_VOICE_LIVE_API_KEY")
             if not api_key_val:
                 raise ValueError(
                     "Azure Voice Live API key must be provided via 'api_key' parameter "
-                    "or AZURE_VOICELIVE_API_KEY environment variable, "
+                    "or AZURE_VOICE_LIVE_API_KEY environment variable, "
                     "or set use_default_credential=True"
                 )
 
@@ -245,7 +240,6 @@ class RealtimeModel(llm.RealtimeModel):
             api_key=api_key_val,
             use_default_credential=use_default_credential,
             conn_options=conn_options,
-            save_audio_per_turn=save_audio_per_turn,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -455,6 +449,7 @@ class RealtimeSession(
             turn_detection=self._realtime_model._opts.turn_detection,
             input_audio_transcription=input_audio_transcription,
             tools=tools_list if tools_list else None,  # type: ignore[arg-type]
+            tool_choice=to_azure_tool_choice(self._realtime_model._opts.tool_choice),
             temperature=self._realtime_model._opts.temperature,
             max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
         )
@@ -743,10 +738,6 @@ class RealtimeSession(
                 self._logged_first_audio = True
                 logger.info(f"First audio delta: {len(delta)} bytes, PCM16 format")
 
-            # Conditional audio saving - only when enabled
-            if self._realtime_model._opts.save_audio_per_turn:
-                self._current_generation._audio_data.extend(delta)
-
             # Create AudioFrame directly from raw bytes
             frame = rtc.AudioFrame(
                 data=delta,
@@ -870,32 +861,6 @@ class RealtimeSession(
                     logger.info(
                         f"[RESPONSE_DONE] content[{j}]: type={part_type}, has_audio={has_audio}, has_transcript={has_transcript}"
                     )
-
-        audio_bytes_received = len(self._current_generation._audio_data)
-        logger.info(f"[RESPONSE_DONE] Total audio bytes received: {audio_bytes_received}")
-
-        # Save audio response to file if enabled
-        if (
-            self._realtime_model._opts.save_audio_per_turn
-            and len(self._current_generation._audio_data) > 0
-        ):
-            try:
-                os.makedirs("audio_debug", exist_ok=True)
-                timestamp = int(time.time() * 1000)
-                response_id = self._response_id or "unknown"
-                filename = f"audio_debug/response_{response_id}_{timestamp}.wav"
-
-                with wave.open(filename, "wb") as wav_file:
-                    wav_file.setnchannels(NUM_CHANNELS)
-                    wav_file.setsampwidth(2)  # 2 bytes for PCM16
-                    wav_file.setframerate(SAMPLE_RATE)
-                    wav_file.writeframes(bytes(self._current_generation._audio_data))
-
-                logger.info(
-                    f"Saved audio response to {filename} ({len(self._current_generation._audio_data)} bytes)"
-                )
-            except Exception as e:
-                logger.error(f"Failed to save audio file: {e}")
 
         # Close all channels to signal end of response
         # The RESPONSE_DONE event from Azure signals that all content is complete
@@ -1038,9 +1003,22 @@ class RealtimeSession(
         logger.warning("push_video() is not supported by Azure Voice Live")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
-        """Update session options."""
+        """Update session options and send session.update to Azure server."""
         if is_given(tool_choice):
-            self._realtime_model._opts.tool_choice = tool_choice
+            if self._realtime_model._opts.tool_choice != tool_choice:
+                self._realtime_model._opts.tool_choice = tool_choice
+                azure_tool_choice = to_azure_tool_choice(tool_choice)
+                session_config = RequestSession(tool_choice=azure_tool_choice)
+                asyncio.create_task(self._send_session_update(session_config))
+
+    async def _send_session_update(self, session_config: RequestSession) -> None:
+        """Send a session.update to the Azure server."""
+        if not self._connection or not self._connection_ready.is_set():
+            return
+        try:
+            await self._connection.session.update(session=session_config)
+        except Exception as e:
+            logger.error(f"Failed to send session update: {e}")
 
     def generate_reply(
         self,

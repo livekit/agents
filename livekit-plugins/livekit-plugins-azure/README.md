@@ -21,10 +21,10 @@ See [https://docs.livekit.io/agents/integrations/azure/](https://docs.livekit.io
 For the realtime speech-to-speech model:
 
 ```bash
-export AZURE_VOICELIVE_ENDPOINT=https://<region>.api.cognitive.microsoft.com/
-export AZURE_VOICELIVE_API_KEY=<your-speech-key>
-export AZURE_VOICELIVE_MODEL=<model-name>  # e.g., gpt-4o, gpt-4o-mini, etc.
-export AZURE_VOICELIVE_VOICE=en-US-AvaMultilingualNeural
+export AZURE_VOICE_LIVE_ENDPOINT=https://<region>.api.cognitive.microsoft.com/
+export AZURE_VOICE_LIVE_API_KEY=<your-speech-key>
+export AZURE_VOICE_LIVE_MODEL=<model-name>  # e.g., gpt-4o, gpt-4o-mini, etc.
+export AZURE_VOICE_LIVE_VOICE=en-US-AvaMultilingualNeural
 ```
 
 To power the intelligence of your voice agent, you have flexibility and choice in the generative AI model between GPT-Realtime, GPT-5, GPT-4.1, Phi, and more options. For supported models and regions, see [Supported models and regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live#supported-models-and-regions).
@@ -98,10 +98,10 @@ input_audio_transcription = AudioInputTranscriptionOptions(
 
 session = AgentSession(
     llm=azure.realtime.RealtimeModel(
-        endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
-        api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
-        model=os.getenv("AZURE_VOICELIVE_MODEL", "gpt-4o"),
-        voice=os.getenv("AZURE_VOICELIVE_VOICE", "en-US-AvaMultilingualNeural"),
+        endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
+        api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
+        model=os.getenv("AZURE_VOICE_LIVE_MODEL", "gpt-4o"),
+        voice=os.getenv("AZURE_VOICE_LIVE_VOICE", "en-US-AvaMultilingualNeural"),
         input_audio_transcription=input_audio_transcription,
         turn_detection=turn_detection,
         tool_choice="auto",  # Enable function calling
@@ -113,10 +113,10 @@ session = AgentSession(
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `endpoint` | Azure Voice Live endpoint URL | `AZURE_VOICELIVE_ENDPOINT` env var |
-| `api_key` | Azure API key | `AZURE_VOICELIVE_API_KEY` env var |
-| `model` | Model name | `AZURE_VOICELIVE_MODEL` env var |
-| `voice` | Azure neural voice name | `AZURE_VOICELIVE_VOICE` env var |
+| `endpoint` | Azure Voice Live endpoint URL | `AZURE_VOICE_LIVE_ENDPOINT` env var |
+| `api_key` | Azure API key | `AZURE_VOICE_LIVE_API_KEY` env var |
+| `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var |
+| `voice` | Azure neural voice name | `AZURE_VOICE_LIVE_VOICE` env var |
 | `input_audio_transcription` | Audio transcription config (model, language) | `whisper-1` with auto-detect |
 | `turn_detection` | VAD configuration object | Server default |
 | `tool_choice` | Function calling mode ("auto", "none", etc.) | "auto" |
