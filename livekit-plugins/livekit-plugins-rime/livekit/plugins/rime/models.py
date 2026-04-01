@@ -1,6 +1,6 @@
 from typing import Literal
 
-TTSModels = Literal["mistv2", "arcana"]
+TTSModels = Literal["mistv2", "mistv3", "arcana"]
 
 # https://docs.rime.ai/api-reference/voices
 ArcanaVoices = Literal[
@@ -8,3 +8,4 @@ ArcanaVoices = Literal[
 ]
 
 DefaultMistv2Voice = "cove"
+DefaultMistv3Voice = "cove"

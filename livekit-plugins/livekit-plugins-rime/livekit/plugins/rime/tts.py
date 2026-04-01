@@ -42,7 +42,20 @@ from .models import ArcanaVoices, TTSModels
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
 MISTV2_MODEL_TIMEOUT = 30
+MISTV3_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
+
+
+@dataclass
+class _Mistv3Options:
+    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
+    speed_alpha: NotGivenOr[float] = NOT_GIVEN
+    pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN
+    no_text_normalization: NotGivenOr[bool] = NOT_GIVEN
+    save_oovs: NotGivenOr[bool] = NOT_GIVEN
 
 
 @dataclass
@@ -51,6 +64,7 @@ class _TTSOptions:
     speaker: str
     arcana_options: _ArcanaOptions | None = None
     mistv2_options: _Mistv2Options | None = None
+    mistv3_options: _Mistv3Options | None = None
 
 
 @dataclass
@@ -95,6 +109,10 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        # Mistv3 options
+        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
+        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -112,7 +130,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(speaker):
-            if model == "mistv2":
+            if model in ("mistv2", "mistv3"):
                 speaker = "cove"
             else:
                 speaker = "astra"
@@ -139,10 +157,26 @@ class TTS(tts.TTS):
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
             )
+        elif model == "mistv3":
+            self._opts.mistv3_options = _Mistv3Options(
+                lang=lang,
+                sample_rate=sample_rate,
+                speed_alpha=speed_alpha,
+                pause_between_brackets=pause_between_brackets,
+                phonemize_between_brackets=phonemize_between_brackets,
+                inline_speed_alpha=inline_speed_alpha,
+                no_text_normalization=no_text_normalization,
+                save_oovs=save_oovs,
+            )
         self._session = http_session
         self._base_url = base_url
 
-        self._total_timeout = ARCANA_MODEL_TIMEOUT if model == "arcana" else MISTV2_MODEL_TIMEOUT
+        if model == "arcana":
+            self._total_timeout = ARCANA_MODEL_TIMEOUT
+        elif model == "mistv3":
+            self._total_timeout = MISTV3_MODEL_TIMEOUT
+        else:
+            self._total_timeout = MISTV2_MODEL_TIMEOUT
 
     @property
     def model(self) -> str:
@@ -180,6 +214,10 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        # Mistv3 parameters
+        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
+        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(base_url):
@@ -191,6 +229,8 @@ class TTS(tts.TTS):
                 self._opts.arcana_options = _ArcanaOptions()
             elif model == "mistv2" and self._opts.mistv2_options is None:
                 self._opts.mistv2_options = _Mistv2Options()
+            elif model == "mistv3" and self._opts.mistv3_options is None:
+                self._opts.mistv3_options = _Mistv3Options()
 
         if is_given(speaker):
             self._opts.speaker = speaker
@@ -222,6 +262,24 @@ class TTS(tts.TTS):
                 self._opts.mistv2_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mistv2_options.phonemize_between_brackets = phonemize_between_brackets
+
+        elif self._opts.model == "mistv3" and self._opts.mistv3_options is not None:
+            if is_given(lang):
+                self._opts.mistv3_options.lang = lang
+            if is_given(sample_rate):
+                self._opts.mistv3_options.sample_rate = sample_rate
+            if is_given(speed_alpha):
+                self._opts.mistv3_options.speed_alpha = speed_alpha
+            if is_given(pause_between_brackets):
+                self._opts.mistv3_options.pause_between_brackets = pause_between_brackets
+            if is_given(phonemize_between_brackets):
+                self._opts.mistv3_options.phonemize_between_brackets = phonemize_between_brackets
+            if is_given(inline_speed_alpha):
+                self._opts.mistv3_options.inline_speed_alpha = inline_speed_alpha
+            if is_given(no_text_normalization):
+                self._opts.mistv3_options.no_text_normalization = no_text_normalization
+            if is_given(save_oovs):
+                self._opts.mistv3_options.save_oovs = save_oovs
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -269,6 +327,26 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["pauseBetweenBrackets"] = mistv2_opts.pause_between_brackets
             if is_given(mistv2_opts.phonemize_between_brackets):
                 payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
+
+        elif self._opts.model == "mistv3":
+            mistv3_opts = self._opts.mistv3_options
+            assert mistv3_opts is not None
+            if is_given(mistv3_opts.lang):
+                payload["lang"] = mistv3_opts.lang
+            if is_given(mistv3_opts.sample_rate):
+                payload["samplingRate"] = mistv3_opts.sample_rate
+            if is_given(mistv3_opts.speed_alpha):
+                payload["speedAlpha"] = mistv3_opts.speed_alpha
+            if is_given(mistv3_opts.pause_between_brackets):
+                payload["pauseBetweenBrackets"] = mistv3_opts.pause_between_brackets
+            if is_given(mistv3_opts.phonemize_between_brackets):
+                payload["phonemizeBetweenBrackets"] = mistv3_opts.phonemize_between_brackets
+            if is_given(mistv3_opts.inline_speed_alpha):
+                payload["inlineSpeedAlpha"] = mistv3_opts.inline_speed_alpha
+            if is_given(mistv3_opts.no_text_normalization):
+                payload["noTextNormalization"] = mistv3_opts.no_text_normalization
+            if is_given(mistv3_opts.save_oovs):
+                payload["saveOovs"] = mistv3_opts.save_oovs
 
         try:
             async with self._tts._ensure_session().post(
