@@ -169,6 +169,10 @@ class RealtimeModel(llm.RealtimeModel):
             and not is_given(default_language)
             and not is_given(additional_languages)
         ):
+            logger.warning(
+                "The `languages` parameter is deprecated; use `default_language` and `additional_languages` instead. When both are omitted, "
+                "`languages[0]` is the default language and `languages[1:]` are additional languages."
+            )
             if languages:
                 default_language = languages[0]
             if len(languages) > 1:
