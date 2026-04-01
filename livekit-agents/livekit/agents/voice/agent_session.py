@@ -1539,12 +1539,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
-        event = (
-            ConversationItemAddedEvent(item=message, created_at=message.created_at)
-            if message.role == "user"
-            else ConversationItemAddedEvent(item=message)
+        created_at = message.created_at
+        if message.role == "assistant":
+            created_at = float(message.metrics.get("stopped_speaking_at", time.time()))
+        self.emit(
+            "conversation_item_added",
+            ConversationItemAddedEvent(item=message, created_at=created_at),
         )
-        self.emit("conversation_item_added", event)
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
