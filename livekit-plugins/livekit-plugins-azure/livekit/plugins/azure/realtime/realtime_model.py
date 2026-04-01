@@ -480,6 +480,16 @@ class RealtimeSession(
             if hasattr(session, "input_audio_format"):
                 logger.info(f"Input audio format: {session.input_audio_format}")
 
+            # Clean up any pending generate_reply futures from previous session
+            for fut in self._response_created_futures.values():
+                if not fut.done():
+                    fut.set_exception(
+                        llm.RealtimeError(
+                            "pending response discarded due to session reconnection"
+                        )
+                    )
+            self._response_created_futures.clear()
+
             self._connection_ready.set()
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
