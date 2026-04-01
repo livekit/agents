@@ -46,6 +46,11 @@ PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 CONFIG_UPDATE_DEBOUNCE_SEC = 0.1
+_CONVERSATION_HISTORY_PREFIX = (
+    "\n\nThis conversation is being continued from an existing "
+    "conversation. You are the assistant speaking to the user. "
+    "The following is the conversation history:\n"
+)
 
 
 @dataclass
@@ -287,9 +292,7 @@ class RealtimeSession(llm.RealtimeSession):
                         "Phonic. Including conversation state in system instructions."
                     )
                     self._system_prompt_postfix = (
-                        "\n\nThis conversation is being continued from an existing "
-                        "conversation. You are the assistant speaking to the user. "
-                        "The following is the conversation history:\n" + turn_history
+                        _CONVERSATION_HISTORY_PREFIX + turn_history
                     )
                 self._chat_ctx = chat_ctx.copy()
             return
@@ -337,22 +340,20 @@ class RealtimeSession(llm.RealtimeSession):
             turn_history = self._build_turn_history(chat_ctx)
             if turn_history:
                 self._schedule_config_update(
-                    system_prompt_postfix=(
-                        "\n\nThis conversation is being continued from an existing "
-                        "conversation. You are the assistant speaking to the user. "
-                        "The following is the conversation history:\n" + turn_history
-                    )
+                    system_prompt_postfix=_CONVERSATION_HISTORY_PREFIX + turn_history
                 )
         elif not sent_tool_call_output and not sent_system_message:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
-                "Phonic does not support general chat context updates."
+                "Phonic does not support general chat context updates without a preceding update_instructions."
             )
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
         self._tool_definitions = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
+            # We disallow tool chaining and tool calls during agent speech to reduce complexity
+            # of managing state while operating within the LiveKit Realtime generations framework
             self._tool_definitions.append(
                 {
                     "type": "custom_websocket",
