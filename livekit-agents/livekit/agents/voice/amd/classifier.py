@@ -198,7 +198,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         reason: NotGivenOr[str] = NOT_GIVEN,
         speech_duration: float | None = None,
     ) -> None:
-        if is_given(category) and is_given(reason):
+        if is_given(category) and is_given(reason) and self._verdict_result is None:
             self._set_verdict(
                 AMDResult(
                     speech_duration=speech_duration or self.speech_duration,
