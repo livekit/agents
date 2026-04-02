@@ -17,7 +17,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
-load_dotenv()
+load_dotenv("../agents/.env")
 
 
 class MyAgent(Agent):

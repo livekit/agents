@@ -15,20 +15,34 @@ if TYPE_CHECKING:
 
 
 class AMD:
-    """Answering-machine detector that owns the full AMD lifecycle.
+    """Detects whether an outbound call is answered by a human or a machine.
 
-    Can be used as an async context manager or with explicit ``start()``::
+    Listens to the call greeting and uses an LLM to classify it into one of
+    the following categories:
 
-        # Pattern 1: context manager
-        async with AMD(session, llm="openai/gpt-5-mini") as amd:
+    - ``human``: a real person answered.
+    - ``machine-dtmf``: an IVR / DTMF menu prompt was detected.
+    - ``machine-vm``: a voicemail greeting where leaving a message is possible.
+    - ``machine-nvm``: the mailbox is full or not set up; leaving a message is not possible.
+    - ``uncertain``: the transcript is ambiguous and could not be classified.
+
+    AMD must be wired to an :class:`AgentSession` before classification begins.
+    The recommended pattern is the async context manager, which handles pausing
+    and resuming speech playout around the detection window::
+
+        async with AMD(session, llm="openai/gpt-4.1-mini") as amd:
             result = await amd.execute()
-            if result.is_human:
-                ...
 
-        # Pattern 2: explicit start
-        amd = AMD(llm="openai/gpt-5-mini")
-        await amd.start(session)
-        result = await amd.execute()
+    Args:
+        session: The :class:`AgentSession` to wire AMD to. Can also be passed
+            later via :meth:`start`.
+        llm: LLM used for greeting classification. Accepts an :class:`LLM`
+            instance, an inference model string (e.g. ``"openai/gpt-4.1-mini"``),
+            or ``None`` to fall back to the session's own LLM.
+        interrupt_on_machine: If ``True`` (default), interrupt any pending
+            agent speech immediately when a machine is detected.
+        start_ivr_on_dtmf: If ``True`` (default), automatically start IVR
+            detection when a ``machine-dtmf`` result is returned.
     """
 
     def __init__(
