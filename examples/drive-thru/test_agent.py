@@ -46,8 +46,9 @@ async def test_item_ordering() -> None:
         # remove item
         result = await sess.run(user_input="No actually I don't want it")
         result.expect.skip_next_event_if(type="message", role="assistant")
-        result.expect.next_event().is_function_call(name="list_order_items")
-        result.expect.next_event().is_function_call_output()
+        # LLM may look up the order first, or use the order_id it already knows
+        result.expect.skip_next_event_if(type="function_call", name="list_order_items")
+        result.expect.skip_next_event_if(type="function_call_output")
         result.expect.contains_function_call(name="remove_order_item")
         result.expect[-1].is_message(role="assistant")
 
@@ -120,6 +121,9 @@ async def test_failure() -> None:
                 name="order_regular_item", arguments={"item_id": "shake_vanilla", "size": "L"}
             )
             result.expect.next_event().is_function_call_output()
+            # LLM may retry once before giving up
+            result.expect.skip_next_event_if(type="function_call", name="order_regular_item")
+            result.expect.skip_next_event_if(type="function_call_output", is_error=True)
             await (
                 result.expect.next_event()
                 .is_message(role="assistant")

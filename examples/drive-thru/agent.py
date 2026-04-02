@@ -322,6 +322,9 @@ class DriveThruAgent(Agent):
             if not item_sizes:
                 raise ToolError(f"error: {item_id} was not found.")
 
+            if not any(item.available for item in item_sizes):
+                raise ToolError(f"error: {item_id} is currently unavailable.")
+
             if size == "null":
                 size = None
 
