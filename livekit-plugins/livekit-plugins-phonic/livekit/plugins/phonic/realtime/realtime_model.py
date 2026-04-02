@@ -24,6 +24,7 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.types import (
+    AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
     ConfigOptions,
@@ -289,14 +290,14 @@ class RealtimeSession(llm.RealtimeSession):
         return self._tools.copy()
 
     async def update_instructions(self, instructions: str) -> None:
-        self._opts.instructions = instructions
-        if not self._config_sent:
-            self._instructions_ready.set()
-        else:
+        if self._config_sent:
             logger.warning(
                 "update_instructions called after config was already sent. "
-                "Use reset() for mid-session updates."
+                "Phonic does not support updating instructions mid-session."
             )
+            return
+        self._opts.instructions = instructions
+        self._instructions_ready.set()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         if not self._config_sent:
@@ -320,6 +321,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
+        sent_system_message = False
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -341,31 +343,46 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     sent_tool_call_output = True
 
+            if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
+                text = item.text_content
+                if text:
+                    logger.debug(f"Sending add system message: {text}")
+                    if self._socket:
+                        await self._socket.send_add_system_message(
+                            AddSystemMessagePayload(system_message=text)
+                        )
+                        sent_system_message = True
+
         self._chat_ctx = chat_ctx.copy()
 
-        if sent_tool_call_output:
-            self._start_new_assistant_turn()
-        else:
+        if not sent_tool_call_output and not sent_system_message:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
-                "Use reset() for mid-session context updates."
+                "Phonic does not support general chat context updates."
             )
+        if sent_tool_call_output:
+            self._start_new_assistant_turn()
+
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
-        self._set_tools(tools)
-        if not self._config_sent:
-            self._tools_ready.set()
-        else:
+        if self._config_sent:
             logger.warning(
                 "update_tools called after config was already sent. "
                 "Use reset() for mid-session tool updates."
             )
+            return
 
-    def _set_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
-        self._tool_definitions = []
+        self._tool_definitions = self._get_tool_definitions(tools)
+        self._tools_ready.set()
+
+    def _get_tool_definitions(self, tools: list[llm.Tool]) -> list[dict]:
+        self._tools = llm.ToolContext(tools)
+        tool_definitions = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
-            self._tool_definitions.append(
+            # We disallow tool chaining and tool calls during agent speech to reduce complexity
+            # of managing state while operating within the LiveKit Realtime generations framework
+            tool_definitions.append(
                 {
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
@@ -374,6 +391,7 @@ class RealtimeSession(llm.RealtimeSession):
                     "allow_tool_chaining": False,
                 }
             )
+        return tool_definitions
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         logger.warning("update_options is not supported by the Phonic realtime model.")
@@ -531,7 +549,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._opts.instructions = instructions
-        self._set_tools(tools)
+        self._tool_definitions = self._get_tool_definitions(tools)
 
         system_prompt = instructions
         history = self._build_turn_history(chat_ctx)
