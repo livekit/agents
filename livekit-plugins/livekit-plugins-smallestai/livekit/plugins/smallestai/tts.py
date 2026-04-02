@@ -35,6 +35,7 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
+from .version import __version__
 
 NUM_CHANNELS = 1
 SMALLEST_BASE_URL = "https://api.smallest.ai/waves/v1"
@@ -204,6 +205,8 @@ class ChunkedStream(tts.ChunkedStream):
             headers = {
                 "Authorization": f"Bearer {self._opts.api_key}",
                 "Content-Type": "application/json",
+                "X-Source": "livekit",
+                "X-LiveKit-Version": __version__,
             }
             async with self._tts._ensure_session().post(
                 url,

@@ -43,6 +43,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 from .models import STTEncoding, STTModels
+from .version import __version__
 
 NUM_CHANNELS = 1
 # Base URL for the Smallest AI API.
@@ -201,6 +202,8 @@ class STT(stt.STT):
                 headers={
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/octet-stream",
+                    "X-Source": "livekit",
+                    "X-LiveKit-Version": __version__,
                 },
                 params=params,
                 # to_wav_bytes() produces a valid WAV file; the server auto-detects format.
@@ -451,7 +454,11 @@ class SpeechStream(stt.SpeechStream):
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
                     ws_url,
-                    headers={"Authorization": f"Bearer {self._opts.api_key}"},
+                    headers={
+                        "Authorization": f"Bearer {self._opts.api_key}",
+                        "X-Source": "livekit",
+                        "X-LiveKit-Version": __version__,
+                    },
                     heartbeat=5.0,
                 ),
                 self._conn_options.timeout,
