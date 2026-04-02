@@ -47,7 +47,6 @@ load_dotenv()
 class Userdata:
     cal: Calendar
     booked_slot_ids: list[str] = field(default_factory=list)
-    slots_listed: int = 0
     slot_unavailable_count: int = 0
 
 
@@ -144,7 +143,6 @@ class FrontDeskAgent(Agent):
         Args:
             range: Determines how far ahead to search for free time slots.
         """
-        ctx.userdata.slots_listed += 1
         now = datetime.datetime.now(self.tz)
         lines: list[str] = []
 
