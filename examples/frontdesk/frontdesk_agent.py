@@ -25,6 +25,17 @@ from livekit.agents import (
     function_tool,
     inference,
 )
+from livekit.agents.evals import (
+    JudgeGroup,
+    accuracy_judge,
+    coherence_judge,
+    conciseness_judge,
+    handoff_judge,
+    relevancy_judge,
+    safety_judge,
+    task_completion_judge,
+    tool_use_judge,
+)
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -163,7 +174,35 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    ctx.make_session_report()
+    report = ctx.make_session_report()
+
+    # Skip evaluation for very short conversations
+    chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
+    if len(chat.items) < 3:
+        return
+
+    judges = JudgeGroup(
+        llm="openai/gpt-4o-mini",
+        judges=[
+            task_completion_judge(),
+            accuracy_judge(),
+            tool_use_judge(),
+            handoff_judge(),
+            safety_judge(),
+            relevancy_judge(),
+            coherence_judge(),
+            conciseness_judge(),
+        ],
+    )
+
+    await judges.evaluate(report.chat_history)
+
+    if ctx.primary_session.userdata.appointment_booked:
+        ctx.tagger.success()
+    else:
+        ctx.tagger.fail(reason="Appointment was not booked")
+
+    logger.info("session tags: %s", ctx.tagger.tags)
 
 
 @server.rtc_session(on_session_end=on_session_end)
