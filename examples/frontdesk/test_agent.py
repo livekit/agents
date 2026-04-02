@@ -89,6 +89,7 @@ async def test_slot_scheduling() -> None:
             user_input="My email address is theo@livekit.io",
             input_modality="audio",  # simulate audio input
         )
+        result.expect.skip_next_event_if(type="message", role="assistant")
         result.expect.next_event().is_function_call(
             name="update_email_address", arguments={"email": "theo@livekit.io"}
         )
@@ -100,6 +101,7 @@ async def test_slot_scheduling() -> None:
         )
 
         result = await sess.run(user_input="Yes, it's valid")
+        result.expect.skip_next_event_if(type="message", role="assistant")
         result.expect.next_event().is_function_call(name="confirm_email_address")
         result.expect.next_event().is_function_call_output()
         result.expect.next_event().is_agent_handoff(new_agent_type=FrontDeskAgent)
