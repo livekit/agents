@@ -51,6 +51,8 @@ class _Mistv3Options:
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
+    pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
 @dataclass
@@ -153,6 +155,8 @@ class TTS(tts.TTS):
                 lang=lang,
                 sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
+                pause_between_brackets=pause_between_brackets,
+                phonemize_between_brackets=phonemize_between_brackets,
             )
         self._session = http_session
         self._base_url = base_url
@@ -252,6 +256,10 @@ class TTS(tts.TTS):
                 self._opts.mistv3_options.sample_rate = sample_rate
             if is_given(speed_alpha):
                 self._opts.mistv3_options.speed_alpha = speed_alpha
+            if is_given(pause_between_brackets):
+                self._opts.mistv3_options.pause_between_brackets = pause_between_brackets
+            if is_given(phonemize_between_brackets):
+                self._opts.mistv3_options.phonemize_between_brackets = phonemize_between_brackets
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -309,6 +317,10 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["samplingRate"] = mistv3_opts.sample_rate
             if is_given(mistv3_opts.speed_alpha):
                 payload["speedAlpha"] = mistv3_opts.speed_alpha
+            if is_given(mistv3_opts.pause_between_brackets):
+                payload["pauseBetweenBrackets"] = mistv3_opts.pause_between_brackets
+            if is_given(mistv3_opts.phonemize_between_brackets):
+                payload["phonemizeBetweenBrackets"] = mistv3_opts.phonemize_between_brackets
 
         try:
             async with self._tts._ensure_session().post(
