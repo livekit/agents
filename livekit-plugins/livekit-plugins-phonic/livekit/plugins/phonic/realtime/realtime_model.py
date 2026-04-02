@@ -24,7 +24,6 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.types import (
-    AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
     ConfigOptions,
@@ -45,7 +44,6 @@ PHONIC_NUM_CHANNELS = 1
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
-CONFIG_UPDATE_DEBOUNCE_SEC = 0.1
 _CONVERSATION_HISTORY_PREFIX = (
     "\n\nThis conversation is being continued from an existing "
     "conversation. You are the assistant speaking to the user. "
@@ -270,8 +268,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
         self._system_prompt_postfix: str = ""
-        self._pending_config_update: dict[str, typing.Any] | None = None
-        self._config_update_task: asyncio.Task[None] | None = None
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -294,12 +290,13 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def update_instructions(self, instructions: str) -> None:
         self._opts.instructions = instructions
-
         if not self._config_sent:
             self._instructions_ready.set()
-            return
-
-        self._schedule_config_update(instructions=instructions)
+        else:
+            logger.warning(
+                "update_instructions called after config was already sent. "
+                "Use reset() for mid-session updates."
+            )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         if not self._config_sent:
@@ -323,7 +320,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
-        sent_system_message = False
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -345,43 +341,30 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     sent_tool_call_output = True
 
-            if (
-                not self._pending_config_update
-                and isinstance(item, llm.ChatMessage)
-                and item.role in ("system", "developer")
-            ):
-                text = item.text_content
-                if text:
-                    logger.debug(f"Sending add system message: {text}")
-                    if self._socket:
-                        await self._socket.send_add_system_message(
-                            AddSystemMessagePayload(system_message=text)
-                        )
-                        sent_system_message = True
-
         self._chat_ctx = chat_ctx.copy()
 
         if sent_tool_call_output:
             self._start_new_assistant_turn()
-
-        if self._pending_config_update:
-            pending_history = self._build_turn_history(chat_ctx)
-            if pending_history:
-                self._schedule_config_update(
-                    system_prompt_postfix=_CONVERSATION_HISTORY_PREFIX + pending_history
-                )
-        elif not sent_tool_call_output and not sent_system_message:
+        else:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
-                "Phonic does not support general chat context updates without a preceding update_instructions."
+                "Use reset() for mid-session context updates."
             )
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
+        self._set_tools(tools)
+        if not self._config_sent:
+            self._tools_ready.set()
+        else:
+            logger.warning(
+                "update_tools called after config was already sent. "
+                "Use reset() for mid-session tool updates."
+            )
+
+    def _set_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
         self._tool_definitions = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
-            # We disallow tool chaining and tool calls during agent speech to reduce complexity
-            # of managing state while operating within the LiveKit Realtime generations framework
             self._tool_definitions.append(
                 {
                     "type": "custom_websocket",
@@ -390,18 +373,6 @@ class RealtimeSession(llm.RealtimeSession):
                     "wait_for_speech_before_tool_call": True,
                     "allow_tool_chaining": False,
                 }
-            )
-
-        if not self._config_sent:
-            self._tools_ready.set()
-            return
-
-        if self._pending_config_update:
-            self._schedule_config_update(tools=self._tool_definitions)
-        else:
-            logger.warning(
-                "update_tools called mid-session without a preceding update_instructions. "
-                "Phonic does not support standalone tool updates."
             )
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
@@ -450,14 +421,10 @@ class RealtimeSession(llm.RealtimeSession):
         return fut
 
     async def _send_generate_reply(self, payload: GenerateReplyPayload) -> None:
-        if self._pending_config_update:
-            await self._flush_config_update()
-
         await self._ready_to_start.wait()
         if self._session_should_close.is_set():
             return
         if self._socket:
-            logger.debug("Sending generate_reply to Phonic")
             await self._socket.send_generate_reply(payload)
 
     def commit_audio(self) -> None:
@@ -487,10 +454,6 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     async def aclose(self) -> None:
-        if self._config_update_task and not self._config_update_task.done():
-            self._config_update_task.cancel()
-        self._pending_config_update = None
-
         self._session_should_close.set()
         self._send_ch.close()
         self._instructions_ready.set()
@@ -550,46 +513,46 @@ class RealtimeSession(llm.RealtimeSession):
         }
         return {k: v for k, v in raw.items() if v is not NOT_GIVEN}
 
-    def _schedule_config_update(self, **kwargs: typing.Any) -> None:
-        if not self._pending_config_update:
-            self._pending_config_update = {}
-        self._pending_config_update.update(kwargs)
-
-        if self._config_update_task and not self._config_update_task.done():
-            self._config_update_task.cancel()
-        self._config_update_task = asyncio.create_task(self._debounced_flush())
-
-    async def _debounced_flush(self) -> None:
-        await asyncio.sleep(CONFIG_UPDATE_DEBOUNCE_SEC)
-        await self._flush_config_update()
-
-    async def _flush_config_update(self) -> None:
-        update = self._pending_config_update
-        self._pending_config_update = None
-        if self._config_update_task and not self._config_update_task.done():
-            self._config_update_task.cancel()
-        self._config_update_task = None
-
-        if not update or not self._socket:
+    async def reset(
+        self,
+        *,
+        instructions: str,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        session_reused: bool,
+    ) -> None:
+        if not session_reused:
+            await super().reset(
+                instructions=instructions,
+                chat_ctx=chat_ctx,
+                tools=tools,
+                session_reused=False,
+            )
             return
 
-        system_prompt = (update.get("instructions") or self._opts.instructions or "") + (
-            update.get("system_prompt_postfix") or ""
-        )
+        self._opts.instructions = instructions
+        self._set_tools(tools)
 
+        system_prompt = instructions
+        history = self._build_turn_history(chat_ctx)
+        if history:
+            system_prompt += _CONVERSATION_HISTORY_PREFIX + history
+
+        self._chat_ctx = chat_ctx.copy()
         self._close_current_generation(interrupted=True)
 
         tools_payload: list[dict | str] = []
         if is_given(self._opts.phonic_tools) and self._opts.phonic_tools:
             tools_payload.extend(self._opts.phonic_tools)
-        tools_payload.extend(update.get("tools", self._tool_definitions))
+        tools_payload.extend(self._tool_definitions)
 
         config_options = self._build_session_config_options_dict(
             system_prompt=system_prompt,
             tools_payload=tools_payload,
         )
-        logger.info("Sending mid-session reset")
-        await self._socket.send_reset(ResetPayload(config=ConfigOptions(**config_options)))
+        if self._socket:
+            logger.info("Sending mid-session reset to Phonic")
+            await self._socket.send_reset(ResetPayload(config=ConfigOptions(**config_options)))
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
