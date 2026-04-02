@@ -23,6 +23,7 @@ from livekit.agents import (
     beta,
     cli,
     function_tool,
+    get_job_context,
     inference,
 )
 from livekit.agents.evals import (
@@ -107,11 +108,21 @@ class FrontDeskAgent(Agent):
             )
         except SlotUnavailableError:
             ctx.userdata.slot_unavailable_count += 1
+            tagger = get_job_context().tagger
+            tagger.remove("slot:available")
+            tagger.add(
+                "slot:unavailable",
+                metadata={"count": ctx.userdata.slot_unavailable_count},
+            )
             # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
         ctx.userdata.appointments_booked += 1
+        get_job_context().tagger.add(
+            "appointment:booked",
+            metadata={"count": ctx.userdata.appointments_booked, "slot_id": slot_id},
+        )
 
         local = slot.start_time.astimezone(self.tz)
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
@@ -133,6 +144,10 @@ class FrontDeskAgent(Agent):
             range: Determines how far ahead to search for free time slots.
         """
         ctx.userdata.slots_listed += 1
+        get_job_context().tagger.add(
+            "slot:available",
+            metadata={"lookup_count": ctx.userdata.slots_listed, "range": range},
+        )
         now = datetime.datetime.now(self.tz)
         lines: list[str] = []
 
@@ -204,22 +219,8 @@ async def on_session_end(ctx: JobContext) -> None:
     userdata = ctx.primary_session.userdata
     if userdata.appointments_booked > 0:
         ctx.tagger.success()
-        ctx.tagger.add(
-            "appointment:booked",
-            metadata={
-                "count": userdata.appointments_booked,
-                "slots_listed": userdata.slots_listed,
-            },
-        )
     else:
         ctx.tagger.fail(reason="Appointment was not booked")
-        ctx.tagger.add("appointment:not_booked")
-
-    if userdata.slot_unavailable_count > 0:
-        ctx.tagger.add(
-            "slot:unavailable",
-            metadata={"count": userdata.slot_unavailable_count},
-        )
 
     logger.info("session tags: %s", ctx.tagger.tags)
 
