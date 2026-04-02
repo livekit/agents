@@ -37,7 +37,7 @@ from .log import logger
 from .models import TTSEncoding, TTSModels
 
 NUM_CHANNELS = 1
-SMALLEST_BASE_URL = "https://waves-api.smallest.ai/api/v1"
+SMALLEST_BASE_URL = "https://api.smallest.ai/waves/v1"
 
 
 @dataclass
@@ -60,8 +60,8 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "lightning-large",
-        voice_id: str = "irisha",
+        model: TTSModels | str = "lightning-v3.1",
+        voice_id: str = "emily",
         sample_rate: int = 24000,
         speed: float = 1.0,
         consistency: float = 0.5,
@@ -73,10 +73,12 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
-        Create a new instance of smallest.ai Waves TTS.
+        Create a new instance of Smallest AI Lightning TTS.
         Args:
             api_key: Your Smallest AI API key.
-            model: The TTS model to use (e.g., "lightning", "lightning-large", "lightning-v2", "lightning-v3.1").
+            model: The TTS model to use. Use "lightning-v3.1" (default) for the latest
+                model with 80+ voices and ~100ms latency, or "lightning-v2" for the
+                previous generation.
             voice_id: The voice ID to use for synthesis.
             sample_rate: Sample rate for the audio output.
             speed: Speed of the speech synthesis.
@@ -102,9 +104,10 @@ class TTS(tts.TTS):
                 " SMALLEST_API_KEY environment variable"
             )
 
-        if (consistency or similarity or enhancement) and model == "lightning":
+        if (consistency or similarity or enhancement) and model != "lightning-v2":
             logger.warning(
-                "consistency, similarity, and enhancement are only supported for model 'lightning-large', 'lightning-v2', and 'lightning-v3.1'. "
+                "consistency, similarity, and enhancement are only supported for lightning-v2 "
+                "and will be ignored for other models."
             )
 
         self._opts = _TTSOptions(
@@ -196,13 +199,7 @@ class ChunkedStream(tts.ChunkedStream):
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
 
-            # lightning and lightning-large use /get_speech_long_text
-            # lightning-v2 and lightning-v3.1 use /get_speech
-            base = self._opts.base_url
-            if self._opts.model in ("lightning-v2", "lightning-v3.1"):
-                url = f"{base}/{self._opts.model}/get_speech"
-            else:
-                url = f"{base}/{self._opts.model}/get_speech_long_text"
+            url = f"{self._opts.base_url}/{self._opts.model}/get_speech"
 
             headers = {
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -238,9 +235,10 @@ class ChunkedStream(tts.ChunkedStream):
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
     base_keys = ["voice_id", "sample_rate", "speed", "language", "output_format"]
+    # consistency, similarity, enhancement are lightning-v2 only params
     extra_keys = ["consistency", "similarity", "enhancement"]
 
-    keys = base_keys if opts.model == "lightning" else base_keys + extra_keys
+    keys = base_keys + extra_keys if opts.model == "lightning-v2" else base_keys
     result = {key: getattr(opts, key) for key in keys}
     if "language" in result and isinstance(result["language"], LanguageCode):
         result["language"] = result["language"].language
