@@ -223,6 +223,11 @@ ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 # The metrics are stored in a dict, since some fields may not be relevant
 # in certain context (e.g., text-only mode or when using a speech-to-speech model).
+class MetricsMetadata(TypedDict, total=False):
+    model_name: str
+    model_provider: str
+
+
 class MetricsReport(TypedDict, total=False):
     started_speaking_at: float
     stopped_speaking_at: float
@@ -262,6 +267,10 @@ class MetricsReport(TypedDict, total=False):
 
     Assistant `ChatMessage` only
     """
+
+    llm_metadata: MetricsMetadata
+    tts_metadata: MetricsMetadata
+    stt_metadata: MetricsMetadata
 
 
 class ChatMessage(BaseModel):

@@ -15,7 +15,7 @@ from ..metrics.base import (
 )
 
 if TYPE_CHECKING:
-    from ..llm.chat_context import ChatContext, MetricsReport
+    from ..llm.chat_context import ChatContext, MetricsMetadata, MetricsReport
 
 _meter = metrics_api.get_meter("livekit-agents")
 
@@ -98,19 +98,34 @@ def flush_turn_metrics(chat_ctx: ChatContext) -> None:
         _record_turn_metrics(msg.metrics)
 
 
+def _metadata_to_attrs(metadata: MetricsMetadata) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    if "model_name" in metadata:
+        attrs["model_name"] = metadata["model_name"]
+    if "model_provider" in metadata:
+        attrs["model_provider"] = metadata["model_provider"]
+    return attrs
+
+
 def _record_turn_metrics(report: MetricsReport) -> None:
+    llm_attrs = _metadata_to_attrs(report["llm_metadata"]) if "llm_metadata" in report else {}
+    tts_attrs = _metadata_to_attrs(report["tts_metadata"]) if "tts_metadata" in report else {}
+    stt_attrs = _metadata_to_attrs(report["stt_metadata"]) if "stt_metadata" in report else {}
+
     if "e2e_latency" in report:
-        _turn_e2e_latency.record(report["e2e_latency"])
+        _turn_e2e_latency.record(report["e2e_latency"], attributes=llm_attrs)
     if "llm_node_ttft" in report:
-        _turn_llm_ttft.record(report["llm_node_ttft"])
+        _turn_llm_ttft.record(report["llm_node_ttft"], attributes=llm_attrs)
     if "tts_node_ttfb" in report:
-        _turn_tts_ttfb.record(report["tts_node_ttfb"])
+        _turn_tts_ttfb.record(report["tts_node_ttfb"], attributes=tts_attrs)
     if "transcription_delay" in report:
-        _turn_transcription_delay.record(report["transcription_delay"])
+        _turn_transcription_delay.record(report["transcription_delay"], attributes=stt_attrs)
     if "end_of_turn_delay" in report:
-        _turn_end_of_turn_delay.record(report["end_of_turn_delay"])
+        _turn_end_of_turn_delay.record(report["end_of_turn_delay"], attributes=stt_attrs)
     if "on_user_turn_completed_delay" in report:
-        _turn_on_user_turn_completed_delay.record(report["on_user_turn_completed_delay"])
+        _turn_on_user_turn_completed_delay.record(
+            report["on_user_turn_completed_delay"], attributes=stt_attrs
+        )
 
 
 def collect_usage(ev: AgentMetrics) -> None:
