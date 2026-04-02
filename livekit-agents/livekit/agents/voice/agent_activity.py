@@ -2117,12 +2117,6 @@ class AgentActivity(RecognitionHooks):
         if forwarded_text and add_to_chat_ctx:
             assistant_metrics: llm.MetricsReport = {}
 
-            if self.llm:
-                assistant_metrics["llm_metadata"] = {
-                    "model_name": self.llm.model,
-                    "model_provider": self.llm.provider,
-                }
-
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
 
@@ -2943,12 +2937,6 @@ class AgentActivity(RecognitionHooks):
             message_id: str, forwarded_text: str, interrupted: bool
         ) -> llm.ChatMessage:
             assistant_metrics: llm.MetricsReport = {}
-
-            if self.llm:
-                assistant_metrics["llm_metadata"] = {
-                    "model_name": self.llm.model,
-                    "model_provider": self.llm.provider,
-                }
 
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
