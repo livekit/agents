@@ -13,3 +13,14 @@ TTSEncoding = Literal[
     "wav",
     "mulaw",
 ]
+
+STTModels = Literal["pulse"]
+
+STTEncoding = Literal[
+    "linear16",
+    "linear32",
+    "alaw",
+    "mulaw",
+    "opus",
+    "ogg_opus",
+]
