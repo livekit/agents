@@ -102,12 +102,19 @@ class _ReusableResources:
     rt_session: llm.RealtimeSession | None = None
 
     async def cleanup(self) -> None:
+        tasks = []
         if self.stt_pipeline is not None:
-            await self.stt_pipeline.aclose()
+            tasks.append(self.stt_pipeline.aclose())
             self.stt_pipeline = None
         if self.rt_session is not None:
-            await self.rt_session.aclose()
+            tasks.append(self.rt_session.aclose())
             self.rt_session = None
+
+        if tasks:
+            outputs = await asyncio.gather(*tasks, return_exceptions=True)
+            for output in outputs:
+                if isinstance(output, Exception):
+                    logger.error("error cleaning up reusable resources", exc_info=output)
 
 
 @dataclass
@@ -578,56 +585,64 @@ class AgentActivity(RecognitionHooks):
         """Detach reusable resources for handoff to *new_activity*."""
         resources = _ReusableResources()
 
-        # stt pipeline
-        if (
-            self._audio_recognition
-            and self.stt is not None
-            and type(self.agent).stt_node is type(new_activity.agent).stt_node
-            and self.stt is new_activity.stt
-        ):
-            resources.stt_pipeline = await self._audio_recognition.detach_stt()
+        try:
+            # stt pipeline
+            if (
+                self._audio_recognition
+                and self.stt is not None
+                and type(self.agent).stt_node is type(new_activity.agent).stt_node
+                and self.stt is new_activity.stt
+            ):
+                resources.stt_pipeline = await self._audio_recognition.detach_stt()
 
-        # rt session
-        if (
-            self._rt_session is not None
-            and isinstance(self.llm, llm.RealtimeModel)
-            and self.llm is new_activity.llm
-        ):
-            # context update is supported or chat context is equivalent
-            reusable = self.llm.capabilities.mid_session_context_update or (
-                self._rt_session.chat_ctx.copy(
-                    exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
-                ).is_equivalent(
-                    new_activity.agent.chat_ctx.copy(
+            # rt session
+            if (
+                self._rt_session is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+                and self.llm is new_activity.llm
+            ):
+                # context update is supported or chat context is equivalent
+                reusable = self.llm.capabilities.mid_session_context_update or (
+                    self._rt_session.chat_ctx.copy(
                         exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
+                    ).is_equivalent(
+                        new_activity.agent.chat_ctx.copy(
+                            exclude_instructions=True,
+                            exclude_handoff=True,
+                            exclude_config_update=True,
+                        )
                     )
                 )
-            )
-            # instructions update is supported or instructions are the same
-            reusable = reusable and (
-                self.llm.capabilities.mid_session_instructions_update
-                or self.agent.instructions == new_activity.agent.instructions
-            )
-            # tools update is supported or tools are the same
-            reusable = reusable and (
-                self.llm.capabilities.mid_session_tools_update
-                or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
-            )
-
-            if reusable:
-                # detach: remove event listeners but don't close the session
-                self._rt_session.off("generation_created", self._on_generation_created)
-                self._rt_session.off("input_speech_started", self._on_input_speech_started)
-                self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
-                self._rt_session.off(
-                    "input_audio_transcription_completed",
-                    self._on_input_audio_transcription_completed,
+                # instructions update is supported or instructions are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mid_session_instructions_update
+                    or self.agent.instructions == new_activity.agent.instructions
                 )
-                self._rt_session.off("metrics_collected", self._on_metrics_collected)
-                self._rt_session.off("remote_item_added", self._on_remote_item_added)
-                self._rt_session.off("error", self._on_error)
-                resources.rt_session = self._rt_session
-                self._rt_session = None  # prevent _close_session from closing it
+                # tools update is supported or tools are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mid_session_tools_update
+                    or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
+                )
+
+                if reusable:
+                    # detach: remove event listeners but don't close the session
+                    self._rt_session.off("generation_created", self._on_generation_created)
+                    self._rt_session.off("input_speech_started", self._on_input_speech_started)
+                    self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
+                    self._rt_session.off(
+                        "input_audio_transcription_completed",
+                        self._on_input_audio_transcription_completed,
+                    )
+                    self._rt_session.off("metrics_collected", self._on_metrics_collected)
+                    self._rt_session.off("remote_item_added", self._on_remote_item_added)
+                    self._rt_session.off("error", self._on_error)
+                    resources.rt_session = self._rt_session
+                    self._rt_session = None  # prevent _close_session from closing it
+
+        except Exception:
+            # avoid leaking resources
+            await resources.cleanup()
+            raise
 
         return resources
 
