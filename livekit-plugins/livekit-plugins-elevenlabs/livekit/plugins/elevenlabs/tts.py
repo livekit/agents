@@ -407,11 +407,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
+            existing = self._tts._current_connection
+            reusable = existing is not None and existing.is_current and not existing._closed
             t0 = time.perf_counter()
             connection = await asyncio.wait_for(
                 self._tts.current_connection(), self._conn_options.timeout
             )
             self._acquire_time = time.perf_counter() - t0
+            self._connection_reused = reusable
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
