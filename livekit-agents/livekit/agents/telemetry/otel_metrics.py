@@ -115,9 +115,8 @@ def _record_turn_metrics(report: MetricsReport) -> None:
 
 def collect_usage(ev: AgentMetrics) -> None:
     """Record usage counters directly from each metrics event."""
-    attrs = _model_attrs(getattr(ev, "metadata", None))
-
     if isinstance(ev, LLMMetrics):
+        attrs = _model_attrs(ev.metadata)
         if ev.prompt_tokens:
             _llm_input_tokens.add(ev.prompt_tokens, attributes=attrs)
         if ev.prompt_cached_tokens:
@@ -126,6 +125,7 @@ def collect_usage(ev: AgentMetrics) -> None:
             _llm_output_tokens.add(ev.completion_tokens, attributes=attrs)
 
     elif isinstance(ev, RealtimeModelMetrics):
+        attrs = _model_attrs(ev.metadata)
         if ev.input_tokens:
             _llm_input_tokens.add(ev.input_tokens, attributes=attrs)
         if ev.input_token_details.cached_tokens:
@@ -144,16 +144,19 @@ def collect_usage(ev: AgentMetrics) -> None:
             _llm_session_duration.add(ev.session_duration, attributes=attrs)
 
     elif isinstance(ev, TTSMetrics):
+        attrs = _model_attrs(ev.metadata)
         if ev.characters_count:
             _tts_characters.add(ev.characters_count, attributes=attrs)
         if ev.audio_duration:
             _tts_audio_duration.add(ev.audio_duration, attributes=attrs)
 
     elif isinstance(ev, STTMetrics):
+        attrs = _model_attrs(ev.metadata)
         if ev.audio_duration:
             _stt_audio_duration.add(ev.audio_duration, attributes=attrs)
 
     elif isinstance(ev, InterruptionMetrics):
+        attrs = _model_attrs(ev.metadata)
         if ev.num_requests:
             _interruption_requests.add(ev.num_requests, attributes=attrs)
 
