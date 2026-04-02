@@ -56,6 +56,7 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
     }
@@ -285,6 +286,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
                 mid_session_instructions_update=True,
                 mid_session_tools_update=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -682,8 +684,22 @@ class RealtimeSession(llm.RealtimeSession):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(
+                    "generate_reply is not compatible with 'gemini-3.1-flash-live-preview'"
+                )
+            )
+            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
@@ -791,9 +807,11 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
 

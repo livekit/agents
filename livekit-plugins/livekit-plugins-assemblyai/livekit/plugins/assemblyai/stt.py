@@ -62,6 +62,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
+    domain: NotGivenOr[str] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -87,6 +88,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
+        domain: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -161,6 +163,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
+            domain=domain,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -483,6 +486,7 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.speaker_labels)
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
+            "domain": self._opts.domain if is_given(self._opts.domain) else None,
         }
 
         headers = {
