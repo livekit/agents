@@ -7,6 +7,7 @@ from opentelemetry import metrics as metrics_api
 from ..metrics.base import (
     AgentMetrics,
     LLMMetrics,
+    Metadata,
     RealtimeModelMetrics,
     STTMetrics,
     TTSMetrics,
@@ -90,6 +91,16 @@ _connection_acquire_time = _meter.create_histogram(
 _usage_collector = ModelUsageCollector()
 
 
+def _model_attrs(metadata: Metadata | None) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    if metadata:
+        if metadata.model_provider:
+            attrs["model_provider"] = metadata.model_provider
+        if metadata.model_name:
+            attrs["model_name"] = metadata.model_name
+    return attrs
+
+
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Emit per-turn latency histograms from the chat history. Called at session end."""
     for msg in chat_ctx.messages():
@@ -117,23 +128,15 @@ def collect_usage(ev: AgentMetrics) -> None:
 
     if isinstance(ev, (LLMMetrics, STTMetrics, TTSMetrics, RealtimeModelMetrics)):
         if ev.acquire_time > 0:
-            attrs: dict[str, str] = {"connection_reused": str(ev.connection_reused)}
-            if ev.metadata:
-                if ev.metadata.model_provider:
-                    attrs["model_provider"] = ev.metadata.model_provider
-                if ev.metadata.model_name:
-                    attrs["model_name"] = ev.metadata.model_name
+            attrs = _model_attrs(ev.metadata)
+            attrs["connection_reused"] = str(ev.connection_reused).lower()
             _connection_acquire_time.record(ev.acquire_time, attributes=attrs)
 
 
 def flush_usage() -> None:
     """Emit all buffered usage as OTEL counters, keyed by model/provider. Called at session end."""
     for usage in _usage_collector.flatten():
-        attrs: dict[str, str] = {}
-        if usage.provider:
-            attrs["model_provider"] = usage.provider
-        if usage.model:
-            attrs["model_name"] = usage.model
+        attrs = _model_attrs(Metadata(model_provider=usage.provider, model_name=usage.model))
 
         if isinstance(usage, LLMModelUsage):
             _emit_llm_usage(usage, attrs)
