@@ -38,14 +38,13 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 ---
 
-### 🎵 Tamil — 16 voices
+### 🎵 Tamil — 15 voices
 
 | | | | | |
 |---|---|---|---|---|
-| Vaani | Isai | Thalam | Swaram | Madhuram |
-| Naadham | Ragam | Pallavi | Komalam | Raagamalika |
-| Geetham | Taalam | Dhruv | Sangeetham | Raagaratna |
-| Pancham | | | | |
+| Vaani | Isai | Thalam | Swaram | Madhuri |
+| Naadham | Rachna | Pallavi | Mrityunjay | Malika |
+| Yamini | Tilak | Dhruv | Sanket | Rudraksh |
 
 ---
 
@@ -53,18 +52,18 @@ You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as
 
 | | | | | |
 |---|---|---|---|---|
-| Naadamu | Dhruv | Taalam | Geetamu | Raagamalika |
-| Sangeetamu | Vaani | Swaramu | Layamu | Taalabaddha |
-| Raagapriya | Swarajathi | Raagini | Karn | Naada |
-| Meghamalini | Sangeetapriya | Raagamala | Dhairy | Shruti |
-| Tara | Komalavani | Mandara | Taana | Swarajati |
-| Raagaanjali | Ruhi | Shweta | Geetika | Swaramala |
-| Aalapana | Raagaratnam | Meghavani | Sanskar | Geetavani |
-| Taala | Hardik | Mridul | Sangeetavani | Geetamala |
-| Naadapriya | Abhishek | Dhwanimala | Sangeetanjali | Gamaka |
-| Raagasudha | Sangeetaratna | Taalamani | Sangeetasundari | Nishchay |
-| Raagavalli | Swarasudha | Sangeetaswarna | Raagamanjari | Swaravara |
-| Naadeshwara | Dhwanividya | Taalapala | Dhwanipala | Swarapala |
+| Ansh | Dhruv | Aadhira | Aahana | Aakriti |
+| Ridhima | Vaani | Shaury | Bhavyaa | Tanuj |
+| Utkarsh | Adyaa | Raagini | Kanika | Madhav |
+| Malini | Priya | Mala | Dhairy | Shruti |
+| Tara | Shubhra | Mandara | Tanya | Sara |
+| Rudrika | Ruhi | Sameer | Geetika | Naitik |
+| Kartik | Naira | Meghvani | Sneha | Sonika |
+| Nikunj | Sonia | Mridul | Shobha | Gunika |
+| Yuvaan | Abhishek | Dhruvika | Hardik | Raj |
+| Raghav | Sanatan | Tanmay | Sanjana | Niharika |
+| Ruchika | Sonakshi | Aaliya | Aanchal | Vartika |
+| Rihaan | Divya | Taarini | Divyansh | Pavani |
 
 ---
 
