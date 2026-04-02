@@ -1,6 +1,6 @@
 # Smallest AI plugin for LiveKit Agents
 
-Support for speech synthesis (TTS) and speech recognition (STT) with the [Smallest AI](https://smallest.ai/) Waves API.
+Support for speech synthesis (TTS) and speech recognition (STT) with the [Smallest AI](https://smallest.ai/) API.
 
 ## Installation
 
