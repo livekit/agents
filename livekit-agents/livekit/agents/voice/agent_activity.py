@@ -108,15 +108,6 @@ class _PreemptiveGeneration:
     created_at: float
 
 
-@dataclass
-class _PipelineGeneration:
-    chat_ctx: llm.ChatContext
-    llm_gen_data: _LLMGenerationData
-    tts_gen_data: _TTSGenerationData | None
-    tasks: list[asyncio.Task[Any]]
-    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
-
-
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
