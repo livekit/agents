@@ -76,9 +76,11 @@ from .models import STTModels
 DEFAULT_SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 CHUNK_DURATION_MS = 100
+DEFAULT_TARGET_STREAMING_DELAY_MS = 480
 DEFAULT_FINALIZE_DELAY_MS = 100  # fallback idle finalize delay
 # Idle threshold: fallback finalization when no FlushSentinel / flush_audio() is used.
 # Must exceed the common 480 ms delay target. 650 ms gives ~170 ms margin.
+IDLE_FINALIZE_MARGIN_MS = 170
 MIN_IDLE_FINALIZE_MS = 650
 
 
@@ -89,6 +91,8 @@ class _STTOptions:
     sample_rate: int
     interim_results: bool
     finalize_delay_ms: int
+    target_streaming_delay_ms: int | None
+    chunk_duration_ms: int
 
 
 class STT(stt.STT):
@@ -102,6 +106,8 @@ class STT(stt.STT):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         interim_results: bool = True,
         finalize_delay_ms: int = DEFAULT_FINALIZE_DELAY_MS,
+        target_streaming_delay_ms: int | None = None,
+        chunk_duration_ms: int = CHUNK_DURATION_MS,
     ):
         """
         Create a new instance of MistralAI STT.
@@ -117,6 +123,8 @@ class STT(stt.STT):
             interim_results: Whether to emit interim transcripts (default True).
             finalize_delay_ms: Delay after VAD end-of-speech before emitting FINAL_TRANSCRIPT.
                 Lower values reduce latency but may truncate; higher values ensure completeness.
+            target_streaming_delay_ms: Optional provider-side delay target in milliseconds.
+            chunk_duration_ms: PCM chunk duration sent to the realtime API in milliseconds.
         """
 
         super().__init__(
@@ -128,6 +136,8 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             interim_results=interim_results,
             finalize_delay_ms=finalize_delay_ms,
+            target_streaming_delay_ms=target_streaming_delay_ms,
+            chunk_duration_ms=chunk_duration_ms,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
@@ -155,6 +165,8 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        target_streaming_delay_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        chunk_duration_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the STT.
@@ -164,6 +176,8 @@ class STT(stt.STT):
             language: The language to transcribe in.
             sample_rate: Audio sample rate in Hz.
             interim_results: Whether to emit interim transcripts.
+            target_streaming_delay_ms: Optional provider-side delay target in milliseconds.
+            chunk_duration_ms: PCM chunk duration sent to the realtime API in milliseconds.
         """
         if is_given(model):
             self._opts.model = model
@@ -173,6 +187,10 @@ class STT(stt.STT):
             self._opts.sample_rate = sample_rate
         if is_given(interim_results):
             self._opts.interim_results = interim_results
+        if is_given(target_streaming_delay_ms):
+            self._opts.target_streaming_delay_ms = target_streaming_delay_ms
+        if is_given(chunk_duration_ms):
+            self._opts.chunk_duration_ms = chunk_duration_ms
 
         if is_given(model) or is_given(interim_results):
             self._capabilities = self._build_capabilities(
@@ -180,17 +198,22 @@ class STT(stt.STT):
                 interim_results=self._opts.interim_results,
             )
 
-        reconnect_needed = is_given(model) or is_given(sample_rate)
-        if reconnect_needed:
+        connection_reconnect_needed = (
+            is_given(model) or is_given(sample_rate) or is_given(target_streaming_delay_ms)
+        )
+        stream_restart_needed = connection_reconnect_needed or is_given(chunk_duration_ms)
+        if connection_reconnect_needed:
             self._pool.invalidate()
 
-        if reconnect_needed or is_given(language) or is_given(interim_results):
+        if stream_restart_needed or is_given(language) or is_given(interim_results):
             for stream in self._streams:
                 stream.update_options(
                     model=model,
                     language=language,
                     sample_rate=sample_rate,
                     interim_results=interim_results,
+                    target_streaming_delay_ms=target_streaming_delay_ms,
+                    chunk_duration_ms=chunk_duration_ms,
                 )
 
     @staticmethod
@@ -232,6 +255,7 @@ class STT(stt.STT):
                     encoding="pcm_s16le",
                     sample_rate=self._opts.sample_rate,
                 ),
+                target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
             ),
             timeout=timeout,
         )
@@ -389,6 +413,8 @@ class SpeechStream(stt.RecognizeStream):
         language: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        target_streaming_delay_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        chunk_duration_ms: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         reconnect_needed = False
 
@@ -404,6 +430,12 @@ class SpeechStream(stt.RecognizeStream):
             reconnect_needed = True
         if is_given(interim_results):
             self._opts.interim_results = interim_results
+        if is_given(target_streaming_delay_ms):
+            self._opts.target_streaming_delay_ms = target_streaming_delay_ms
+            reconnect_needed = True
+        if is_given(chunk_duration_ms):
+            self._opts.chunk_duration_ms = chunk_duration_ms
+            reconnect_needed = True
 
         if reconnect_needed:
             self._reconnect_event.set()
@@ -487,7 +519,7 @@ class SpeechStream(stt.RecognizeStream):
         self._pool.put(connection)
 
     async def _send_task(self, connection: RealtimeConnection) -> None:
-        samples_per_chunk = self._opts.sample_rate * CHUNK_DURATION_MS // 1000
+        samples_per_chunk = self._opts.sample_rate * self._opts.chunk_duration_ms // 1000
         bytes_per_second = self._opts.sample_rate * NUM_CHANNELS * 2
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
@@ -530,8 +562,7 @@ class SpeechStream(stt.RecognizeStream):
         no FlushSentinel arrives (e.g. non-VAD pipelines).
         """
         check_interval = 0.05
-        finalize_delay_s = max(self._opts.finalize_delay_ms / 1000.0, 0.05)
-        idle_finalize_delay_s = max(finalize_delay_s, MIN_IDLE_FINALIZE_MS / 1000.0)
+        idle_finalize_delay_s = self._idle_finalize_delay_s()
 
         while True:
             await asyncio.sleep(check_interval)
@@ -546,6 +577,16 @@ class SpeechStream(stt.RecognizeStream):
             )
             if idle_ready:
                 self._finalize_utterance(reason="idle_timeout")
+
+    def _idle_finalize_delay_s(self) -> float:
+        finalize_delay_s = max(self._opts.finalize_delay_ms / 1000.0, 0.05)
+        if self._opts.target_streaming_delay_ms is None:
+            provider_finalize_delay_s = MIN_IDLE_FINALIZE_MS / 1000.0
+        else:
+            provider_finalize_delay_s = (
+                self._opts.target_streaming_delay_ms + IDLE_FINALIZE_MARGIN_MS
+            ) / 1000.0
+        return max(finalize_delay_s, provider_finalize_delay_s)
 
     def _finalize_utterance(
         self,

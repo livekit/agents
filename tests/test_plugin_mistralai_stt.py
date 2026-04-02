@@ -184,6 +184,28 @@ class _FakePool:
             await close()
 
 
+class _CaptureRealtimeConnection(_IdleConnection):
+    pass
+
+
+class _CaptureRealtime:
+    instances: list[_CaptureRealtime] = []
+
+    def __init__(self, sdk_configuration: object) -> None:
+        del sdk_configuration
+        self.connect_kwargs: dict[str, object] | None = None
+        type(self).instances.append(self)
+
+    async def connect(self, **kwargs):
+        self.connect_kwargs = kwargs
+        return _CaptureRealtimeConnection()
+
+
+class _FakeMistralClient:
+    def __init__(self) -> None:
+        self.sdk_configuration = object()
+
+
 def _audio_frame(*, sample_rate: int = 16000) -> rtc.AudioFrame:
     samples_per_channel = sample_rate // 100
     return rtc.AudioFrame(
@@ -274,6 +296,53 @@ async def test_update_options_reconfigures_active_streams():
         assert stream._needed_sr == 8000
         assert stream._opts.interim_results is False
         assert stream._opts.language == LanguageCode("fr")
+
+
+@pytest.mark.asyncio
+async def test_connect_forwards_target_streaming_delay_ms(monkeypatch: pytest.MonkeyPatch):
+    import livekit.plugins.mistralai.stt as mistral_stt
+    from livekit.plugins.mistralai import STT
+
+    monkeypatch.setattr(mistral_stt, "RealtimeTranscription", _CaptureRealtime)
+
+    stt = STT(
+        client=_FakeMistralClient(),
+        model="voxtral-mini-transcribe-realtime-2602",
+        target_streaming_delay_ms=240,
+    )
+
+    connection = await stt._connect_ws(timeout=0.1)
+    await connection.close()
+
+    assert _CaptureRealtime.instances
+    assert _CaptureRealtime.instances[-1].connect_kwargs is not None
+    assert _CaptureRealtime.instances[-1].connect_kwargs["target_streaming_delay_ms"] == 240
+
+
+@pytest.mark.asyncio
+async def test_idle_finalize_delay_uses_target_streaming_delay():
+    from livekit.plugins.mistralai import STT
+
+    stt = STT(
+        client=object(),
+        model="voxtral-mini-transcribe-realtime-2602",
+        finalize_delay_ms=100,
+        target_streaming_delay_ms=240,
+    )
+    stt._pool = _FakePool(_IdleConnection())
+
+    async with stt.stream(conn_options=TEST_CONNECT_OPTIONS) as stream:
+        assert stream._idle_finalize_delay_s() == pytest.approx(0.41, abs=1e-6)
+
+    stt_default = STT(
+        client=object(),
+        model="voxtral-mini-transcribe-realtime-2602",
+        finalize_delay_ms=100,
+    )
+    stt_default._pool = _FakePool(_IdleConnection())
+
+    async with stt_default.stream(conn_options=TEST_CONNECT_OPTIONS) as default_stream:
+        assert default_stream._idle_finalize_delay_s() == pytest.approx(0.65, abs=1e-6)
 
 
 @pytest.mark.asyncio
