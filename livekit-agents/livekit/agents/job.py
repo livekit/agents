@@ -270,7 +270,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
         if (any(report.recording_options.values()) or has_evals) and obs_url:
             try:

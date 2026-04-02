@@ -4,7 +4,7 @@ import datetime
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -23,6 +23,7 @@ from livekit.agents import (
     beta,
     cli,
     function_tool,
+    get_job_context,
     inference,
 )
 from livekit.agents.evals import (
@@ -45,7 +46,8 @@ load_dotenv()
 @dataclass
 class Userdata:
     cal: Calendar
-    appointment_booked: bool = False
+    booked_times: list[str] = field(default_factory=list)
+    slot_unavailable_count: int = 0
 
 
 logger = logging.getLogger("front-desk")
@@ -104,13 +106,21 @@ class FrontDeskAgent(Agent):
                 start_time=slot.start_time, attendee_email=email_result.email_address
             )
         except SlotUnavailableError:
+            ctx.userdata.slot_unavailable_count += 1
+            get_job_context().tagger.add(
+                "slot:unavailable",
+                metadata={"count": ctx.userdata.slot_unavailable_count},
+            )
             # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
-        ctx.userdata.appointment_booked = True
-
         local = slot.start_time.astimezone(self.tz)
+        ctx.userdata.booked_times.append(local.isoformat())
+        get_job_context().tagger.add(
+            "appointment:booked",
+            metadata={"time": ctx.userdata.booked_times},
+        )
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
     @function_tool
@@ -197,7 +207,8 @@ async def on_session_end(ctx: JobContext) -> None:
 
     await judges.evaluate(report.chat_history)
 
-    if ctx.primary_session.userdata.appointment_booked:
+    userdata = ctx.primary_session.userdata
+    if userdata.booked_times:
         ctx.tagger.success()
     else:
         ctx.tagger.fail(reason="Appointment was not booked")

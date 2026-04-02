@@ -426,6 +426,7 @@ async def _upload_session_report(
             attributes={
                 "session.options": vars(report.options),
                 "session.report_timestamp": report.timestamp,
+                "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
                 "sdk_version": report.sdk_version,
                 "usage": [
@@ -475,12 +476,28 @@ async def _upload_session_report(
                 severity_text=severity_text,
             )
 
-    if tagger.outcome_reason:
+    for tag, entry in tagger._tags.items():
+        if entry.metadata:
+            _log(
+                eval_logger,
+                body="tag",
+                timestamp=int(entry.timestamp * 1e9),
+                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+            )
+
+    if tagger.outcome:
+        is_fail = tagger.outcome == "fail"
+        outcome_data: dict[str, Any] = {"outcome": tagger.outcome}
+        if tagger.outcome_reason:
+            outcome_data["reason"] = tagger.outcome_reason
+
         _log(
             eval_logger,
             body="outcome",
             timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": {"reason": tagger.outcome_reason}},
+            attributes={"outcome": outcome_data},
+            severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
+            severity_text="error" if is_fail else "unspecified",
         )
 
     has_audio = (
