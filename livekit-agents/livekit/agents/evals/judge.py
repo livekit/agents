@@ -271,10 +271,13 @@ class _TaskCompletionJudge:
                 "Evaluation may be less accurate without knowing the agent's goal."
             )
 
-        prompt_parts = [
-            "Evaluate if the agent completed its goal based on its instructions.",
-            "",
-        ]
+        criteria = (
+            "Evaluate if the agent completed its goal based on its instructions. "
+            "Task completed, appropriately handed off, or correctly declined = pass. "
+            "User's need ignored, no resolution, gave up without handoff = fail."
+        )
+
+        prompt_parts = [criteria, ""]
 
         if instructions:
             prompt_parts.extend([f"Agent Instructions:\n{instructions}", ""])
@@ -285,18 +288,8 @@ class _TaskCompletionJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        prompt_parts.extend(
-            [
-                "",
-                "Did the agent complete what it was instructed to do?",
-                "Consider: task completed, appropriately handed off, or correctly declined = pass",
-                "User's need ignored, no resolution, gave up without handoff = fail",
-            ]
-        )
-
-        task_instructions = "\n".join(prompt_parts)
-        result = await _evaluate_with_llm(effective_llm, task_instructions)
-        result.instructions = task_instructions
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = criteria
         return result
 
 
@@ -336,11 +329,15 @@ class _HandoffJudge:
                 "Pass llm to JudgeGroup or to the judge constructor."
             )
 
+        criteria = (
+            "Evaluate if the conversation maintained context across agent handoffs. "
+            "Handoffs can be silent or explicit, either is acceptable. "
+            "Remembered info (names, details, requests) = pass. "
+            "Break in continuity, repeated questions, context lost = fail."
+        )
+
         prompt_parts = [
-            "Evaluate if the conversation maintained context across agent handoffs.",
-            "",
-            "Note: Handoffs can be silent (user doesn't notice) or explicit "
-            "(agent announces 'transferring you to...'). Either is acceptable.",
+            criteria,
             "",
             f"Conversation:\n{_format_chat_ctx(chat_ctx)}",
         ]
@@ -349,18 +346,8 @@ class _HandoffJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        prompt_parts.extend(
-            [
-                "",
-                "Did the new agent preserve context from the conversation?",
-                "Consider: remembered info (names, details, requests) = pass",
-                "Break in continuity, repeated questions, context lost = fail",
-            ]
-        )
-
-        handoff_instructions = "\n".join(prompt_parts)
-        result = await _evaluate_with_llm(effective_llm, handoff_instructions)
-        result.instructions = handoff_instructions
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = criteria
         return result
 
 
