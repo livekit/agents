@@ -44,7 +44,6 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
-from .amd import AMD
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -559,13 +558,6 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    detector: AMD | None = self._session._amd
-                    if detector is not None and detector.pending:
-                        try:
-                            await detector.result()
-                        except BaseException:
-                            detector.stop()
-                            raise
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
                         tk = _OnEnterContextVar.set(data)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import TracebackType
 from typing import TYPE_CHECKING
 
 from ...inference import LLM as _InferenceLLM, LLMModels
@@ -16,28 +17,35 @@ if TYPE_CHECKING:
 class AMD:
     """Answering-machine detector that owns the full AMD lifecycle.
 
-    Example::
+    Can be used as an async context manager or with explicit ``start()``::
 
-        amd = AMD("openai/gpt-5-mini")
+        # Pattern 1: context manager
+        async with AMD(session, llm="openai/gpt-5-mini") as amd:
+            result = await amd.execute()
+            if result.is_human:
+                ...
 
-        # wire AMD to the session before starting it
+        # Pattern 2: explicit start
+        amd = AMD(llm="openai/gpt-5-mini")
         await amd.start(session)
-        await session.start(agent=MyAgent(), room=ctx.room)
-
-        # inside Agent.on_enter:
-        result = await amd.result()
-        if result.is_human:
-            amd.stop(abort_generation=False)
-        else:
-            amd.stop(abort_generation=True)
+        result = await amd.execute()
     """
 
-    def __init__(self, llm: LLM | LLMModels | str | None = None) -> None:
+    def __init__(
+        self,
+        session: AgentSession | None = None,
+        *,
+        llm: LLM | LLMModels | str | None = None,
+        interrupt_on_machine: bool = True,
+        start_ivr_on_dtmf: bool = True,
+    ) -> None:
         self._llm_config = llm
-        self._session: AgentSession | None = None
+        self._session: AgentSession | None = session
         self._classifier: _AMDClassifier | None = None
         self._result: AMDResult | None = None
         self._closed = False
+        self._interrupt_on_machine = interrupt_on_machine
+        self._start_ivr_on_dtmf = start_ivr_on_dtmf
 
     @property
     def enabled(self) -> bool:
@@ -47,53 +55,75 @@ class AMD:
     def pending(self) -> bool:
         return self._classifier is not None and self._result is None
 
-    # region: public methods
+    # region: public API
+
     async def start(self, session: AgentSession) -> None:
         """Wire AMD to the given session.
 
         Must be called before ``session.start()`` so that
         :class:`AudioRecognition` picks up the AMD instance for lifecycle hooks.
         """
+        self._session = session
         self._start_internal(session)
 
-    def stop(self, *, abort_generation: bool = False) -> None:
-        """Stop AMD and resume speech playout authorization.
+    async def execute(self) -> AMDResult:
+        """Run AMD detection and return the result.
 
-        Args:
-            abort_generation: When ``True``, cancel all pending/current
-                generation via ``session.interrupt(force=True)`` before
-                resuming authorization.  When ``False``, any queued
-                responses will play out normally.
+        While executing, speech playout authorization is locked. Once the
+        result is available, authorization is resumed and automatic actions
+        (interrupt on machine, start IVR on DTMF) are applied based on the
+        configured options.
         """
         if self._session is None:
-            return
-
-        if abort_generation:
-            self._session.interrupt(force=True)
-
-        if self._session._activity is not None:
-            self._session._activity._resume_authorization()
-
-    async def result(self) -> AMDResult:
-        """Wait for the answering-machine detection result and return it.
-
-        Raises:
-            RuntimeError: If AMD was not enabled or could not be resolved, or
-                if the detector was closed before producing a result.
-        """
+            raise RuntimeError("AMD is not wired to a session, call start() first")
         if self._classifier is None and self._result is None:
             raise RuntimeError("AMD could not be resolved, please provide a compatible LLM")
+
         if self._classifier is not None:
             await self._classifier._verdict_ready.wait()
         if self._result is None:
             raise RuntimeError("AMD was closed before a result was available")
-        return self._result
+
+        result = self._result
+
+        if result.is_machine and self._interrupt_on_machine:
+            self._session.interrupt(force=True)
+
+        if result.category == "machine-dtmf" and self._start_ivr_on_dtmf:
+            await self._session._start_ivr_detection(transcript=result.transcript)
+
+        if self._session._activity is not None:
+            self._session._activity._resume_authorization()
+
+        return result
+
+    async def __aenter__(self) -> AMD:
+        if self._session is not None:
+            self._start_internal(self._session)
+            # if the session is already running, start classifier and pause
+            # authorization immediately (audio may already be flowing)
+            if self._classifier is not None and not self._classifier.started:
+                self._classifier.start()
+                if self._session._activity is not None:
+                    self._session._activity._pause_authorization()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if exc_val is not None and self._session is not None:
+            # on exception, ensure authorization is resumed so the session isn't stuck
+            if self._session._activity is not None:
+                self._session._activity._resume_authorization()
+        await self.aclose()
 
     # endregion
+    # region: lifecycle hooks (called by AudioRecognition)
 
-    # region: lifecycle hooks
-
-    def on_first_audio(self) -> None:
+    def _on_first_audio(self) -> None:
         """Start AMD on the first audio frame and pause speech authorization."""
         if self._classifier is None or self._classifier.started:
             return
@@ -101,15 +131,15 @@ class AMD:
         if self._session is not None and self._session._activity is not None:
             self._session._activity._pause_authorization()
 
-    def on_user_speech_started(self) -> None:
+    def _on_user_speech_started(self) -> None:
         if self._classifier is not None:
             self._classifier.on_user_speech_started()
 
-    def on_user_speech_ended(self, silence_duration: float) -> None:
+    def _on_user_speech_ended(self, silence_duration: float) -> None:
         if self._classifier is not None:
             self._classifier.on_user_speech_ended(silence_duration)
 
-    def on_transcript(self, text: str) -> None:
+    def _on_transcript(self, text: str) -> None:
         if self._classifier is not None:
             self._classifier.push_text(text)
 
@@ -123,7 +153,6 @@ class AMD:
             self._classifier = None
 
     # endregion
-
     # region: internal methods
 
     def _start_internal(self, session: AgentSession) -> None:
@@ -136,7 +165,7 @@ class AMD:
         self._classifier.on("amd_result", self._on_amd_result)
 
         if session.options.ivr_detection:
-            logger.warning("ivr_detection will be disabled when amd is enabled")
+            logger.warning("ivr_detection will be disabled when AMD is enabled")
             session.options.ivr_detection = False
 
         session._amd = self

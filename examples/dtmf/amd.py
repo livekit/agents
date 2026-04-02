@@ -9,10 +9,8 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    MetricsCollectedEvent,
     cli,
     inference,
-    metrics,
 )
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -20,8 +18,6 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
-
-amd = AMD("openai/gpt-5-mini")
 
 
 class MyAgent(Agent):
@@ -34,34 +30,6 @@ class MyAgent(Agent):
                 "If you do, you will try to leave a message to ask them to call back."
             ),
         )
-
-    async def on_enter(self):
-        result = await amd.result()
-        if result.is_human:
-            logger.info("human answered the call, proceeding with normal conversation")
-            amd.stop()
-            return
-
-        # abort any pending responses generated for human conversation
-        amd.stop(abort_generation=True)
-
-        if result.category == "machine-dtmf":
-            logger.info("dtmf menu detected, starting IVR detection")
-            await self.session.start_ivr_detection(transcript=result.transcript)
-            return
-
-        if result.category == "machine-vm":
-            logger.info("voicemail detected, leaving a message")
-            speech_handle = self.session.generate_reply(
-                instructions=(
-                    "You've reached voicemail. Leave a brief message asking "
-                    "the customer to call back."
-                ),
-            )
-            await speech_handle.wait_for_playout()
-        else:
-            logger.info("mailbox unavailable, ending call")
-        self.session.shutdown()
 
 
 server = AgentServer()
@@ -86,29 +54,33 @@ async def entrypoint(ctx: JobContext):
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
-        resume_false_interruption=True,
-        false_interruption_timeout=1.0,
     )
-
-    usage_collector = metrics.UsageCollector()
-
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
-
-    ctx.add_shutdown_callback(log_usage)
-
-    await amd.start(session)
 
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
     )
+
+    async with AMD(session, llm="openai/gpt-5-mini") as amd:
+        result = await amd.execute()
+
+        if result.category == "human":
+            logger.info("human answered the call, proceeding with normal conversation")
+        elif result.category == "machine-dtmf":
+            logger.info("dtmf menu detected, starting IVR detection")
+        elif result.category == "machine-vm":
+            logger.info("voicemail detected, leaving a message")
+            speech_handle = session.generate_reply(
+                instructions=(
+                    "You've reached voicemail. Leave a brief message asking "
+                    "the customer to call back."
+                ),
+            )
+            await speech_handle.wait_for_playout()
+            session.shutdown()
+        elif result.category == "machine-nvm":
+            logger.info("mailbox unavailable, ending call")
+            session.shutdown()
 
 
 if __name__ == "__main__":

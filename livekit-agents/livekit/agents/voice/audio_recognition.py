@@ -29,7 +29,6 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
-from .amd import AMD
 from .endpointing import BaseEndpointing
 from .turn import TurnDetectionMode as TurnDetectionMode
 
@@ -187,9 +186,6 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
-
-        # automatic machine detection
-        self._amd: AMD | None = session._amd
 
         self._vad_speech_started: bool = False
 
@@ -444,8 +440,8 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-        if self._amd is not None:
-            self._amd.on_first_audio()
+        if self._session._amd is not None:
+            self._session._amd._on_first_audio()
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
@@ -473,8 +469,6 @@ class AudioRecognition:
 
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
-
-        self._amd = None
 
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
@@ -736,8 +730,8 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
-            if self._amd is not None:
-                self._amd.on_transcript(transcript)
+            if self._session._amd is not None:
+                self._session._amd._on_transcript(transcript)
 
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
@@ -885,8 +879,8 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-            if self._amd is not None:
-                self._amd.on_user_speech_started()
+            if self._session._amd is not None:
+                self._session._amd._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
@@ -911,8 +905,8 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
-            if self._amd is not None:
-                self._amd.on_user_speech_ended(ev.silence_duration)
+            if self._session._amd is not None:
+                self._session._amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:

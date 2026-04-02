@@ -2,8 +2,9 @@ import asyncio
 import functools
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, get_args
+
+from pydantic import BaseModel
 
 from ...llm.chat_context import ChatContext, ChatMessage
 from ...llm.llm import LLM
@@ -23,8 +24,8 @@ AMD_TIMEOUT = 20.0
 AMDCategory: TypeAlias = Literal["human", "machine-dtmf", "machine-vm", "machine-nvm", "uncertain"]
 
 
-@dataclass
-class AMDResult:
+class AMDResult(BaseModel):
+    type: Literal["amd"] = "amd"
     speech_duration: float
     category: AMDCategory
     reason: str

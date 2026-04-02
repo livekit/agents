@@ -744,7 +744,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if self.options.ivr_detection:
                     tasks.append(
-                        asyncio.create_task(self.start_ivr_detection(), name="_ivr_activity_start")
+                        asyncio.create_task(
+                            self._start_ivr_detection(), name="_ivr_activity_start"
+                        )
                     )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
@@ -1065,7 +1067,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 turn_detection=turn_detection,
             )
 
-    async def start_ivr_detection(self, transcript: str | None = None) -> None:
+    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
 
         This method injects the DTMF tool and enables loop/silence detection,
