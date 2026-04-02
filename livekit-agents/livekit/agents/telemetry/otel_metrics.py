@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import metrics as metrics_api
 
-from ..metrics.base import AgentMetrics
+from ..metrics.base import (
+    AgentMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+)
 from ..metrics.usage import (
     InterruptionModelUsage,
     LLMModelUsage,
@@ -73,6 +79,13 @@ _stt_audio_duration = _meter.create_counter(
 )
 _interruption_requests = _meter.create_counter("lk.agents.usage.interruption_requests")
 
+# -- Connection metrics --
+_connection_acquire_time = _meter.create_histogram(
+    "lk.agents.connection.acquire_time",
+    unit="s",
+    description="Time to acquire a connection (WebSocket only)",
+)
+
 # Per-model usage collectors
 _usage_collector = ModelUsageCollector()
 
@@ -99,8 +112,18 @@ def _record_turn_metrics(report: MetricsReport) -> None:
 
 
 def collect_usage(ev: AgentMetrics) -> None:
-    """Buffer usage per model. Called on each metrics event."""
+    """Buffer usage per model and record per-event metrics. Called on each metrics event."""
     _usage_collector.collect(ev)
+
+    if isinstance(ev, (LLMMetrics, STTMetrics, TTSMetrics, RealtimeModelMetrics)):
+        if ev.acquire_time > 0:
+            attrs: dict[str, str] = {"connection_reused": str(ev.connection_reused)}
+            if ev.metadata:
+                if ev.metadata.model_provider:
+                    attrs["model_provider"] = ev.metadata.model_provider
+                if ev.metadata.model_name:
+                    attrs["model_name"] = ev.metadata.model_name
+            _connection_acquire_time.record(ev.acquire_time, attributes=attrs)
 
 
 def flush_usage() -> None:

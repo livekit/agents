@@ -23,6 +23,10 @@ class LLMMetrics(BaseModel):
     prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
+    acquire_time: float = 0.0
+    """Time in seconds to acquire the connection. (WebSocket only)"""
+    connection_reused: bool = False
+    """Whether the connection was reused from a pool. (WebSocket only)"""
     speech_id: str | None = None
     metadata: Metadata | None = None
 
@@ -42,6 +46,10 @@ class STTMetrics(BaseModel):
     """Output text tokens (for token-based billing)."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    acquire_time: float = 0.0
+    """Time in seconds to acquire the connection. (WebSocket only)"""
+    connection_reused: bool = False
+    """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
 
 
@@ -61,6 +69,10 @@ class TTSMetrics(BaseModel):
     output_tokens: int = 0
     """Output audio tokens (for token-based billing, e.g., OpenAI TTS)."""
     streamed: bool
+    acquire_time: float = 0.0
+    """Time in seconds to acquire the connection. (WebSocket only)"""
+    connection_reused: bool = False
+    """Whether the connection was reused from a pool. (WebSocket only)"""
     segment_id: str | None = None
     speech_id: str | None = None
     metadata: Metadata | None = None
@@ -141,6 +153,10 @@ class RealtimeModelMetrics(BaseModel):
     """Details about the input tokens used in the Response."""
     output_token_details: OutputTokenDetails
     """Details about the output tokens used in the Response."""
+    acquire_time: float = 0.0
+    """Time in seconds to acquire the connection. (WebSocket only)"""
+    connection_reused: bool = False
+    """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
 
 
