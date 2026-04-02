@@ -6,7 +6,6 @@ from opentelemetry import metrics as metrics_api
 
 from ..metrics.base import (
     AgentMetrics,
-    LLMMetrics,
     Metadata,
     RealtimeModelMetrics,
     STTMetrics,
@@ -126,7 +125,7 @@ def collect_usage(ev: AgentMetrics) -> None:
     """Buffer usage per model and record per-event metrics. Called on each metrics event."""
     _usage_collector.collect(ev)
 
-    if isinstance(ev, (LLMMetrics, STTMetrics, TTSMetrics, RealtimeModelMetrics)):
+    if isinstance(ev, (STTMetrics, TTSMetrics, RealtimeModelMetrics)):
         if ev.acquire_time > 0:
             attrs = _model_attrs(ev.metadata)
             attrs["connection_reused"] = str(ev.connection_reused).lower()

@@ -309,6 +309,8 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
 
         self._start_time_offset: float = 0.0
 
@@ -321,6 +323,25 @@ class RecognizeStream(ABC):
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
         self._start_time_offset = value
+
+    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
+        """Report connection timing as an STTMetrics event with zero usage."""
+        self._acquire_time = acquire_time
+        self._connection_reused = connection_reused
+        self._stt.emit(
+            "metrics_collected",
+            STTMetrics(
+                request_id="",
+                timestamp=time.time(),
+                duration=0.0,
+                label=self._stt._label,
+                audio_duration=0.0,
+                streamed=True,
+                acquire_time=acquire_time,
+                connection_reused=connection_reused,
+                metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+            ),
+        )
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -394,6 +415,8 @@ class RecognizeStream(ABC):
                     input_tokens=ev.recognition_usage.input_tokens,
                     output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
+                    acquire_time=self._acquire_time,
+                    connection_reused=self._connection_reused,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider
                     ),

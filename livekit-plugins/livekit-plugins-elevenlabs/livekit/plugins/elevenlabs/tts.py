@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -406,9 +407,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
+            t0 = time.perf_counter()
             connection = await asyncio.wait_for(
                 self._tts.current_connection(), self._conn_options.timeout
             )
+            self._acquire_time = time.perf_counter() - t0
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:

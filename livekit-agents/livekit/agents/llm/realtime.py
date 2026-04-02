@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
@@ -147,6 +148,26 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model
+
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        """Report connection timing as a RealtimeModelMetrics event with zero usage."""
+        from ..metrics.base import Metadata, RealtimeModelMetrics
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id="",
+                timestamp=time.time(),
+                acquire_time=acquire_time,
+                connection_reused=False,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
 
     @property
     def realtime_model(self) -> RealtimeModel:

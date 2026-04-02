@@ -488,8 +488,10 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
+            t0 = time.perf_counter()
             self._socket_ctx = self._client.conversations.connect()
             self._socket = await self._socket_ctx.__aenter__()
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             # Need to wait for instructions and tools before sending config
             await self._instructions_ready.wait()

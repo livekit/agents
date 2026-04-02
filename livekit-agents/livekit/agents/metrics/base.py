@@ -23,10 +23,6 @@ class LLMMetrics(BaseModel):
     prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
-    acquire_time: float = 0.0
-    """Time in seconds to acquire the connection. (WebSocket only)"""
-    connection_reused: bool = False
-    """Whether the connection was reused from a pool. (WebSocket only)"""
     speech_id: str | None = None
     metadata: Metadata | None = None
 

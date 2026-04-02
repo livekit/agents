@@ -801,9 +801,11 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
 
