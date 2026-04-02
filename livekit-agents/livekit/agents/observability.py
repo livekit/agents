@@ -118,10 +118,12 @@ class Tagger:
         Called automatically by JudgeGroup.evaluate().
         """
         for name, judgment in result.judgments.items():
-            self._tags[f"lk.judge.{name}:{judgment.verdict}"] = _TagEntry()
+            tag = f"lk.judge.{name}:{judgment.verdict}"
+            self._tags[tag] = _TagEntry()
             self._evaluation_results.append(
                 {
                     "name": name,
+                    "tag": tag,
                     "verdict": judgment.verdict,
                     "reasoning": judgment.reasoning,
                     "instructions": judgment.instructions,
