@@ -3,6 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import (
+    AMD,
     Agent,
     AgentServer,
     AgentSession,
@@ -20,6 +21,8 @@ logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
+amd = AMD("openai/gpt-5-mini")
+
 
 class MyAgent(Agent):
     def __init__(self) -> None:
@@ -33,17 +36,14 @@ class MyAgent(Agent):
         )
 
     async def on_enter(self):
-        assert self.session.amd is not None
-        result = await self.session.amd.result()
+        result = await amd.result()
         if result.is_human:
-            # resume playout authorization so that any queued responses can be played out
             logger.info("human answered the call, proceeding with normal conversation")
-            self.session.amd.resume_authorization()
+            amd.stop()
             return
 
-        # interrupt any pending responses first before resuming playout authorization
-        self.session.interrupt(force=True)
-        self.session.amd.resume_authorization()
+        # abort any pending responses generated for human conversation
+        amd.stop(abort_generation=True)
 
         if result.category == "machine-dtmf":
             logger.info("dtmf menu detected, starting IVR detection")
@@ -88,7 +88,6 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
-        amd="openai/gpt-5-mini",
     )
 
     usage_collector = metrics.UsageCollector()
@@ -103,6 +102,8 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {summary}")
 
     ctx.add_shutdown_callback(log_usage)
+
+    await amd.start(session)
 
     await session.start(
         agent=MyAgent(),

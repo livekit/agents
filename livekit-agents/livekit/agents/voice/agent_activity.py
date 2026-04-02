@@ -559,12 +559,12 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    detector: AMD | None = self._session._ensure_amd(activity=self)
+                    detector: AMD | None = self._session._amd
                     if detector is not None and detector.pending:
                         try:
                             await detector.result()
                         except BaseException:
-                            detector.resume_authorization()
+                            detector.stop()
                             raise
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     try:
@@ -704,8 +704,6 @@ class AgentActivity(RecognitionHooks):
         )
         initial_config._tools = llm.ToolContext(self.tools).flatten()
         self._agent._chat_ctx.insert(initial_config)
-
-        self._session._ensure_amd(activity=self)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(

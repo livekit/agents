@@ -229,7 +229,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         preemptive_generation: bool = True,
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
-        amd: bool | llm.LLM | LLMModels | str = False,
         user_away_timeout: float | None = 15.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -286,11 +285,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
-            amd (bool | llm.LLM | str): Answering machine detection. When enabled, the agent
-                holds its response until AMD classifies the callee's greeting as human or
-                machine. Pass ``True`` to reuse the session's main LLM for classification,
-                or pass a dedicated ``llm.LLM`` instance (e.g. a cheaper/faster model).
-                Default ``False`` (disabled).
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -349,10 +343,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not is_given(turn_handling)
             else turn_handling
         )
-
-        if ivr_detection and amd:
-            logger.warning("ivr detection will be disabled when amd is enabled")
-            ivr_detection = False
 
         endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
         interruption = _resolve_interruption(turn_handling.get("interruption"))
@@ -463,7 +453,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # ivr and amd
         self._ivr_activity: IVRActivity | None = None
-        self._amd_llm = amd
         self._amd: AMD | None = None
 
     @property
@@ -1109,7 +1098,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._warn_if_amd_pending("say")
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
@@ -1162,7 +1150,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._warn_if_amd_pending("generate_reply")
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
             if isinstance(user_input, str)
@@ -1584,31 +1571,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
-
-    def _ensure_amd(self, *, activity: AgentActivity | None = None) -> AMD | None:
-        """Create the AMD detector if AMD is enabled.
-
-        Called by ``AgentActivity._start_session`` once the agent's LLM is
-        resolved.  No-op on subsequent calls.
-        """
-        if self._amd is not None:
-            return self._amd
-        if not self._amd_llm:
-            return None
-
-        detector = AMD(llm=self._amd_llm, session=self, activity=activity)
-        if detector.enabled:
-            self._amd = detector
-            return detector
-        return None
-
-    def _warn_if_amd_pending(self, method: str) -> None:
-        if self._amd is not None and self._amd.pending:
-            logger.warning(
-                "%s() called before AMD result is available, "
-                "the agent may be speaking to an answering machine",
-                method,
-            )
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
