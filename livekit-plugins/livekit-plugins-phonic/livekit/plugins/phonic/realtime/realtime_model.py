@@ -409,6 +409,7 @@ class RealtimeSession(llm.RealtimeSession):
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,

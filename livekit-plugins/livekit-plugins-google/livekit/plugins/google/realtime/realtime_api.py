@@ -686,6 +686,7 @@ class RealtimeSession(llm.RealtimeSession):
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._opts.model == "gemini-3.1-flash-live-preview":
             logger.warning(
