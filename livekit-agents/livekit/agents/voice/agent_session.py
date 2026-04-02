@@ -653,6 +653,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 c.acquire_io(loop=self._loop, session=self)
+
+                if c._tcp_transport is not None:
+                    self._session_host = SessionHost(
+                        c._tcp_transport,
+                        audio_input=c._tcp_audio_input,
+                        audio_output=c._tcp_audio_output,
+                    )
+                    self._session_host.register_session(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
