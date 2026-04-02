@@ -720,26 +720,13 @@ class AgentActivity(RecognitionHooks):
 
             remove_instructions(self._agent._chat_ctx)
 
-            # skip the update if the session is reused and no mid-session update is supported
-            # this means the content is the same as the previous session
             capabilities = self.llm.capabilities
-            if not rt_reused or capabilities.mid_session_instructions_update:
-                try:
-                    await self._rt_session.update_instructions(self._agent.instructions)
-                except llm.RealtimeError:
-                    logger.exception("failed to update the instructions")
-
-            if not rt_reused or capabilities.mid_session_context_update:
-                try:
-                    await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
-                except llm.RealtimeError:
-                    logger.exception("failed to update the chat_ctx")
-
-            if not rt_reused or capabilities.mid_session_tools_update:
-                try:
-                    await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-                except llm.RealtimeError:
-                    logger.exception("failed to update the tools")
+            await self._rt_session.reset(
+                instructions=self._agent.instructions,
+                chat_ctx=self._agent.chat_ctx,
+                tools=llm.ToolContext(self.tools).flatten(),
+                session_reused=rt_reused,
+            )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
             if not capabilities.audio_output and not self.tts and self._session.output.audio:

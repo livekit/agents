@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from livekit import rtc
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -215,6 +218,33 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    async def reset(
+        self,
+        *,
+        instructions: str,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        session_reused: bool,
+    ) -> None:
+        capabilities = self._realtime_model.capabilities
+        if not session_reused or capabilities.mid_session_instructions_update:
+            try:
+                await self.update_instructions(instructions)
+            except RealtimeError:
+                logger.exception("failed to update the instructions")
+
+        if not session_reused or capabilities.mid_session_context_update:
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+        if not session_reused or capabilities.mid_session_tools_update:
+            try:
+                await self.update_tools(tools)
+            except RealtimeError:
+                logger.exception("failed to update the tools")
 
     def start_user_activity(self) -> None:
         """notifies the model that user activity has started"""
