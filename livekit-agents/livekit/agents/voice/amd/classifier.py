@@ -2,7 +2,8 @@ import asyncio
 import functools
 import time
 from collections.abc import Callable
-from typing import Any, Literal, TypeAlias, get_args
+from enum import Enum
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -21,7 +22,12 @@ NO_SPEECH_THRESHOLD = 10.0
 AMD_TIMEOUT = 20.0
 
 
-AMDCategory: TypeAlias = Literal["human", "machine-dtmf", "machine-vm", "machine-nvm", "uncertain"]
+class AMDCategory(str, Enum):
+    human = "human"
+    machine_dtmf = "machine-dtmf"
+    machine_vm = "machine-vm"
+    machine_nvm = "machine-nvm"
+    uncertain = "uncertain"
 
 
 class AMDResult(BaseModel):
@@ -34,11 +40,15 @@ class AMDResult(BaseModel):
 
     @property
     def is_human(self) -> bool:
-        return self.category == "human"
+        return self.category == AMDCategory.human
 
     @property
     def is_machine(self) -> bool:
-        return self.category.startswith("machine")
+        return self.category in (
+            AMDCategory.machine_dtmf,
+            AMDCategory.machine_vm,
+            AMDCategory.machine_nvm,
+        )
 
 
 AMD_PROMPT = """Task:
@@ -114,7 +124,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             NO_SPEECH_THRESHOLD,
             functools.partial(
                 self._silence_timer_callback,
-                category="machine-nvm",
+                category=AMDCategory.machine_nvm,
                 reason="no_speech_timeout",
             ),
         )
@@ -122,7 +132,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             AMD_TIMEOUT,
             functools.partial(
                 self._silence_timer_callback,
-                category="uncertain",
+                category=AMDCategory.uncertain,
                 reason="amd_timeout",
             ),
         )
@@ -155,7 +165,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                 max(0, self._human_silence_threshold - silence_duration),
                 functools.partial(
                     self._silence_timer_callback,
-                    category="human",
+                    category=AMDCategory.human,
                     reason="short_greeting",
                     speech_duration=speech_duration,
                 ),
@@ -235,7 +245,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             label: AMDCategory,
         ) -> None:
             """Save the prediction to the verdict."""
-            if label in set(get_args(AMDCategory)) and label != "uncertain":
+            if label != AMDCategory.uncertain:
                 self._set_verdict(
                     AMDResult(
                         speech_duration=self.speech_duration,

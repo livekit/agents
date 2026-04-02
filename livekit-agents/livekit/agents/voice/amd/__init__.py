@@ -1,4 +1,4 @@
 from .amd import AMD
-from .classifier import AMDResult
+from .classifier import AMDCategory, AMDResult
 
-__all__ = ["AMD", "AMDResult"]
+__all__ = ["AMD", "AMDCategory", "AMDResult"]
