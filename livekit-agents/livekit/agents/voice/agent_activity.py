@@ -64,7 +64,6 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
-    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
