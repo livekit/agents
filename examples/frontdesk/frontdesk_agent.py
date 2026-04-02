@@ -108,9 +108,7 @@ class FrontDeskAgent(Agent):
             )
         except SlotUnavailableError:
             ctx.userdata.slot_unavailable_count += 1
-            tagger = get_job_context().tagger
-            tagger.remove("slot:available")
-            tagger.add(
+            get_job_context().tagger.add(
                 "slot:unavailable",
                 metadata={"count": ctx.userdata.slot_unavailable_count},
             )
@@ -147,10 +145,6 @@ class FrontDeskAgent(Agent):
             range: Determines how far ahead to search for free time slots.
         """
         ctx.userdata.slots_listed += 1
-        get_job_context().tagger.add(
-            "slot:available",
-            metadata={"lookup_count": ctx.userdata.slots_listed},
-        )
         now = datetime.datetime.now(self.tz)
         lines: list[str] = []
 
