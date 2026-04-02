@@ -7,10 +7,14 @@ name = "livekit-plugins-telnyx"
 version = "0.1.0"
 description = "Telnyx implementation for LiveKit Agents"
 dependencies = [
-    "livekit-agents>=1.4.5",
+    "livekit-agents>=1.5.1",
     "livekit-api>=0.6.0",
     "aiohttp>=3.10.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days", livekit-api = "0 days" }

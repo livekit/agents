@@ -23,7 +23,7 @@ from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url
 
 CartesiaModels = Literal[
     "cartesia",
@@ -167,7 +167,6 @@ TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 24000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -354,11 +353,7 @@ class TTS(tts.TTS):
             if parsed_voice is not None and not is_given(voice):
                 voice = parsed_voice
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
@@ -642,6 +637,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

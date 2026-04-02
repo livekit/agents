@@ -144,7 +144,32 @@ class ServerEnvOption(Generic[T]):
 
 
 _default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
+_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
 _default_permissions = WorkerPermissions()
+
+VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"})
+
+
+def _validate_and_normalize_log_level(
+    log_level: str | ServerEnvOption[str],
+) -> str | ServerEnvOption[str]:
+    if isinstance(log_level, ServerEnvOption):
+        levels_to_check = [log_level.dev_default, log_level.prod_default]
+    else:
+        levels_to_check = [log_level]
+
+    for level in levels_to_check:
+        if level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}. Valid levels: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            )
+
+    if isinstance(log_level, ServerEnvOption):
+        return ServerEnvOption(
+            dev_default=log_level.dev_default.upper(),
+            prod_default=log_level.prod_default.upper(),
+        )
+    return log_level.upper()
 
 
 # NOTE: this object must be pickle-able
@@ -183,6 +208,8 @@ class ServerOptions:
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 10.0
     """Maximum amount of time to wait for a job to shut down gracefully"""
+    session_end_timeout: float = 300.0
+    """Maximum amount of time to wait for on_session_end to complete (default: 5 minutes)."""
     initialize_process_timeout: float = 10.0
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
@@ -197,14 +224,21 @@ class ServerOptions:
     """URL to connect to the LiveKit server.
 
     By default it uses ``LIVEKIT_URL`` from environment"""
-    api_key: str | None = None
+    api_key: str | None = field(repr=False, default=None)
     """API key to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_KEY`` from environment"""
-    api_secret: str | None = None
+    api_secret: str | None = field(repr=False, default=None)
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
+
+    log_level: str | ServerEnvOption[str] = _default_log_level
+    """Log level for the worker.
+
+    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
+    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
+    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
 
     host: str = ""  # default to all interfaces
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
@@ -232,6 +266,9 @@ class ServerOptions:
     When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
+
+    def __post_init__(self) -> None:
+        self.log_level = _validate_and_normalize_log_level(self.log_level)
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -269,6 +306,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: int = 1800,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
         max_retry: int = 16,
@@ -285,6 +323,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
+        log_level: str | ServerEnvOption[str] = _default_log_level,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -302,6 +341,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._drain_timeout = drain_timeout
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
+        self._session_end_timeout = session_end_timeout
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
         self._max_retry = max_retry
@@ -314,6 +354,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
+        self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -336,6 +377,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    @property
+    def log_level(self) -> str | ServerEnvOption[str]:
+        return self._log_level
 
     @property
     def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
@@ -367,6 +412,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             drain_timeout=options.drain_timeout,
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
+            session_end_timeout=options.session_end_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
@@ -378,8 +424,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy=options.http_proxy,
             multiprocessing_context=options.multiprocessing_context,
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            log_level=options.log_level,
         )
         server.rtc_session(
             options.entrypoint_fnc,
@@ -553,6 +601,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                session_end_timeout=self._session_end_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
@@ -746,6 +795,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
     ) -> None:
         if not self._closed:
@@ -783,6 +833,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(shutdown_process_timeout):
             self._shutdown_process_timeout = shutdown_process_timeout
+
+        if is_given(session_end_timeout):
+            self._session_end_timeout = session_end_timeout
 
     @property
     def id(self) -> str:
