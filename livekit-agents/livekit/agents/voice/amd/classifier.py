@@ -23,11 +23,11 @@ AMD_TIMEOUT = 20.0
 
 
 class AMDCategory(str, Enum):
-    human = "human"
-    machine_dtmf = "machine-dtmf"
-    machine_vm = "machine-vm"
-    machine_nvm = "machine-nvm"
-    uncertain = "uncertain"
+    HUMAN = "human"
+    MACHINE_DTMF = "machine-dtmf"
+    MACHINE_VM = "machine-vm"
+    MACHINE_NVM = "machine-nvm"
+    UNCERTAIN = "uncertain"
 
 
 class AMDResult(BaseModel):
@@ -40,14 +40,14 @@ class AMDResult(BaseModel):
 
     @property
     def is_human(self) -> bool:
-        return self.category == AMDCategory.human
+        return self.category == AMDCategory.HUMAN
 
     @property
     def is_machine(self) -> bool:
         return self.category in (
-            AMDCategory.machine_dtmf,
-            AMDCategory.machine_vm,
-            AMDCategory.machine_nvm,
+            AMDCategory.MACHINE_DTMF,
+            AMDCategory.MACHINE_VM,
+            AMDCategory.MACHINE_NVM,
         )
 
 
@@ -124,7 +124,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             NO_SPEECH_THRESHOLD,
             functools.partial(
                 self._silence_timer_callback,
-                category=AMDCategory.machine_nvm,
+                category=AMDCategory.MACHINE_NVM,
                 reason="no_speech_timeout",
             ),
         )
@@ -132,7 +132,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             AMD_TIMEOUT,
             functools.partial(
                 self._silence_timer_callback,
-                category=AMDCategory.uncertain,
+                category=AMDCategory.UNCERTAIN,
                 reason="amd_timeout",
             ),
         )
@@ -165,7 +165,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                 max(0, self._human_silence_threshold - silence_duration),
                 functools.partial(
                     self._silence_timer_callback,
-                    category=AMDCategory.human,
+                    category=AMDCategory.HUMAN,
                     reason="short_greeting",
                     speech_duration=speech_duration,
                 ),
@@ -245,7 +245,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             label: AMDCategory,
         ) -> None:
             """Save the prediction to the verdict."""
-            if label != AMDCategory.uncertain:
+            if label != AMDCategory.UNCERTAIN:
                 self._set_verdict(
                     AMDResult(
                         speech_duration=self.speech_duration,
