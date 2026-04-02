@@ -483,6 +483,10 @@ class RealtimeSession(
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the LLM based on the instructions."""
+        if is_given(tools):
+            logger.warning(
+                "per-response tools is not supported by Ultravox Realtime API, ignoring"
+            )
         # Cancel prior pending generation if exists
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(

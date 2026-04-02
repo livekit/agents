@@ -411,6 +411,8 @@ class RealtimeSession(llm.RealtimeSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Phonic Realtime API, ignoring")
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,
         )

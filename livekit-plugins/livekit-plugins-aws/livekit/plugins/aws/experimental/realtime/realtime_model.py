@@ -2034,6 +2034,10 @@ class RealtimeSession(  # noqa: F811
             update_chat_ctx() which sends interactive text to Nova Sonic.
             This method handles the instructions parameter for system-level prompts.
         """
+        if is_given(tools):
+            logger.warning(
+                "per-response tools is not supported by AWS Nova Sonic Realtime API, ignoring"
+            )
         # Check if generate_reply is supported (requires mixed modalities)
         if self._realtime_model.modalities != "mixed":
             logger.warning(
