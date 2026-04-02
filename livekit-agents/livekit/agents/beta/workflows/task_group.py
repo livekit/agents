@@ -60,7 +60,9 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
             on_task_completed (Callable[]): A callable that executes upon each task completion. The callback takes in a single argument of a TaskCompletedEvent.
         """
-        super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
+        super().__init__(
+            instructions="*empty*", chat_ctx=chat_ctx, llm=NOT_GIVEN
+        )  # the LLM is set as NOT_GIVEN to allow session reusage if supported
 
         self._summarize_chat_ctx = summarize_chat_ctx
         self._return_exceptions = return_exceptions
