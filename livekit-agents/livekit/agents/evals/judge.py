@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
@@ -16,6 +16,8 @@ class JudgmentResult:
     """The judgment verdict: 'pass', 'fail', or 'maybe' (uncertain)."""
     reasoning: str
     """Chain-of-thought reasoning for the judgment."""
+    instructions: str = field(default="")
+    """The evaluation criteria/instructions used by the judge."""
 
     @property
     def passed(self) -> bool:
@@ -146,7 +148,33 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
 
 
 class Judge:
-    def __init__(self, *, llm: LLM | None = None, instructions: str, name: str = "custom") -> None:
+    """Base class for evaluation judges.
+
+    Can be used in two ways:
+
+    1. **LLM-based evaluation** - pass ``instructions`` and the judge uses an LLM
+       to evaluate the conversation against the criteria::
+
+           brevity = Judge(name="brevity", instructions="Responses must be under 50 words.")
+
+    2. **Custom evaluation** - subclass and override :meth:`evaluate` for
+       deterministic or programmatic checks that don't need an LLM::
+
+           class CitationJudge(Judge):
+               def __init__(self):
+                   super().__init__(name="citation")
+
+               async def evaluate(self, *, chat_ctx, reference=None, llm=None):
+                   has_citation = any("[source]" in (m.text_content or "") for m in chat_ctx.messages)
+                   return JudgmentResult(
+                       verdict="pass" if has_citation else "fail",
+                       reasoning="Found citation markers" if has_citation else "No citations",
+                   )
+    """
+
+    def __init__(
+        self, *, llm: LLM | None = None, instructions: str = "", name: str = "custom"
+    ) -> None:
         self._llm = llm
         self._instructions = instructions
         self._name = name
@@ -155,6 +183,10 @@ class Judge:
     def name(self) -> str:
         return self._name
 
+    @property
+    def instructions(self) -> str:
+        return self._instructions
+
     async def evaluate(
         self,
         *,
@@ -162,11 +194,23 @@ class Judge:
         reference: ChatContext | None = None,
         llm: LLM | None = None,
     ) -> JudgmentResult:
+        """Evaluate a conversation and return a judgment.
+
+        Override this method in subclasses for custom evaluation logic.
+        The default implementation uses an LLM to evaluate against ``instructions``.
+        """
+        if not self._instructions:
+            raise NotImplementedError(
+                f"Judge '{self._name}' has no instructions and does not override evaluate(). "
+                "Either pass instructions for LLM-based evaluation, or subclass Judge "
+                "and override evaluate() for custom logic."
+            )
+
         effective_llm = llm or self._llm
         if effective_llm is None:
             raise ValueError(
                 f"No LLM provided for judge '{self._name}'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
         prompt_parts = [
             f"Criteria: {self._instructions}",
@@ -185,7 +229,9 @@ class Judge:
             ]
         )
 
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = self._instructions
+        return result
 
 
 class _TaskCompletionJudge:
@@ -213,7 +259,7 @@ class _TaskCompletionJudge:
         if effective_llm is None:
             raise ValueError(
                 "No LLM provided for judge 'task_completion'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
 
         instructions = _get_latest_instructions(chat_ctx)
@@ -247,7 +293,10 @@ class _TaskCompletionJudge:
             ]
         )
 
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        task_instructions = "\n".join(prompt_parts)
+        result = await _evaluate_with_llm(effective_llm, task_instructions)
+        result.instructions = task_instructions
+        return result
 
 
 class _HandoffJudge:
@@ -283,7 +332,7 @@ class _HandoffJudge:
         if effective_llm is None:
             raise ValueError(
                 "No LLM provided for judge 'handoff'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
 
         prompt_parts = [
@@ -308,7 +357,10 @@ class _HandoffJudge:
             ]
         )
 
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        handoff_instructions = "\n".join(prompt_parts)
+        result = await _evaluate_with_llm(effective_llm, handoff_instructions)
+        result.instructions = handoff_instructions
+        return result
 
 
 def task_completion_judge(llm: LLM | None = None) -> _TaskCompletionJudge:
