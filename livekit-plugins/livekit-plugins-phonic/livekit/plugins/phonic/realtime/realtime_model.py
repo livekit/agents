@@ -59,6 +59,7 @@ class _RealtimeOptions:
     audio_speed: NotGivenOr[float]
     phonic_tools: NotGivenOr[list[str]]
     boosted_keywords: NotGivenOr[list[str]]
+    min_words_to_interrupt: NotGivenOr[int]
     generate_no_input_poke_text: NotGivenOr[bool]
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
@@ -109,6 +110,7 @@ class RealtimeModel(llm.RealtimeModel):
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
         generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
@@ -139,6 +141,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
+            min_words_to_interrupt: Minimum number of user words required to interrupt the assistant.
             generate_no_input_poke_text: When True, auto-generate poke text when the user is silent.
             no_input_poke_sec: Seconds of silence before sending a poke message.
             no_input_poke_text: Custom poke message text. Ignored when
@@ -191,6 +194,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed=audio_speed,
             phonic_tools=phonic_tools,
             boosted_keywords=boosted_keywords,
+            min_words_to_interrupt=min_words_to_interrupt,
             generate_no_input_poke_text=generate_no_input_poke_text,
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
@@ -525,6 +529,7 @@ class RealtimeSession(llm.RealtimeSession):
                 "audio_speed": self._opts.audio_speed,
                 "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
                 "boosted_keywords": self._opts.boosted_keywords,
+                "min_words_to_interrupt": self._opts.min_words_to_interrupt,
                 "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
                 "no_input_poke_sec": self._opts.no_input_poke_sec,
                 "no_input_poke_text": self._opts.no_input_poke_text,
