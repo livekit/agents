@@ -119,7 +119,7 @@ class FrontDeskAgent(Agent):
         ctx.userdata.booked_times.append(local.isoformat())
         get_job_context().tagger.add(
             "appointment:booked",
-            metadata={"times": ctx.userdata.booked_times},
+            metadata={"time": ctx.userdata.booked_times},
         )
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
