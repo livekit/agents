@@ -499,9 +499,15 @@ class AgentActivity(RecognitionHooks):
             # mark a speech_handle as done, if every "linked" tasks are done
             speech_handle._tasks.append(task)
 
-            def _mark_done_if_needed(_: asyncio.Task) -> None:
+            def _mark_done_if_needed(done_task: asyncio.Task) -> None:
                 if all(task.done() for task in speech_handle._tasks):
-                    speech_handle._mark_done()
+                    # propagate the first task exception to the speech handle
+                    error: BaseException | None = None
+                    for t in speech_handle._tasks:
+                        if not t.cancelled() and (exc := t.exception()):
+                            error = exc
+                            break
+                    speech_handle._mark_done(error=error)
 
             task.add_done_callback(_mark_done_if_needed)
 

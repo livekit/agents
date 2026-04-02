@@ -566,7 +566,7 @@ class SessionHost:
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
         assert self._session is not None
         req_type = req.WhichOneof("request")
-        logger.debug("session host received request", extra={"request_id": req.request_id, "type": req_type})
+        logger.info("session host received request", extra={"request_id": req.request_id, "type": req_type})
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -610,37 +610,24 @@ class SessionHost:
             error: str | None = None
             text = req.run_input.text
             if text:
-                if self._text_input_cb is not None:
-                    from .room_io.types import TextInputEvent
+                # Disable audio/transcription so TTS is skipped and the run
+                # completes after text generation without waiting for playout.
+                self._session.output.audio = None
+                self._session.output.transcription = None
 
-                    cb_result = self._text_input_cb(
-                        self._session,
-                        TextInputEvent(text=text, info=None, participant=None),
-                    )
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
-                else:
-                    # Disable audio/transcription so TTS is skipped and the run
-                    # completes after text generation without waiting for playout.
-                    self._session.output.audio = None
-                    self._session.output.transcription = None
+                # Interrupt any in-progress speech (e.g. the greeting) that may
+                # be blocking the speech queue waiting for audio playout.
+                try:
+                    await self._session.interrupt(force=True)
+                except RuntimeError:
+                    pass  # session not running yet
 
-                    # Interrupt any in-progress speech (e.g. the greeting) that may
-                    # be blocking the speech queue waiting for audio playout.
-                    try:
-                        await self._session.interrupt(force=True)
-                    except RuntimeError:
-                        pass  # session not running yet
-
-                    try:
-                        result: RunResult[None] = self._session.run(user_input=text)
-                        await result
-                        items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
-                        if not items_list:
-                            logger.warning("run_input produced 0 items", extra={"request_id": req.request_id, "events": len(result.events), "done": result.done()})
-                    except Exception as e:
-                        error = str(e)
-                        logger.warning("run_input error", extra={"request_id": req.request_id, "error": error})
+                try:
+                    result: RunResult[None] = self._session.run(user_input=text)
+                    await result
+                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                except Exception as e:
+                    error = str(e)
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -866,7 +853,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
         resp_type = response.WhichOneof("response")
-        logger.debug("remote session received response", extra={"request_id": response.request_id, "type": resp_type, "has_error": bool(response.error)})
+        logger.info("remote session received response", extra={"request_id": response.request_id, "type": resp_type, "has_error": bool(response.error)})
         future = self._pending_requests.pop(response.request_id, None)
         if future and not future.done():
             future.set_result(response)
@@ -877,7 +864,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
         req_type = request.WhichOneof("request")
-        logger.debug("remote session sending request", extra={"request_id": request.request_id, "type": req_type})
+        logger.info("remote session sending request", extra={"request_id": request.request_id, "type": req_type})
         future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
         self._pending_requests[request.request_id] = future
 
