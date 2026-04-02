@@ -11,7 +11,7 @@ from .agent import DriveThruAgent, new_userdata
 def _main_llm() -> llm.LLM | llm.RealtimeModel:
     # use any LLM or realtime model
     return inference.LLM(
-        "openai/gpt-4.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+        "openai/gpt-5.4-nano", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
     )
 
 

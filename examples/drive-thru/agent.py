@@ -102,10 +102,11 @@ class DriveThruAgent(Agent):
             drink_id: Annotated[
                 str,
                 Field(
-                    description="The ID of the drink the user requested.",
-                    json_schema_extra={"enum": list(available_drink_ids)},
+                    description="The ID of the drink the user requested. Use 'null' if the user has not specified a drink yet.",
+                    json_schema_extra={"enum": [*available_drink_ids, "null"]},
                 ),
-            ],
+            ]
+            | None,
             drink_size: Literal["M", "L", "null"] | None,
             fries_size: Literal["M", "L"],
             sauce_id: Annotated[
@@ -132,6 +133,14 @@ class DriveThruAgent(Agent):
             """
             if not find_items_by_id(combo_items, meal_id):
                 raise ToolError(f"error: the meal {meal_id} was not found")
+
+            if drink_id == "null":
+                drink_id = None
+
+            if drink_id is None:
+                raise ToolError(
+                    "error: a drink is required for a combo meal. Please ask the user which drink they'd like."
+                )
 
             drink_sizes = find_items_by_id(drink_items, drink_id)
             if not drink_sizes:
@@ -200,10 +209,11 @@ class DriveThruAgent(Agent):
             drink_id: Annotated[
                 str,
                 Field(
-                    description="The ID of the drink the user requested.",
-                    json_schema_extra={"enum": list(available_drink_ids)},
+                    description="The ID of the drink the user requested. Use 'null' if the user has not specified a drink yet.",
+                    json_schema_extra={"enum": [*available_drink_ids, "null"]},
                 ),
-            ],
+            ]
+            | None,
             drink_size: Literal["S", "M", "L", "null"] | None,
             sauce_id: Annotated[
                 str,
@@ -227,6 +237,14 @@ class DriveThruAgent(Agent):
             """
             if not find_items_by_id(happy_items, meal_id):
                 raise ToolError(f"error: the meal {meal_id} was not found")
+
+            if drink_id == "null":
+                drink_id = None
+
+            if drink_id is None:
+                raise ToolError(
+                    "error: a drink is required for a happy meal. Please ask the user which drink they'd like."
+                )
 
             drink_sizes = find_items_by_id(drink_items, drink_id)
             if not drink_sizes:
