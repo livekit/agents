@@ -149,7 +149,7 @@ class FrontDeskAgent(Agent):
         ctx.userdata.slots_listed += 1
         get_job_context().tagger.add(
             "slot:available",
-            metadata={"lookup_count": ctx.userdata.slots_listed, "range": range},
+            metadata={"lookup_count": ctx.userdata.slots_listed},
         )
         now = datetime.datetime.now(self.tz)
         lines: list[str] = []
