@@ -914,6 +914,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Use connection pool for WebSocket management
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 self._ws_conn = ws
                 self._connection_state = ConnectionState.CONNECTED
 

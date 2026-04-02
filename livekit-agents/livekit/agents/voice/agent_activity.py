@@ -33,7 +33,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as trace_utils
+from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -64,6 +64,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -105,6 +106,15 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
+
+
+@dataclass
+class _PipelineGeneration:
+    chat_ctx: llm.ChatContext
+    llm_gen_data: _LLMGenerationData
+    tts_gen_data: _TTSGenerationData | None
+    tasks: list[asyncio.Task[Any]]
+    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -1037,12 +1047,6 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
-            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
-                instructions = self._agent.instructions + "\n" + instructions
-
             task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
@@ -1231,6 +1235,32 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
+    async def _wait_for_inactive(self) -> None:
+        agent_active = True
+        user_active = True
+        while agent_active or user_active:
+            if self._current_speech is None and not self._speech_q:
+                agent_active = False
+            else:
+                agent_active = True
+                if (speech := self._current_speech) and speech._generations:
+                    await speech._wait_for_generation()
+                await asyncio.sleep(0)
+
+            if self._user_silence_event.is_set():
+                user_active = False
+            else:
+                user_active = True
+                await self._user_silence_event.wait()
+
+            if (
+                self._audio_recognition
+                and (eou_task := self._audio_recognition._end_of_turn_task)
+                and not eou_task.done()
+            ):
+                user_active = True
+                await eou_task
+
     # -- Realtime Session events --
 
     def _on_metrics_collected(
@@ -1248,6 +1278,7 @@ class AgentActivity(RecognitionHooks):
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         self._session.emit(
             "session_usage_updated",
@@ -1801,6 +1832,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
         if info.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.started_speaking_at
 
@@ -2178,10 +2214,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            chat_ctx.add_message(role="system", content=[instructions])
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
@@ -2363,6 +2396,17 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
+
+        if self.llm:
+            assistant_metrics["llm_metadata"] = {
+                "model_name": self.llm.model,
+                "model_provider": self.llm.provider,
+            }
+        if self.tts:
+            assistant_metrics["tts_metadata"] = {
+                "model_name": self.tts.model,
+                "model_provider": self.tts.provider,
+            }
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft

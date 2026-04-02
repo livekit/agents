@@ -343,7 +343,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 ws_url = self._build_ws_url()
                 http_session = self._realtime_model._ensure_http_session()
 
+                t0 = time.perf_counter()
                 ws_conn = await http_session.ws_connect(ws_url)
+                self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
                 retry_delay = INITIAL_RETRY_DELAY  # reset on successful connect
 

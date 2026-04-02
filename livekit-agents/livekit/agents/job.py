@@ -38,7 +38,7 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report
+from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
@@ -248,6 +248,8 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
+        otel_metrics.flush_turn_metrics(session.history)
+
         c = AgentsConsole.get_instance()
         report = self.make_session_report(session)
 
@@ -268,7 +270,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
         if (any(report.recording_options.values()) or has_evals) and obs_url:
             try:
