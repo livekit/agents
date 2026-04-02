@@ -45,7 +45,7 @@ from .log import logger
 from .models import STTEncoding, STTModels
 
 NUM_CHANNELS = 1
-# Base URL for the Smallest AI Waves API.
+# Base URL for the Smallest AI API.
 # Streaming: wss://api.smallest.ai/waves/v1/{model}/get_text
 # Batch:     https://api.smallest.ai/waves/v1/{model}/get_text
 SMALLEST_STT_BASE_URL = "https://api.smallest.ai/waves/v1"
@@ -133,7 +133,7 @@ class STT(stt.STT):
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
-            base_url: Override the default Waves API base URL.
+            base_url: Override the default API base URL.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(

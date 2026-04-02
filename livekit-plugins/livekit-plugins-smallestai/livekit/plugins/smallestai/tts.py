@@ -186,7 +186,7 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """Synthesize chunked text using the Waves API endpoint"""
+    """Synthesize chunked text using the Smallest AI TTS endpoint."""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
