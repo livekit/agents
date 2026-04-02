@@ -299,7 +299,6 @@ class JobContext:
                 self._stop_log_buffering()
 
         self._tempdir.cleanup()
-        otel_metrics.flush_usage()
         _shutdown_telemetry()
 
         for handler in self._handlers_with_filter:

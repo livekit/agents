@@ -6,17 +6,12 @@ from opentelemetry import metrics as metrics_api
 
 from ..metrics.base import (
     AgentMetrics,
+    InterruptionMetrics,
+    LLMMetrics,
     Metadata,
     RealtimeModelMetrics,
     STTMetrics,
     TTSMetrics,
-)
-from ..metrics.usage import (
-    InterruptionModelUsage,
-    LLMModelUsage,
-    ModelUsageCollector,
-    STTModelUsage,
-    TTSModelUsage,
 )
 
 if TYPE_CHECKING:
@@ -86,9 +81,6 @@ _connection_acquire_time = _meter.create_histogram(
     description="Time to acquire a connection (WebSocket only)",
 )
 
-# Per-model usage collectors
-_usage_collector = ModelUsageCollector()
-
 
 def _model_attrs(metadata: Metadata | None) -> dict[str, str]:
     attrs: dict[str, str] = {}
@@ -122,66 +114,52 @@ def _record_turn_metrics(report: MetricsReport) -> None:
 
 
 def collect_usage(ev: AgentMetrics) -> None:
-    """Buffer usage per model and record per-event metrics. Called on each metrics event."""
-    _usage_collector.collect(ev)
+    """Record usage counters directly from each metrics event."""
+    attrs = _model_attrs(getattr(ev, "metadata", None))
 
+    if isinstance(ev, LLMMetrics):
+        if ev.prompt_tokens:
+            _llm_input_tokens.add(ev.prompt_tokens, attributes=attrs)
+        if ev.prompt_cached_tokens:
+            _llm_input_cached_tokens.add(ev.prompt_cached_tokens, attributes=attrs)
+        if ev.completion_tokens:
+            _llm_output_tokens.add(ev.completion_tokens, attributes=attrs)
+
+    elif isinstance(ev, RealtimeModelMetrics):
+        if ev.input_tokens:
+            _llm_input_tokens.add(ev.input_tokens, attributes=attrs)
+        if ev.input_token_details.cached_tokens:
+            _llm_input_cached_tokens.add(ev.input_token_details.cached_tokens, attributes=attrs)
+        if ev.output_tokens:
+            _llm_output_tokens.add(ev.output_tokens, attributes=attrs)
+        if ev.input_token_details.audio_tokens:
+            _llm_input_audio_tokens.add(ev.input_token_details.audio_tokens, attributes=attrs)
+        if ev.input_token_details.text_tokens:
+            _llm_input_text_tokens.add(ev.input_token_details.text_tokens, attributes=attrs)
+        if ev.output_token_details.audio_tokens:
+            _llm_output_audio_tokens.add(ev.output_token_details.audio_tokens, attributes=attrs)
+        if ev.output_token_details.text_tokens:
+            _llm_output_text_tokens.add(ev.output_token_details.text_tokens, attributes=attrs)
+        if ev.session_duration:
+            _llm_session_duration.add(ev.session_duration, attributes=attrs)
+
+    elif isinstance(ev, TTSMetrics):
+        if ev.characters_count:
+            _tts_characters.add(ev.characters_count, attributes=attrs)
+        if ev.audio_duration:
+            _tts_audio_duration.add(ev.audio_duration, attributes=attrs)
+
+    elif isinstance(ev, STTMetrics):
+        if ev.audio_duration:
+            _stt_audio_duration.add(ev.audio_duration, attributes=attrs)
+
+    elif isinstance(ev, InterruptionMetrics):
+        if ev.num_requests:
+            _interruption_requests.add(ev.num_requests, attributes=attrs)
+
+    # Connection timing
     if isinstance(ev, (STTMetrics, TTSMetrics, RealtimeModelMetrics)):
         if ev.acquire_time > 0:
-            attrs = _model_attrs(ev.metadata)
-            attrs["connection_reused"] = str(ev.connection_reused).lower()
-            _connection_acquire_time.record(ev.acquire_time, attributes=attrs)
-
-
-def flush_usage() -> None:
-    """Emit all buffered usage as OTEL counters, keyed by model/provider. Called at session end."""
-    global _usage_collector
-
-    for usage in _usage_collector.flatten():
-        attrs = _model_attrs(Metadata(model_provider=usage.provider, model_name=usage.model))
-
-        if isinstance(usage, LLMModelUsage):
-            _emit_llm_usage(usage, attrs)
-        elif isinstance(usage, TTSModelUsage):
-            _emit_tts_usage(usage, attrs)
-        elif isinstance(usage, STTModelUsage):
-            _emit_stt_usage(usage, attrs)
-        elif isinstance(usage, InterruptionModelUsage):
-            _emit_interruption_usage(usage, attrs)
-
-    _usage_collector = ModelUsageCollector()
-
-
-def _emit_llm_usage(usage: LLMModelUsage, attrs: dict[str, str]) -> None:
-    if usage.input_tokens:
-        _llm_input_tokens.add(usage.input_tokens, attributes=attrs)
-    if usage.input_cached_tokens:
-        _llm_input_cached_tokens.add(usage.input_cached_tokens, attributes=attrs)
-    if usage.output_tokens:
-        _llm_output_tokens.add(usage.output_tokens, attributes=attrs)
-    if usage.input_audio_tokens:
-        _llm_input_audio_tokens.add(usage.input_audio_tokens, attributes=attrs)
-    if usage.input_text_tokens:
-        _llm_input_text_tokens.add(usage.input_text_tokens, attributes=attrs)
-    if usage.output_audio_tokens:
-        _llm_output_audio_tokens.add(usage.output_audio_tokens, attributes=attrs)
-    if usage.output_text_tokens:
-        _llm_output_text_tokens.add(usage.output_text_tokens, attributes=attrs)
-    if usage.session_duration:
-        _llm_session_duration.add(usage.session_duration, attributes=attrs)
-
-
-def _emit_tts_usage(usage: TTSModelUsage, attrs: dict[str, str]) -> None:
-    if usage.characters_count:
-        _tts_characters.add(usage.characters_count, attributes=attrs)
-    if usage.audio_duration:
-        _tts_audio_duration.add(usage.audio_duration, attributes=attrs)
-
-
-def _emit_stt_usage(usage: STTModelUsage, attrs: dict[str, str]) -> None:
-    if usage.audio_duration:
-        _stt_audio_duration.add(usage.audio_duration, attributes=attrs)
-
-
-def _emit_interruption_usage(usage: InterruptionModelUsage, attrs: dict[str, str]) -> None:
-    if usage.total_requests:
-        _interruption_requests.add(usage.total_requests, attributes=attrs)
+            conn_attrs = _model_attrs(ev.metadata)
+            conn_attrs["connection_reused"] = str(ev.connection_reused).lower()
+            _connection_acquire_time.record(ev.acquire_time, attributes=conn_attrs)
