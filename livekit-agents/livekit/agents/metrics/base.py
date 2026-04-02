@@ -10,7 +10,14 @@ class Metadata(BaseModel):
     model_provider: str | None = None
 
 
-class LLMMetrics(BaseModel):
+class _BaseMetrics(BaseModel):
+    def __repr__(self) -> str:
+        fields = self.model_dump(exclude_defaults=True)
+        fields_str = ", ".join(f"{k}={v!r}" for k, v in fields.items())
+        return f"{self.__class__.__name__}({fields_str})"
+
+
+class LLMMetrics(_BaseMetrics):
     type: Literal["llm_metrics"] = "llm_metrics"
     label: str
     request_id: str
@@ -27,7 +34,7 @@ class LLMMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class STTMetrics(BaseModel):
+class STTMetrics(_BaseMetrics):
     type: Literal["stt_metrics"] = "stt_metrics"
     label: str
     request_id: str
@@ -49,7 +56,7 @@ class STTMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class TTSMetrics(BaseModel):
+class TTSMetrics(_BaseMetrics):
     type: Literal["tts_metrics"] = "tts_metrics"
     label: str
     request_id: str
@@ -74,7 +81,7 @@ class TTSMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class VADMetrics(BaseModel):
+class VADMetrics(_BaseMetrics):
     type: Literal["vad_metrics"] = "vad_metrics"
     label: str
     timestamp: float
@@ -84,7 +91,7 @@ class VADMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class EOUMetrics(BaseModel):
+class EOUMetrics(_BaseMetrics):
     type: Literal["eou_metrics"] = "eou_metrics"
     timestamp: float
     end_of_utterance_delay: float
@@ -105,7 +112,7 @@ class EOUMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class RealtimeModelMetrics(BaseModel):
+class RealtimeModelMetrics(_BaseMetrics):
     class CachedTokenDetails(BaseModel):
         audio_tokens: int = 0
         text_tokens: int = 0
@@ -156,7 +163,7 @@ class RealtimeModelMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
-class InterruptionMetrics(BaseModel):
+class InterruptionMetrics(_BaseMetrics):
     type: Literal["interruption_metrics"] = "interruption_metrics"
     timestamp: float
     total_duration: float
