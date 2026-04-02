@@ -377,7 +377,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._tools_ready.set()
 
     def _get_tool_definitions(self, tools: list[llm.Tool]) -> list[dict]:
-        self._tools = llm.ToolContext(tools)
         tool_definitions = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
             # We disallow tool chaining and tool calls during agent speech to reduce complexity
@@ -549,6 +548,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._opts.instructions = instructions
+        self._tools = llm.ToolContext(tools)
         self._tool_definitions = self._get_tool_definitions(tools)
 
         system_prompt = instructions
