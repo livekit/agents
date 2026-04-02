@@ -134,6 +134,8 @@ def collect_usage(ev: AgentMetrics) -> None:
 
 def flush_usage() -> None:
     """Emit all buffered usage as OTEL counters, keyed by model/provider. Called at session end."""
+    global _usage_collector
+
     for usage in _usage_collector.flatten():
         attrs = _model_attrs(Metadata(model_provider=usage.provider, model_name=usage.model))
 
@@ -145,6 +147,8 @@ def flush_usage() -> None:
             _emit_stt_usage(usage, attrs)
         elif isinstance(usage, InterruptionModelUsage):
             _emit_interruption_usage(usage, attrs)
+
+    _usage_collector = ModelUsageCollector()
 
 
 def _emit_llm_usage(usage: LLMModelUsage, attrs: dict[str, str]) -> None:
