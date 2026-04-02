@@ -309,8 +309,6 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
 
         self._start_time_offset: float = 0.0
 
@@ -326,8 +324,6 @@ class RecognizeStream(ABC):
 
     def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
         """Report connection timing as an STTMetrics event with zero usage."""
-        self._acquire_time = acquire_time
-        self._connection_reused = connection_reused
         self._stt.emit(
             "metrics_collected",
             STTMetrics(
@@ -415,8 +411,6 @@ class RecognizeStream(ABC):
                     input_tokens=ev.recognition_usage.input_tokens,
                     output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
-                    acquire_time=self._acquire_time,
-                    connection_reused=self._connection_reused,
                     metadata=Metadata(
                         model_name=self._stt.model, model_provider=self._stt.provider
                     ),
