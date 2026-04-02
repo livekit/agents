@@ -5,10 +5,23 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Generic, TypeVar
 
+from opentelemetry import metrics as metrics_api
+
 from ..log import logger
 from . import aio
 
 T = TypeVar("T")
+
+_meter = metrics_api.get_meter("livekit-agents")
+_ws_connect_time = _meter.create_histogram(
+    "lk.agents.ws.connect_time",
+    unit="s",
+    description="WebSocket connection acquisition time",
+)
+
+
+def _record_ws_connect_time(duration: float, *, reused: bool, attrs: dict[str, str]) -> None:
+    _ws_connect_time.record(duration, attributes={"reused": reused, **attrs})
 
 
 class ConnectionPool(Generic[T]):
@@ -26,6 +39,7 @@ class ConnectionPool(Generic[T]):
         connect_cb: Callable[[float], Awaitable[T]] | None = None,
         close_cb: Callable[[T], Awaitable[None]] | None = None,
         connect_timeout: float = 10.0,
+        metric_attrs: dict[str, str] | None = None,
     ) -> None:
         """Initialize the connection wrapper.
 
@@ -34,11 +48,13 @@ class ConnectionPool(Generic[T]):
             mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
+            metric_attrs: Optional attributes (e.g. model_provider, model_name) attached to connection metrics
         """  # noqa: E501
         self._max_session_duration = max_session_duration
         self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb
         self._close_cb = close_cb
+        self._metric_attrs = metric_attrs or {}
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
@@ -108,11 +124,17 @@ class ConnectionPool(Generic[T]):
                 ):
                     if self._mark_refreshed_on_get:
                         self._connections[conn] = now
+                    _record_ws_connect_time(0.0, reused=True, attrs=self._metric_attrs)
                     return conn
                 # connection expired; mark it for resetting.
                 self.remove(conn)
 
-            return await self._connect(timeout)
+            t0 = time.perf_counter()
+            conn = await self._connect(timeout)
+            _record_ws_connect_time(
+                time.perf_counter() - t0, reused=False, attrs=self._metric_attrs
+            )
+            return conn
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.
