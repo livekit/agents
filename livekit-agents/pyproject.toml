@@ -134,3 +134,7 @@ include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days", livekit-blingfire = "0 days" }

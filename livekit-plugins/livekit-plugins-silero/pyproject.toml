@@ -43,3 +43,7 @@ include = ["/livekit"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "livekit/plugins/silero/resources/silero_vad.onnx" = "livekit/plugins/silero/resources/silero_vad.onnx"
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
