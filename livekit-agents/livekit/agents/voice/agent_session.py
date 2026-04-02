@@ -744,9 +744,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if self.options.ivr_detection:
                     tasks.append(
-                        asyncio.create_task(
-                            self._start_ivr_detection(), name="_ivr_activity_start"
-                        )
+                        asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
