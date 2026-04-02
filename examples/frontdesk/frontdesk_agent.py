@@ -216,7 +216,7 @@ async def on_session_end(ctx: JobContext) -> None:
     logger.info("session tags: %s", ctx.tagger.tags)
 
 
-@server.rtc_session(on_session_end=on_session_end)
+@server.rtc_session(agent_name="theo_test", on_session_end=on_session_end)
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 

@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, get_type_hints, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -544,14 +544,15 @@ async def _execute_tools_task(
 
             try:
                 json_args = fnc_call.arguments or "{}"
+                call_ctx = RunContext(
+                    session=session,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                )
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
                     fnc=function_tool,
                     json_arguments=json_args,
-                    call_ctx=RunContext(
-                        session=session,
-                        speech_handle=speech_handle,
-                        function_call=fnc_call,
-                    ),
+                    call_ctx=call_ctx,
                 )
 
             except (ValidationError, ValueError) as e:
@@ -587,34 +588,35 @@ async def _execute_tools_task(
                         },
                     )
 
-                    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+                    async def _run_mock(
+                        mock: Callable,
+                        raw_arguments: dict[str, Any],
+                        call_ctx: RunContext | None,
+                    ) -> Any:
                         sig = inspect.signature(mock)
+                        type_hints = get_type_hints(mock, include_extras=True)
 
-                        pos_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.POSITIONAL_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        max_positional = len(pos_param_names)
-                        trimmed_args = fnc_args[:max_positional]
-                        kw_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.KEYWORD_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        trimmed_kwargs = {
-                            k: v for k, v in fnc_kwargs.items() if k in kw_param_names
-                        }
+                        # filter raw arguments to only include params the mock accepts
+                        has_var_keyword = any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                        )
+                        if has_var_keyword:
+                            filtered = dict(raw_arguments)
+                        else:
+                            filtered = {
+                                k: v for k, v in raw_arguments.items() if k in sig.parameters
+                            }
 
-                        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+                        # inject RunContext if the mock accepts it
+                        if call_ctx is not None:
+                            for param_name in sig.parameters:
+                                hint = type_hints.get(param_name)
+                                if hint is not None and llm_utils.is_context_type(
+                                    hint, allow_subclasses=True
+                                ):
+                                    filtered[param_name] = call_ctx
+
+                        bound = sig.bind_partial(**filtered)
                         bound.apply_defaults()
 
                         if inspect.iscoroutinefunction(mock):
@@ -622,7 +624,8 @@ async def _execute_tools_task(
                         else:
                             return mock(*bound.args, **bound.kwargs)
 
-                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
+                    raw_args: dict[str, Any] = json.loads(json_args)
+                    function_callable = functools.partial(_run_mock, mock, raw_args, call_ctx)
                 else:
                     logger.debug(
                         "executing tool",
