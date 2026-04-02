@@ -72,7 +72,7 @@ _stt_audio_duration = _meter.create_counter(
     "lk.agents.usage.stt_audio_duration",
     unit="s",
 )
-_interruption_requests = _meter.create_counter("lk.agents.usage.interruption_requests")
+_interruption_num_requests = _meter.create_counter("lk.agents.usage.interruption_num_requests")
 
 # -- Connection metrics --
 _connection_acquire_time = _meter.create_histogram(
@@ -158,7 +158,7 @@ def collect_usage(ev: AgentMetrics) -> None:
     elif isinstance(ev, InterruptionMetrics):
         attrs = _model_attrs(ev.metadata)
         if ev.num_requests:
-            _interruption_requests.add(ev.num_requests, attributes=attrs)
+            _interruption_num_requests.add(ev.num_requests, attributes=attrs)
 
     # Connection timing
     if isinstance(ev, (STTMetrics, TTSMetrics, RealtimeModelMetrics)):
