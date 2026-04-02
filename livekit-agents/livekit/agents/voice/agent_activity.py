@@ -2651,7 +2651,7 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
                 if tools is not None:
-                    ori_tools = llm.ToolContext(self.tools).flatten()
+                    ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
             try:
