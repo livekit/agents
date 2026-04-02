@@ -4,7 +4,7 @@ import datetime
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -46,7 +46,7 @@ load_dotenv()
 @dataclass
 class Userdata:
     cal: Calendar
-    appointments_booked: int = 0
+    booked_times: list[str] = field(default_factory=list)
     slot_unavailable_count: int = 0
 
 
@@ -115,11 +115,11 @@ class FrontDeskAgent(Agent):
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
-        ctx.userdata.appointments_booked += 1
         local = slot.start_time.astimezone(self.tz)
+        ctx.userdata.booked_times.append(local.isoformat())
         get_job_context().tagger.add(
             "appointment:booked",
-            metadata={"time": local.isoformat()},
+            metadata={"times": ctx.userdata.booked_times},
         )
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
@@ -208,7 +208,7 @@ async def on_session_end(ctx: JobContext) -> None:
     await judges.evaluate(report.chat_history)
 
     userdata = ctx.primary_session.userdata
-    if userdata.appointments_booked > 0:
+    if userdata.booked_times:
         ctx.tagger.success()
     else:
         ctx.tagger.fail(reason="Appointment was not booked")
