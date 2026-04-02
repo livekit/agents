@@ -6,6 +6,7 @@ from opentelemetry import metrics as metrics_api
 
 from ..metrics.base import AgentMetrics
 from ..metrics.usage import (
+    InterruptionModelUsage,
     LLMModelUsage,
     ModelUsageCollector,
     STTModelUsage,
@@ -43,6 +44,11 @@ _turn_end_of_turn_delay = _meter.create_histogram(
     unit="s",
     description="Time from end of speech to turn decision",
 )
+_turn_on_user_turn_completed_delay = _meter.create_histogram(
+    "lk.agents.turn.on_user_turn_completed_delay",
+    unit="s",
+    description="Time to invoke the on_user_turn_completed callback",
+)
 
 # -- Usage counters --
 _llm_input_tokens = _meter.create_counter("lk.agents.usage.llm_input_tokens")
@@ -65,6 +71,7 @@ _stt_audio_duration = _meter.create_counter(
     "lk.agents.usage.stt_audio_duration",
     unit="s",
 )
+_interruption_requests = _meter.create_counter("lk.agents.usage.interruption_requests")
 
 # Per-model usage collectors
 _usage_collector = ModelUsageCollector()
@@ -87,6 +94,8 @@ def _record_turn_metrics(report: MetricsReport) -> None:
         _turn_transcription_delay.record(report["transcription_delay"])
     if "end_of_turn_delay" in report:
         _turn_end_of_turn_delay.record(report["end_of_turn_delay"])
+    if "on_user_turn_completed_delay" in report:
+        _turn_on_user_turn_completed_delay.record(report["on_user_turn_completed_delay"])
 
 
 def collect_usage(ev: AgentMetrics) -> None:
@@ -109,6 +118,8 @@ def flush_usage() -> None:
             _emit_tts_usage(usage, attrs)
         elif isinstance(usage, STTModelUsage):
             _emit_stt_usage(usage, attrs)
+        elif isinstance(usage, InterruptionModelUsage):
+            _emit_interruption_usage(usage, attrs)
 
 
 def _emit_llm_usage(usage: LLMModelUsage, attrs: dict[str, str]) -> None:
@@ -140,3 +151,8 @@ def _emit_tts_usage(usage: TTSModelUsage, attrs: dict[str, str]) -> None:
 def _emit_stt_usage(usage: STTModelUsage, attrs: dict[str, str]) -> None:
     if usage.audio_duration:
         _stt_audio_duration.add(usage.audio_duration, attributes=attrs)
+
+
+def _emit_interruption_usage(usage: InterruptionModelUsage, attrs: dict[str, str]) -> None:
+    if usage.total_requests:
+        _interruption_requests.add(usage.total_requests, attributes=attrs)
