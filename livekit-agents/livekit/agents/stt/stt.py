@@ -322,6 +322,23 @@ class RecognizeStream(ABC):
             raise ValueError("start_time_offset must be non-negative")
         self._start_time_offset = value
 
+    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
+        """Report connection timing as an STTMetrics event with zero usage."""
+        self._stt.emit(
+            "metrics_collected",
+            STTMetrics(
+                request_id="",
+                timestamp=time.time(),
+                duration=0.0,
+                label=self._stt._label,
+                audio_duration=0.0,
+                streamed=True,
+                acquire_time=acquire_time,
+                connection_reused=connection_reused,
+                metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+            ),
+        )
+
     @abstractmethod
     async def _run(self) -> None: ...
 

@@ -33,7 +33,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as trace_utils
+from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -1278,6 +1278,7 @@ class AgentActivity(RecognitionHooks):
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         self._session.emit(
             "session_usage_updated",
@@ -1831,6 +1832,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
         if info.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.started_speaking_at
 
@@ -2390,6 +2396,17 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
+
+        if self.llm:
+            assistant_metrics["llm_metadata"] = {
+                "model_name": self.llm.model,
+                "model_provider": self.llm.provider,
+            }
+        if self.tts:
+            assistant_metrics["tts_metadata"] = {
+                "model_name": self.tts.model,
+                "model_provider": self.tts.provider,
+            }
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft

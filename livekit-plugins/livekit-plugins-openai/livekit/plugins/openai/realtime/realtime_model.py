@@ -908,11 +908,14 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        t0 = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
+            return ws
         except aiohttp.ClientError as e:
             raise APIConnectionError("OpenAI Realtime API client connection error") from e
         except asyncio.TimeoutError as e:
