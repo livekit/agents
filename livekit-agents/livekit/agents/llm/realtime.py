@@ -67,9 +67,13 @@ class RealtimeCapabilities:
     audio_output: bool
     manual_function_calls: bool
     mid_session_context_update: bool = False
+    """Whether the chat context can be updated mid-session"""
     mid_session_instructions_update: bool = False
+    """Whether the instructions can be updated mid-session"""
     mid_session_tools_update: bool = False
-    per_response_tool_choice: bool
+    """Whether the tools can be updated mid-session"""
+    per_response_tool_choice: bool = False
+    """Whether the tool and tool choice can be specified per response"""
 
 
 class RealtimeError(Exception):
