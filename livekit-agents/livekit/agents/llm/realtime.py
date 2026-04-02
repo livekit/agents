@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -219,28 +220,27 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
-    async def reset(
+    async def update_session(
         self,
         *,
-        instructions: str,
-        chat_ctx: ChatContext,
-        tools: list[Tool],
-        session_reused: bool,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
-        capabilities = self._realtime_model.capabilities
-        if not session_reused or capabilities.mid_session_instructions_update:
+
+        if is_given(instructions):
             try:
                 await self.update_instructions(instructions)
             except RealtimeError:
                 logger.exception("failed to update the instructions")
 
-        if not session_reused or capabilities.mid_session_context_update:
+        if is_given(chat_ctx):
             try:
                 await self.update_chat_ctx(chat_ctx)
             except RealtimeError:
                 logger.exception("failed to update the chat_ctx")
 
-        if not session_reused or capabilities.mid_session_tools_update:
+        if is_given(tools):
             try:
                 await self.update_tools(tools)
             except RealtimeError:

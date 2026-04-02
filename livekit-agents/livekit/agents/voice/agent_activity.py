@@ -721,11 +721,18 @@ class AgentActivity(RecognitionHooks):
             remove_instructions(self._agent._chat_ctx)
 
             capabilities = self.llm.capabilities
-            await self._rt_session.reset(
-                instructions=self._agent.instructions,
-                chat_ctx=self._agent.chat_ctx,
-                tools=llm.ToolContext(self.tools).flatten(),
-                session_reused=rt_reused,
+            reset_instructions = reset_chat_ctx = reset_tools = True
+            if rt_reused:
+                # skip the update if the session is reused and no mid-session update is supported
+                # this means the content is the same as the previous session
+                reset_instructions = capabilities.mid_session_instructions_update
+                reset_chat_ctx = capabilities.mid_session_context_update
+                reset_tools = capabilities.mid_session_tools_update
+
+            await self._rt_session.update_session(
+                instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,
+                chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
+                tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
             )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
