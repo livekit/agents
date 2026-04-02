@@ -284,6 +284,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -681,7 +682,10 @@ class RealtimeSession(llm.RealtimeSession):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._opts.model == "gemini-3.1-flash-live-preview":
             logger.warning(
