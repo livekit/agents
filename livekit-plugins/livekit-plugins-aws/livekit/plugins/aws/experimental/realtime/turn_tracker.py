@@ -7,10 +7,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...log import logger
 from livekit.agents import llm
 
-
+from ...log import logger
 
 # Nova Sonic's barge-in detection signal (raw content without newline)
 BARGE_IN_CONTENT = '{ "interrupted" : true }'

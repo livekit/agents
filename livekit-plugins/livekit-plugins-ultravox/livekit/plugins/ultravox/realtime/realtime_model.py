@@ -637,7 +637,9 @@ class RealtimeSession(
                     # init as text if specified
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
+                t0 = time.perf_counter()
                 ws_conn = await http_session.ws_connect(join_url)
+                self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
 
                 # Create tasks for send/recv and restart monitoring

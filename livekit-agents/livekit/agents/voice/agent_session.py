@@ -400,7 +400,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
-        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
+        self._input = io.AgentInput(
+            self._on_video_input_changed,
+            self._on_audio_input_changed,
+            audio_enabled_cb=self._on_audio_enabled_changed,
+        )
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -603,6 +607,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started_at = time.time()
 
             # configure observability first
+            record_is_given = is_given(record)
             job_ctx: JobContext | None = None
             try:
                 # defer to server-side setting for recording
@@ -616,7 +621,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
 
+            is_primary = True
             if job_ctx:
+                # set the primary session
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
+                    job_ctx._primary_agent_session = self
+                else:
+                    is_primary = False
+                    if any(self._recording_options.values()):
+                        if record_is_given:
+                            raise RuntimeError(
+                                "Only one `AgentSession` can be the primary at a time. "
+                                "If you want to ignore primary designation, "
+                                "use session.start(record=False)."
+                            )
+                        else:
+                            # auto-disable recording for non-primary sessions when record is not given
+                            self._recording_options = _resolve_recording_options(False)
+
                 job_ctx.init_recording(self._recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
@@ -685,14 +707,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                transport = RoomSessionTransport(room)
-                self._session_host = SessionHost(transport)
-                self._session_host.register_session(self)
+                if is_primary:
+                    # only the primary session can have a session host
+                    transport = RoomSessionTransport(room)
+                    self._session_host = SessionHost(transport)
+                    self._session_host.register_session(self)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
                     self._room_io.register_text_input(text_input_opts.text_input_cb)
-                    self._session_host.register_text_input(text_input_opts.text_input_cb)
+                    if self._session_host is not None:
+                        self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -709,14 +734,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                                 )
                             )
                             tasks.append(task)
-
-                if job_ctx._primary_agent_session is None:
-                    job_ctx._primary_agent_session = self
-                elif any(self._recording_options.values()):
-                    raise RuntimeError(
-                        "Only one `AgentSession` can be the primary at a time. "
-                        "If you want to ignore primary designation, use session.start(record=False)."
-                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
@@ -1204,6 +1221,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
+    async def wait_for_inactive(self) -> None:
+        if self._activity is not None:
+            await self._activity._wait_for_inactive()
+
     async def _update_activity(
         self,
         agent: Agent,
@@ -1500,6 +1521,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 created_at=last_speaking_time or time.time(),
             ),
         )
+
+    def _on_audio_enabled_changed(self, enabled: bool) -> None:
+        """End user speaking state when audio is disabled by default."""
+        if not enabled and self._user_state == "speaking":
+            if self._activity is not None:
+                self._activity.on_end_of_speech(None)
+            else:
+                self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self.user_state == "away" and ev.is_final:

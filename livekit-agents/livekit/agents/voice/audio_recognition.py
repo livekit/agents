@@ -826,6 +826,18 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
+            # STT EOT changes user state from speaking to listening without updating VAD internal states
+            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
+            # and user state won't be updated until a new VAD SOS is received
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
+            if self._vad:
+                if self._speaking:
+                    logger.warning(
+                        "stt end of speech received while user is speaking, resetting vad"
+                    )
+                self.update_vad(self._vad)
+
             self._speaking = False
             self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
@@ -1086,6 +1098,13 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+
+            # reset the speaking state to prevent stuck user speaking state during handoff
+            if self._speaking:
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
+                self._speaking = False
+                self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(

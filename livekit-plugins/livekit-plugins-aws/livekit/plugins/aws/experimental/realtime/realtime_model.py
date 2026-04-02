@@ -44,10 +44,9 @@ from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from ...log import logger
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
-
+from ...log import logger
 from .events import (
     SonicEventBuilder as seb,
     Tool,
@@ -526,7 +525,9 @@ class RealtimeSession(  # noqa: F811
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
-        self._no_gen_content_roles: dict[str, str] = {}  # contentId → role for events without generation
+        self._no_gen_content_roles: dict[
+            str, str
+        ] = {}  # contentId → role for events without generation
         self._current_user_content_id: str | None = None  # track current user utterance
         # Signalled after await_output() returns (HTTP 200 received).
         # Interactive text must wait for this to avoid being sent before
@@ -862,6 +863,7 @@ class RealtimeSession(  # noqa: F811
             assert self._bedrock_client is not None, "bedrock_client is None"
 
             logger.info("Initializing Bedrock stream")
+            t0 = time.perf_counter()
             self._stream_response = (
                 await self._bedrock_client.invoke_model_with_bidirectional_stream(
                     InvokeModelWithBidirectionalStreamOperationInput(
@@ -869,6 +871,7 @@ class RealtimeSession(  # noqa: F811
                     )
                 )
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             if not is_restart:
                 # Lazy-initialize futures if needed
@@ -1208,7 +1211,9 @@ class RealtimeSession(  # noqa: F811
                 self._current_generation.message_gen.text_ch.send_nowait(text_content)
             self._update_chat_ctx(role="assistant", text_content=text_content)
 
-    def _update_chat_ctx(self, role: llm.ChatRole, text_content: str, content_id: str | None = None) -> None:
+    def _update_chat_ctx(
+        self, role: llm.ChatRole, text_content: str, content_id: str | None = None
+    ) -> None:
         """
         Update the chat context with the latest ASR text while guarding against model limitations:
             a) 40 total messages limit
@@ -1696,9 +1701,7 @@ class RealtimeSession(  # noqa: F811
                 and self._chat_ctx.items[0].role == "assistant"
             ):
                 removed = self._chat_ctx.items.pop(0)
-                logger.debug(
-                    "Stripped leading assistant message from context: %s", removed.id
-                )
+                logger.debug("Stripped leading assistant message from context: %s", removed.id)
             # Mark all initial context messages as already sent so the loop below
             # doesn't re-send them as interactive=true text. These messages are already
             # sent as non-interactive history via create_prompt_start_block during
@@ -1852,9 +1855,7 @@ class RealtimeSession(  # noqa: F811
         while True:
             try:
                 discarded = self._tool_results_ch.recv_nowait()
-                logger.debug(
-                    f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}"
-                )
+                logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
             except utils.aio.channel.ChanEmpty:
                 break
         await self._graceful_session_recycle()
