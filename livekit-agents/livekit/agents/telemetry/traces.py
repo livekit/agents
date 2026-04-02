@@ -253,13 +253,11 @@ def _setup_cloud_tracer(
     current_meter_provider = metrics_api.get_meter_provider()
     if not isinstance(current_meter_provider, SdkMeterProvider):
         metric_exporter = OTLPMetricExporter(
-            endpoint=f"https://{cloud_hostname}/observability/metrics/otlp/v0",
+            endpoint=f"{observability_url}/observability/metrics/otlp/v0",
             compression=otlp_compression,
             session=session,
         )
-        reader = PeriodicExportingMetricReader(
-            metric_exporter, export_interval_millis=30000
-        )
+        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
         meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
         metrics_api.set_meter_provider(meter_provider)
 

@@ -4,8 +4,13 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import metrics as metrics_api
 
-from ..metrics.base import AgentMetrics, Metadata
-from ..metrics.usage_collector import UsageCollector, UsageSummary
+from ..metrics.base import AgentMetrics
+from ..metrics.usage import (
+    LLMModelUsage,
+    ModelUsageCollector,
+    STTModelUsage,
+    TTSModelUsage,
+)
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext, MetricsReport
@@ -39,14 +44,18 @@ _turn_end_of_turn_delay = _meter.create_histogram(
     description="Time from end of speech to turn decision",
 )
 
-# -- Usage counters (emitted at session end) --
-_llm_prompt_tokens = _meter.create_counter("lk.agents.usage.llm_prompt_tokens")
-_llm_prompt_cached_tokens = _meter.create_counter("lk.agents.usage.llm_prompt_cached_tokens")
-_llm_completion_tokens = _meter.create_counter("lk.agents.usage.llm_completion_tokens")
+# -- Usage counters --
+_llm_input_tokens = _meter.create_counter("lk.agents.usage.llm_input_tokens")
+_llm_input_cached_tokens = _meter.create_counter("lk.agents.usage.llm_input_cached_tokens")
+_llm_output_tokens = _meter.create_counter("lk.agents.usage.llm_output_tokens")
 _llm_input_audio_tokens = _meter.create_counter("lk.agents.usage.llm_input_audio_tokens")
 _llm_input_text_tokens = _meter.create_counter("lk.agents.usage.llm_input_text_tokens")
 _llm_output_audio_tokens = _meter.create_counter("lk.agents.usage.llm_output_audio_tokens")
 _llm_output_text_tokens = _meter.create_counter("lk.agents.usage.llm_output_text_tokens")
+_llm_session_duration = _meter.create_counter(
+    "lk.agents.usage.llm_session_duration",
+    unit="s",
+)
 _tts_characters = _meter.create_counter("lk.agents.usage.tts_characters")
 _tts_audio_duration = _meter.create_counter(
     "lk.agents.usage.tts_audio_duration",
@@ -57,12 +66,12 @@ _stt_audio_duration = _meter.create_counter(
     unit="s",
 )
 
-# Per-model usage collectors (reuses UsageCollector directly)
-_usage_by_model: dict[tuple[str | None, str | None], UsageCollector] = {}
+# Per-model usage collectors
+_usage_collector = ModelUsageCollector()
 
 
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
-    """Emit per-turn latency histograms by reading the chat history. Called at session end."""
+    """Emit per-turn latency histograms from the chat history. Called at session end."""
     for msg in chat_ctx.messages():
         _record_turn_metrics(msg.metrics)
 
@@ -81,49 +90,53 @@ def _record_turn_metrics(report: MetricsReport) -> None:
 
 
 def collect_usage(ev: AgentMetrics) -> None:
-    """Buffer usage per model using UsageCollector. Called on each metrics event."""
-    metadata: Metadata | None = getattr(ev, "metadata", None)
-    key = (
-        metadata.model_name if metadata else None,
-        metadata.model_provider if metadata else None,
-    )
-    if key not in _usage_by_model:
-        _usage_by_model[key] = UsageCollector()
-    _usage_by_model[key].collect(ev)
+    """Buffer usage per model. Called on each metrics event."""
+    _usage_collector.collect(ev)
 
 
 def flush_usage() -> None:
-    """Emit all buffered usage as OTEL counters. Called once at session end."""
-    for (model_name, model_provider), collector in _usage_by_model.items():
-        summary = collector.get_summary()
+    """Emit all buffered usage as OTEL counters, keyed by model/provider. Called at session end."""
+    for usage in _usage_collector.flatten():
         attrs: dict[str, str] = {}
-        if model_name:
-            attrs["model_name"] = model_name
-        if model_provider:
-            attrs["model_provider"] = model_provider
+        if usage.provider:
+            attrs["model_provider"] = usage.provider
+        if usage.model:
+            attrs["model_name"] = usage.model
 
-        _emit_usage_summary(summary, attrs)
-    _usage_by_model.clear()
+        if isinstance(usage, LLMModelUsage):
+            _emit_llm_usage(usage, attrs)
+        elif isinstance(usage, TTSModelUsage):
+            _emit_tts_usage(usage, attrs)
+        elif isinstance(usage, STTModelUsage):
+            _emit_stt_usage(usage, attrs)
 
 
-def _emit_usage_summary(summary: UsageSummary, attrs: dict[str, str]) -> None:
-    if summary.llm_prompt_tokens:
-        _llm_prompt_tokens.add(summary.llm_prompt_tokens, attributes=attrs)
-    if summary.llm_prompt_cached_tokens:
-        _llm_prompt_cached_tokens.add(summary.llm_prompt_cached_tokens, attributes=attrs)
-    if summary.llm_completion_tokens:
-        _llm_completion_tokens.add(summary.llm_completion_tokens, attributes=attrs)
-    if summary.llm_input_audio_tokens:
-        _llm_input_audio_tokens.add(summary.llm_input_audio_tokens, attributes=attrs)
-    if summary.llm_input_text_tokens:
-        _llm_input_text_tokens.add(summary.llm_input_text_tokens, attributes=attrs)
-    if summary.llm_output_audio_tokens:
-        _llm_output_audio_tokens.add(summary.llm_output_audio_tokens, attributes=attrs)
-    if summary.llm_output_text_tokens:
-        _llm_output_text_tokens.add(summary.llm_output_text_tokens, attributes=attrs)
-    if summary.tts_characters_count:
-        _tts_characters.add(summary.tts_characters_count, attributes=attrs)
-    if summary.tts_audio_duration:
-        _tts_audio_duration.add(summary.tts_audio_duration, attributes=attrs)
-    if summary.stt_audio_duration:
-        _stt_audio_duration.add(summary.stt_audio_duration, attributes=attrs)
+def _emit_llm_usage(usage: LLMModelUsage, attrs: dict[str, str]) -> None:
+    if usage.input_tokens:
+        _llm_input_tokens.add(usage.input_tokens, attributes=attrs)
+    if usage.input_cached_tokens:
+        _llm_input_cached_tokens.add(usage.input_cached_tokens, attributes=attrs)
+    if usage.output_tokens:
+        _llm_output_tokens.add(usage.output_tokens, attributes=attrs)
+    if usage.input_audio_tokens:
+        _llm_input_audio_tokens.add(usage.input_audio_tokens, attributes=attrs)
+    if usage.input_text_tokens:
+        _llm_input_text_tokens.add(usage.input_text_tokens, attributes=attrs)
+    if usage.output_audio_tokens:
+        _llm_output_audio_tokens.add(usage.output_audio_tokens, attributes=attrs)
+    if usage.output_text_tokens:
+        _llm_output_text_tokens.add(usage.output_text_tokens, attributes=attrs)
+    if usage.session_duration:
+        _llm_session_duration.add(usage.session_duration, attributes=attrs)
+
+
+def _emit_tts_usage(usage: TTSModelUsage, attrs: dict[str, str]) -> None:
+    if usage.characters_count:
+        _tts_characters.add(usage.characters_count, attributes=attrs)
+    if usage.audio_duration:
+        _tts_audio_duration.add(usage.audio_duration, attributes=attrs)
+
+
+def _emit_stt_usage(usage: STTModelUsage, attrs: dict[str, str]) -> None:
+    if usage.audio_duration:
+        _stt_audio_duration.add(usage.audio_duration, attributes=attrs)
