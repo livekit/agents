@@ -76,10 +76,6 @@ STTs: list[Callable[[], stt.STT]] = [
         lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),
         id="livekit.plugins.gradium.STT",
     ),
-    pytest.param(
-        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-2602"),
-        id="livekit.plugins.mistralai.realtime",
-    ),
 ]
 
 

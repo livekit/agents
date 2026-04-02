@@ -326,6 +326,11 @@ class SpeechStream(stt.RecognizeStream):
             elif ev.type == vad.VADEventType.END_OF_SPEECH:
                 # force Mistral to finalize the current speech segment
                 await connection.flush_audio()
+                if self._speaking:
+                    self._speaking = False
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         current_text = ""
@@ -359,13 +364,6 @@ class SpeechStream(stt.RecognizeStream):
 
         elif isinstance(event, TranscriptionStreamTextDelta):
             text = current_text + event.text
-
-            # when no VAD is configured, fall back to text-delta-based START_OF_SPEECH
-            if not self._speaking and self._vad is None:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                )
-                self._speaking = True
 
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
@@ -425,10 +423,6 @@ class SpeechStream(stt.RecognizeStream):
                     ),
                 )
             )
-
-            if self._speaking:
-                self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif isinstance(event, RealtimeTranscriptionError):
             raise APIStatusError(
