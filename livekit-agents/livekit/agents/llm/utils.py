@@ -123,8 +123,14 @@ def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
     if not allow_subclasses:
         return ty is RunContext or origin is RunContext
 
+    if origin is not None:
+        try:
+            return issubclass(origin, RunContext)
+        except TypeError:
+            return False
+
     try:
-        return issubclass(ty, RunContext) or (origin is not None and issubclass(origin, RunContext))
+        return issubclass(ty, RunContext)
     except TypeError:
         return False
 
