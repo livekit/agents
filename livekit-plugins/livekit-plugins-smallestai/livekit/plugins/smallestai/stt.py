@@ -439,9 +439,7 @@ class SpeechStream(stt.SpeechStream):
             "eou_timeout_ms": self._opts.eou_timeout_ms,
         }
         ws_url = (
-            self._opts.base_url.replace("https://", "wss://", 1).replace(
-                "http://", "ws://", 1
-            )
+            self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             + f"/{self._opts.model}/get_text"
             + f"?{urlencode(params)}"
         )
@@ -500,9 +498,7 @@ class SpeechStream(stt.SpeechStream):
         # Infer START_OF_SPEECH — the Pulse API does not emit a dedicated speech-start event.
         if not self._speaking:
             self._speaking = True
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            )
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
         alts = _transcript_to_speech_data(
             language=self._opts.language,
@@ -521,9 +517,7 @@ class SpeechStream(stt.SpeechStream):
             )
             if self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
         else:
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
@@ -564,9 +558,7 @@ def _transcript_to_speech_data(
     # Pick the most frequent speaker across the utterance for top-level speaker_id.
     speaker_id: str | None = None
     if diarize and raw_words:
-        speaker_counts = Counter(
-            w["speaker"] for w in raw_words if "speaker" in w
-        )
+        speaker_counts = Counter(w["speaker"] for w in raw_words if "speaker" in w)
         if speaker_counts:
             speaker_id = f"S{speaker_counts.most_common(1)[0][0]}"
 
