@@ -107,8 +107,11 @@ def to_azure_tool_choice(
     return DEFAULT_TOOL_CHOICE
 
 
-def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
-    """Convert LiveKit Tool to Azure FunctionTool format."""
+def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
+    """Convert LiveKit Tool to Azure FunctionTool format.
+
+    Returns None for unsupported tool types (e.g. ProviderTool).
+    """
     from livekit.agents.llm import utils as llm_utils
 
     # Handle FunctionTool and RawFunctionTool
@@ -141,7 +144,10 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool:
         logger.info(f"[TOOL_CONVERSION] Converted raw tool {tool.info.name}")
         return azure_tool
     else:
-        raise ValueError(f"Unsupported tool type: {type(tool)}")
+        logger.warning(
+            f"[TOOL_CONVERSION] Skipping unsupported tool type: {type(tool)}"
+        )
+        return None
 
 
 # Type alias for Azure conversation items
@@ -194,45 +200,3 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
             return UserMessageItem(content=content_parts, id=item.id)
         raise ValueError(f"Unsupported role: {item.role}")
     raise ValueError(f"Unsupported item type: {item.type}")
-
-
-def azure_item_to_livekit_item(item: dict[str, Any]) -> llm.ChatItem:
-    """Convert Azure conversation item to LiveKit ChatItem."""
-    item_id = item.get("id")
-    item_type = item.get("type")
-
-    if item_type == "function_call":
-        return llm.FunctionCall(
-            id=item_id,
-            call_id=item["call_id"],
-            name=item["name"],
-            arguments=item["arguments"],
-        )
-
-    if item_type == "function_call_output":
-        return llm.FunctionCallOutput(
-            id=item_id,
-            call_id=item["call_id"],
-            output=item["output"],
-            is_error=False,
-        )
-
-    if item_type == "message":
-        role = item.get("role")
-        content_list = item.get("content", [])
-
-        chat_content: list[llm.ChatContent] = []
-        for c in content_list:
-            content_type = c.get("type")
-            if content_type in ("input_text", "text") and c.get("text"):
-                chat_content.append(c["text"])
-            elif content_type == "input_audio" and c.get("transcript"):
-                chat_content.append(c["transcript"])
-
-        return llm.ChatMessage(
-            id=item_id,
-            role=role,
-            content=chat_content,
-        )
-
-    raise ValueError(f"Unsupported item type: {item_type}")

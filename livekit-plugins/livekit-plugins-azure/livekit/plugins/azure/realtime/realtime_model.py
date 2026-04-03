@@ -20,6 +20,7 @@ from azure.ai.voicelive.models import (
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
+    Tool,
     TurnDetection,
 )
 from azure.core.credentials import AzureKeyCredential
@@ -408,10 +409,12 @@ class RealtimeSession(
 
     async def _configure_session(self, conn: Any) -> None:
         """Configure the Azure Voice Live session with initial settings."""
-        tools_list: list[FunctionTool] = []
+        tools_list: list[Tool] = []
         if self._tools:
             for tool in self._tools.flatten():
-                tools_list.append(livekit_tool_to_azure_tool(tool))
+                converted = livekit_tool_to_azure_tool(tool)
+                if converted is not None:
+                    tools_list.append(converted)
 
         # Wrap voice name in AzureStandardVoice if it's an Azure voice name
         voice_config: str | AzureStandardVoice = self._realtime_model._opts.voice
@@ -440,7 +443,7 @@ class RealtimeSession(
                     locale=language if language else None,
                 )
 
-        session_config = RequestSession(  # type: ignore[misc]
+        session_config = RequestSession(
             modalities=list(self._realtime_model._opts.modalities),
             instructions=self._instructions or "You are a helpful assistant.",
             voice=voice_config,
@@ -448,7 +451,7 @@ class RealtimeSession(
             output_audio_format=self._realtime_model._opts.output_audio_format,
             turn_detection=self._realtime_model._opts.turn_detection,
             input_audio_transcription=input_audio_transcription,
-            tools=tools_list if tools_list else None,  # type: ignore[arg-type]
+            tools=tools_list if tools_list else None,
             tool_choice=to_azure_tool_choice(self._realtime_model._opts.tool_choice),
             temperature=self._realtime_model._opts.temperature,
             max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
@@ -1183,7 +1186,11 @@ class RealtimeSession(
 
             if self._connection:
                 try:
-                    tools_list = [livekit_tool_to_azure_tool(t) for t in tools]
+                    tools_list: list[Tool] = []
+                    for t in tools:
+                        converted = livekit_tool_to_azure_tool(t)
+                        if converted is not None:
+                            tools_list.append(converted)
                     session_config = RequestSession(tools=tools_list if tools_list else None)
                     await self._connection.session.update(session=session_config)
                 except Exception as e:
