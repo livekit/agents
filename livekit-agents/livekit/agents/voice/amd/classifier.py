@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from ...llm.chat_context import ChatContext, ChatMessage
 from ...llm.llm import LLM
-from ...llm.tool_context import ToolContext, function_tool
+from ...llm.tool_context import Tool, ToolContext, function_tool
 from ...llm.utils import execute_function_call
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
@@ -262,7 +262,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                     )
                 )
 
-        tools = [function_tool(save_prediction)]
+        tools: list[Tool] = [function_tool(save_prediction)]
 
         @log_exceptions(logger=logger)
         async def _run(transcript: str) -> None:
