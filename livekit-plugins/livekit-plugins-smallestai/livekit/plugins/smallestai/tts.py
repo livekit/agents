@@ -104,7 +104,7 @@ class TTS(tts.TTS):
 
         if (consistency or similarity or enhancement) and model == "lightning":
             logger.warning(
-                "consistency, similarity, and enhancement are only supported for model 'lightning-large' and 'lightning-v2'. "
+                "consistency, similarity, and enhancement are only supported for model 'lightning-large', 'lightning-v2', and 'lightning-v3.1'. "
             )
 
         self._opts = _TTSOptions(
