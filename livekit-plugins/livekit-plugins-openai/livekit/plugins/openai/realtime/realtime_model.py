@@ -409,6 +409,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                per_response_tool_choice=True,
             )
         )
 
@@ -843,6 +844,7 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
+            self._close_current_generation("session reconnection")
 
             logger.debug("reconnected to OpenAI Realtime API")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
@@ -907,11 +909,14 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        t0 = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
+            return ws
         except aiohttp.ClientError as e:
             raise APIConnectionError("OpenAI Realtime API client connection error") from e
         except asyncio.TimeoutError as e:
@@ -1440,20 +1445,24 @@ class RealtimeSession(
         self._pushed_duration_s = 0
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
+
+        params = RealtimeResponseCreateParams(
+            instructions=instructions or None,
+            metadata={"client_event_id": event_id},
+        )
+        if is_given(tool_choice):
+            params.tool_choice = to_oai_tool_choice(tool_choice)
+
         self.send_event(
-            ResponseCreateEvent(
-                type="response.create",
-                event_id=event_id,
-                response=RealtimeResponseCreateParams(
-                    instructions=instructions or None,
-                    metadata={"client_event_id": event_id},
-                ),
-            )
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
         )
 
         def _on_timeout() -> None:
@@ -1508,8 +1517,34 @@ class RealtimeSession(
                     self.send_event(ev)
 
     async def aclose(self) -> None:
+        self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask
+
+    def _close_current_generation(self, reason: str | None = None) -> None:
+        """Close all channels and resolve _done_fut for the current generation.
+
+        This prevents consumers from hanging indefinitely when a generation is
+        interrupted by a reconnection or session close.
+        """
+        if self._current_generation is None or self._current_generation._done_fut.done():
+            return
+
+        for generation in self._current_generation.messages.values():
+            generation.text_ch.close()
+            generation.audio_ch.close()
+            if not generation.modalities.done():
+                generation.modalities.set_result(self._realtime_model._opts.modalities)
+
+        self._current_generation.function_ch.close()
+        self._current_generation.message_ch.close()
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._current_generation._done_fut.set_result(None)
+        self._current_generation = None
+
+        if reason:
+            logger.warning(f"in-progress generation discarded due to {reason}")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:

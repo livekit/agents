@@ -43,7 +43,8 @@ DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMATS = "pcm"
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
-    voice: TTSVoices | str
+    voice: TTSVoices | str | None
+    ref_audio: str | None
     response_format: RESPONSE_FORMATS
 
 
@@ -52,7 +53,8 @@ class TTS(tts.TTS):
         self,
         *,
         model: TTSModels | str = DEFAULT_MODEL,
-        voice: TTSVoices | str = DEFAULT_VOICE,
+        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        ref_audio: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
         response_format: RESPONSE_FORMATS = DEFAULT_RESPONSE_FORMAT,
@@ -62,7 +64,10 @@ class TTS(tts.TTS):
 
         Args:
             model: The MistralAI TTS model to use, default is voxtral-mini-tts-2603.
-            voice: The voice ID to use for synthesis, default is en_paul_neutral.
+            voice: The voice ID to use for synthesis. Mutually exclusive with
+                ``ref_audio``. Defaults to ``en_paul_neutral`` when neither is given.
+            ref_audio: Base64-encoded audio sample (3–25 s) for zero-shot voice
+                cloning. Mutually exclusive with ``voice``.
             api_key: Your MistralAI API key. If not provided, will use the
                 MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
@@ -73,7 +78,20 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        self._opts = _TTSOptions(model=model, voice=voice, response_format=response_format)
+        if is_given(voice) and is_given(ref_audio):
+            raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
+
+        resolved_voice: TTSVoices | str | None = voice if is_given(voice) else None
+        resolved_ref_audio: str | None = ref_audio if is_given(ref_audio) else None
+        if resolved_voice is None and resolved_ref_audio is None:
+            resolved_voice = DEFAULT_VOICE
+
+        self._opts = _TTSOptions(
+            model=model,
+            voice=resolved_voice,
+            ref_audio=resolved_ref_audio,
+            response_format=response_format,
+        )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
@@ -93,6 +111,7 @@ class TTS(tts.TTS):
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        ref_audio: NotGivenOr[str] = NOT_GIVEN,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
     ) -> None:
         """
@@ -100,13 +119,21 @@ class TTS(tts.TTS):
 
         Args:
             model: The MistralAI TTS model to use.
-            voice: The voice ID to use for synthesis.
+            voice: The voice ID to use for synthesis. Clears ``ref_audio``.
+            ref_audio: Base64-encoded audio sample for zero-shot voice cloning.
+                Clears ``voice``.
             response_format: The audio format of the synthesized speech.
         """
+        if is_given(voice) and is_given(ref_audio):
+            raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
         if is_given(model):
             self._opts.model = model
         if is_given(voice):
             self._opts.voice = voice
+            self._opts.ref_audio = None
+        if is_given(ref_audio):
+            self._opts.ref_audio = ref_audio
+            self._opts.voice = None
         if is_given(response_format):
             self._opts.response_format = response_format
 
@@ -133,14 +160,24 @@ class ChunkedStream(tts.ChunkedStream):
                 num_channels=NUM_CHANNELS,
                 mime_type=f"audio/{self._opts.response_format}",
             )
-            stream = await self._tts._client.audio.speech.complete_async(
-                model=self._opts.model,
-                input=self.input_text,
-                voice_id=self._opts.voice,
-                response_format=self._opts.response_format,
-                timeout_ms=int(self._conn_options.timeout * 1000),
-                stream=True,
-            )
+            if self._opts.ref_audio is not None:
+                stream = await self._tts._client.audio.speech.complete_async(
+                    model=self._opts.model,
+                    input=self.input_text,
+                    ref_audio=self._opts.ref_audio,
+                    response_format=self._opts.response_format,
+                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    stream=True,
+                )
+            else:
+                stream = await self._tts._client.audio.speech.complete_async(
+                    model=self._opts.model,
+                    input=self.input_text,
+                    voice_id=self._opts.voice or DEFAULT_VOICE,
+                    response_format=self._opts.response_format,
+                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    stream=True,
+                )
             async for ev in stream:
                 if ev.event == "speech.audio.delta":
                     data = base64.b64decode(ev.data.audio_data)

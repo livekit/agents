@@ -68,6 +68,7 @@ livekit-plugins-did = { workspace = true }
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
+    "livekit-plugins/community",
     "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",

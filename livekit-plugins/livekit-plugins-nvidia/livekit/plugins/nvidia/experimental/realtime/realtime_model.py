@@ -114,6 +114,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output=True,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -229,7 +230,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     # -- Public API: generation control --
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         raise NotImplementedError(
             "generate_reply is not yet supported by the PersonaPlex realtime model."
@@ -343,7 +347,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 ws_url = self._build_ws_url()
                 http_session = self._realtime_model._ensure_http_session()
 
+                t0 = time.perf_counter()
                 ws_conn = await http_session.ws_connect(ws_url)
+                self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
                 retry_delay = INITIAL_RETRY_DELAY  # reset on successful connect
 

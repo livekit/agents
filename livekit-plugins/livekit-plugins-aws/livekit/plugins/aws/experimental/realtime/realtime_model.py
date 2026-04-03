@@ -332,6 +332,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=True,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
         self._model = model
@@ -863,6 +864,7 @@ class RealtimeSession(  # noqa: F811
             assert self._bedrock_client is not None, "bedrock_client is None"
 
             logger.info("Initializing Bedrock stream")
+            t0 = time.perf_counter()
             self._stream_response = (
                 await self._bedrock_client.invoke_model_with_bidirectional_stream(
                     InvokeModelWithBidirectionalStreamOperationInput(
@@ -870,6 +872,7 @@ class RealtimeSession(  # noqa: F811
                     )
                 )
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             if not is_restart:
                 # Lazy-initialize futures if needed
@@ -1985,6 +1988,7 @@ class RealtimeSession(  # noqa: F811
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the model.
 

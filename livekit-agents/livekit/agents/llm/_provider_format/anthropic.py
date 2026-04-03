@@ -7,7 +7,7 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -21,6 +21,8 @@ def to_chat_ctx(
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], AnthropicFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
     current_role: str | None = None
