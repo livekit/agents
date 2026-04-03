@@ -239,14 +239,17 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             self._no_speech_timer = None
         self._input_ch.send_nowait(text)
 
+    def end_input(self) -> None:
+        if self._input_ch.closed:
+            return
+        self._input_ch.close()
+
     @log_exceptions(logger=logger)
     async def _classify_user_speech(self) -> None:
-        transcript = ""
+        ctx = {"transcript": ""}
         run_atask = None
 
-        async def save_prediction(
-            label: AMDCategory,
-        ) -> None:
+        async def save_prediction(label: AMDCategory) -> None:
             """Save the prediction to the verdict."""
             if label != AMDCategory.UNCERTAIN:
                 self._set_verdict(
@@ -254,14 +257,16 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                         speech_duration=self.speech_duration,
                         category=label,
                         reason="llm",
-                        transcript=transcript,
+                        transcript=ctx["transcript"],
                         delay=time.time() - (self._speech_ended_at or time.time()),
                     )
                 )
 
+        tools = [function_tool(save_prediction)]
+
         @log_exceptions(logger=logger)
         async def _run(transcript: str) -> None:
-
+            ctx["transcript"] = transcript
             stream = self._llm.chat(
                 chat_ctx=ChatContext(
                     items=[
@@ -269,7 +274,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                         ChatMessage(role="user", content=[transcript]),
                     ]
                 ),
-                tools=[function_tool(save_prediction)],
+                tools=tools,
                 tool_choice="required",
             )
             response = await stream.collect()
@@ -278,11 +283,10 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
 
         try:
             async for text in self._input_ch:
-                transcript += " " + text
-                transcript = transcript.lstrip()
+                ctx["transcript"] = (ctx["transcript"] + " " + text).lstrip()
                 if run_atask is not None:
                     await aio.cancel_and_wait(run_atask)
-                run_atask = asyncio.create_task(_run(transcript.lstrip()))
+                run_atask = asyncio.create_task(_run(ctx["transcript"]))
         finally:
             if run_atask is not None:
                 await aio.cancel_and_wait(run_atask)

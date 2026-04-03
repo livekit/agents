@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -66,7 +65,6 @@ class AMD:
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
-        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def enabled(self) -> bool:
@@ -109,6 +107,7 @@ class AMD:
         if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
             await self._session._start_ivr_detection(transcript=result.transcript)
 
+        # eagerly resume so agent can speak immediately to a human
         if self._session._activity is not None:
             self._session._activity._resume_authorization()
 
@@ -131,10 +130,6 @@ class AMD:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        # on exit, resume authorization
-        if self._session is not None and self._session._activity is not None:
-            self._session._activity._resume_authorization()
-
         await self.aclose()
 
     # region: lifecycle hooks (called by AudioRecognition)
@@ -171,6 +166,9 @@ class AMD:
         if self._session is not None and self._session._activity is not None:
             self._session._activity._resume_authorization()
 
+        if self._session is not None:
+            self._session._amd = None
+
     # endregion
 
     # region: internal methods
@@ -206,15 +204,8 @@ class AMD:
 
     def _on_amd_result(self, result: AMDResult) -> None:
         self._result = result
-        task = asyncio.create_task(self.aclose())
-        self._tasks.add(task)
-
-        def _done_callback(task: asyncio.Task[None]) -> None:
-            self._tasks.discard(task)
-            if not task.cancelled() and (exception := task.exception()) is not None:
-                logger.error("error closing AMD: %s", exception)
-
-        task.add_done_callback(_done_callback)
+        if self._classifier is not None:
+            self._classifier.end_input()
 
     @staticmethod
     def _resolve_classifier(
