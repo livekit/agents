@@ -207,6 +207,7 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
+        self._is_retryable_error = False
 
         self._session_stopped_event = asyncio.Event()
         self._session_started_event = asyncio.Event()
@@ -219,8 +220,11 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        retry_count = 0
         while True:
             self._session_stopped_event.clear()
+            self._session_started_event.clear()
+            self._is_retryable_error = False
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -262,12 +266,31 @@ class SpeechStream(stt.SpeechStream):
                         if task not in [wait_reconnect_task, wait_stopped_task]:
                             task.result()
 
-                    if wait_stopped_task in done:
+                    if wait_stopped_task in done and not self._is_retryable_error:
                         raise APIConnectionError("SpeechRecognition session stopped")
 
                     if wait_reconnect_task not in done:
                         break
                     self._reconnect_event.clear()
+
+                    if self._is_retryable_error:
+                        if retry_count >= self._conn_options.retry_count:
+                            logger.error(
+                                "Azure STT reconnection failed after multiple attempts"
+                            )
+                            raise APIConnectionError("Failed to reconnect to Azure STT")
+
+                        retry_count += 1
+                        delay = self._conn_options.retry_delay * (
+                            2 ** (retry_count - 1)
+                        )
+                        logger.info(
+                            f"reconnecting to Azure STT, attempt {retry_count}, delay {delay}s"
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        # manual reconnect, reset retry count
+                        retry_count = 0
                 finally:
                     await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
 
@@ -379,6 +402,14 @@ class SpeechStream(stt.SpeechStream):
                     "error_details": evt.cancellation_details.error_details,
                 },
             )
+
+            if (
+                evt.cancellation_details.code
+                == speechsdk.CancellationErrorCode.ServiceTimeout
+            ):
+                self._is_retryable_error = True
+                with contextlib.suppress(RuntimeError):
+                    self._loop.call_soon_threadsafe(self._reconnect_event.set)
 
 
 def _create_speech_recognizer(
