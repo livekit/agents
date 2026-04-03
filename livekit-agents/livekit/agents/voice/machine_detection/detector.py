@@ -7,42 +7,46 @@ from typing import TYPE_CHECKING
 from ...inference import LLM as _InferenceLLM, LLMModels
 from ...llm import LLM as _LLM
 from ...log import logger
-from .classifier import AMDResult, _AMDClassifier
+from .classifier import (
+    MachineDetectionCategory,
+    MachineDetectionResult,
+    _MachineDetectionClassifier,
+)
 
 if TYPE_CHECKING:
     from ...llm import LLM
     from ..agent_session import AgentSession
 
 
-class AMD:
+class MachineDetector:
     """Detects whether an outbound call is answered by a human or a machine.
 
     Listens to the call greeting and uses an LLM to classify it into one of
     the following categories:
 
     - ``human``: a real person answered.
-    - ``machine-dtmf``: an IVR / DTMF menu prompt was detected.
+    - ``machine-ivr``: an IVR / DTMF menu prompt was detected.
     - ``machine-vm``: a voicemail greeting where leaving a message is possible.
-    - ``machine-nvm``: the mailbox is full or not set up; leaving a message is not possible.
+    - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    AMD must be wired to an :class:`AgentSession` before classification begins.
+    MachineDetector must be wired to an :class:`AgentSession` before classification begins.
     The recommended pattern is the async context manager, which handles pausing
     and resuming speech playout around the detection window::
 
-        async with AMD(session, llm="openai/gpt-4.1-mini") as amd:
-            result = await amd.execute()
+        async with MachineDetector(session, llm="openai/gpt-4.1-mini") as detector:
+            result = await detector.execute()
 
     Args:
-        session: The :class:`AgentSession` to wire AMD to. Can also be passed
+        session: The :class:`AgentSession` to wire MachineDetector to. Can also be passed
             later via :meth:`start`.
         llm: LLM used for greeting classification. Accepts an :class:`LLM`
             instance, an inference model string (e.g. ``"openai/gpt-4.1-mini"``),
             or ``None`` to fall back to the session's own LLM.
         interrupt_on_machine: If ``True`` (default), interrupt any pending
             agent speech immediately when a machine is detected.
-        start_ivr_on_dtmf: If ``True`` (default), automatically start IVR
-            detection when a ``machine-dtmf`` result is returned.
+        ivr_detection: If ``True`` (default), automatically start IVR
+            navigation when a ``machine-ivr`` result is returned.
     """
 
     def __init__(
@@ -51,15 +55,15 @@ class AMD:
         *,
         llm: LLM | LLMModels | str | None = None,
         interrupt_on_machine: bool = True,
-        start_ivr_on_dtmf: bool = True,
+        ivr_detection: bool = True,
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
-        self._classifier: _AMDClassifier | None = None
-        self._result: AMDResult | None = None
+        self._classifier: _MachineDetectionClassifier | None = None
+        self._result: MachineDetectionResult | None = None
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
-        self._start_ivr_on_dtmf = start_ivr_on_dtmf
+        self._ivr_detection = ivr_detection
 
     @property
     def enabled(self) -> bool:
@@ -69,41 +73,37 @@ class AMD:
     def pending(self) -> bool:
         return self._classifier is not None and self._result is None
 
-    # region: public API
-
-    async def start(self, session: AgentSession) -> None:
-        """Wire AMD to the given session.
-
-        Must be called before ``session.start()`` so that
-        :class:`AudioRecognition` picks up the AMD instance for lifecycle hooks.
-        """
+    def start(self, session: AgentSession) -> None:
+        """Wire MachineDetector to the given session."""
         self._session = session
-        self._start_internal(session)
+        self._run(session)
 
-    async def execute(self) -> AMDResult:
-        """Run AMD detection and return the result.
+    async def execute(self) -> MachineDetectionResult:
+        """Run MachineDetector and return the result.
 
         While executing, speech playout authorization is locked. Once the
         result is available, authorization is resumed and automatic actions
-        (interrupt on machine, start IVR on DTMF) are applied based on the
+        (interrupt on machine, ivr detection) are applied based on the
         configured options.
         """
         if self._session is None:
-            raise RuntimeError("AMD is not wired to a session, call start() first")
-        if self._classifier is None and self._result is None:
-            raise RuntimeError("AMD could not be resolved, please provide a compatible LLM")
+            raise RuntimeError("MachineDetector is not wired to a session, call start() first")
+        if self._classifier is None:
+            raise RuntimeError(
+                "MachineDetector could not be resolved, please provide a compatible LLM"
+            )
 
         if self._classifier is not None:
             await self._classifier._verdict_ready.wait()
         if self._result is None:
-            raise RuntimeError("AMD was closed before a result was available")
+            raise RuntimeError("MachineDetector was closed before a result was available")
 
         result = self._result
 
         if result.is_machine and self._interrupt_on_machine:
             self._session.interrupt(force=True)
 
-        if result.category == "machine-dtmf" and self._start_ivr_on_dtmf:
+        if result.category == MachineDetectionCategory.MACHINE_IVR and self._ivr_detection:
             await self._session._start_ivr_detection(transcript=result.transcript)
 
         if self._session._activity is not None:
@@ -111,9 +111,9 @@ class AMD:
 
         return result
 
-    async def __aenter__(self) -> AMD:
+    async def __aenter__(self) -> MachineDetector:
         if self._session is not None:
-            self._start_internal(self._session)
+            self._run(self._session)
             # if the session is already running, start classifier and pause
             # authorization immediately (audio may already be flowing)
             if self._classifier is not None and not self._classifier.started:
@@ -128,17 +128,16 @@ class AMD:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if exc_val is not None and self._session is not None:
-            # on exception, ensure authorization is resumed so the session isn't stuck
-            if self._session._activity is not None:
-                self._session._activity._resume_authorization()
+        # on exit, resume authorization
+        if self._session is not None and self._session._activity is not None:
+            self._session._activity._resume_authorization()
+
         await self.aclose()
 
-    # endregion
     # region: lifecycle hooks (called by AudioRecognition)
 
     def _on_first_audio(self) -> None:
-        """Start AMD on the first audio frame and pause speech authorization."""
+        """Start MachineDetector on the first audio frame and pause speech authorization."""
         if self._classifier is None or self._classifier.started:
             return
         self._classifier.start()
@@ -162,29 +161,34 @@ class AMD:
             return
         self._closed = True
         if self._classifier is not None:
-            self._classifier.off("amd_result", self._on_amd_result)
+            self._classifier.off("machine_detection_result", self._on_machine_detection_result)
             await self._classifier.close()
             self._classifier = None
 
     # endregion
+
     # region: internal methods
 
-    def _start_internal(self, session: AgentSession) -> None:
+    def _run(self, session: AgentSession) -> None:
         self._session = session
         self._classifier = self._resolve_classifier(self._llm_config, session)
         if self._classifier is None:
             raise ValueError(
-                "amd classifier could not be resolved, please provide a compatible model"
+                "machine detection classifier could not be resolved, please provide a compatible model"
             )
-        self._classifier.on("amd_result", self._on_amd_result)
+        self._classifier.on("machine_detection_result", self._on_machine_detection_result)
+        self._closed = False
+        self._result = None
 
         if session.options.ivr_detection:
-            logger.warning("ivr_detection will be disabled when AMD is enabled")
+            logger.warning(
+                "session level ivr_detection will be disabled when machine detection is used"
+            )
             session.options.ivr_detection = False
 
-        session._amd = self
+        session._machine_detector = self
 
-    def _on_amd_result(self, result: AMDResult) -> None:
+    def _on_machine_detection_result(self, result: MachineDetectionResult) -> None:
         self._result = result
         task = asyncio.create_task(self.aclose())
         task.add_done_callback(lambda _: None)
@@ -193,16 +197,15 @@ class AMD:
     def _resolve_classifier(
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
-    ) -> _AMDClassifier | None:
-        if isinstance(llm, str):
-            return _AMDClassifier(_InferenceLLM(llm))
-        if isinstance(llm, _LLM):
-            return _AMDClassifier(llm)
+    ) -> _MachineDetectionClassifier | None:
 
-        # llm is None — fall back to the session's LLM (skip RealtimeModel)
-        candidate = session.llm
-        if candidate is not None and isinstance(candidate, _LLM):
-            return _AMDClassifier(candidate)
+        if isinstance(llm, str):
+            return _MachineDetectionClassifier(_InferenceLLM(llm))
+        if isinstance(llm, _LLM):
+            return _MachineDetectionClassifier(llm)
+
+        if (candidate := session.llm) is not None and isinstance(candidate, _LLM):
+            return _MachineDetectionClassifier(candidate)
 
         return None
 

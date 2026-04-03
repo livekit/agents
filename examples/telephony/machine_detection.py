@@ -3,12 +3,12 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import (
-    AMD,
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
+    MachineDetector,
     cli,
     inference,
 )
@@ -61,13 +61,13 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-    async with AMD(session, llm="openai/gpt-5-mini") as amd:
-        result = await amd.execute()
+    async with MachineDetector(session, llm="openai/gpt-5-mini") as detector:
+        result = await detector.execute()
 
         if result.category == "human":
             logger.info("human answered the call, proceeding with normal conversation")
-        elif result.category == "machine-dtmf":
-            logger.info("dtmf menu detected, starting IVR detection")
+        elif result.category == "machine-ivr":
+            logger.info("ivr menu detected, starting navigation")
         elif result.category == "machine-vm":
             logger.info("voicemail detected, leaving a message")
             speech_handle = session.generate_reply(
@@ -78,7 +78,7 @@ async def entrypoint(ctx: JobContext):
             )
             await speech_handle.wait_for_playout()
             session.shutdown()
-        elif result.category == "machine-nvm":
+        elif result.category == "machine-unavailable":
             logger.info("mailbox unavailable, ending call")
             session.shutdown()
 

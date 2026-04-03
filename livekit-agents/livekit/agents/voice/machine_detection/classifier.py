@@ -19,56 +19,57 @@ HUMAN_SPEECH_THRESHOLD = 2.5
 HUMAN_SILENCE_THRESHOLD = 0.5
 MACHINE_SILENCE_THRESHOLD = 1.5
 NO_SPEECH_THRESHOLD = 10.0
-AMD_TIMEOUT = 20.0
+TIMEOUT = 20.0
 
 
-class AMDCategory(str, Enum):
+class MachineDetectionCategory(str, Enum):
     HUMAN = "human"
-    MACHINE_DTMF = "machine-dtmf"
+    MACHINE_IVR = "machine-ivr"
     MACHINE_VM = "machine-vm"
-    MACHINE_NVM = "machine-nvm"
+    MACHINE_UNAVAILABLE = "machine-unavailable"
     UNCERTAIN = "uncertain"
 
 
-class AMDResult(BaseModel):
-    type: Literal["amd"] = "amd"
+class MachineDetectionResult(BaseModel):
+    type: Literal["machine_detection"] = "machine_detection"
     speech_duration: float
-    category: AMDCategory
+    category: MachineDetectionCategory
     reason: str
     transcript: str
     delay: float
 
     @property
     def is_human(self) -> bool:
-        return self.category == AMDCategory.HUMAN
+        return self.category == MachineDetectionCategory.HUMAN
 
     @property
     def is_machine(self) -> bool:
         return self.category in (
-            AMDCategory.MACHINE_DTMF,
-            AMDCategory.MACHINE_VM,
-            AMDCategory.MACHINE_NVM,
+            MachineDetectionCategory.MACHINE_IVR,
+            MachineDetectionCategory.MACHINE_VM,
+            MachineDetectionCategory.MACHINE_UNAVAILABLE,
         )
 
 
-AMD_PROMPT = """Task:
+# region: prompt
+MACHINE_DETECTION_PROMPT = """Task:
 Classify the call greeting transcript into exactly one of these categories:
 
 human: A person answered (e.g., "Hello?", "This is John.").
-machine-dtmf: A prompt to press a key (e.g., "Press 1 to continue").
+machine-ivr: A prompt to press a key (e.g., "Press 1 to continue").
 machine-vm: A voicemail greeting where leaving a message IS possible.
-machine-nvm: Any greeting indicating it's NOT possible to leave message, eg because mailbox is full, not setup, etc.
+machine-unavailable: Any greeting indicating it's NOT possible to leave message, eg because mailbox is full, not setup, etc.
 uncertain: For partial transcripts that are ambiguous.
 
 Examples:
 Input: "The person you called has a voice mailbox that hasn't been set up yet. Goodbye."
-Output: machine-nvm
+Output: machine-unavailable
 
 Input: "Thank you for calling Truly Pizza in Dana Pointe. Our hours of operation are 11AM to 8PM, Sunday through Thursday, 11AM to 9PM, Friday and Saturday, and we're closed on Tuesdays."
 Output: uncertain
 
 Input: "You for calling Truly Pizza in Dana Pointe. Our hours of operation are 11AM to 8PM, Sunday through Thursday, 11AM to 9PM, Friday and Saturday, and we're closed on Tuesdays. If you'd like to place an order, please press 1 or head to our website to order online for pickup and local delivery."
-Output: machine-dtmf
+Output: machine-ivr
 
 Input: "I'm away from my desk. If you leave a message, I will get back to you."
 Output: machine-vm
@@ -76,13 +77,15 @@ Output: machine-vm
 Input: "Hello, this is Lisa."
 Output: human"""
 
+# endregion
+
 
 def _state_guard(method: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(method)
-    def wrapper(self: "_AMDClassifier", *args: Any, **kwargs: Any) -> Any:
+    def wrapper(self: "_MachineDetectionClassifier", *args: Any, **kwargs: Any) -> Any:
         if self.closed or not self.started:
             logger.warning(
-                "AMD state is invalid: started=%s, closed=%s",
+                "MachineDetector state is invalid: started=%s, closed=%s",
                 self.started,
                 self.closed,
             )
@@ -92,7 +95,7 @@ def _state_guard(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
+class _MachineDetectionClassifier(EventEmitter[Literal["machine_detection_result"]]):
     def __init__(self, llm: LLM):
         super().__init__()
         self._human_speech_threshold = HUMAN_SPEECH_THRESHOLD
@@ -103,9 +106,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._classify_task: asyncio.Task[None] | None = None
         self._no_speech_timer: asyncio.TimerHandle | None = None
         self._silence_timer: asyncio.TimerHandle | None = None
-        self._amd_timeout_timer: asyncio.TimerHandle | None = None
+        self._detection_timeout_timer: asyncio.TimerHandle | None = None
 
-        self._verdict_result: AMDResult | None = None
+        self._verdict_result: MachineDetectionResult | None = None
         self._verdict_ready = asyncio.Event()
 
         self._llm = llm
@@ -124,16 +127,16 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             NO_SPEECH_THRESHOLD,
             functools.partial(
                 self._silence_timer_callback,
-                category=AMDCategory.MACHINE_NVM,
+                category=MachineDetectionCategory.MACHINE_UNAVAILABLE,
                 reason="no_speech_timeout",
             ),
         )
-        self._amd_timeout_timer = asyncio.get_running_loop().call_later(
-            AMD_TIMEOUT,
+        self._detection_timeout_timer = asyncio.get_running_loop().call_later(
+            TIMEOUT,
             functools.partial(
                 self._silence_timer_callback,
-                category=AMDCategory.UNCERTAIN,
-                reason="amd_timeout",
+                category=MachineDetectionCategory.UNCERTAIN,
+                reason="detection_timeout",
             ),
         )
 
@@ -165,7 +168,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                 max(0, self._human_silence_threshold - silence_duration),
                 functools.partial(
                     self._silence_timer_callback,
-                    category=AMDCategory.HUMAN,
+                    category=MachineDetectionCategory.HUMAN,
                     reason="short_greeting",
                     speech_duration=speech_duration,
                 ),
@@ -183,7 +186,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             functools.partial(self._silence_timer_callback, speech_duration=speech_duration),
         )
 
-    def _set_verdict(self, result: AMDResult) -> None:
+    def _set_verdict(self, result: MachineDetectionResult) -> None:
         self._verdict_result = result
         self._try_emit_result()
 
@@ -195,23 +198,23 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._closed or self._emitted:
             return
         self._verdict_ready.set()
-        if self._amd_timeout_timer is not None:
-            self._amd_timeout_timer.cancel()
-            self._amd_timeout_timer = None
-        self.emit("amd_result", self._verdict_result)
+        if self._detection_timeout_timer is not None:
+            self._detection_timeout_timer.cancel()
+            self._detection_timeout_timer = None
+        self.emit("machine_detection_result", self._verdict_result)
         self._emitted = True
 
     @log_exceptions(logger=logger)
     @_state_guard
     def _silence_timer_callback(
         self,
-        category: NotGivenOr[AMDCategory] = NOT_GIVEN,
+        category: NotGivenOr[MachineDetectionCategory] = NOT_GIVEN,
         reason: NotGivenOr[str] = NOT_GIVEN,
         speech_duration: float | None = None,
     ) -> None:
         if is_given(category) and is_given(reason) and self._verdict_result is None:
             self._set_verdict(
-                AMDResult(
+                MachineDetectionResult(
                     speech_duration=speech_duration or self.speech_duration,
                     category=category,
                     reason=reason,
@@ -225,7 +228,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
 
     @_state_guard
     def push_text(self, text: str) -> None:
-        """Push transcript text to the AMD classifier."""
+        """Push transcript text to the MachineDetector classifier."""
         if self._input_ch.closed:
             logger.debug("push_text called after close")
             return
@@ -242,12 +245,12 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         run_atask = None
 
         async def save_prediction(
-            label: AMDCategory,
+            label: MachineDetectionCategory,
         ) -> None:
             """Save the prediction to the verdict."""
-            if label != AMDCategory.UNCERTAIN:
+            if label != MachineDetectionCategory.UNCERTAIN:
                 self._set_verdict(
-                    AMDResult(
+                    MachineDetectionResult(
                         speech_duration=self.speech_duration,
                         category=label,
                         reason="llm",
@@ -260,7 +263,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             stream = self._llm.chat(
                 chat_ctx=ChatContext(
                     items=[
-                        ChatMessage(role="system", content=[AMD_PROMPT]),
+                        ChatMessage(role="system", content=[MACHINE_DETECTION_PROMPT]),
                         ChatMessage(role="user", content=[transcript]),
                     ]
                 ),
@@ -293,9 +296,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._silence_timer is not None:
             self._silence_timer.cancel()
             self._silence_timer = None
-        if self._amd_timeout_timer is not None:
-            self._amd_timeout_timer.cancel()
-            self._amd_timeout_timer = None
+        if self._detection_timeout_timer is not None:
+            self._detection_timeout_timer.cancel()
+            self._detection_timeout_timer = None
 
         if self._classify_task is not None:
             await aio.cancel_and_wait(self._classify_task)
@@ -320,19 +323,3 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             if self._speech_started_at is not None
             else 0.0
         )
-
-    def __repr__(self) -> str:
-        return (
-            f"AMD(llm={self._llm.label}, model={self._llm.model}, "
-            f"started={self._started}, closed={self._closed}, "
-            f"speech_duration={self.speech_duration:.2f}, verdict={self._verdict_result!r})"
-        )
-
-    def __str__(self) -> str:
-        if self._verdict_result is not None:
-            return f"AMD({self._verdict_result.category}, reason={self._verdict_result.reason})"
-        if self._closed:
-            return "AMD(closed)"
-        if not self._started:
-            return "AMD(pending)"
-        return "AMD(listening)"
