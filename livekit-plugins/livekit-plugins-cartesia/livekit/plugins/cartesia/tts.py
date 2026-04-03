@@ -510,7 +510,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                     raise APIError(f"Cartesia returned error: {data}")
                 elif data.get("type") == "flush_done":
-                    logger.debug("Received flush_done acknowledgment from Cartesia TTS")
+                    pass
                 else:
                     logger.warning("unexpected message %s", data)
 
