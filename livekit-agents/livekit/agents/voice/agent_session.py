@@ -43,6 +43,7 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
+from .amd import AMD
 from .events import (
     AgentEvent,
     AgentState,
@@ -56,7 +57,6 @@ from .events import (
     UserStateChangedEvent,
 )
 from .ivr import IVRActivity
-from .machine_detection import MachineDetector
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost
 from .run_result import RunResult
@@ -451,14 +451,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
 
-        # ivr and machine detection
+        # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
-        self._machine_detector: MachineDetector | None = None
+        self._amd: AMD | None = None
 
     @property
-    def machine_detector(self) -> MachineDetector | None:
-        """The machine detector, or ``None`` if machine detection is disabled."""
-        return self._machine_detector
+    def amd(self) -> AMD | None:
+        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
+        return self._amd
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -910,9 +910,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
-            if self._machine_detector is not None:
-                await self._machine_detector.aclose()
-                self._machine_detector = None
+            if self._amd is not None:
+                await self._amd.aclose()
+                self._amd = None
 
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -1069,7 +1069,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Start IVR detection on this session.
 
         This method injects the DTMF tool and enables loop/silence detection,
-        allowing the agent to navigate IVR phone trees. Safe to call after MachineDetector resolves.
+        allowing the agent to navigate IVR phone trees. Safe to call after AMD resolves.
 
         Args:
             transcript (str | None, optional): The transcript to start IVR detection with.

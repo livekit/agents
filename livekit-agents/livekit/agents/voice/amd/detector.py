@@ -8,9 +8,9 @@ from ...inference import LLM as _InferenceLLM, LLMModels
 from ...llm import LLM as _LLM
 from ...log import logger
 from .classifier import (
-    MachineDetectionCategory,
-    MachineDetectionResult,
-    _MachineDetectionClassifier,
+    AMDCategory,
+    AMDResult,
+    _AMDClassifier,
 )
 
 if TYPE_CHECKING:
@@ -18,8 +18,10 @@ if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
 
-class MachineDetector:
-    """Detects whether an outbound call is answered by a human or a machine.
+class AMD:
+    """Answering Machine Detection (AMD).
+
+    Detects whether an outbound call is answered by a human or a machine.
 
     Listens to the call greeting and uses an LLM to classify it into one of
     the following categories:
@@ -30,15 +32,15 @@ class MachineDetector:
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    MachineDetector must be wired to an :class:`AgentSession` before classification begins.
+    AMD must be wired to an :class:`AgentSession` before classification begins.
     The recommended pattern is the async context manager, which handles pausing
     and resuming speech playout around the detection window::
 
-        async with MachineDetector(session, llm="openai/gpt-4.1-mini") as detector:
+        async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
             result = await detector.execute()
 
     Args:
-        session: The :class:`AgentSession` to wire MachineDetector to. Can also be passed
+        session: The :class:`AgentSession` to wire AMD to. Can also be passed
             later via :meth:`start`.
         llm: LLM used for greeting classification. Accepts an :class:`LLM`
             instance, an inference model string (e.g. ``"openai/gpt-4.1-mini"``),
@@ -59,8 +61,8 @@ class MachineDetector:
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
-        self._classifier: _MachineDetectionClassifier | None = None
-        self._result: MachineDetectionResult | None = None
+        self._classifier: _AMDClassifier | None = None
+        self._result: AMDResult | None = None
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
@@ -78,12 +80,12 @@ class MachineDetector:
         return self._classifier is not None and self._classifier.started
 
     def start(self, session: AgentSession) -> None:
-        """Wire MachineDetector to the given session."""
+        """Wire AMD to the given session."""
         self._session = session
         self._run(session)
 
-    async def execute(self) -> MachineDetectionResult:
-        """Run MachineDetector and return the result.
+    async def execute(self) -> AMDResult:
+        """Run AMD and return the result.
 
         While executing, speech playout authorization is locked. Once the
         result is available, authorization is resumed and automatic actions
@@ -91,19 +93,19 @@ class MachineDetector:
         configured options.
         """
         if self._session is None:
-            raise RuntimeError("MachineDetector is not wired to a session, call start() first")
+            raise RuntimeError("AMD is not wired to a session, call start() first")
 
         if self._classifier is not None:
             await self._classifier._verdict_ready.wait()
         if self._result is None:
-            raise RuntimeError("MachineDetector was closed before a result was available")
+            raise RuntimeError("AMD was closed before a result was available")
 
         result = self._result
 
         if result.is_machine and self._interrupt_on_machine:
             await self._session.interrupt(force=True)
 
-        if result.category == MachineDetectionCategory.MACHINE_IVR and self._ivr_detection:
+        if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
             await self._session._start_ivr_detection(transcript=result.transcript)
 
         if self._session._activity is not None:
@@ -111,7 +113,7 @@ class MachineDetector:
 
         return result
 
-    async def __aenter__(self) -> MachineDetector:
+    async def __aenter__(self) -> AMD:
         if self._session is not None:
             self._run(self._session)
             # if the session is already running, start classifier and pause
@@ -137,7 +139,7 @@ class MachineDetector:
     # region: lifecycle hooks (called by AudioRecognition)
 
     def _on_first_audio(self) -> None:
-        """Start MachineDetector on the first audio frame and pause speech authorization."""
+        """Start AMD on the first audio frame and pause speech authorization."""
         if self._classifier is None or self._classifier.started:
             return
         self._classifier.start()
@@ -161,7 +163,7 @@ class MachineDetector:
             return
         self._closed = True
         if self._classifier is not None:
-            self._classifier.off("machine_detection_result", self._on_machine_detection_result)
+            self._classifier.off("amd_result", self._on_amd_result)
             await self._classifier.close()
             self._classifier = None
 
@@ -174,34 +176,32 @@ class MachineDetector:
 
     def _run(self, session: AgentSession) -> None:
         if self._classifier is not None:
-            logger.warning("machine detector already running, skipping")
+            logger.warning("AMD already running, skipping")
             return
 
         self._session = session
         self._classifier = self._resolve_classifier(self._llm_config, session)
         if self._classifier is None:
             raise ValueError(
-                "machine detection classifier could not be resolved, please provide a compatible model"
+                "AMD classifier could not be resolved, please provide a compatible model"
             )
-        self._classifier.on("machine_detection_result", self._on_machine_detection_result)
+        self._classifier.on("amd_result", self._on_amd_result)
         self._closed = False
         self._result = None
 
         if session.options.ivr_detection:
-            logger.warning(
-                "session level ivr_detection will be disabled when machine detection is used"
-            )
+            logger.warning("session level ivr_detection will be disabled when AMD is used")
             session.options.ivr_detection = False
 
-        session._machine_detector = self
+        session._amd = self
 
-    def _on_machine_detection_result(self, result: MachineDetectionResult) -> None:
+    def _on_amd_result(self, result: AMDResult) -> None:
         self._result = result
         task = asyncio.create_task(self.aclose())
 
         def _done_callback(task: asyncio.Task[None]) -> None:
             if not task.cancelled() and (exception := task.exception()) is not None:
-                logger.error("error closing machine detector: %s", exception)
+                logger.error("error closing AMD: %s", exception)
 
         task.add_done_callback(_done_callback)
 
@@ -209,15 +209,15 @@ class MachineDetector:
     def _resolve_classifier(
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
-    ) -> _MachineDetectionClassifier | None:
+    ) -> _AMDClassifier | None:
 
         if isinstance(llm, str):
-            return _MachineDetectionClassifier(_InferenceLLM(llm))
+            return _AMDClassifier(_InferenceLLM(llm))
         if isinstance(llm, _LLM):
-            return _MachineDetectionClassifier(llm)
+            return _AMDClassifier(llm)
 
         if (candidate := session.llm) is not None and isinstance(candidate, _LLM):
-            return _MachineDetectionClassifier(candidate)
+            return _AMDClassifier(candidate)
 
         return None
 

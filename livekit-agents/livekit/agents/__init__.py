@@ -92,12 +92,12 @@ from .voice import (
     room_io,
     text_transforms,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
-from .voice.machine_detection import (
-    MachineDetectionCategory,
-    MachineDetectionResult,
-    MachineDetector,
+from .voice.amd import (
+    AMD,
+    AMDCategory,
+    AMDResult,
 )
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -225,9 +225,9 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
-    "MachineDetector",
-    "MachineDetectionCategory",
-    "MachineDetectionResult",
+    "AMD",
+    "AMDCategory",
+    "AMDResult",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

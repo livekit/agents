@@ -3,12 +3,12 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import (
+    AMD,
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
-    MachineDetector,
     cli,
     inference,
 )
@@ -61,7 +61,7 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-    async with MachineDetector(session, llm="openai/gpt-5-mini") as detector:
+    async with AMD(session, llm="openai/gpt-5-mini") as detector:
         result = await detector.execute()
 
         if result.category == "human":
