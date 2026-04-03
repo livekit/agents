@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+DEFAULT_COMMIT_USER_TURN_STT_FLUSH_DURATION: float = 2.0
+"""Default seconds of silence appended to STT when committing a user turn."""
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 
@@ -576,7 +578,7 @@ class AudioRecognition:
         *,
         audio_detached: bool,
         transcript_timeout: float,
-        stt_flush_duration: float = 2.0,
+        stt_flush_duration: float = DEFAULT_COMMIT_USER_TURN_STT_FLUSH_DURATION,
         skip_reply: bool = False,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
