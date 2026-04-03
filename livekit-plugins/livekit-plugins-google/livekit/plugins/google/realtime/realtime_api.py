@@ -551,6 +551,7 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning(
                 "update_instructions is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
             )
+            self._opts.instructions = instructions
             return
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
@@ -581,6 +582,12 @@ class RealtimeSession(llm.RealtimeSession):
         if self._opts.model == "gemini-3.1-flash-live-preview":
             logger.warning(
                 "update_chat_ctx is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            self._chat_ctx = chat_ctx.copy(
+                exclude_handoff=True,
+                exclude_instructions=True,
+                exclude_empty_message=True,
+                exclude_config_update=True,
             )
             return
         # Check for system/developer messages that will be dropped
