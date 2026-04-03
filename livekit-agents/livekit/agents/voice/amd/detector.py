@@ -66,6 +66,7 @@ class AMD:
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def enabled(self) -> bool:
@@ -79,10 +80,10 @@ class AMD:
     def started(self) -> bool:
         return self._classifier is not None and self._classifier.started
 
-    def start(self, session: AgentSession) -> None:
+    async def start(self, session: AgentSession) -> None:
         """Wire AMD to the given session."""
         self._session = session
-        self._run(session)
+        await self._run(session)
 
     async def execute(self) -> AMDResult:
         """Run AMD and return the result.
@@ -115,7 +116,7 @@ class AMD:
 
     async def __aenter__(self) -> AMD:
         if self._session is not None:
-            self._run(self._session)
+            await self._run(self._session)
             # if the session is already running, start classifier and pause
             # authorization immediately (audio may already be flowing)
             if self._classifier is not None and not self._classifier.started:
@@ -174,7 +175,7 @@ class AMD:
 
     # region: internal methods
 
-    def _run(self, session: AgentSession) -> None:
+    async def _run(self, session: AgentSession) -> None:
         if self._classifier is not None:
             logger.warning("AMD already running, skipping")
             return
@@ -193,13 +194,23 @@ class AMD:
             logger.warning("session level ivr_detection will be disabled when AMD is used")
             session.options.ivr_detection = False
 
+        if session._ivr_activity is not None:
+            logger.warning(
+                "session-level IVR detection was already started, "
+                "closing it so AMD can manage the IVR lifecycle"
+            )
+            await session._ivr_activity.aclose()
+            session._ivr_activity = None
+
         session._amd = self
 
     def _on_amd_result(self, result: AMDResult) -> None:
         self._result = result
         task = asyncio.create_task(self.aclose())
+        self._tasks.add(task)
 
         def _done_callback(task: asyncio.Task[None]) -> None:
+            self._tasks.discard(task)
             if not task.cancelled() and (exception := task.exception()) is not None:
                 logger.error("error closing AMD: %s", exception)
 
