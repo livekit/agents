@@ -491,6 +491,9 @@ class TestDiscriminatedUnionSchema:
         assert not _has_one_of(schema), (
             f"schema should not contain oneOf: {json.dumps(schema, indent=2)}"
         )
+        item = schema["properties"]["item"]
+        assert "anyOf" in item, f"item should have anyOf: {json.dumps(item, indent=2)}"
+        assert len(item["anyOf"]) == 2, f"item should have 2 variants: {json.dumps(item, indent=2)}"
 
     def test_nested_discriminated_union_uses_anyof_not_oneof(self):
         """Nested discriminated unions should also convert oneOf to anyOf."""
@@ -498,13 +501,6 @@ class TestDiscriminatedUnionSchema:
         assert not _has_one_of(schema), (
             f"nested schema should not contain oneOf: {json.dumps(schema, indent=2)}"
         )
-
-    def test_discriminated_union_strict_schema_has_variants(self):
-        """Ensure the converted schema still contains the union variants."""
-        schema = to_strict_json_schema(_DiscriminatedUnionModel)
-        item = schema["properties"]["item"]
-        assert "anyOf" in item, f"item should have anyOf: {json.dumps(item, indent=2)}"
-        assert len(item["anyOf"]) == 2, f"item should have 2 variants: {json.dumps(item, indent=2)}"
 
     def test_discriminated_union_build_strict_openai_schema(self):
         """End-to-end: build_strict_openai_schema should not produce oneOf for
