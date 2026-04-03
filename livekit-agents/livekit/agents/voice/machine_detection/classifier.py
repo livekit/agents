@@ -259,7 +259,9 @@ class _MachineDetectionClassifier(EventEmitter[Literal["machine_detection_result
                     )
                 )
 
+        @log_exceptions(logger=logger)
         async def _run(transcript: str) -> None:
+
             stream = self._llm.chat(
                 chat_ctx=ChatContext(
                     items=[
@@ -277,6 +279,7 @@ class _MachineDetectionClassifier(EventEmitter[Literal["machine_detection_result
         try:
             async for text in self._input_ch:
                 transcript += " " + text
+                transcript = transcript.lstrip()
                 if run_atask is not None:
                     await aio.cancel_and_wait(run_atask)
                 run_atask = asyncio.create_task(_run(transcript.lstrip()))
@@ -289,6 +292,8 @@ class _MachineDetectionClassifier(EventEmitter[Literal["machine_detection_result
             return
 
         self._verdict_ready.set()
+        if not self._input_ch.closed:
+            self._input_ch.close()
 
         if self._no_speech_timer is not None:
             self._no_speech_timer.cancel()
@@ -302,8 +307,6 @@ class _MachineDetectionClassifier(EventEmitter[Literal["machine_detection_result
 
         if self._classify_task is not None:
             await aio.cancel_and_wait(self._classify_task)
-        if not self._input_ch.closed:
-            self._input_ch.close()
 
         self._closed = True
         self._started = False

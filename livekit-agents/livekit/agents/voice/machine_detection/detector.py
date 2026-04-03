@@ -73,6 +73,10 @@ class MachineDetector:
     def pending(self) -> bool:
         return self._classifier is not None and self._result is None
 
+    @property
+    def started(self) -> bool:
+        return self._classifier is not None and self._classifier.started
+
     def start(self, session: AgentSession) -> None:
         """Wire MachineDetector to the given session."""
         self._session = session
@@ -88,10 +92,6 @@ class MachineDetector:
         """
         if self._session is None:
             raise RuntimeError("MachineDetector is not wired to a session, call start() first")
-        if self._classifier is None:
-            raise RuntimeError(
-                "MachineDetector could not be resolved, please provide a compatible LLM"
-            )
 
         if self._classifier is not None:
             await self._classifier._verdict_ready.wait()
@@ -101,7 +101,7 @@ class MachineDetector:
         result = self._result
 
         if result.is_machine and self._interrupt_on_machine:
-            self._session.interrupt(force=True)
+            await self._session.interrupt(force=True)
 
         if result.category == MachineDetectionCategory.MACHINE_IVR and self._ivr_detection:
             await self._session._start_ivr_detection(transcript=result.transcript)
@@ -165,11 +165,18 @@ class MachineDetector:
             await self._classifier.close()
             self._classifier = None
 
+        if self._session is not None and self._session._activity is not None:
+            self._session._activity._resume_authorization()
+
     # endregion
 
     # region: internal methods
 
     def _run(self, session: AgentSession) -> None:
+        if self._classifier is not None:
+            logger.warning("machine detector already running, skipping")
+            return
+
         self._session = session
         self._classifier = self._resolve_classifier(self._llm_config, session)
         if self._classifier is None:
@@ -191,7 +198,12 @@ class MachineDetector:
     def _on_machine_detection_result(self, result: MachineDetectionResult) -> None:
         self._result = result
         task = asyncio.create_task(self.aclose())
-        task.add_done_callback(lambda _: None)
+
+        def _done_callback(task: asyncio.Task[None]) -> None:
+            if not task.cancelled() and (exception := task.exception()) is not None:
+                logger.error("error closing machine detector: %s", exception)
+
+        task.add_done_callback(_done_callback)
 
     @staticmethod
     def _resolve_classifier(
