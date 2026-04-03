@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.8.0",
-    "livekit-agents>=1.4.4",
+    "livekit-agents>=1.5.1",
 ]
 
 [project.urls]
@@ -40,3 +40,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

@@ -14,7 +14,7 @@ import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.llm.tool_context import (
     Tool,
 )
@@ -40,6 +40,7 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
+from ..log import logger
 from ..models import _supports_reasoning_effort
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
@@ -175,6 +176,10 @@ class LLM(llm.LLM):
             else:
                 reasoning = Reasoning(effort="minimal")
 
+        if client is not None and use_websocket:
+            logger.warning("use_websocket is ignored when a custom client is provided, disabling")
+            use_websocket = False
+
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -194,6 +199,7 @@ class LLM(llm.LLM):
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
+        self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
 
         if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -236,6 +242,16 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        if self._opts.use_websocket and self._ws is not None:
+            from urllib.parse import urlparse
+
+            return urlparse(self._ws._base_url).netloc
+        if self._client is not None:
+            return self._client._base_url.netloc.decode("utf-8")
+        return ""
+
     def chat(
         self,
         *,
@@ -272,7 +288,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: response_create_params.ToolChoice
             if isinstance(tool_choice, dict):
@@ -282,7 +298,7 @@ class LLM(llm.LLM):
                 }
                 extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice  # type: ignore
+                oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
@@ -293,7 +309,9 @@ class LLM(llm.LLM):
             and self._prev_resp_id
         ):
             n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx):
+            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
+                self._prev_chat_ctx
+            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
                 # send only the new items appended since the last response
                 input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
                 extra["previous_response_id"] = self._prev_resp_id
@@ -309,6 +327,15 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
         )
+
+    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
+        if not self._pending_tool_calls:
+            return True
+
+        completed_tool_calls = {
+            item.call_id for item in items if item.type == "function_call_output"
+        }
+        return all(call_id in completed_tool_calls for call_id in self._pending_tool_calls)
 
 
 class LLMStream(llm.LLMStream):
@@ -330,6 +357,8 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._response_completed: bool = False
+        self._pending_tool_calls = set[str]()
+
         self._client = client
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
@@ -479,6 +508,7 @@ class LLMStream(llm.LLMStream):
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
+        self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
         if usage := event.response.usage:
@@ -512,6 +542,7 @@ class LLMStream(llm.LLMStream):
                     ],
                 ),
             )
+            self._pending_tool_calls.add(event.item.call_id)
         return chunk
 
     def _handle_response_output_text_delta(

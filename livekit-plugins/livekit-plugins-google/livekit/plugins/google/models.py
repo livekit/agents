@@ -193,6 +193,14 @@ SpeechLanguages = Literal[
     "zu-ZA",
 ]
 
+EndpointingSensitivity = Literal[
+    "ENDPOINTING_SENSITIVITY_UNSPECIFIED",
+    "ENDPOINTING_SENSITIVITY_STANDARD",
+    "ENDPOINTING_SENSITIVITY_SHORT",
+    "ENDPOINTING_SENSITIVITY_SUPERSHORT",
+]
+# https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3#sensitivity_levels
+
 Gender = Literal["male", "female", "neutral"]
 
 ChatModels = Literal[

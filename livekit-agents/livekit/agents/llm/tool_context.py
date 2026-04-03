@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import itertools
@@ -47,7 +48,7 @@ class ProviderTool(Tool):
         return self._id
 
 
-class Toolset(ABC):
+class Toolset:
     @dataclass
     class ToolCalledEvent:
         ctx: RunContext
@@ -58,16 +59,40 @@ class Toolset(ABC):
         ctx: RunContext
         output: Any | Exception | None
 
-    def __init__(self, *, id: str) -> None:
+    def __init__(self, *, id: str, tools: Sequence[Tool | Toolset] | None = None) -> None:
         self._id = id
+        self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
+        self._tools.extend(find_function_tools(self))
 
     @property
     def id(self) -> str:
         return self._id
 
     @property
-    @abstractmethod
-    def tools(self) -> list[Tool]: ...
+    def tools(self) -> Sequence[Tool | Toolset]:
+        return self._tools
+
+    async def setup(self) -> Self:
+        """Initialize the toolset and any nested toolsets.
+
+        Called automatically by ``AgentActivity`` when an agent starts.
+        """
+        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        if toolsets:
+            await asyncio.gather(*(toolset.setup() for toolset in toolsets))
+        return self
+
+    async def aclose(self) -> None:
+        """Close the toolset and release any held resources.
+
+        Agent-scoped toolsets (passed to ``Agent(tools=...)``) are closed when the
+        ``AgentActivity`` ends (on agent transition or session close). Session-scoped
+        toolsets (passed to ``AgentSession(tools=...)``) are closed only when the
+        ``AgentSession`` shuts down.
+        """
+        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        if toolsets:
+            await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
 
 
 # Used by ToolChoice
@@ -490,7 +515,9 @@ class ToolContext:
     def parse_function_tools(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
 
     @overload
-    def parse_function_tools(self, format: Literal["anthropic"]) -> list[dict[str, Any]]: ...
+    def parse_function_tools(
+        self, format: Literal["anthropic"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
 
     def parse_function_tools(
         self,

@@ -11,7 +11,6 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
-    Instructions,
     MetricsReport,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
@@ -37,6 +36,7 @@ from .realtime import (
     RealtimeModelError,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
+    RemoteItemAddedEvent,
 )
 from .tool_context import (
     FunctionTool,
@@ -72,7 +72,6 @@ __all__ = [
     "AgentConfigUpdate",
     "AgentHandoff",
     "MetricsReport",
-    "Instructions",
     "ChatItem",
     "ChoiceDelta",
     "ChatChunk",
@@ -108,6 +107,7 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "RealtimeSessionRestoredEvent",
     "LLMError",
+    "RemoteItemAddedEvent",
 ]
 
 # Cleanup docs of unexported modules

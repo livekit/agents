@@ -11,11 +11,12 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace, trace as trace_api
-from opentelemetry._logs import get_logger_provider, set_logger_provider
+from opentelemetry import context as otel_context, metrics as metrics_api, trace as trace_api
+from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
@@ -25,6 +26,16 @@ from opentelemetry.sdk._logs import (
     ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.metrics import (
+    Counter as SdkCounter,
+    Histogram as SdkHistogram,
+    MeterProvider as SdkMeterProvider,
+    ObservableCounter as SdkObservableCounter,
+    ObservableGauge as SdkObservableGauge,
+    ObservableUpDownCounter as SdkObservableUpDownCounter,
+    UpDownCounter as SdkUpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -35,7 +46,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
-from ..log import logger
+from ..log import TRACE_LEVEL, logger
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -47,12 +58,12 @@ if TYPE_CHECKING:
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
-        self._tracer_provider: trace_api.TracerProvider = trace.get_tracer_provider()
-        self._tracer = trace.get_tracer(instrumenting_module_name)
+        self._tracer_provider: trace_api.TracerProvider = trace_api.get_tracer_provider()
+        self._tracer = trace_api.get_tracer(instrumenting_module_name)
 
     def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
         self._tracer_provider = tracer_provider
-        self._tracer = trace.get_tracer(
+        self._tracer = trace_api.get_tracer(
             self._instrumenting_module_name,
             tracer_provider=self._tracer_provider,
         )
@@ -110,6 +121,22 @@ class _BufferingHandler(logging.Handler):
         self.buffer.append(record)
 
 
+class _TraceLevelLoggingHandler(LoggingHandler):
+    """Custom LoggingHandler that properly maps TRACE_LEVEL to OTel TRACE severity.
+
+    The default OTel LoggingHandler maps any log level < 10 to UNSPECIFIED,
+    but we want TRACE_LEVEL (5) to map to TRACE for proper severity in exports.
+    """
+
+    def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
+        log_record = super()._translate(record)
+        # OTel's std_to_otel returns UNSPECIFIED for levels < 10
+        # Map our TRACE_LEVEL to OTel's TRACE
+        if record.levelno == TRACE_LEVEL:
+            log_record.severity_number = SeverityNumber.TRACE
+        return log_record
+
+
 def set_tracer_provider(
     tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
@@ -129,7 +156,7 @@ def _setup_cloud_tracer(
     *,
     room_id: str,
     job_id: str,
-    cloud_hostname: str,
+    observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
 ) -> None:
@@ -200,7 +227,7 @@ def _setup_cloud_tracer(
                 tracer_provider.resource.merge(resource)
 
         span_exporter = OTLPSpanExporter(
-            endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
+            endpoint=f"{observability_url}/observability/traces/otlp/v0",
             compression=otlp_compression,
             session=session,
         )
@@ -209,7 +236,7 @@ def _setup_cloud_tracer(
             tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
             tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    # Set up the logger provider — it's the entrypoint for session reports,
+    # Always set up the logger provider — it's needed for session reports,
     # evaluations, and chat history, not just Python log export.
     logger_provider = get_logger_provider()
     if not isinstance(logger_provider, LoggerProvider):
@@ -218,17 +245,37 @@ def _setup_cloud_tracer(
 
     if enable_logs:
         log_exporter = OTLPLogExporter(
-            endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
+            endpoint=f"{observability_url}/observability/logs/otlp/v0",
             compression=otlp_compression,
             session=session,
         )
         logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
         logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
 
-        handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+        handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
         root = logging.getLogger()
         root.addHandler(handler)
+
+    # Set up the MeterProvider for OTEL metrics export
+    current_meter_provider = metrics_api.get_meter_provider()
+    if not isinstance(current_meter_provider, SdkMeterProvider):
+        metric_exporter = OTLPMetricExporter(
+            endpoint=f"{observability_url}/observability/metrics/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+            preferred_temporality={
+                SdkCounter: AggregationTemporality.DELTA,
+                SdkUpDownCounter: AggregationTemporality.DELTA,
+                SdkHistogram: AggregationTemporality.DELTA,
+                SdkObservableCounter: AggregationTemporality.DELTA,
+                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+                SdkObservableGauge: AggregationTemporality.DELTA,
+            },
+        )
+        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+        meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
+        metrics_api.set_meter_provider(meter_provider)
 
 
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
@@ -347,13 +394,13 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb)
+    return MessageToDict(item_pb, preserving_proto_field_name=True)
 
 
 async def _upload_session_report(
     *,
     agent_name: str,
-    cloud_hostname: str,
+    observability_url: str,
     report: SessionReport,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
@@ -395,7 +442,15 @@ async def _upload_session_report(
             attributes={
                 "session.options": vars(report.options),
                 "session.report_timestamp": report.timestamp,
+                "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
+                "sdk_version": report.sdk_version,
+                "usage": [
+                    {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
+                    for u in report.model_usage
+                ]
+                if report.model_usage
+                else None,
             },
         )
 
@@ -437,12 +492,28 @@ async def _upload_session_report(
                 severity_text=severity_text,
             )
 
-    if tagger.outcome_reason:
+    for tag, entry in tagger._tags.items():
+        if entry.metadata:
+            _log(
+                eval_logger,
+                body="tag",
+                timestamp=int(entry.timestamp * 1e9),
+                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+            )
+
+    if tagger.outcome:
+        is_fail = tagger.outcome == "fail"
+        outcome_data: dict[str, Any] = {"outcome": tagger.outcome}
+        if tagger.outcome_reason:
+            outcome_data["reason"] = tagger.outcome_reason
+
         _log(
             eval_logger,
             body="outcome",
             timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": {"reason": tagger.outcome_reason}},
+            attributes={"outcome": outcome_data},
+            severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
+            severity_text="error" if is_fail else "unspecified",
         )
 
     has_audio = (
@@ -494,7 +565,7 @@ async def _upload_session_report(
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 
-    url = f"https://{cloud_hostname}/observability/recordings/v0"
+    url = f"{observability_url}/observability/recordings/v0"
     headers = {
         "Authorization": f"Bearer {jwt}",
         "Content-Type": mp.content_type,
@@ -523,3 +594,8 @@ def _shutdown_telemetry() -> None:
 
         logger_provider.force_flush()
         logger_provider.shutdown()  # type: ignore
+
+    if isinstance(meter_provider := metrics_api.get_meter_provider(), SdkMeterProvider):
+        logger.debug("shutting down telemetry meter provider")
+        meter_provider.force_flush()
+        meter_provider.shutdown()

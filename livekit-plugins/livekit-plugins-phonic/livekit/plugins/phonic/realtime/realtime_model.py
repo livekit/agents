@@ -24,9 +24,11 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.types import (
+    AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
     ConfigPayload,
+    GenerateReplyPayload,
     InputTextPayload,
     ToolCallInterruptedPayload,
     ToolCallOutputPayload,
@@ -51,10 +53,13 @@ class _RealtimeOptions:
     welcome_message: NotGivenOr[str | None]
     generate_welcome_message: NotGivenOr[bool | None]
     project: NotGivenOr[str | None]
-    languages: NotGivenOr[list[str]]
+    default_language: NotGivenOr[str]
+    additional_languages: NotGivenOr[list[str]]
+    multilingual_mode: NotGivenOr[Literal["auto", "request"]]
     audio_speed: NotGivenOr[float]
     phonic_tools: NotGivenOr[list[str]]
     boosted_keywords: NotGivenOr[list[str]]
+    min_words_to_interrupt: NotGivenOr[int]
     generate_no_input_poke_text: NotGivenOr[bool]
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
@@ -98,10 +103,14 @@ class RealtimeModel(llm.RealtimeModel):
         welcome_message: NotGivenOr[str | None] = NOT_GIVEN,
         generate_welcome_message: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str | None] = NOT_GIVEN,
+        default_language: NotGivenOr[str] = NOT_GIVEN,
+        additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
         languages: NotGivenOr[list[str]] = NOT_GIVEN,
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
         generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
@@ -121,10 +130,18 @@ class RealtimeModel(llm.RealtimeModel):
             generate_welcome_message: When True, the welcome message is automatically generated
                 and ``welcome_message`` is ignored.
             project: Project name to use for the conversation.
-            languages: ISO 639-1 language codes the agent should recognize and speak.
+            default_language: ISO 639-1 default language for recognition and speech.
+            additional_languages: Further ISO 639-1 codes the agent may use (must not include
+                ``default_language``).
+            multilingual_mode: ``\"auto\"`` to detect language per utterance, ``\"request\"`` to
+                switch only when the user asks (recommended).
+            languages: Deprecated. Use ``default_language`` and ``additional_languages`` instead.
+                When both of those are omitted and this is set, ``languages[0]`` is the default
+                language and ``languages[1:]`` are additional languages.
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
+            min_words_to_interrupt: Minimum number of user words required to interrupt the assistant.
             generate_no_input_poke_text: When True, auto-generate poke text when the user is silent.
             no_input_poke_sec: Seconds of silence before sending a poke message.
             no_input_poke_text: Custom poke message text. Ignored when
@@ -140,6 +157,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=True,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -150,6 +168,20 @@ class RealtimeModel(llm.RealtimeModel):
                 "set PHONIC_API_KEY environment variable."
             )
 
+        if (
+            is_given(languages)
+            and not is_given(default_language)
+            and not is_given(additional_languages)
+        ):
+            logger.warning(
+                "The `languages` parameter is deprecated; use `default_language` and `additional_languages` instead. When both are omitted, "
+                "`languages[0]` is the default language and `languages[1:]` are additional languages."
+            )
+            if languages:
+                default_language = languages[0]
+            if len(languages) > 1:
+                additional_languages = languages[1:]
+
         self._opts = _RealtimeOptions(
             api_key=api_key,
             phonic_agent=phonic_agent,
@@ -157,10 +189,13 @@ class RealtimeModel(llm.RealtimeModel):
             welcome_message=welcome_message,
             generate_welcome_message=generate_welcome_message,
             project=project,
-            languages=languages,
+            default_language=default_language,
+            additional_languages=additional_languages,
+            multilingual_mode=multilingual_mode,
             audio_speed=audio_speed,
             phonic_tools=phonic_tools,
             boosted_keywords=boosted_keywords,
+            min_words_to_interrupt=min_words_to_interrupt,
             generate_no_input_poke_text=generate_no_input_poke_text,
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
@@ -222,12 +257,15 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._session_lock = asyncio.Lock()
 
+        self._generate_reply_task: asyncio.Task[None] | None = None
+        self._pending_generate_reply_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._instructions_ready = asyncio.Event()
         self._tools_ready = asyncio.Event()
+        self._ready_to_start = asyncio.Event()
         self._config_sent = False
-        self._ready_to_start = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
+        self._system_prompt_postfix: str = ""
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -259,8 +297,38 @@ class RealtimeSession(llm.RealtimeSession):
         self._instructions_ready.set()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        tool_call_result_sent = False
-        for item in chat_ctx.items:
+        if not self._config_sent:
+            messages = [
+                item
+                for item in chat_ctx.items
+                if isinstance(item, llm.ChatMessage)
+                and item.text_content
+                and item.text_content.strip()
+            ]
+            if messages:
+                turn_history = "\n".join(f"{m.role}: {m.text_content}" for m in messages)
+                if turn_history.strip():
+                    logger.debug(
+                        "update_chat_ctx called with messages prior to config being sent to "
+                        "Phonic. Including conversation state in system instructions."
+                    )
+                    self._system_prompt_postfix = (
+                        "\n\nThis conversation is being continued from an existing "
+                        "conversation. You are the assistant speaking to the user. "
+                        "The following is the conversation history:\n" + turn_history
+                    )
+                self._chat_ctx = chat_ctx.copy()
+            return
+
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+        sent_tool_call_output = False
+        sent_system_message = False
+
+        for _, item_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if item is None:
+                continue
+
             if (
                 isinstance(item, llm.FunctionCallOutput)
                 and item.call_id in self._pending_tool_call_ids
@@ -274,15 +342,27 @@ class RealtimeSession(llm.RealtimeSession):
                             output=str(item.output),
                         )
                     )
-                    tool_call_result_sent = True
+                    sent_tool_call_output = True
 
-        if tool_call_result_sent:
-            self._start_new_assistant_turn()
-        elif self._config_sent:
+            if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
+                text = item.text_content
+                if text:
+                    logger.debug(f"Sending add system message: {text}")
+                    if self._socket:
+                        await self._socket.send_add_system_message(
+                            AddSystemMessagePayload(system_message=text)
+                        )
+                        sent_system_message = True
+
+        self._chat_ctx = chat_ctx.copy()
+
+        if not sent_tool_call_output and not sent_system_message:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
             )
+        if sent_tool_call_output:
+            self._start_new_assistant_turn()
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         if self._config_sent:
@@ -313,7 +393,11 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("update_options is not supported by the Phonic realtime model.")
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._session_should_close.is_set() or not self._ready_to_start or not self._socket:
+        if (
+            self._session_should_close.is_set()
+            or not self._ready_to_start.is_set()
+            or not self._socket
+        ):
             return
 
         for f in self._resample_audio(frame):
@@ -325,12 +409,40 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("push_video is not supported by the Phonic realtime model.")
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        raise NotImplementedError(
-            "generate_reply is not yet supported by the Phonic realtime model. "
-            "Consider using `welcome_message` instead."
+        payload = GenerateReplyPayload(
+            system_message=instructions if is_given(instructions) else None,
         )
+        if self._generate_reply_task and not self._generate_reply_task.done():
+            self._generate_reply_task.cancel()
+        self._generate_reply_task = asyncio.create_task(self._send_generate_reply(payload))
+
+        self._close_current_generation(interrupted=False)
+
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generate_reply_fut = fut
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+
+        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
+        return fut
+
+    async def _send_generate_reply(self, payload: GenerateReplyPayload) -> None:
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
+        if self._socket:
+            await self._socket.send_generate_reply(payload)
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
@@ -363,8 +475,16 @@ class RealtimeSession(llm.RealtimeSession):
         self._send_ch.close()
         self._instructions_ready.set()
         self._tools_ready.set()
+        self._ready_to_start.set()
 
         self._close_current_generation(interrupted=False)
+
+        if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
+            self._pending_generate_reply_fut.cancel()
+            self._pending_generate_reply_fut = None
+
+        if self._generate_reply_task and not self._generate_reply_task.done():
+            await utils.aio.cancel_and_wait(self._generate_reply_task)
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
@@ -376,8 +496,10 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
+            t0 = time.perf_counter()
             self._socket_ctx = self._client.conversations.connect()
             self._socket = await self._socket_ctx.__aenter__()
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             # Need to wait for instructions and tools before sending config
             await self._instructions_ready.wait()
@@ -393,20 +515,27 @@ class RealtimeSession(llm.RealtimeSession):
                 tools_payload.extend(self._opts.phonic_tools)
             tools_payload.extend(self._tool_definitions)
 
+            if not is_given(self._opts.instructions):
+                logger.warning("Instructions are not set. Phonic will not start a conversation.")
+                return
+
             config = {
                 "type": "config",
                 "agent": self._opts.phonic_agent,
                 "project": self._opts.project,
                 "welcome_message": self._opts.welcome_message,
                 "generate_welcome_message": self._opts.generate_welcome_message,
-                "system_prompt": self._opts.instructions,
+                "system_prompt": self._opts.instructions + self._system_prompt_postfix,
                 "voice_id": self._opts.voice,
                 "input_format": "pcm_44100",
                 "output_format": "pcm_44100",
-                "recognized_languages": self._opts.languages,
+                "default_language": self._opts.default_language,
+                "additional_languages": self._opts.additional_languages,
+                "multilingual_mode": self._opts.multilingual_mode,
                 "audio_speed": self._opts.audio_speed,
                 "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
                 "boosted_keywords": self._opts.boosted_keywords,
+                "min_words_to_interrupt": self._opts.min_words_to_interrupt,
                 "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
                 "no_input_poke_sec": self._opts.no_input_poke_sec,
                 "no_input_poke_text": self._opts.no_input_poke_text,
@@ -494,14 +623,14 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "tool_call_interrupted":
                     self._handle_tool_call_interrupted(message)
                 elif msg_type == "ready_to_start_conversation":
-                    self._ready_to_start = True
+                    self._ready_to_start.set()
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
                 self._emit_error(e, recoverable=True)
                 raise e
 
-    def _start_new_assistant_turn(self) -> None:
+    def _start_new_assistant_turn(self, user_initiated: bool = False) -> llm.GenerationCreatedEvent:
         if self._current_generation:
             self._close_current_generation(interrupted=True)
 
@@ -527,15 +656,23 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
-        self.emit(
-            "generation_created",
-            llm.GenerationCreatedEvent(
-                message_stream=self._current_generation.message_ch,
-                function_stream=self._current_generation.function_ch,
-                user_initiated=False,
-                response_id=response_id,
-            ),
+        generation_ev = llm.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+            user_initiated=user_initiated,
+            response_id=response_id,
         )
+
+        if (
+            self._pending_generate_reply_fut is not None
+            and not self._pending_generate_reply_fut.done()
+        ):
+            generation_ev.user_initiated = True
+            self._pending_generate_reply_fut.set_result(generation_ev)
+            self._pending_generate_reply_fut = None
+
+        self.emit("generation_created", generation_ev)
+        return generation_ev
 
     def _close_current_generation(self, interrupted: bool) -> None:
         gen = self._current_generation
