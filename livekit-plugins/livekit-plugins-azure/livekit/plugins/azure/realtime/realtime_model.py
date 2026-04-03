@@ -486,9 +486,7 @@ class RealtimeSession(
             for fut in self._response_created_futures.values():
                 if not fut.done():
                     fut.set_exception(
-                        llm.RealtimeError(
-                            "pending response discarded due to session reconnection"
-                        )
+                        llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
 

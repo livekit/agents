@@ -143,9 +143,7 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
         logger.info(f"[TOOL_CONVERSION] Converted raw tool {tool.info.name}")
         return azure_tool
     else:
-        logger.warning(
-            f"[TOOL_CONVERSION] Skipping unsupported tool type: {type(tool)}"
-        )
+        logger.warning(f"[TOOL_CONVERSION] Skipping unsupported tool type: {type(tool)}")
         return None
 
 
