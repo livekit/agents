@@ -121,17 +121,23 @@ class AsyncToolset(Toolset):
     """A toolset for running long-running functions in the background.
 
     Tools with an :class:`AsyncRunContext` parameter are wrapped to run in the background.
+    Each ``ctx.update()`` and the final ``return`` inject a tool output into the conversation;
+    the agent then generates a natural-language reply to the user based on that output.
 
     Example::
+
         @function_tool
         async def book_flight(ctx: AsyncRunContext, origin: str, destination: str) -> dict:
             await ctx.update(f"Looking up flights from {origin} to {destination}...")
+            # → agent says: "Sure, let me look up flights from NYC to Tokyo for you!"
 
             flights = await search_flights(origin, destination)
             await ctx.update(f"Found {len(flights)} flights, picking the best one...")
+            # → agent says: "I found 3 flights — picking the best option for you now."
 
             booking = await book_best_flight(flights)
             return {"confirmation": booking.id}
+            # → agent says: "All set! Your booking confirmation number is FL-847293."
 
         async_tools = AsyncToolset(id="booking", tools=[book_flight])
     """
