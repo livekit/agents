@@ -400,7 +400,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
-        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
+        self._input = io.AgentInput(
+            self._on_video_input_changed,
+            self._on_audio_input_changed,
+            audio_enabled_cb=self._on_audio_enabled_changed,
+        )
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -450,7 +454,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._ivr_activity: IVRActivity | None = None
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
-        if event == "metrics_collected":
+        if event == "metrics_collected" and callback is not None:
             logger.warning(
                 "metrics_collected is deprecated. "
                 "Use session_usage_updated for usage tracking "
@@ -603,6 +607,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started_at = time.time()
 
             # configure observability first
+            record_is_given = is_given(record)
             job_ctx: JobContext | None = None
             try:
                 # defer to server-side setting for recording
@@ -616,7 +621,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
 
+            is_primary = True
             if job_ctx:
+                # set the primary session
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
+                    job_ctx._primary_agent_session = self
+                else:
+                    is_primary = False
+                    if any(self._recording_options.values()):
+                        if record_is_given:
+                            raise RuntimeError(
+                                "Only one `AgentSession` can be the primary at a time. "
+                                "If you want to ignore primary designation, "
+                                "use session.start(record=False)."
+                            )
+                        else:
+                            # auto-disable recording for non-primary sessions when record is not given
+                            self._recording_options = _resolve_recording_options(False)
+
                 job_ctx.init_recording(self._recording_options)
 
             self._session_span = current_span = tracer.start_span("agent_session")
@@ -685,14 +707,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                transport = RoomSessionTransport(room)
-                self._session_host = SessionHost(transport)
-                self._session_host.register_session(self)
+                if is_primary:
+                    # only the primary session can have a session host
+                    transport = RoomSessionTransport(room)
+                    self._session_host = SessionHost(transport)
+                    self._session_host.register_session(self)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
                     self._room_io.register_text_input(text_input_opts.text_input_cb)
-                    self._session_host.register_text_input(text_input_opts.text_input_cb)
+                    if self._session_host is not None:
+                        self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -709,14 +734,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                                 )
                             )
                             tasks.append(task)
-
-                if job_ctx._primary_agent_session is None:
-                    job_ctx._primary_agent_session = self
-                elif any(self._recording_options.values()):
-                    raise RuntimeError(
-                        "Only one `AgentSession` can be the primary at a time. "
-                        "If you want to ignore primary designation, use session.start(record=False)."
-                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
@@ -988,31 +1005,57 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_options(
         self,
         *,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the agent session.
 
         Args:
-            min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
-            max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+            endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
+            min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
+            max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
-        if is_given(min_endpointing_delay):
-            self._opts.endpointing["min_delay"] = min_endpointing_delay
-        if is_given(max_endpointing_delay):
-            self._opts.endpointing["max_delay"] = max_endpointing_delay
+        if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
+            logger.warning(
+                "min_endpointing_delay and max_endpointing_delay are deprecated, "
+                "use endpointing_opts instead"
+            )
+            endpointing_opts = EndpointingOptions(
+                mode=self._opts.endpointing["mode"],
+                min_delay=(
+                    min_endpointing_delay
+                    if is_given(min_endpointing_delay)
+                    else self._opts.endpointing["min_delay"]
+                ),
+                max_delay=(
+                    max_endpointing_delay
+                    if is_given(max_endpointing_delay)
+                    else self._opts.endpointing["max_delay"]
+                ),
+            )
+
+        if is_given(endpointing_opts):
+            if (mode := endpointing_opts.get("mode")) is not None:
+                self._opts.endpointing["mode"] = mode
+            if (min_delay := endpointing_opts.get("min_delay")) is not None:
+                self._opts.endpointing["min_delay"] = min_delay
+            if (max_delay := endpointing_opts.get("max_delay")) is not None:
+                self._opts.endpointing["max_delay"] = max_delay
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
         if self._activity is not None:
             self._activity.update_options(
-                min_endpointing_delay=min_endpointing_delay,
-                max_endpointing_delay=max_endpointing_delay,
+                endpointing_opts=(
+                    self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
+                ),
                 turn_detection=turn_detection,
             )
 
@@ -1178,6 +1221,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
+    async def wait_for_inactive(self) -> None:
+        if self._activity is not None:
+            await self._activity._wait_for_inactive()
+
     async def _update_activity(
         self,
         agent: Agent,
@@ -1211,43 +1258,59 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
-            previous_activity_v = self._activity
-            if (activity := self._activity) is not None:
-                if previous_activity == "close":
-                    await activity.drain()
-                    await activity.aclose()
-                elif previous_activity == "pause":
-                    await activity.pause(blocked_tasks=blocked_tasks or [])
-
-            if self._closing and new_activity == "start":
-                # disallow starting a new activity when the session is closing
-                logger.warning(
-                    f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
-                )
-                self._next_activity = None
-                self._activity = None
-                return
-
-            self._activity = self._next_activity
-            self._next_activity = None
-
-            run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
+            # detach STT pipeline from old activity for potential reuse in the new one
+            _reuse_pipeline = (
+                await self._activity._detach_stt_pipeline_if_reusable(self._next_activity)
+                if self._activity is not None
+                else None
             )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
-                )
-            self._chat_ctx.insert(handoff_item)
 
-            if new_activity == "start":
-                await self._activity.start()
-            elif new_activity == "resume":
-                await self._activity.resume()
+            try:
+                previous_activity_v = self._activity
+                if (activity := self._activity) is not None:
+                    if previous_activity == "close":
+                        await activity.drain()
+                        await activity.aclose()
+                    elif previous_activity == "pause":
+                        await activity.pause(blocked_tasks=blocked_tasks or [])
+
+                if self._closing and new_activity == "start":
+                    # disallow starting a new activity when the session is closing
+                    logger.warning(
+                        f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
+                    )
+                    if _reuse_pipeline is not None:
+                        await _reuse_pipeline.aclose()
+                        _reuse_pipeline = None
+                    self._next_activity = None
+                    self._activity = None
+                    return
+
+                self._activity = self._next_activity
+                self._next_activity = None
+
+                run_state = self._global_run_state
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
+                )
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
+                self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
+
+                if new_activity == "start":
+                    await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
+                elif new_activity == "resume":
+                    await self._activity.resume(reuse_stt_pipeline=_reuse_pipeline)
+            except BaseException:
+                if _reuse_pipeline is not None:
+                    await _reuse_pipeline.aclose()
+                raise
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
@@ -1458,6 +1521,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 created_at=last_speaking_time or time.time(),
             ),
         )
+
+    def _on_audio_enabled_changed(self, enabled: bool) -> None:
+        """End user speaking state when audio is disabled by default."""
+        if not enabled and self._user_state == "speaking":
+            if self._activity is not None:
+                self._activity.on_end_of_speech(None)
+            else:
+                self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self.user_state == "away" and ev.is_final:

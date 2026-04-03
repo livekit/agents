@@ -33,7 +33,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as trace_utils
+from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -49,6 +49,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _STTPipeline,
 )
 from .endpointing import create_endpointing
 from .events import (
@@ -510,7 +511,7 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self) -> None:
+    async def start(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -535,7 +536,7 @@ class AgentActivity(RecognitionHooks):
                         self.tts.prewarm()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
                 self._started = True
 
                 @tracer.start_as_current_span(
@@ -559,7 +560,24 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _start_session(self) -> None:
+    async def _detach_stt_pipeline_if_reusable(
+        self, new_activity: AgentActivity
+    ) -> _STTPipeline | None:
+        """Detach and return the STT pipeline if it can be handed off to *new_activity*.
+
+        Requires the same STT instance and the same stt_node implementation.
+        """
+        if (
+            self._audio_recognition
+            and self.stt is not None
+            and type(self.agent).stt_node is type(new_activity.agent).stt_node
+            and self.stt is new_activity.stt
+        ):
+            return await self._audio_recognition.detach_stt()
+
+        return None
+
+    async def _start_session(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
         if isinstance(self.llm, llm.LLM):
@@ -679,7 +697,11 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
-        self._audio_recognition.start()
+        if reuse_stt_pipeline is not None:
+            logger.debug("reusing STT pipeline from previous activity")
+            self._audio_recognition.start(stt_pipeline=reuse_stt_pipeline)
+        else:
+            self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -740,7 +762,7 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self) -> None:
+    async def resume(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
@@ -749,7 +771,7 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                await self._start_session()
+                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
             finally:
                 span.end()
 
@@ -1015,12 +1037,6 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
-            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
-                instructions = self._agent.instructions + "\n" + instructions
-
             task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
@@ -1209,6 +1225,32 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
+    async def _wait_for_inactive(self) -> None:
+        agent_active = True
+        user_active = True
+        while agent_active or user_active:
+            if self._current_speech is None and not self._speech_q:
+                agent_active = False
+            else:
+                agent_active = True
+                if (speech := self._current_speech) and speech._generations:
+                    await speech._wait_for_generation()
+                await asyncio.sleep(0)
+
+            if self._user_silence_event.is_set():
+                user_active = False
+            else:
+                user_active = True
+                await self._user_silence_event.wait()
+
+            if (
+                self._audio_recognition
+                and (eou_task := self._audio_recognition._end_of_turn_task)
+                and not eou_task.done()
+            ):
+                user_active = True
+                await eou_task
+
     # -- Realtime Session events --
 
     def _on_metrics_collected(
@@ -1226,6 +1268,7 @@ class AgentActivity(RecognitionHooks):
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         self._session.emit(
             "session_usage_updated",
@@ -1779,6 +1822,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
         if info.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.started_speaking_at
 
@@ -2156,10 +2204,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.insert(new_message)
 
         if instructions is not None:
-            try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
-            except ValueError:
-                logger.exception("failed to update the instructions")
+            chat_ctx.add_message(role="system", content=[instructions])
 
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
@@ -2341,6 +2386,17 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
+
+        if self.llm:
+            assistant_metrics["llm_metadata"] = {
+                "model_name": self.llm.model,
+                "model_provider": self.llm.provider,
+            }
+        if self.tts:
+            assistant_metrics["tts_metadata"] = {
+                "model_name": self.tts.model,
+                "model_provider": self.tts.provider,
+            }
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
@@ -2554,14 +2610,20 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
+        per_response_tool_choice = (
+            self._rt_session.realtime_model.capabilities.per_response_tool_choice
+        )
         ori_tool_choice = self._tool_choice
-        if utils.is_given(model_settings.tool_choice):
+        if utils.is_given(model_settings.tool_choice) and not per_response_tool_choice:
             self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
         try:
             try:
                 generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
                 )
             except llm.RealtimeError as e:
                 logger.error(
@@ -2580,9 +2642,10 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions,
             )
         finally:
-            # reset tool_choice value
+            # reset tool_choice value (only needed for non-per-response models)
             if (
-                utils.is_given(model_settings.tool_choice)
+                not per_response_tool_choice
+                and utils.is_given(model_settings.tool_choice)
                 and model_settings.tool_choice != ori_tool_choice
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)

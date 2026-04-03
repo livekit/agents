@@ -44,8 +44,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate, num_channels, samples_per_channel=sample_rate // 20
-        )  # chunk the frame into a small, fixed size
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
+        )
 
         # used to republish track on reconnection
         self._republish_task: asyncio.Task[None] | None = None

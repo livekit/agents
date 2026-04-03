@@ -497,3 +497,89 @@ class TestEmptySchemaStripping:
             assert len(any_of) != 1, (
                 f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
             )
+
+
+class TestExecuteFunctionCallValidationErrors:
+    """Test that argument validation errors are surfaced to the LLM."""
+
+    @pytest.mark.asyncio
+    async def test_missing_required_arg_surfaces_error(self):
+        """When the LLM omits a required argument, the error details should be
+        returned as a ToolError (is_error=True) instead of 'An internal error occurred'."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{}",  # missing required 'arg1'
+            call_id="test-call-1",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # The error message should contain details about what went wrong,
+        # NOT the generic "An internal error occurred"
+        assert "An internal error occurred" not in result.fnc_call_out.output
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_wrong_type_arg_surfaces_error(self):
+        """When the LLM provides an argument with the wrong type, the validation
+        error details should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_2])
+        tool_call = FunctionToolCall(
+            name="mock_tool_2",
+            arguments='{"arg1": 12345}',  # should be a MockOption string, not int
+            call_id="test-call-2",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        assert "An internal error occurred" not in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_valid_args_still_work(self):
+        """Verify that valid arguments still execute successfully."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments='{"arg1": "hello"}',
+            call_id="test-call-3",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_surfaces_error(self):
+        """When the LLM provides invalid JSON, the error should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{not valid json}",
+            call_id="test-call-4",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # Should contain error details, not generic message
+        assert "An internal error occurred" not in result.fnc_call_out.output
