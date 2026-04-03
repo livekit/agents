@@ -14,7 +14,6 @@ from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
     AudioInputTranscriptionOptions,
     AzureStandardVoice,
-    FunctionTool,
     InputAudioFormat,
     Modality,
     OutputAudioFormat,
