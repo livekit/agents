@@ -14,3 +14,7 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days", livekit-api = "0 days" }

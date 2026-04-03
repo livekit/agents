@@ -176,6 +176,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -475,7 +476,10 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the LLM based on the instructions."""
         # Cancel prior pending generation if exists

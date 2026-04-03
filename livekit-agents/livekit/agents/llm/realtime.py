@@ -62,6 +62,7 @@ class RealtimeCapabilities:
     auto_tool_reply_generation: bool
     audio_output: bool
     manual_function_calls: bool
+    per_response_tool_choice: bool
 
 
 class RealtimeError(Exception):
@@ -206,6 +207,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # commit the input audio buffer to the server

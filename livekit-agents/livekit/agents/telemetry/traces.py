@@ -26,8 +26,16 @@ from opentelemetry.sdk._logs import (
     ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics import (
+    Counter as SdkCounter,
+    Histogram as SdkHistogram,
+    MeterProvider as SdkMeterProvider,
+    ObservableCounter as SdkObservableCounter,
+    ObservableGauge as SdkObservableGauge,
+    ObservableUpDownCounter as SdkObservableUpDownCounter,
+    UpDownCounter as SdkUpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -256,6 +264,14 @@ def _setup_cloud_tracer(
             endpoint=f"{observability_url}/observability/metrics/otlp/v0",
             compression=otlp_compression,
             session=session,
+            preferred_temporality={
+                SdkCounter: AggregationTemporality.DELTA,
+                SdkUpDownCounter: AggregationTemporality.DELTA,
+                SdkHistogram: AggregationTemporality.DELTA,
+                SdkObservableCounter: AggregationTemporality.DELTA,
+                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+                SdkObservableGauge: AggregationTemporality.DELTA,
+            },
         )
         reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
         meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
