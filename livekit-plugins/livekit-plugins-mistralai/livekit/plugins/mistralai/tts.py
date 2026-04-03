@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import struct
 import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -22,14 +23,21 @@ from mistralai.client.errors import SDKError
 
 from .models import TTSModels, TTSVoices
 
+
+def _f32le_to_s16le(data: bytes) -> bytes:
+    n = len(data) // 4
+    floats = struct.unpack(f"<{n}f", data)
+    return struct.pack(f"<{n}h", *(max(-32768, min(32767, int(s * 32767))) for s in floats))
+
+
 DEFAULT_MODEL: TTSModels = "voxtral-mini-tts-latest"
 DEFAULT_VOICE: TTSVoices = "en_paul_neutral"
 
 SAMPLE_RATE: int = 24000
 NUM_CHANNELS: int = 1
 
-RESPONSE_FORMAT = Literal["mp3", "wav", "opus", "flac"]
-DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMAT = "wav"
+RESPONSE_FORMAT = Literal["mp3", "wav", "pcm", "opus", "flac"]
+DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMAT = "pcm"
 
 
 @dataclass
@@ -59,7 +67,7 @@ class TTS(tts.TTS):
             model: The Mistral AI model to use for text-to-speech, default is "voxtral-mini-tts-latest".
             voice: The voice ID to use for synthesis. Mutually exclusive with ``ref_audio``. Defaults to ``en_paul_neutral`` when neither is given.
             ref_audio: Base64-encoded audio sample (3–25 s) for zero-shot voice cloning. Mutually exclusive with ``voice``.
-            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``opus`` or ``flac``. Defaults to ``wav``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``pcm``.
         """
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
@@ -112,7 +120,7 @@ class TTS(tts.TTS):
             model: The model to use for text-to-speech. Clears ``ref_audio``.
             voice: The voice ID to use for synthesis.
             ref_audio: Base64-encoded audio sample for zero-shot voice cloning. Clears ``voice``.
-            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``opus`` or ``flac``. Defaults to ``wav``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``pcm``.
         """
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
@@ -170,7 +178,10 @@ class ChunkedStream(tts.ChunkedStream):
                 )
             async for ev in stream:
                 if ev.event == "speech.audio.delta":
-                    output_emitter.push(base64.b64decode(ev.data.audio_data))
+                    data = base64.b64decode(ev.data.audio_data)
+                    if self._opts.response_format == "pcm":
+                        data = _f32le_to_s16le(data)
+                    output_emitter.push(data)
                 elif ev.event == "speech.audio.done":
                     self._set_token_usage(
                         input_tokens=ev.data.usage.prompt_tokens,
