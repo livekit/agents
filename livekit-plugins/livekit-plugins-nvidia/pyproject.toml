@@ -22,8 +22,14 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.4.6",
+    "livekit-agents>=1.5.1",
     "nvidia-riva-client",
+]
+
+[project.optional-dependencies]
+personaplex = [
+    "livekit-agents[codecs]>=1.5.1",
+    "sphn>=0.2.0",
 ]
 
 [project.urls]
@@ -39,3 +45,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

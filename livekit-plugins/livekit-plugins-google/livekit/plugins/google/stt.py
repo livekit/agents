@@ -52,7 +52,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
-from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
+from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
 
 LgType = SpeechLanguages | str
 LanguagesInput = LgType | list[LgType]
@@ -87,6 +87,7 @@ class STTOptions:
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
+    endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -151,6 +152,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -182,8 +184,18 @@ class STT(stt.STT):
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
+            endpointing_sensitivity(EndpointingSensitivity): controls the trade-off between latency
+                and accuracy when detecting end-of-speech. Only supported with chirp_3.
+                Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
+                ENDPOINTING_SENSITIVITY_SHORT, ENDPOINTING_SENSITIVITY_SUPERSHORT (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
+        if is_given(endpointing_sensitivity) and model != "chirp_3":
+            logger.warning(
+                "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
+            )
+            endpointing_sensitivity = NOT_GIVEN
+
         if is_given(adaptation):
             if is_given(keywords):
                 logger.warning(
@@ -251,6 +263,7 @@ class STT(stt.STT):
             denoiser_config=denoiser_config,
             speech_start_timeout=speech_start_timeout,
             speech_end_timeout=speech_end_timeout,
+            endpointing_sensitivity=endpointing_sensitivity,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
@@ -447,6 +460,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -500,6 +514,14 @@ class STT(stt.STT):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
             self._config.speech_end_timeout = speech_end_timeout
+        if is_given(endpointing_sensitivity):
+            if self._config.model != "chirp_3":
+                logger.warning(
+                    "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
+                )
+                endpointing_sensitivity = NOT_GIVEN
+            else:
+                self._config.endpointing_sensitivity = endpointing_sensitivity
 
         for stream in self._streams:
             stream.update_options(
@@ -515,6 +537,7 @@ class STT(stt.STT):
                 keywords=keywords,
                 speech_start_timeout=speech_start_timeout,
                 speech_end_timeout=speech_end_timeout,
+                endpointing_sensitivity=endpointing_sensitivity,
             )
 
     async def aclose(self) -> None:
@@ -574,6 +597,7 @@ class SpeechStream(stt.SpeechStream):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -607,6 +631,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
             self._config.speech_end_timeout = speech_end_timeout
+        if is_given(endpointing_sensitivity):
+            self._config.endpointing_sensitivity = endpointing_sensitivity
 
         self._reconnect_event.set()
 
@@ -661,6 +687,12 @@ class SpeechStream(stt.SpeechStream):
                     enable_voice_activity_events=self._config.enable_voice_activity_events
                     or (voice_activity_timeout is not None),
                     voice_activity_timeout=voice_activity_timeout,
+                    endpointing_sensitivity=getattr(
+                        cloud_speech_v2.StreamingRecognitionFeatures.EndpointingSensitivity,
+                        self._config.endpointing_sensitivity,
+                    )
+                    if is_given(self._config.endpointing_sensitivity)
+                    else None,
                 ),
             )
 
@@ -823,6 +855,9 @@ class SpeechStream(stt.SpeechStream):
             audio_pushed = False
             try:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as client:
+                    self._report_connection_acquired(
+                        self._pool.last_acquire_time, self._pool.last_connection_reused
+                    )
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

@@ -210,6 +210,7 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -249,6 +250,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            max_completion_tokens=max_completion_tokens,
         )
         llm._owns_client = True
         return llm

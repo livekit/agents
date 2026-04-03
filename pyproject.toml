@@ -25,6 +25,7 @@ livekit-plugins-gladia = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
+livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
@@ -66,7 +67,9 @@ livekit-plugins-phonic = { workspace = true }
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
+    "livekit-plugins/community",
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
 ]
 
@@ -158,6 +161,11 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mistralai.*"
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
