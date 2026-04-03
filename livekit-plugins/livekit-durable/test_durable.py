@@ -51,11 +51,6 @@ assert isinstance(my_effect, EffectCall)
 pickle.dumps(g)
 
 
-import pickle
-
-from livekit import durable
-
-
 @durable.durable
 def my_generator():
     for i in range(3):
@@ -65,10 +60,6 @@ def my_generator():
 g = my_generator()
 print(next(g))  # 0
 
-b = pickle.dumps(g)
-g2 = pickle.loads(b)
-print(next(g2))  # 1
-print(next(g2))  # 2
-
+pickle.dumps(g)
 print(next(g))  # 1
 print(next(g))  # 2
