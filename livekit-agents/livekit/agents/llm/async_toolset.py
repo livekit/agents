@@ -5,12 +5,15 @@ import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
+import pydantic
+
 from .. import utils
 from ..llm.chat_context import ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
     Tool,
+    ToolError,
     Toolset,
     function_tool,
 )
@@ -235,9 +238,13 @@ class AsyncToolset(Toolset):
 
             async def _execute_tool() -> Any:
                 try:
-                    fnc_args, fnc_kwargs = prepare_function_arguments(
-                        fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
-                    )
+                    try:
+                        fnc_args, fnc_kwargs = prepare_function_arguments(
+                            fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
+                        )
+                    except (pydantic.ValidationError, ValueError) as e:
+                        raise ToolError(f"Error parsing arguments for `{fnc_name}`: {e}") from e
+
                     output = await tool(*fnc_args, **fnc_kwargs)
                 except asyncio.CancelledError:
                     logger.debug(
@@ -248,9 +255,6 @@ class AsyncToolset(Toolset):
                     return
                 except Exception as e:
                     output = e
-                    logger.exception(
-                        "error in async tool", extra={"call_id": call_id, "function": fnc_name}
-                    )
 
                 if not async_ctx._pending_fut.done():
                     # pending() was never called — return output directly
@@ -262,6 +266,13 @@ class AsyncToolset(Toolset):
 
                 if output is None:
                     return
+
+                if isinstance(output, Exception):
+                    extra = {"call_id": call_id, "function": fnc_name, "arguments": raw_arguments}
+                    if isinstance(output, ToolError):
+                        logger.warning(f"tool error in async tool: {output.message}", extra=extra)
+                    else:
+                        logger.exception("error in async tool", extra=extra)
 
                 tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}/finished")
                 if tool_output.fnc_call_out is None:

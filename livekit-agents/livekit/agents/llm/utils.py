@@ -626,14 +626,14 @@ async def execute_function_call(
         # Without this, the LLM only sees "An internal error occurred" and has
         # no signal about what was wrong with its arguments.
         logger.warning(
-            f"invalid arguments for AI function `{tool_call.name}`: {e}",
+            f"invalid arguments for function tool `{tool_call.name}`: {e}",
             extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
         )
         tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
     except Exception as e:
         logger.exception(
-            f"exception preparing arguments for AI function `{tool_call.name}`",
+            f"exception preparing arguments for function tool `{tool_call.name}`",
             extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
         )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
@@ -647,7 +647,7 @@ async def execute_function_call(
 
     except Exception as e:
         logger.exception(
-            f"exception executing AI function `{tool_call.name}`",
+            f"exception executing function tool `{tool_call.name}`",
             extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
         )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
