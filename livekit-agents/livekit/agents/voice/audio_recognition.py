@@ -882,10 +882,7 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-            if (
-                self._session.machine_detector is not None
-                and not self._session.machine_detector.started
-            ):
+            if self._session.machine_detector is not None:
                 self._session.machine_detector._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
