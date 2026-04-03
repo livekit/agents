@@ -653,3 +653,48 @@ class TestExecuteFunctionCallValidationErrors:
         assert result.fnc_call_out.is_error is True
         # Should contain error details, not generic message
         assert "An internal error occurred" not in result.fnc_call_out.output
+
+
+class TestVoicePathValidationErrors:
+    """Test that the voice path's make_tool_output surfaces ToolError details."""
+
+    def test_tool_error_surfaces_message(self):
+        """When a ToolError is passed to make_tool_output, the error message should
+        appear in FunctionCallOutput.output with is_error=True."""
+        from livekit.agents.llm import FunctionCall, ToolError
+        from livekit.agents.voice.generation import make_tool_output
+
+        fnc_call = FunctionCall(
+            name="test_fn",
+            arguments="{}",
+            call_id="test-call-voice-1",
+        )
+        tool_error = ToolError("Error parsing arguments for `test_fn`: missing field 'arg1'")
+
+        result = make_tool_output(fnc_call=fnc_call, output=None, exception=tool_error)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        assert "missing field 'arg1'" in result.fnc_call_out.output
+        assert "An internal error occurred" not in result.fnc_call_out.output
+
+    def test_raw_value_error_hides_message(self):
+        """When a raw ValueError (not ToolError) is passed to make_tool_output,
+        the output is the generic 'An internal error occurred' message.
+        This demonstrates why wrapping in ToolError matters."""
+        from livekit.agents.llm import FunctionCall
+        from livekit.agents.voice.generation import make_tool_output
+
+        fnc_call = FunctionCall(
+            name="test_fn",
+            arguments="{}",
+            call_id="test-call-voice-2",
+        )
+        raw_error = ValueError("missing field 'arg1'")
+
+        result = make_tool_output(fnc_call=fnc_call, output=None, exception=raw_error)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # Raw ValueError produces the generic message - this is the behavior we're fixing
+        assert result.fnc_call_out.output == "An internal error occurred"
