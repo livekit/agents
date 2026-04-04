@@ -74,14 +74,14 @@ class AgentHumanAPI:
         )
         payload = {
             "avatar": avatar,
-            "aspect_ratio": aspect_ratio,
             "room": {
                 "platform": "livekit",
                 "url": room_url,
-                "token": room_token,
-                "display_name": "displaynamexxx",
+                "token": room_token
             },
         }
+        if utils.is_given(aspect_ratio):
+            payload["aspect_ratio"] = aspect_ratio
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
@@ -105,7 +105,7 @@ class AgentHumanAPI:
                 return cast(str, session_data["session"]["session_id"])
         except Exception as e:
             if isinstance(e, APIConnectionError):
-                logger.warning("failed to call agenthuman api", extra={"error": str(e)})
+                logger.warning("[agenthuman] failed to call agenthuman api", extra={"error": str(e)})
             else:
-                logger.exception("failed to call agenthuman api")
+                logger.exception("[agenthuman] failed to call agenthuman api")
             raise

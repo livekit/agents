@@ -89,7 +89,7 @@ class AvatarSession:
             .to_jwt()
         )
 
-        logger.debug("starting avatar session")
+        logger.debug("[agenthuman] starting avatar session")
 
         self.conversation_id = await self._api.create_session(
             avatar=self._avatar,
@@ -103,13 +103,12 @@ class AvatarSession:
                 try:
                     payload = json.loads(data_packet.data.decode("utf-8"))
                     logger.info(
-                        "session.state received: state=%s reason=%s",
+                        "[agenthuman] session.state received: state=%s reason=%s",
                         payload.get("state"),
                         payload.get("reason", ""),
                     )
-                    print(f"[agenthuman] session.state: {payload}")
                 except Exception as e:
-                    logger.warning("session.state: failed to parse data packet: %s", e)
+                    logger.warning("[agenthuman] session.state: failed to parse data packet: %s", e)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,

@@ -9,7 +9,7 @@ This example demonstrates how to create an animated avatar using [AgentHuman](ht
 ```bash
 # AgentHuman Config
 export AGENTHUMAN_API_KEY="..."
-export LEMONSLICE_IMAGE_URL="..." # Publicly accessible image url for the avatar.
+export AGENTHUMAN_AVATAR="..." # Avatar ID or publicly accessible image url for the avatar.
 
 # LiveKit config
 export LIVEKIT_API_KEY="..."
