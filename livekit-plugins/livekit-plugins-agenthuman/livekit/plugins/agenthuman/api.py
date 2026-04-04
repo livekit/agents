@@ -117,7 +117,7 @@ class AgentHumanAPI:
                         raise AgentHumanException(
                             f"Unexpected API response structure: {session_data}"
                         ) from e
-            except APIStatusError:
+            except (APIStatusError, AgentHumanException):
                 raise
             except Exception as e:
                 last_exc = e
