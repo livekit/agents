@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Any, cast
 
@@ -85,27 +86,33 @@ class AgentHumanAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
-        # Create the session
-        try:
-            async with self._session.post(
-                f"{self._api_url}/sessions",
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": self._api_key,
-                },
-                json=payload,
-                timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
-            ) as response:
-                if not response.ok:
-                    text = await response.text()
-                    raise APIStatusError(
-                        "Server returned an error", status_code=response.status, body=text
+        for i in range(self._conn_options.max_retry):
+            try:
+                async with self._session.post(
+                    f"{self._api_url}/sessions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": self._api_key,
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                ) as response:
+                    if not response.ok:
+                        text = await response.text()
+                        raise APIStatusError(
+                            "Server returned an error", status_code=response.status, body=text
+                        )
+                    session_data = await response.json()
+                    return cast(str, session_data["session"]["session_id"])
+            except Exception as e:
+                if isinstance(e, APIConnectionError):
+                    logger.warning(
+                        "[agenthuman] failed to call agenthuman api", extra={"error": str(e)}
                     )
-                session_data = await response.json()
-                return cast(str, session_data["session"]["session_id"])
-        except Exception as e:
-            if isinstance(e, APIConnectionError):
-                logger.warning("[agenthuman] failed to call agenthuman api", extra={"error": str(e)})
-            else:
-                logger.exception("[agenthuman] failed to call agenthuman api")
-            raise
+                else:
+                    logger.exception("[agenthuman] failed to call agenthuman api")
+
+                if i < self._conn_options.max_retry - 1:
+                    await asyncio.sleep(self._conn_options.retry_interval)
+
+        raise APIConnectionError("Failed to create AgentHuman session after all retries")
