@@ -117,8 +117,15 @@ class AgentHumanAPI:
                         raise AgentHumanException(
                             f"Unexpected API response structure: {session_data}"
                         ) from e
-            except (APIStatusError, AgentHumanException):
+            except AgentHumanException:
                 raise
+            except APIStatusError as e:
+                last_exc = e
+                if not e.retryable:
+                    raise
+                logger.warning(
+                    "[agenthuman] failed to call agenthuman api", extra={"error": str(e)}
+                )
             except Exception as e:
                 last_exc = e
                 if isinstance(e, APIConnectionError):
@@ -128,9 +135,11 @@ class AgentHumanAPI:
                 else:
                     logger.exception("[agenthuman] failed to call agenthuman api")
 
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+            if i < self._conn_options.max_retry - 1:
+                await asyncio.sleep(self._conn_options.retry_interval)
 
+        if isinstance(last_exc, APIStatusError):
+            raise last_exc
         raise APIConnectionError(
             "Failed to create AgentHuman session after all retries"
         ) from last_exc
