@@ -66,8 +66,6 @@ class AgentHumanAPI:
             APIConnectionError: If the request fails
         """
         avatar = avatar or (os.getenv("AGENTHUMAN_AVATAR") or DEFAULT_AVATAR_ID)
-        if not avatar:
-            raise AgentHumanException("AGENTHUMAN_AVATAR must be set")
 
         room_url = livekit_room.get("livekit_ws_url") if utils.is_given(livekit_room) else None
         room_token = (
