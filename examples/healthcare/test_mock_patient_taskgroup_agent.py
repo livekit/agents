@@ -1,7 +1,5 @@
 import asyncio
-import json
 import os
-import time
 from pprint import pformat
 
 import pytest
@@ -12,22 +10,6 @@ os.environ.setdefault("LIVEKIT_EVALS_VERBOSE", "1")
 from livekit.agents import AgentSession, inference, llm
 
 from .mock_patient_taskgroup_agent import MockPatientTaskGroupAgent, UserData
-
-DEBUG_LOG_PATH = "/Users/toubatbrian/Documents/agents-js/.cursor/debug-e6d38d.log"
-
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    payload = {
-        "sessionId": "e6d38d",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload) + "\n")
 
 
 def _pretty_events(events: list[object]) -> str:
@@ -82,19 +64,6 @@ async def test_taskgroup_handoff_visibility_with_delay() -> None:
             # Accessing `expect` triggers LIVEKIT_EVALS_VERBOSE debug output.
 
             event_types = [event.type for event in result.events]
-            # region agent log
-            _debug_log(
-                run_id="pre-fix",
-                hypothesis_id="H4",
-                location="test_mock_patient_taskgroup_agent.py:90",
-                message="run1 events captured",
-                data={
-                    "startup_delay": startup_delay,
-                    "delay_after_wait": delay_after_wait,
-                    "event_types": event_types,
-                },
-            )
-            # endregion
             print(
                 f"\nPython run #1 events (startup_delay={startup_delay}s, delay_after_wait={delay_after_wait}s):"
             )
@@ -103,7 +72,7 @@ async def test_taskgroup_handoff_visibility_with_delay() -> None:
             # The first run may either call a tool immediately or ask a follow-up question first.
             if "function_call" in event_types:
                 result.expect.contains_function_call(name="verify_intent")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)
 
             try:
                 result2 = await sess.run(
@@ -113,19 +82,6 @@ async def test_taskgroup_handoff_visibility_with_delay() -> None:
                     f"\nPython run #2 events (startup_delay={startup_delay}s, delay_after_wait={delay_after_wait}s):"
                 )
                 print(_pretty_events(list(result2.events)))
-                # region agent log
-                _debug_log(
-                    run_id="pre-fix",
-                    hypothesis_id="H5",
-                    location="test_mock_patient_taskgroup_agent.py:112",
-                    message="run2 events captured",
-                    data={
-                        "startup_delay": startup_delay,
-                        "delay_after_wait": delay_after_wait,
-                        "event_types": [event.type for event in result2.events],
-                    },
-                )
-                # endregion
             except RuntimeError as e:
                 print(
                     f"\nPython run #2 raised RuntimeError "

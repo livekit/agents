@@ -1,27 +1,9 @@
-import json
-import time
 from dataclasses import dataclass
 from typing import Literal
 
 from livekit.agents import Agent, AgentTask
 from livekit.agents.beta.workflows import TaskGroup
 from livekit.agents.llm import function_tool
-
-DEBUG_LOG_PATH = "/Users/toubatbrian/Documents/agents-js/.cursor/debug-e6d38d.log"
-
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    payload = {
-        "sessionId": "e6d38d",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(payload) + "\n")
 
 
 @dataclass
@@ -40,15 +22,6 @@ class VerifyIntentTask(AgentTask[str]):
         )
 
     async def on_enter(self) -> None:
-        # region agent log
-        _debug_log(
-            run_id="pre-fix",
-            hypothesis_id="H1",
-            location="mock_patient_taskgroup_agent.py:30",
-            message="VerifyIntentTask.on_enter entered",
-            data={"task": "verify_intent_task"},
-        )
-        # endregion
         await self.session.generate_reply(
             instructions=(
                 "Ask user if they want to schedule an appointment. That said, do not say anything more. Just one brief sentence is enough."
@@ -58,15 +31,6 @@ class VerifyIntentTask(AgentTask[str]):
 
     @function_tool()
     async def verify_intent(self, intent: Literal["schedule"]) -> None:
-        # region agent log
-        _debug_log(
-            run_id="pre-fix",
-            hypothesis_id="H2",
-            location="mock_patient_taskgroup_agent.py:50",
-            message="verify_intent tool executed",
-            data={"intent": intent},
-        )
-        # endregion
         self.session.userdata.verified_intent = intent
         self.complete(intent)
 
@@ -80,15 +44,6 @@ class IdentifyPatientTask(AgentTask[dict]):
         )
 
     async def on_enter(self) -> None:
-        # region agent log
-        _debug_log(
-            run_id="pre-fix",
-            hypothesis_id="H3",
-            location="mock_patient_taskgroup_agent.py:69",
-            message="IdentifyPatientTask.on_enter entered",
-            data={"verified_intent": self.session.userdata.verified_intent},
-        )
-        # endregion
         await self.session.generate_reply(
             instructions=(
                 "Ask for full name and date of birth, then call identify_patient immediately."
