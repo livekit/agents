@@ -28,7 +28,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -344,6 +344,9 @@ class LLMStream(llm.LLMStream):
             if self._provider:
                 headers = self._extra_kwargs.setdefault("extra_headers", {})
                 headers["X-LiveKit-Inference-Provider"] = self._provider
+
+            extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
+            extra_headers.update(get_inference_headers())
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),

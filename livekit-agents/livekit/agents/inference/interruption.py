@@ -49,6 +49,7 @@ from ._utils import (
     STAGING_INFERENCE_URL,
     create_access_token,
     get_default_inference_url,
+    get_inference_headers,
 )
 
 SAMPLE_RATE = 16000
@@ -766,6 +767,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
             async with self._session.post(
                 url=f"{self._opts.base_url}/bargein?threshold={self._opts.threshold}&min_frames={int(self._opts.min_frames)}&created_at={int(created_at)}",
                 headers={
+                    **get_inference_headers(),
                     "Content-Type": "application/octet-stream",
                     "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
                 },
@@ -1126,7 +1128,8 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
             ws = await asyncio.wait_for(
