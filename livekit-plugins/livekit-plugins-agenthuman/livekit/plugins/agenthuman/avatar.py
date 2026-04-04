@@ -26,7 +26,7 @@ _AVATAR_AGENT_NAME = "agenthuman-avatar-agent"
 
 
 class AvatarSession:
-    """A AgentHuman avatar session"""
+    """An AgentHuman avatar session"""
 
     def __init__(
         self,
@@ -40,7 +40,7 @@ class AvatarSession:
     ) -> None:
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
-        self.conversation_id: str | None = None
+        self.session_id: str | None = None
         self._avatar = avatar
         self._aspect_ratio = aspect_ratio
         self._api = AgentHumanAPI(
@@ -91,7 +91,7 @@ class AvatarSession:
 
         logger.debug("[agenthuman] starting avatar session")
 
-        self.conversation_id = await self._api.create_session(
+        self.session_id = await self._api.create_session(
             avatar=self._avatar,
             aspect_ratio=self._aspect_ratio,
             livekit_room={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},

@@ -17,19 +17,19 @@
 See https://docs.livekit.io/agents/models/avatar/plugins/agenthuman/ for more information.
 """
 
+from livekit.agents import Plugin
+
 from .api import AgentHumanException
 from .avatar import AvatarSession
+from .log import logger
 from .version import __version__
 
 __all__ = [
     "AgentHumanException",
+    "AgentHumanPlugin",
     "AvatarSession",
     "__version__",
 ]
-
-from livekit.agents import Plugin
-
-from .log import logger
 
 
 class AgentHumanPlugin(Plugin):

@@ -39,7 +39,16 @@ class AgentHumanAPI:
 
         self._api_url = "https://api.agenthuman.com/v1"
         self._conn_options = conn_options
-        self._session = session or aiohttp.ClientSession()
+        if session is not None:
+            self._session = session
+            self._owns_session = False
+        else:
+            self._session = aiohttp.ClientSession()
+            self._owns_session = True
+
+    async def aclose(self) -> None:
+        if self._owns_session:
+            await self._session.close()
 
     async def create_session(
         self,
@@ -84,6 +93,7 @@ class AgentHumanAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
+        last_exc: Exception | None = None
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(
@@ -101,8 +111,16 @@ class AgentHumanAPI:
                             "Server returned an error", status_code=response.status, body=text
                         )
                     session_data = await response.json()
-                    return cast(str, session_data["session"]["session_id"])
+                    try:
+                        return cast(str, session_data["session"]["session_id"])
+                    except (KeyError, TypeError) as e:
+                        raise AgentHumanException(
+                            f"Unexpected API response structure: {session_data}"
+                        ) from e
+            except APIStatusError:
+                raise
             except Exception as e:
+                last_exc = e
                 if isinstance(e, APIConnectionError):
                     logger.warning(
                         "[agenthuman] failed to call agenthuman api", extra={"error": str(e)}
@@ -113,4 +131,6 @@ class AgentHumanAPI:
                 if i < self._conn_options.max_retry - 1:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Failed to create AgentHuman session after all retries")
+        raise APIConnectionError(
+            "Failed to create AgentHuman session after all retries"
+        ) from last_exc
