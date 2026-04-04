@@ -109,6 +109,7 @@ class RunningJobInfo:
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]

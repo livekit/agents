@@ -243,6 +243,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
     def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.kind not in (
+            rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
             rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
         ):
