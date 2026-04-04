@@ -3,6 +3,7 @@ constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
+livekit-plugins-agenthuman = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }

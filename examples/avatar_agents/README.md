@@ -8,6 +8,7 @@ This directory contains examples demonstrating how to integrate visual avatars w
 
 These providers work with pre-configured avatars using unique avatar identifiers:
 
+- **[Agent Human](./agenthuman/)** - [Platform](https://agenthuman.com/) | [Integration Guide](https://docs.agenthuman.com/documentation/livekit)
 - **[Anam](./anam/)** - [Platform](https://anam.ai/) | [Integration Guide](https://docs.anam.ai/third-party-integrations/livekit)
 - **[Avatario](./avatario/)** - [Platform](https://avatario.ai/) | [Integration Guide](https://avatario.ai/docs/integrations/livekit)
 - **[Beyond Presence (Bey)](./bey/)** - [Platform](https://bey.dev/) | [Integration Guide](https://docs.bey.dev/integration/livekit)
@@ -22,6 +23,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 
 These providers allow direct image upload to create custom avatars:
 
+- **[Agent Human](./agenthuman/)** - [Platform](https://agenthuman.com/) | [Integration Guide](https://docs.agenthuman.com/documentation/livekit)
 - **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/self-managed/livekit-agent-integration)
 - **[Hedra](./hedra/)** - [Platform](https://www.hedra.com/)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
