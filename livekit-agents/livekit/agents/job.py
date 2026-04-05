@@ -109,6 +109,7 @@ class RunningJobInfo:
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
@@ -478,6 +479,11 @@ class JobContext:
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
         """
+
+        # handle connection automatically, otherwise wait_for_participant will raise an error
+        if not self._room.isconnected():
+            await self.connect()
+
         return await wait_for_participant(self._room, identity=identity, kind=kind)
 
     async def connect(

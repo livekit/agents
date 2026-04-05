@@ -375,6 +375,7 @@ class LLMStream(llm.LLMStream):
                                 prompt_tokens=chunk.usage.prompt_tokens,
                                 prompt_cached_tokens=cached_tokens or 0,
                                 total_tokens=chunk.usage.total_tokens,
+                                service_tier=getattr(chunk, "service_tier", None),
                             ),
                         )
                         self._event_ch.send_nowait(usage_chunk)
