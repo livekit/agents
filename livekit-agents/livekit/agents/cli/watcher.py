@@ -48,13 +48,13 @@ class WatchClient:
 
         try:
             # On startup: send GetRunningJobsRequest to Go, recv response, reload jobs
-            req = agent_dev.DevMessage(
-                get_running_jobs_request=agent_dev.GetRunningJobsRequest()
+            req = agent_dev.AgentDevMessage(
+                get_running_jobs_request=agent_dev.GetRunningAgentJobsRequest()
             )
             await _send_proto(writer, req.SerializeToString())
 
             data = await _recv_proto(reader)
-            resp = agent_dev.DevMessage()
+            resp = agent_dev.AgentDevMessage()
             resp.ParseFromString(data)
 
             if resp.HasField("get_running_jobs_response"):
@@ -71,14 +71,14 @@ class WatchClient:
                 except (asyncio.IncompleteReadError, ConnectionError, OSError):
                     break
 
-                msg = agent_dev.DevMessage()
+                msg = agent_dev.AgentDevMessage()
                 msg.ParseFromString(data)
 
                 if msg.HasField("get_running_jobs_request"):
                     jobs = self._worker.active_jobs
                     job_protos = [proto.running_job_to_proto(j) for j in jobs]
-                    resp = agent_dev.DevMessage(
-                        get_running_jobs_response=agent_dev.GetRunningJobsResponse(
+                    resp = agent_dev.AgentDevMessage(
+                        get_running_jobs_response=agent_dev.GetRunningAgentJobsResponse(
                             jobs=job_protos
                         )
                     )
