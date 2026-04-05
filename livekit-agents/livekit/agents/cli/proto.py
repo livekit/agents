@@ -19,7 +19,7 @@ class CliArgs:
 
 def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningAgentJobInfo:
     return agent_dev.RunningAgentJobInfo(
-        job=info.job,
+        job=info.job.SerializeToString(),
         accept_name=info.accept_arguments.name,
         accept_identity=info.accept_arguments.identity,
         accept_metadata=info.accept_arguments.metadata,
@@ -37,7 +37,7 @@ def running_job_from_proto(pb: agent_dev.RunningAgentJobInfo) -> RunningJobInfo:
             identity=pb.accept_identity,
             metadata=pb.accept_metadata,
         ),
-        job=pb.job,
+        job=agent.Job.FromString(pb.job),
         url=pb.url,
         token=pb.token,
         worker_id=pb.worker_id,
