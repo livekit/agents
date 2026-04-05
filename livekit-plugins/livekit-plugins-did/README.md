@@ -28,10 +28,6 @@ curl -X POST https://api.d-id.com/agents \
       "type": "expressive",
       "presenter_id": "public_mia_elegant@avt_TJ0Tq5"
     },
-    "llm": {
-      "provider": "openai",
-      "instructions": "You are a helpful assistant."
-    },
     "preview_name": "My Expressive Agent"
   }'
 ```
