@@ -267,6 +267,12 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(output_audio_transcription):
             output_audio_transcription = types.AudioTranscriptionConfig()
 
+        if not is_given(model):
+            if vertexai:
+                model = "gemini-live-2.5-flash-native-audio"
+            else:
+                model = "gemini-2.5-flash-native-audio-preview-12-2025"
+
         server_turn_detection = True
         if (
             is_given(realtime_input_config)
@@ -275,6 +281,10 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+
+        # Gemini 3.1+ does not support send_client_content mid-session.
+        # Tool responses and chat turns must use their own dedicated API methods.
+        supports_client_content = "3.1" not in model
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -287,14 +297,9 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_instructions=True,
                 mutable_tools=False,
                 per_response_tool_choice=False,
+                supports_client_content=supports_client_content,
             )
         )
-
-        if not is_given(model):
-            if vertexai:
-                model = "gemini-live-2.5-flash-native-audio"
-            else:
-                model = "gemini-2.5-flash-native-audio-preview-12-2025"
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -581,17 +586,6 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        if self._opts.model == "gemini-3.1-flash-live-preview":
-            logger.warning(
-                "update_chat_ctx is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
-            )
-            self._chat_ctx = chat_ctx.copy(
-                exclude_handoff=True,
-                exclude_instructions=True,
-                exclude_empty_message=True,
-                exclude_config_update=True,
-            )
-            return
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
             1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
@@ -627,20 +621,29 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                format="google", inject_dummy_user_message=False
-            )
-            # we are not generating, and do not need to inject
-            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+            # Tool responses always go through send_tool_response regardless of model
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            if turns:
-                self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
                 self._send_client_event(tool_results)
+
+            # Chat turns are routed based on model capabilities
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                format="google", inject_dummy_user_message=False
+            )
+            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+            if turns:
+                if self._realtime_model.capabilities.supports_client_content:
+                    self._send_client_event(
+                        types.LiveClientContent(turns=turns, turn_complete=False)
+                    )
+                else:
+                    logger.debug(
+                        "send_client_content not supported mid-session, skipping chat turn update"
+                    )
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.

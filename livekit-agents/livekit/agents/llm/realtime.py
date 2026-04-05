@@ -72,6 +72,10 @@ class RealtimeCapabilities:
     """Whether the tools can be updated mid-session"""
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
+    supports_client_content: bool = True
+    """Whether the model supports send_client_content for mid-session chat context
+    updates. When False, chat turns should be sent via send_realtime_input and tool
+    responses via send_tool_response independently."""
 
 
 class RealtimeError(Exception):
