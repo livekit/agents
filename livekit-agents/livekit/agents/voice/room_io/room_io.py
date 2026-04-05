@@ -26,11 +26,11 @@ if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
 
+from ...job import DEFAULT_PARTICIPANT_KINDS
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
 from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 from .types import (
     DEFAULT_CLOSE_ON_DISCONNECT_REASONS,
-    DEFAULT_PARTICIPANT_KINDS,
     RoomInputOptions,
     RoomOptions,
     RoomOutputOptions,

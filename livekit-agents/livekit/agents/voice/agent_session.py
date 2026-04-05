@@ -43,6 +43,7 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
+from .amd import AMD
 from .events import (
     AgentEvent,
     AgentState,
@@ -450,8 +451,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
 
-        # ivr activity
+        # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
+        self._amd: AMD | None = None
+
+    @property
+    def amd(self) -> AMD | None:
+        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
+        return self._amd
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -736,13 +743,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             tasks.append(task)
 
                 if self.options.ivr_detection:
-                    self._ivr_activity = IVRActivity(self)
-
-                    # inject the IVR activity tools into the session tools
-                    self._tools.extend(self._ivr_activity.tools)
-
                     tasks.append(
-                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                        asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
@@ -908,6 +910,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
+            if self._amd is not None:
+                await self._amd.aclose()
+                self._amd = None
+
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
                 # notify AgentTask to complete and wait it to resume the parent agent
@@ -1057,6 +1063,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),
                 turn_detection=turn_detection,
+            )
+
+    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
+        """Start IVR detection on this session.
+
+        This method injects the DTMF tool and enables loop/silence detection,
+        allowing the agent to navigate IVR phone trees. Safe to call after AMD resolves.
+
+        Args:
+            transcript (str | None, optional): The transcript to start IVR detection with.
+        """
+        if self._ivr_activity is not None:
+            logger.warning("IVR detection already started, skipping")
+            return
+
+        self._ivr_activity = IVRActivity(self)
+        self._tools.extend(self._ivr_activity.tools)
+        await self._ivr_activity.start()
+        if transcript is not None:
+            logger.debug("IVR detection started with transcript", extra={"transcript": transcript})
+            self._ivr_activity._on_user_input_transcribed(
+                UserInputTranscribedEvent(transcript=transcript, is_final=True)
             )
 
     def say(
