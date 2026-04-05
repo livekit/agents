@@ -90,7 +90,7 @@ class AgentHumanAPI:
             payload.update(extra_payload)
 
         last_exc: Exception | None = None
-        for i in range(self._conn_options.max_retry + 1):
+        for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(
                     f"{self._api_url}/sessions",
