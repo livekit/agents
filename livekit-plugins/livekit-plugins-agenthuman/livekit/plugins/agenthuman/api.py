@@ -82,11 +82,7 @@ class AgentHumanAPI:
         )
         payload = {
             "avatar": avatar,
-            "room": {
-                "platform": "livekit",
-                "url": room_url,
-                "token": room_token
-            },
+            "room": {"platform": "livekit", "url": room_url, "token": room_token},
         }
         if utils.is_given(aspect_ratio):
             payload["aspect_ratio"] = aspect_ratio
