@@ -94,7 +94,7 @@ class AgentHumanAPI:
             try:
                 async with self._session.post(
                     f"{self._api_url}/sessions",
-                    headers={
+        for i in range(self._conn_options.max_retry + 1):
                         "Content-Type": "application/json",
                         "x-api-key": self._api_key,
                     },
