@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import os
-import platform
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -23,7 +22,7 @@ from urllib.parse import urlparse
 import httpx
 
 import openai
-from livekit.agents import __version__ as livekit_version, llm
+from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
@@ -51,7 +50,6 @@ from .models import (
     OpenRouterWebPlugin,
     PerplexityChatModels,
     SambaNovaChatModels,
-    SarvamChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
