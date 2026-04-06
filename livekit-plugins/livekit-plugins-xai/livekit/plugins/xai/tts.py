@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -50,6 +51,19 @@ class _TTSOptions:
     voice: GrokVoices | str
     language: TTSLanguages | str
     tokenizer: tokenize.WordTokenizer
+
+
+def _streaming_tts_ws_url(opts: _TTSOptions) -> str:
+    """Build WebSocket URL with query parameters required by the streaming TTS API."""
+    voice = str(opts.voice).lower()
+    language = str(opts.language)
+    params = {
+        "language": language,
+        "voice": voice,
+        "codec": "pcm",
+        "sample_rate": str(SAMPLE_RATE),
+    }
+    return f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
 
 
 class TTS(tts.TTS):
@@ -105,29 +119,25 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "xAI"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self, timeout: float, opts: _TTSOptions
+    ) -> aiohttp.ClientWebSocketResponse:
+        url = _streaming_tts_ws_url(opts)
         try:
             ws = await asyncio.wait_for(
                 self._ensure_session().ws_connect(
-                    XAI_WEBSOCKET_URL,
+                    url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ),
                 timeout,
             )
-            config_msg = {
-                "type": "config",
-                "data": {
-                    "voice_id": self._opts.voice,
-                    "language": self._opts.language,
-                    "output_format": {"Raw": {"encoding": "Linear16"}},
-                    "sample_rate_hertz": "Hz24000",
-                },
-            }
-            try:
-                await ws.send_str(json.dumps(config_msg))
-            except Exception:
-                await ws.close()
-                raise
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
         except (
             aiohttp.ClientConnectorError,
             aiohttp.ClientConnectionResetError,
@@ -240,6 +250,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_id=request_id,
                 body=None,
             ) from None
+        except APIStatusError:
+            raise
+        except APIConnectionError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -250,21 +264,13 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
-        input_ended = False
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal input_ended
-
             async for word in input_stream:
-                text_chunk_msg = {
-                    "type": "text_chunk",
-                    "data": {"text": f"{word.token}", "is_last": False},
-                }
+                text_delta_msg = {"type": "text.delta", "delta": f"{word.token}"}
                 self._mark_started()
-                await ws.send_str(json.dumps(text_chunk_msg))
-            last_msg = {"type": "text_chunk", "data": {"text": "", "is_last": True}}
-            await ws.send_str(json.dumps(last_msg))
-            input_ended = True
+                await ws.send_str(json.dumps(text_delta_msg))
+            await ws.send_str(json.dumps({"type": "text.done"}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
@@ -284,20 +290,36 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected xAI message type %s", msg.type)
                     continue
 
-                msg = json.loads(msg.data)
-                if msg["data"].get("type") == "audio":
-                    if msg["data"]["data"].get("audio", None):
-                        b64data = base64.b64decode(msg["data"]["data"]["audio"])
-                        output_emitter.push(b64data)
+                event = json.loads(msg.data)
+                event_type = event.get("type")
+                if event_type == "audio.delta":
+                    delta = event.get("delta")
+                    if delta:
+                        pcm = base64.b64decode(delta)
+                        output_emitter.push(pcm)
+                elif event_type == "audio.done":
+                    break
+                elif event_type == "error":
+                    err_msg = event.get("message", "unknown error")
+                    code = event.get("code", 400)
+                    try:
+                        code = int(code)
+                    except (ValueError, TypeError):
+                        code = 400
 
-                    if msg["data"]["data"].get("is_last") and input_ended:
-                        output_emitter.end_segment()
-                        break
-
+                    if 400 <= code < 500:
+                        raise APIStatusError(
+                            message=f"xAI TTS error: {err_msg}",
+                            status_code=code,
+                            request_id=None,
+                            body=event,
+                        )
+                    else:
+                        raise APIConnectionError(f"xAI TTS error: {err_msg}")
                 else:
-                    logger.error("Unexpected xAI message %s", msg)
+                    logger.error("Unexpected xAI message %s", event)
 
-        ws = await self._tts._connect_ws(self._conn_options.timeout)
+        ws = await self._tts._connect_ws(self._conn_options.timeout, self._opts)
         tasks = [
             asyncio.create_task(_send_task(ws)),
             asyncio.create_task(_recv_task(ws)),
@@ -307,3 +329,4 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
             await self._tts._close_ws(ws)
+            output_emitter.end_segment()

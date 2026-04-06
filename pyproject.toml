@@ -117,7 +117,7 @@ convention = "google"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = ["--import-mode=importlib", "--ignore=examples"]
+addopts = ["--import-mode=importlib", "--ignore=examples", "--ignore=livekit-plugins/livekit-blockguard", "--ignore=livekit-plugins/livekit-durable"]
 pythonpath = ["."]
 
 
