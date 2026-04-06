@@ -266,19 +266,25 @@ class SpeechHandle:
     async def _wait_for_scheduled(self) -> None:
         await asyncio.shield(self._scheduled_fut)
 
-    def _mark_generation_done(self) -> None:
+    def _mark_generation_done(self, *, error: BaseException | None = None) -> None:
         if not self._generations:
             raise RuntimeError("cannot use mark_generation_done: no active generation is running.")
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._generations[-1].set_result(None)
+            if error is not None:
+                self._generations[-1].set_exception(error)
+            else:
+                self._generations[-1].set_result(None)
 
-    def _mark_done(self) -> None:
+    def _mark_done(self, *, error: BaseException | None = None) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
-            self._done_fut.set_result(None)
+            if error is not None:
+                self._done_fut.set_exception(error)
+            else:
+                self._done_fut.set_result(None)
             if self._generations:
-                self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
+                self._mark_generation_done(error=error)  # preemptive generation could be cancelled before being scheduled
 
         if self._interrupt_timeout_handle is not None:
             self._interrupt_timeout_handle.cancel()

@@ -107,6 +107,15 @@ class _PreemptiveGeneration:
     created_at: float
 
 
+def _first_task_exception(tasks: list[asyncio.Task[Any]]) -> BaseException | None:
+    """Return the first exception from a list of completed tasks, or None."""
+    for task in tasks:
+        if task.done() and not task.cancelled():
+            if exc := task.exception():
+                return exc
+    return None
+
+
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
@@ -500,8 +509,14 @@ class AgentActivity(RecognitionHooks):
             speech_handle._tasks.append(task)
 
             def _mark_done_if_needed(_: asyncio.Task) -> None:
-                if all(task.done() for task in speech_handle._tasks):
-                    speech_handle._mark_done()
+                if all(t.done() for t in speech_handle._tasks):
+                    # propagate the first exception from any linked task
+                    error: BaseException | None = None
+                    for t in speech_handle._tasks:
+                        if not t.cancelled() and t.exception() is not None:
+                            error = t.exception()
+                            break
+                    speech_handle._mark_done(error=error)
 
             task.add_done_callback(_mark_done_if_needed)
 
@@ -2144,6 +2159,10 @@ class AgentActivity(RecognitionHooks):
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
 
+        gen_error = _first_task_exception(tasks)
+        if gen_error is not None:
+            raise gen_error
+
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -2485,7 +2504,11 @@ class AgentActivity(RecognitionHooks):
 
         await text_tee.aclose()
 
-        speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
+        gen_error = _first_task_exception(tasks)
+        speech_handle._mark_generation_done(error=gen_error)  # mark the playout done before waiting for the tool execution  # noqa: E501
+
+        if gen_error is not None:
+            raise gen_error
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
@@ -3018,7 +3041,12 @@ class AgentActivity(RecognitionHooks):
 
         for tee in tees:
             await tee.aclose()
-        speech_handle._mark_generation_done()
+
+        gen_error = _first_task_exception(tasks)
+        speech_handle._mark_generation_done(error=gen_error)
+
+        if gen_error is not None:
+            raise gen_error
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
