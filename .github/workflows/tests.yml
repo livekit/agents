@@ -27,19 +27,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
-      - name: Build and install blockguard
-        run: pip install livekit-plugins/livekit-blockguard/
-
-      - name: Install pytest
-        run: pip install pytest
-
-      - name: Run blockguard tests
-        working-directory: livekit-plugins/livekit-blockguard
-        run: python -m pytest test_blockguard.py -v
+      - name: Run blockguard tests on all Python versions
+        shell: bash
+        run: |
+          failed=""
+          for ver in 3.10 3.11 3.12 3.13 3.13t 3.14 3.14t; do
+            echo ""
+            echo "::group::Python $ver"
+            uv venv ".venv-$ver" --python "$ver"
+            VIRTUAL_ENV=".venv-$ver" uv pip install ./livekit-plugins/livekit-blockguard/ pytest
+            py=".venv-$ver/bin/python"
+            [ -f "$py" ] || py=".venv-$ver/Scripts/python.exe"
+            if ! "$py" -m pytest livekit-plugins/livekit-blockguard/test_blockguard.py -v; then
+              failed="$failed $ver"
+            fi
+            rm -rf ".venv-$ver"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Tests failed on:$failed"
+            exit 1
+          fi
 
   unit-tests:
     runs-on: ubuntu-latest
