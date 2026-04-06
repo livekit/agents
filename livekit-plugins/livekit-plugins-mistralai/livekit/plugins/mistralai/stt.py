@@ -43,7 +43,6 @@ def _is_realtime(model: str) -> bool:
 
 
 DEFAULT_MODEL: STTModels = "voxtral-mini-latest"
-DEFAULT_LANGUAGE: str = "en"
 
 SAMPLE_RATE: int = 16000
 NUM_CHANNELS: int = 1
@@ -74,8 +73,9 @@ class STT(stt.STT):
         Args:
             client: Optional pre-configured MistralAI client instance.
             api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
-            model: The Mistral AI model to use for transcription, default is "voxtral-mini-latest".
-            language: The language code to use for transcription (e.g., "fr" for French), default is "en".
+            model: The Mistral AI model to use for transcription, default is batch "voxtral-mini-latest".
+            language: The optional language code to use for better transcription accuracy if language is already known (e.g., "fr" for French).
+                Only used with batch models.
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
@@ -83,9 +83,7 @@ class STT(stt.STT):
                 When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_language = (
-            LanguageCode(language) if is_given(language) else LanguageCode(DEFAULT_LANGUAGE)
-        )
+        resolved_language = LanguageCode(language) if is_given(language) else None
         resolved_context_bias = context_bias if is_given(context_bias) else None
         resolved_target_streaming_delay_ms = (
             target_streaming_delay_ms if is_given(target_streaming_delay_ms) else None
@@ -100,8 +98,8 @@ class STT(stt.STT):
             )
         )
         self._opts = _STTOptions(
-            language=resolved_language,
             model=resolved_model,
+            language=resolved_language,
             context_bias=resolved_context_bias,
             target_streaming_delay_ms=resolved_target_streaming_delay_ms,
         )
@@ -170,7 +168,8 @@ class STT(stt.STT):
 
         Args:
             model: The model to use for transcription.
-            language: The language code to use for transcription.
+            language: The optional language code to use for better transcription accuracy if language is already known (e.g., "fr" for French).
+                Only used with batch models.
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
@@ -183,7 +182,7 @@ class STT(stt.STT):
             self._opts.context_bias = context_bias
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
-        if is_given(model) or is_given(language) or is_given(target_streaming_delay_ms):
+        if is_given(model) or is_given(target_streaming_delay_ms):
             self._pool.invalidate()
             for stream in self._streams:
                 stream._reconnect_event.set()
@@ -203,9 +202,9 @@ class STT(stt.STT):
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language,
-                context_bias=self._opts.context_bias,
-                timestamp_granularities=None if self._opts.language else ["segment"],
+                language=self._opts.language if self._opts.language else None,
+                context_bias=self._opts.context_bias if self._opts.context_bias else None,
+                timestamp_granularities=["segment"] if not self._opts.language else None,
             )
 
             return stt.SpeechEvent(
@@ -213,7 +212,9 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=LanguageCode(self._opts.language if self._opts.language else ""),
+                        language=LanguageCode(resp.language)
+                        if resp.language
+                        else self._opts.language or LanguageCode(""),
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
@@ -243,12 +244,11 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
             conn_options=conn_options,
+            language=language,
             vad_instance=self._vad,
         )
         self._streams.add(stream)
@@ -264,6 +264,7 @@ class SpeechStream(stt.RecognizeStream):
         stt: STT,
         pool: utils.ConnectionPool[RealtimeConnection],
         conn_options: APIConnectOptions,
+        language: NotGivenOr[str] = NOT_GIVEN,
         vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(
@@ -278,7 +279,7 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = ""
         self._audio_duration = 0.0
         self._speaking = False
-        self._detected_language: LanguageCode | None = self._opts.language
+        self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
 
     async def _send_task(
         self,
@@ -334,100 +335,78 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         current_text = ""
-        detected_language: LanguageCode = self._opts.language or LanguageCode("")
 
         async for event in connection.events():
-            self._process_event(event, current_text, detected_language)
-            if isinstance(event, TranscriptionStreamTextDelta):
-                current_text += event.text
+            if isinstance(event, RealtimeTranscriptionSessionCreated):
+                if event.session:
+                    self._request_id = event.session.request_id
+
             elif isinstance(event, TranscriptionStreamLanguage):
                 if event.audio_language:
-                    detected_language = LanguageCode(event.audio_language)
-            elif isinstance(event, TranscriptionStreamDone):
-                # reset for next speech segment
-                current_text = ""
-                detected_language = self._opts.language or LanguageCode("")
+                    self._detected_language = LanguageCode(event.audio_language)
 
-    def _process_event(
-        self,
-        event: object,
-        current_text: str,
-        detected_language: LanguageCode,
-    ) -> None:
-        if isinstance(event, RealtimeTranscriptionSessionCreated):
-            if event.session:
-                self._request_id = event.session.request_id
-
-        elif isinstance(event, TranscriptionStreamLanguage):
-            if event.audio_language:
-                self._detected_language = LanguageCode(event.audio_language)
-
-        elif isinstance(event, TranscriptionStreamTextDelta):
-            text = current_text + event.text
-
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=[
-                        stt.SpeechData(
-                            text=text,
-                            language=detected_language,
-                        )
-                    ],
-                )
-            )
-
-        elif isinstance(event, TranscriptionStreamDone):
-            final_language = LanguageCode(
-                event.language or self._detected_language or self._opts.language or "en"
-            )
-            words = (
-                [
-                    TimedString(
-                        text=seg.text,
-                        start_time=seg.start + self.start_time_offset,
-                        end_time=seg.end + self.start_time_offset,
+            elif isinstance(event, TranscriptionStreamTextDelta):
+                current_text += event.text
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=current_text,
+                                language=self._detected_language,
+                            )
+                        ],
                     )
-                    for seg in event.segments
-                ]
-                if event.segments
-                else None
-            )
+                )
 
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=[
-                        stt.SpeechData(
-                            text=event.text,
-                            language=final_language,
-                            words=words,
+            elif isinstance(event, TranscriptionStreamDone):
+                current_text = ""
+                words = (
+                    [
+                        TimedString(
+                            text=seg.text,
+                            start_time=seg.start + self.start_time_offset,
+                            end_time=seg.end + self.start_time_offset,
                         )
-                    ],
+                        for seg in event.segments
+                    ]
+                    if event.segments
+                    else None
                 )
-            )
 
-            audio_duration = (
-                event.usage.prompt_audio_seconds if event.usage.prompt_audio_seconds else 0
-            )
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    request_id=self._request_id,
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=audio_duration,
-                        input_tokens=event.usage.prompt_tokens or 0,
-                        output_tokens=event.usage.completion_tokens or 0,
-                    ),
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=event.text,
+                                language=LanguageCode(event.language)
+                                if event.language
+                                else self._detected_language,
+                                words=words,
+                            )
+                        ],
+                    )
                 )
-            )
 
-        elif isinstance(event, RealtimeTranscriptionError):
-            raise APIStatusError(
-                message=str(event.error.message), status_code=event.error.code, body=event.error
-            )
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.RECOGNITION_USAGE,
+                        request_id=self._request_id,
+                        recognition_usage=stt.RecognitionUsage(
+                            audio_duration=event.usage.prompt_audio_seconds or 0,
+                            input_tokens=event.usage.prompt_tokens or 0,
+                            output_tokens=event.usage.completion_tokens or 0,
+                        ),
+                    )
+                )
+
+            elif isinstance(event, RealtimeTranscriptionError):
+                raise APIStatusError(
+                    message=str(event.error.message), status_code=event.error.code, body=event.error
+                )
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
