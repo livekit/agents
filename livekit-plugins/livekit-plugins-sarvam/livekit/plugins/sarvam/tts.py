@@ -70,17 +70,33 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
 # Map codec names to appropriate mime types.
 # linear16 is raw 16-bit linear PCM → audio/pcm (handled by AudioByteStream).
 # mulaw/alaw are 8-bit logarithmic encodings — must NOT use audio/pcm (which
-# assumes 16-bit linear PCM). Use standard IANA mime types so PyAV can decode
-# them correctly, consistent with livekit-plugins-lmnt's approach.
+# assumes 16-bit linear PCM). Use standard IANA mime types instead so PyAV
+# can attempt decoding. NOTE: neither "audio/basic" nor "audio/x-alaw" appear
+# in the core _mime_to_av_format table (livekit-agents/utils/codecs/decoder.py),
+# so AudioStreamDecoder falls back to PyAV auto-detection with probesize=32.
+# This works only if Sarvam returns a containerised format (e.g. WAV-wrapped
+# mulaw/alaw). If raw headerless bytes are returned, decoding will fail silently.
+# TODO: add "audio/basic" → "mulaw" and "audio/x-alaw" → "alaw" entries to
+# _mime_to_av_format in livekit-agents so these codecs have an explicit format
+# hint and don't rely on PyAV auto-detection.
 _CODEC_TO_MIME_TYPE: dict[str, str] = {
     "linear16": "audio/pcm",
     "mulaw": "audio/basic",
     "alaw": "audio/x-alaw",
 }
 
+_RAW_CODEC_WARNING = frozenset({"mulaw", "alaw"})
+
 
 def _codec_to_mime(codec: str) -> str:
     """Return the mime type for a given output codec."""
+    if codec in _RAW_CODEC_WARNING:
+        logger.warning(
+            "output_audio_codec '%s' relies on PyAV auto-detection for decoding. "
+            "Audio output may be silent if the Sarvam API returns raw headerless bytes "
+            "rather than a containerised format. See TODO in tts.py for a permanent fix.",
+            codec,
+        )
     return _CODEC_TO_MIME_TYPE.get(codec, f"audio/{codec}")
 
 
