@@ -49,6 +49,7 @@ from ._utils import (
     STAGING_INFERENCE_URL,
     create_access_token,
     get_default_inference_url,
+    get_inference_headers,
 )
 
 SAMPLE_RATE = 16000
@@ -1126,6 +1127,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
+            **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
