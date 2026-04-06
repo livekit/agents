@@ -341,12 +341,10 @@ class LLMStream(llm.LLMStream):
                 # remove tool_choice from extra_kwargs if no tools are provided
                 self._extra_kwargs.pop("tool_choice", None)
 
-            if self._provider:
-                headers = self._extra_kwargs.setdefault("extra_headers", {})
-                headers["X-LiveKit-Inference-Provider"] = self._provider
-
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
             extra_headers.update(get_inference_headers())
+            if self._provider:
+                extra_headers["X-LiveKit-Inference-Provider"] = self._provider
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
