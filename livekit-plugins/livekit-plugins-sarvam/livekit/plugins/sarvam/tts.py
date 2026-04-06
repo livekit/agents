@@ -67,6 +67,19 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
     "alaw",
 }
 
+# Map raw codec names to mime types recognized by AudioEmitter / decoder
+_CODEC_TO_MIME_TYPE: dict[str, str] = {
+    "linear16": "audio/pcm",
+    "mulaw": "audio/pcm",
+    "alaw": "audio/pcm",
+}
+
+
+def _codec_to_mime(codec: str) -> str:
+    """Return the mime type for a given output codec."""
+    return _CODEC_TO_MIME_TYPE.get(codec, f"audio/{codec}")
+
+
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
     "bn-IN",  # Bengali
@@ -691,7 +704,7 @@ class ChunkedStream(tts.ChunkedStream):
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
-        mime_type = f"audio/{self._opts.output_audio_codec}"
+        mime_type = _codec_to_mime(self._opts.output_audio_codec)
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -757,7 +770,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
-        mime_type = f"audio/{self._opts.output_audio_codec}"
+        mime_type = _codec_to_mime(self._opts.output_audio_codec)
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
