@@ -35,7 +35,9 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 _SUPPORTED_MODELS = {
     "sarvam-m",
     "sarvam-30b",
+    "sarvam-30b-16k",  # deprecated by Sarvam, kept for backward compatibility
     "sarvam-105b",
+    "sarvam-105b-32k",  # deprecated by Sarvam, kept for backward compatibility
 }
 _ALLOWED_EXTRA_BODY_PARAMS = {
     "frequency_penalty",

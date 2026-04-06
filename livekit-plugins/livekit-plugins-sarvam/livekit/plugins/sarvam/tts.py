@@ -852,6 +852,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
+                    "speech_sample_rate": self._opts.speech_sample_rate,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
