@@ -20,6 +20,7 @@ See https://docs.livekit.io/agents/integrations/stt/google/ for more information
 """
 
 from . import beta, realtime, tools
+from .egress import build_gcp_upload, build_gcp_upload_async
 from .llm import LLM
 from .stt import STT, SpeechStream
 from .tts import TTS
@@ -34,6 +35,8 @@ __all__ = [
     "beta",
     "LLM",
     "tools",
+    "build_gcp_upload",
+    "build_gcp_upload_async",
 ]
 from livekit.agents import Plugin
 
