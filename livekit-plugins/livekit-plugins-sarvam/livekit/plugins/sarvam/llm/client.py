@@ -33,10 +33,9 @@ from .models import SarvamLLMModels
 SARVAM_LLM_BASE_URL = "https://api.sarvam.ai/v1"
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 _SUPPORTED_MODELS = {
+    "sarvam-m",
     "sarvam-30b",
-    "sarvam-30b-16k",
     "sarvam-105b",
-    "sarvam-105b-32k",
 }
 _ALLOWED_EXTRA_BODY_PARAMS = {
     "frequency_penalty",

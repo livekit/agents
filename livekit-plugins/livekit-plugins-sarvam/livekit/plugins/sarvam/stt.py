@@ -517,6 +517,8 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        if self._opts.input_audio_codec:
+            form_data.add_field("input_audio_codec", self._opts.input_audio_codec)
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
