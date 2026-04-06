@@ -67,11 +67,15 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
     "alaw",
 }
 
-# Map raw codec names to mime types recognized by AudioEmitter / decoder
+# Map codec names to appropriate mime types.
+# linear16 is raw 16-bit linear PCM → audio/pcm (handled by AudioByteStream).
+# mulaw/alaw are 8-bit logarithmic encodings — must NOT use audio/pcm (which
+# assumes 16-bit linear PCM). Use standard IANA mime types so PyAV can decode
+# them correctly, consistent with livekit-plugins-lmnt's approach.
 _CODEC_TO_MIME_TYPE: dict[str, str] = {
     "linear16": "audio/pcm",
-    "mulaw": "audio/pcm",
-    "alaw": "audio/pcm",
+    "mulaw": "audio/basic",
+    "alaw": "audio/x-alaw",
 }
 
 
