@@ -400,7 +400,12 @@ class TTS(tts.TTS):
 
         # Validate parameter ranges
         if not -0.75 <= pitch <= 0.75:
-            raise ValueError("Pitch must be between -0.75 and 0.75")
+            logger.warning(
+                "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
+                "clamping to nearest bound. Please update your code.",
+                pitch,
+            )
+            pitch = max(-0.75, min(0.75, pitch))
         if not 0.3 <= pace <= 3.0:
             raise ValueError("Pace must be between 0.3 and 3.0")
         if not 0.5 <= loudness <= 2.0:
@@ -565,7 +570,12 @@ class TTS(tts.TTS):
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
-                raise ValueError("Pitch must be between -0.75 and 0.75")
+                logger.warning(
+                    "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
+                    "clamping to nearest bound. Please update your code.",
+                    pitch,
+                )
+                pitch = max(-0.75, min(0.75, pitch))
             self._opts.pitch = pitch
 
         if pace is not None:
