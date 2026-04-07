@@ -58,8 +58,10 @@ class AvatarSession:
         if avatar_id and preset_id:
             raise RunwayException("Provide avatar_id or preset_id, not both")
 
-        self._avatar_id = avatar_id
-        self._preset_id = preset_id
+        if avatar_id:
+            self._avatar: dict[str, str] = {"type": "custom", "avatarId": str(avatar_id)}
+        else:
+            self._avatar = {"type": "runway-preset", "presetId": str(preset_id)}
         self._max_duration = max_duration
 
         self._api_url = api_url or os.getenv("RUNWAYML_BASE_URL", DEFAULT_API_URL)
@@ -125,16 +127,9 @@ class AvatarSession:
         assert self._api_key is not None
         assert isinstance(self._api_url, str)
 
-        if self._avatar_id:
-            assert isinstance(self._avatar_id, str)
-            avatar = {"type": "custom", "avatarId": self._avatar_id}
-        else:
-            assert isinstance(self._preset_id, str)
-            avatar = {"type": "runway-preset", "presetId": self._preset_id}
-
-        body: dict = {
+        body: dict[str, object] = {
             "model": "gwm1_avatars",
-            "avatar": avatar,
+            "avatar": self._avatar,
             "livekit": {
                 "url": livekit_url,
                 "token": livekit_token,
