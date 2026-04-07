@@ -815,7 +815,11 @@ class AgentActivity(RecognitionHooks):
 
             # detach after speech tasks are done but before _close_session
             if new_activity is not None:
-                return await self._detach_reusable_resources(new_activity)
+                try:
+                    return await self._detach_reusable_resources(new_activity)
+                except BaseException:
+                    logger.exception("failed to detach reusable resources")
+
             return None
 
     async def _pause_scheduling_task(
