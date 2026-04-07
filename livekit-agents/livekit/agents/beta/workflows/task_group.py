@@ -139,9 +139,11 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     self.complete(e)
                     return
 
-        try:
-            if self._summarize_chat_ctx:
-                assert isinstance(self.session.llm, llm.LLM)
+        if self._summarize_chat_ctx:
+            try:
+                assert isinstance(self.session.llm, llm.LLM), (
+                    "llm must be a LLM instance to summarize the chat_ctx"
+                )
 
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
@@ -155,8 +157,10 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)
 
                 await self.update_chat_ctx(summarized_chat_ctx)
-        except Exception as e:
-            self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
+            except Exception as e:
+                self.complete(e)
+                return
+
         self.complete(TaskGroupResult(task_results=task_results))
 
     def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
