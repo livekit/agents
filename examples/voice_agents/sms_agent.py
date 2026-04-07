@@ -15,8 +15,9 @@ from livekit.agents import (
     TextMessageContext,
     cli,
 )
+from livekit.agents.beta import Instructions
 from livekit.agents.beta.workflows import GetEmailTask
-from livekit.agents.llm import Instructions, ToolFlag, function_tool
+from livekit.agents.llm import ToolFlag, function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
