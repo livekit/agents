@@ -51,9 +51,27 @@ assert isinstance(my_effect, EffectCall)
 pickle.dumps(g)
 
 
+import hashlib
+import hmac
+import os
 import pickle
 
 from livekit import durable
+
+_HMAC_KEY = os.urandom(32)
+
+
+def _signed_dumps(obj):
+    data = pickle.dumps(obj)
+    sig = hmac.new(_HMAC_KEY, data, hashlib.sha256).digest()
+    return sig + data
+
+
+def _signed_loads(signed_data):
+    sig, data = signed_data[:32], signed_data[32:]
+    if not hmac.compare_digest(sig, hmac.new(_HMAC_KEY, data, hashlib.sha256).digest()):
+        raise ValueError("HMAC verification failed: data may have been tampered with")
+    return pickle.loads(data)
 
 
 @durable.durable
@@ -65,8 +83,8 @@ def my_generator():
 g = my_generator()
 print(next(g))  # 0
 
-b = pickle.dumps(g)
-g2 = pickle.loads(b)
+b = _signed_dumps(g)
+g2 = _signed_loads(b)
 print(next(g2))  # 1
 print(next(g2))  # 2
 
