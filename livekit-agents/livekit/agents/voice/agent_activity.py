@@ -2662,7 +2662,7 @@ class AgentActivity(RecognitionHooks):
                     ),
                     tools=(
                         llm.ToolContext(tools).flatten()
-                        if per_response_tool_choice and tools
+                        if per_response_tool_choice and tools is not None
                         else NOT_GIVEN
                     ),
                 )

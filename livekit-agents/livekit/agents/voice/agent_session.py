@@ -1113,7 +1113,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
             tools (NotGivenOr[list[str]], optional): List of tool IDs to make available for this response.
-                When set, only the specified tools can be used. Tool IDs must match registered tools on the agent.
+                When set, only the specified tools can be used. Tool IDs must match registered tools on the
+                agent. For function tools, the ID is the function name (accessible via ``my_tool.id``).
+                For toolsets, the ID is the one provided at construction (accessible via ``my_toolset.id``).
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
             chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
                 Defaults to the chat context of the current agent if not provided.
