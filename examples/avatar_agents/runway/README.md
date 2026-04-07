@@ -4,7 +4,7 @@ This example demonstrates how to create an animated avatar using [Runway Charact
 
 ## Usage
 
-* Update the environment:
+- Update the environment:
 
 ```bash
 # Runway Config
@@ -20,8 +20,9 @@ export LIVEKIT_API_SECRET="..."
 export LIVEKIT_URL="..."
 ```
 
-* Start the agent worker:
+- Start the agent worker:
 
 ```bash
 python examples/avatar_agents/runway/agent_worker.py dev
 ```
+
