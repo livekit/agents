@@ -142,7 +142,8 @@ class STT(stt.STT):
             ws.keepalive_task.cancel()
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        if _is_realtime(self._opts.model):
+            self._pool.prewarm()
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -158,7 +159,6 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -167,22 +167,18 @@ class STT(stt.STT):
         Update the STT options.
 
         Args:
-            model: The model to use for transcription.
             language: The optional language code to use for better transcription accuracy if language is already known (e.g., "fr" for French).
                 Only used with batch models.
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
         """
-        if is_given(model):
-            self._opts.model = model
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(context_bias):
             self._opts.context_bias = context_bias
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
-        if is_given(model) or is_given(target_streaming_delay_ms):
             self._pool.invalidate()
             for stream in self._streams:
                 stream._reconnect_event.set()
