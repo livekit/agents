@@ -602,7 +602,7 @@ class AgentActivity(RecognitionHooks):
                 and self.llm is new_activity.llm
             ):
                 # context update is supported or chat context is equivalent
-                reusable = self.llm.capabilities.mid_session_context_update or (
+                reusable = self.llm.capabilities.mid_session_chat_ctx_update or (
                     self._rt_session.chat_ctx.copy(
                         exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
                     ).is_equivalent(
@@ -726,7 +726,7 @@ class AgentActivity(RecognitionHooks):
                 # skip the update if the session is reused and no mid-session update is supported
                 # this means the content is the same as the previous session
                 reset_instructions = capabilities.mid_session_instructions_update
-                reset_chat_ctx = capabilities.mid_session_context_update
+                reset_chat_ctx = capabilities.mid_session_chat_ctx_update
                 reset_tools = capabilities.mid_session_tools_update
 
             await self._rt_session.update_session(

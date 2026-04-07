@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
@@ -13,12 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
+from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,7 +64,7 @@ class RealtimeCapabilities:
     auto_tool_reply_generation: bool
     audio_output: bool
     manual_function_calls: bool
-    mid_session_context_update: bool = False
+    mid_session_chat_ctx_update: bool = False
     """Whether the chat context can be updated mid-session"""
     mid_session_instructions_update: bool = False
     """Whether the instructions can be updated mid-session"""
