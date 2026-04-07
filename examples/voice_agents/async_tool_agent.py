@@ -46,6 +46,9 @@ class TravelToolset(AsyncToolset):
             destination: Arrival city or airport code.
             date: Travel date (e.g. "2026-04-15").
         """
+        # This update is delivered immediately — the agent will say something like:
+        # "Sure, let me search for flights from New York to Tokyo on April 15th.
+        #  This might take a couple of minutes, hang tight!"
         await ctx.update(
             f"Searching flights from {origin} to {destination} on {date}. "
             "This will take a couple of minutes."
@@ -61,6 +64,9 @@ class TravelToolset(AsyncToolset):
         cheapest = min(prices, key=lambda a: prices[a])
 
         logger.info("Found airlines and prices, booking the flight...")
+        # This update is delivered when the agent is idle — the agent will say something like:
+        # "Good news, I found 3 options. The best price is $289 on Delta.
+        #  I'm confirming that booking for you now."
         await ctx.update(
             f"Found {len(airlines)} options. Best price: ${prices[cheapest]} on {cheapest}. "
             "Confirming the booking now.",
@@ -71,6 +77,9 @@ class TravelToolset(AsyncToolset):
 
         logger.info("Flight booked")
         confirmation = f"FL-{random.randint(100000, 999999)}"
+        # The final return value is also delivered when the agent is idle — it will say:
+        # "All done! Your Delta flight from New York to Tokyo on April 15th is booked.
+        #  It was $289 and your confirmation number is FL-847293."
         return (
             f"Flight booked! {cheapest} from {origin} to {destination} on {date}. "
             f"Price: ${prices[cheapest]}. Confirmation: {confirmation}."

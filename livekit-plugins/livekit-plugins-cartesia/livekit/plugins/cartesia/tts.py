@@ -509,6 +509,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id, "error": data},
                     )
                     raise APIError(f"Cartesia returned error: {data}")
+                elif data.get("type") == "flush_done":
+                    pass
                 else:
                     logger.warning("unexpected message %s", data)
 
