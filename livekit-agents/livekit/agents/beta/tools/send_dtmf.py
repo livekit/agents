@@ -1,6 +1,9 @@
 import asyncio
+import logging
 
 from ... import function_tool
+
+logger = logging.getLogger(__name__)
 from ...job import get_job_context
 from ..workflows.utils import DtmfEvent, dtmf_event_to_code
 
@@ -24,7 +27,8 @@ async def send_dtmf_events(
             code = dtmf_event_to_code(event)
             await job_ctx.room.local_participant.publish_dtmf(code=code, digit=event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
-        except Exception as e:
-            return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
+        except Exception:
+            logger.exception("Failed to send DTMF event: %s", event.value)
+            return f"Failed to send DTMF event: {event.value}"
 
     return f"Successfully sent DTMF events: {', '.join(events)}"
