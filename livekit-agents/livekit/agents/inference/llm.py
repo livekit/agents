@@ -126,6 +126,7 @@ class ChatCompletionOptions(TypedDict, total=False):
     prediction: ChatCompletionPredictionContentParam | None
     presence_penalty: float | None
     prompt_cache_key: str
+    prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
     safety_identifier: str
     seed: int | None
