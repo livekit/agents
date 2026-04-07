@@ -1,6 +1,7 @@
 # mypy: ignore-errors
 # ruff: noqa
 import asyncio
+import io
 import pickle
 from types import coroutine
 
@@ -56,6 +57,19 @@ import pickle
 from livekit import durable
 
 
+class _RestrictedUnpickler(pickle.Unpickler):
+    _ALLOWED_MODULE_PREFIXES = ("builtins", "copyreg", "livekit.", "livekit", "__main__")
+
+    def find_class(self, module, name):
+        if not any(module == p or module.startswith(p + ".") for p in self._ALLOWED_MODULE_PREFIXES):
+            raise pickle.UnpicklingError(f"Disallowed class: {module}.{name}")
+        return super().find_class(module, name)
+
+
+def _restricted_loads(data):
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
+
+
 @durable.durable
 def my_generator():
     for i in range(3):
@@ -66,7 +80,7 @@ g = my_generator()
 print(next(g))  # 0
 
 b = pickle.dumps(g)
-g2 = pickle.loads(b)
+g2 = _restricted_loads(b)
 print(next(g2))  # 1
 print(next(g2))  # 2
 
