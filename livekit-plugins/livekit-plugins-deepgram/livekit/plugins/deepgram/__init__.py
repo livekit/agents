@@ -19,7 +19,7 @@ Support for speech-to-text with [Deepgram](https://deepgram.com/).
 See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more information.
 """
 
-from .models import DeepgramModels, DeepgramLanguages, TTSModels
+from .models import DeepgramLanguages, DeepgramModels, TTSModels
 from .stt import STT, SpeechStream
 from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import TTS

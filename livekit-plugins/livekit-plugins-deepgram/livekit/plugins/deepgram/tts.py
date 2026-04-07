@@ -181,14 +181,26 @@ class TTS(tts.TTS):
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
                 See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
         """
+        connection_params_changed = False
         if is_given(model):
             self._opts.model = model
+            connection_params_changed = True
         if is_given(encoding):
             self._opts.encoding = encoding
+            connection_params_changed = True
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+            self._sample_rate = sample_rate  # keep base class property in sync
+            connection_params_changed = True
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # These params are baked into the WebSocket URL at connection time, so any
+            # existing pooled connection must be invalidated to avoid serving audio at
+            # the wrong rate/encoding.
+            self._pool.invalidate()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
