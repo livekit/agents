@@ -15,7 +15,7 @@ NUM_CHANNELS = 1
 def get_api_key(api_key: str | None = None) -> str:
     resolved_key = api_key or os.environ.get("TELNYX_API_KEY")
     if not resolved_key:
-        raise ValueError("Telnyx API key required. Set TELNYX_API_KEY or provide api_key.")
+        raise ValueError("Telnyx API key is required. Provide an api_key or set the appropriate environment variable.")
     return resolved_key
 
 
