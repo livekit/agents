@@ -1,4 +1,4 @@
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from speechmatics.voice import __version__ as sdk_version
 
@@ -22,4 +22,4 @@ def get_tts_url(base_url: str, voice: str, sample_rate: int) -> str:
     query_params["sm-app"] = f"livekit/{sdk_version}"
     query = urlencode(query_params)
 
-    return f"{base_url}/generate/{voice}?{query}"
+    return f"{base_url}/generate/{quote(voice, safe='')}?{query}"
