@@ -2094,6 +2094,11 @@ class AgentActivity(RecognitionHooks):
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
+        # check for errors in generation/forwarding tasks (e.g. missing audio file)
+        for task in tasks:
+            if task.done() and not task.cancelled() and task.exception():
+                raise task.exception()
+
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
