@@ -1127,6 +1127,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         input_modality: Literal["text", "audio"] = "text",
@@ -1139,6 +1140,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
+            tools (NotGivenOr[list[str]], optional): List of tool IDs to make available for this response.
+                When set, only the specified tools can be used. Tool IDs must match registered tools on the
+                agent. For function tools, the ID is the function name (accessible via ``my_tool.id``).
+                For toolsets, the ID is the one provided at construction (accessible via ``my_toolset.id``).
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
             chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
                 Defaults to the chat context of the current agent if not provided.
@@ -1172,6 +1177,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 user_message=user_message if user_message else None,
                 instructions=instructions,
                 tool_choice=tool_choice,
+                tools=tools,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
                 input_details=InputDetails(modality=input_modality),
