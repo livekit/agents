@@ -2090,13 +2090,16 @@ class AgentActivity(RecognitionHooks):
                 # update the agent state based on text if no audio output
                 text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        all_tasks = [t for t in (tts_task, forward_audio_task, forward_text_task) if t is not None]
+        all_tasks: list[asyncio.Future[Any]] = [
+            t for t in (tts_task, forward_audio_task, forward_text_task) if t is not None
+        ]
         await speech_handle.wait_if_not_interrupted(all_tasks)
 
         # check for errors in generation/forwarding tasks (e.g. missing audio file)
         for task in (tts_task, forward_audio_task, forward_text_task):
-            if task is not None and task.done() and not task.cancelled() and task.exception():
-                raise task.exception()
+            if task is not None and task.done() and not task.cancelled():
+                if exc := task.exception():
+                    raise exc
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
