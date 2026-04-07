@@ -1,7 +1,5 @@
-import asyncio
 import os
 import time
-from collections import OrderedDict
 from typing import Any
 
 import aiohttp
@@ -95,9 +93,6 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super().__init__(realtime_model)
         self._xai_model: RealtimeModel = realtime_model
         self._session_connected_at: float = 0.0
-
-        # keep the order of item deletion futures
-        self._item_delete_future = OrderedDict[str, asyncio.Future]()
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         self._session_connected_at = time.time()
