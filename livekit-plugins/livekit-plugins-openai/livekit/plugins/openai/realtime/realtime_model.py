@@ -1356,7 +1356,7 @@ class RealtimeSession(
             self._tools = llm.ToolContext(retained_tools)
 
     # this function can be overrided
-    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+    def _convert_tools_to_oai(self, tools: list[llm.Tool]) -> list[RealtimeFunctionTool]:
         oai_tools: list[RealtimeFunctionTool] = []
 
         for tool in tools:
@@ -1384,6 +1384,11 @@ class RealtimeSession(
                     extra={"tool": tool_desc},
                 )
                 continue
+
+        return oai_tools
+
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        oai_tools = self._convert_tools_to_oai(tools)
 
         event = self._wrap_session_update(
             event_id=utils.shortuuid("tools_update_"),
@@ -1449,6 +1454,7 @@ class RealtimeSession(
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
@@ -1460,6 +1466,8 @@ class RealtimeSession(
         )
         if is_given(tool_choice):
             params.tool_choice = to_oai_tool_choice(tool_choice)
+        if is_given(tools):
+            params.tools = self._convert_tools_to_oai(tools)  # type: ignore
 
         self.send_event(
             ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
