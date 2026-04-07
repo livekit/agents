@@ -5,6 +5,8 @@ import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
+from typing_extensions import Self
+
 from .. import utils
 from ..llm.chat_context import ChatItem, FunctionCall
 from ..llm.tool_context import (
@@ -22,6 +24,28 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
+
+# registry of active AsyncToolset instances, populated in setup(), removed in aclose()
+_ActiveToolsets: dict[str, AsyncToolset] = {}
+
+
+@function_tool
+async def get_running_tasks() -> list[dict]:
+    """Get the list of running async tool calls across all async toolsets."""
+    results = []
+    for toolset in _ActiveToolsets.values():
+        for task in toolset._running_tasks.values():
+            results.append(task.ctx.function_call.model_dump())
+    return results
+
+
+@function_tool
+async def cancel_task(call_id: str) -> str:
+    """Cancel a running async tool call by call_id."""
+    for toolset in _ActiveToolsets.values():
+        if await toolset.cancel(call_id):
+            return f"Task {call_id} cancelled successfully."
+    return f"Task {call_id} not found or already completed."
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
@@ -158,6 +182,7 @@ class AsyncToolset(Toolset):
             self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
             for t in self._tools
         ]
+        self._tools.extend([get_running_tasks, cancel_task])
 
         self._running_tasks: dict[str, _RunningTask] = {}
 
@@ -165,19 +190,10 @@ class AsyncToolset(Toolset):
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
 
-    @function_tool
-    async def get_running_tasks(self) -> list[dict]:
-        """Get the list of running async tool calls."""
-        return [task.ctx.function_call.model_dump() for task in self._running_tasks.values()]
-
-    @function_tool
-    async def cancel_task(self, call_id: str) -> str:
-        """Cancel a running async tool call by call_id."""
-        success = await self.cancel(call_id)
-        if success:
-            return f"Task {call_id} cancelled successfully."
-        else:
-            return f"Task {call_id} not found or already completed."
+    async def setup(self) -> Self:
+        await super().setup()
+        _ActiveToolsets[self._id] = self
+        return self
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -187,13 +203,14 @@ class AsyncToolset(Toolset):
         return False
 
     async def aclose(self) -> None:
-        """Cancel all tasks."""
+        """Cancel all tasks and unregister from the global registry."""
         await super().aclose()
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if self._reply_task is not None:
             tasks.append(self._reply_task)
         await utils.aio.cancel_and_wait(*tasks)
         self._running_tasks.clear()
+        _ActiveToolsets.pop(self._id, None)
 
     def _wrap_tool(self, tool: FunctionTool | RawFunctionTool) -> FunctionTool | RawFunctionTool:
         if not _has_async_context_param(tool):

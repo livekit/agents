@@ -240,18 +240,24 @@ class TestToolContext:
         assert ctx == ctx_copy
         assert toolset in ctx_copy.toolsets
 
+    def test_toolset_same_instance_dedup(self):
+        # same instance appearing in multiple places is allowed (deduplication)
+        toolset = MockToolset1()  # contains mock_tool_1, mock_tool_2
+        ToolContext([toolset, mock_tool_1])  # same mock_tool_1 instance, no conflict
+        ToolContext([mock_tool_1, toolset])
+        ToolContext([MockToolset1(), MockToolset2()])  # same mock_tool_2 instance
+
     def test_toolset_duplicate_name_conflict(self):
         toolset = MockToolset1()  # contains mock_tool_1, mock_tool_2
 
-        # conflict: toolset before tool, tool before toolset, multiple toolsets
+        # different instances with the same name should raise
+        @function_tool
+        async def mock_tool_1() -> str:
+            """Duplicate name, different instance"""
+            return ""
+
         with pytest.raises(ValueError, match="duplicate function name"):
             ToolContext([toolset, mock_tool_1])
-
-        with pytest.raises(ValueError, match="duplicate function name"):
-            ToolContext([mock_tool_1, toolset])
-
-        with pytest.raises(ValueError, match="duplicate function name"):
-            ToolContext([MockToolset1(), MockToolset2()])  # both have mock_tool_2
 
     def test_toolset_equality(self):
         toolset = MockToolset1()
@@ -653,3 +659,38 @@ class TestExecuteFunctionCallValidationErrors:
         assert result.fnc_call_out.is_error is True
         # Should contain error details, not generic message
         assert "An internal error occurred" not in result.fnc_call_out.output
+
+
+class TestAsyncToolsetDedup:
+    """Test that multiple AsyncToolsets can coexist without duplicate tool name conflicts."""
+
+    def test_two_async_toolsets_no_conflict(self):
+        """Two AsyncToolsets share the same get_running_tasks/cancel_task singleton tools."""
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts1 = AsyncToolset(id="booking", tools=[mock_tool_1])
+        ts2 = AsyncToolset(id="search", tools=[mock_tool_2])
+
+        # should not raise — the management tools are the same module-level instances
+        ctx = ToolContext([ts1, ts2])
+
+        # only one copy of each management tool in the flattened list
+        names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
+        assert names.count("get_running_tasks") == 1
+        assert names.count("cancel_task") == 1
+
+    def test_async_toolset_registry_lifecycle(self):
+        """setup() registers, aclose() unregisters from the module-level registry."""
+        import asyncio
+
+        from livekit.agents.llm.async_toolset import AsyncToolset, _ActiveToolsets
+
+        ts = AsyncToolset(id="lifecycle_test", tools=[mock_tool_1])
+        assert "lifecycle_test" not in _ActiveToolsets
+
+        asyncio.get_event_loop().run_until_complete(ts.setup())
+        assert "lifecycle_test" in _ActiveToolsets
+        assert _ActiveToolsets["lifecycle_test"] is ts
+
+        asyncio.get_event_loop().run_until_complete(ts.aclose())
+        assert "lifecycle_test" not in _ActiveToolsets

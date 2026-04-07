@@ -471,8 +471,11 @@ class ToolContext:
                 self._provider_tools.append(tool)
 
             elif isinstance(tool, (FunctionTool, RawFunctionTool)):
-                if tool.info.name in self._fnc_tools_map:
-                    raise ValueError(f"duplicate function name: {tool.info.name}")
+                existing = self._fnc_tools_map.get(tool.info.name)
+                if existing is not None:
+                    if existing is not tool:
+                        raise ValueError(f"duplicate function name: {tool.info.name}")
+                    return  # same instance, skip
                 self._fnc_tools_map[tool.info.name] = tool
 
             elif isinstance(tool, Toolset):
