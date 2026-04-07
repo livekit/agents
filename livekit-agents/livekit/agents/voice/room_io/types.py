@@ -14,13 +14,6 @@ from ..io import TextOutput
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
-
-DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
-]
-
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
     rtc.DisconnectReason.CLIENT_INITIATED,
     rtc.DisconnectReason.ROOM_DELETED,
@@ -31,8 +24,8 @@ DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
 @dataclass
 class TextInputEvent:
     text: str
-    info: rtc.TextStreamInfo
-    participant: rtc.RemoteParticipant
+    info: rtc.TextStreamInfo | None = None
+    participant: rtc.RemoteParticipant | None = None
 
 
 TextInputCallback = Callable[["AgentSession", TextInputEvent], Coroutine[None, None, None] | None]
@@ -72,6 +65,8 @@ class AudioInputOptions:
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None
     ) = None
+    auto_gain_control: bool = True
+    """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0

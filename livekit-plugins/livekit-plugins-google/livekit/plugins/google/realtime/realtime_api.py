@@ -56,6 +56,7 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
         "gemini-2.5-flash-native-audio-preview-09-2025",
     }
@@ -283,6 +284,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -545,6 +547,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str) -> None:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "update_instructions is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            self._opts.instructions = instructions
+            return
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
 
@@ -571,6 +579,17 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "update_chat_ctx is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            self._chat_ctx = chat_ctx.copy(
+                exclude_handoff=True,
+                exclude_instructions=True,
+                exclude_empty_message=True,
+                exclude_config_update=True,
+            )
+            return
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
             1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
@@ -659,12 +678,10 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[
-                        types.Blob(
-                            data=nf.data.tobytes(),
-                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                        )
-                    ]
+                    audio=types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                    )
                 )
                 self._send_client_event(realtime_input)
 
@@ -673,7 +690,7 @@ class RealtimeSession(llm.RealtimeSession):
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
         realtime_input = types.LiveClientRealtimeInput(
-            media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
+            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
         )
         self._send_client_event(realtime_input)
 
@@ -682,8 +699,25 @@ class RealtimeSession(llm.RealtimeSession):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(
+                    "generate_reply is not compatible with 'gemini-3.1-flash-live-preview'"
+                )
+            )
+            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
@@ -791,9 +825,11 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
 
@@ -906,9 +942,12 @@ class RealtimeSession(llm.RealtimeSession):
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
-                    if msg.media_chunks:
-                        for media_chunk in msg.media_chunks:
-                            await session.send_realtime_input(media=media_chunk)
+                    if msg.audio:
+                        await session.send_realtime_input(audio=msg.audio)
+                    elif msg.video:
+                        await session.send_realtime_input(video=msg.video)
+                    elif msg.text:
+                        await session.send_realtime_input(text=msg.text)
                     elif msg.activity_start:
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
@@ -924,7 +963,9 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientRealtimeInput,
                     ),
                 ):
-                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (
+                        msg.audio or msg.video or msg.text
+                    ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
                             extra={"content": msg.model_dump(exclude_defaults=True)},

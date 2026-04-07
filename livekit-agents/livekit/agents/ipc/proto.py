@@ -217,11 +217,32 @@ class DumpStackTraceRequest:
         pass
 
 
+class ShutdownRequestAck:
+    MSG_ID: ClassVar[int] = 10
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
+@dataclass
+class ShuttingDown:
+    MSG_ID: ClassVar[int] = 11
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
 @dataclass
 class TextResponse:
     """sent by the subprocess to the main process to send a text response"""
 
-    MSG_ID: ClassVar[int] = 10
+    MSG_ID: ClassVar[int] = 12
     session_id: str = ""
     event: agent_text.TextMessageResponse = field(init=False)
 
@@ -247,4 +268,6 @@ IPC_MESSAGES = {
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
     TextResponse.MSG_ID: TextResponse,
+    ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
+    ShuttingDown.MSG_ID: ShuttingDown,
 }

@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.4.4",
+    "livekit-agents>=1.5.1",
     "onnxruntime>=1.18",
     "numpy>=1.26",
 ]
@@ -43,3 +43,7 @@ include = ["/livekit"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "livekit/plugins/silero/resources/silero_vad.onnx" = "livekit/plugins/silero/resources/silero_vad.onnx"
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

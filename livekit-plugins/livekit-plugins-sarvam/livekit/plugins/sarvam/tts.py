@@ -56,6 +56,14 @@ SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
+ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
+    "mp3",
+    "opus",
+    "flac",
+    "aac",
+    "wav",
+}
+
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -272,15 +280,17 @@ class SarvamTTSOptions:
         api_key: Sarvam.ai API key
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
-        pitch: Voice pitch adjustment (-20.0 to 20.0)
-        pace: Speech rate multiplier (0.5 to 2.0)
+        pitch: Voice pitch adjustment (-0.75 to 0.75)
+        pace: Speech rate multiplier (0.3 to 3.0)
         loudness: Volume multiplier (0.5 to 2.0)
-        temperature: Sampling temperature (0.01 to 1.0), used for v3 and v3-beta
+        temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, or 24000)
-        enable_preprocessing: Whether to use text preprocessing
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
+        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         model: The Sarvam TTS model to use
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
@@ -300,11 +310,14 @@ class SarvamTTSOptions:
     max_chunk_length: int = 150
     speech_sample_rate: int = 22050  # Default 22050 Hz
     enable_preprocessing: bool = False
+    dict_id: str | None = None  # Custom pronunciation dictionary (bulbul:v3 only)
+    enable_cached_responses: bool | None = None  # Response caching beta (bulbul:v1/v2 only)
     model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
+    output_audio_codec: str = "mp3"
 
 
 class TTS(tts.TTS):
@@ -319,10 +332,12 @@ class TTS(tts.TTS):
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-20.0 to 20.0) - only supported in v2 for now
-        pace: Speech rate multiplier (0.5 to 2.0)
+        pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
+        pace: Speech rate multiplier (0.3 to 3.0)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
-        temperature: Sampling temperature (0.01 to 1.0), only used in v3 and v3-beta
+        temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
@@ -331,6 +346,7 @@ class TTS(tts.TTS):
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
+        output_audio_codec: Optionally choose the output codec format (mp3)
     """
 
     def __init__(
@@ -349,11 +365,14 @@ class TTS(tts.TTS):
         min_buffer_size: int = 50,
         max_chunk_length: int = 150,
         enable_preprocessing: bool = False,
+        dict_id: str | None = None,
+        enable_cached_responses: bool | None = None,
         api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
         ws_url: str = SARVAM_TTS_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
+        output_audio_codec: str = "mp3",
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -380,14 +399,19 @@ class TTS(tts.TTS):
                 speaker = "anushka"
 
         # Validate parameter ranges
-        if not -20.0 <= pitch <= 20.0:
-            raise ValueError("Pitch must be between -20.0 and 20.0")
-        if not 0.5 <= pace <= 2.0:
-            raise ValueError("Pace must be between 0.5 and 2.0")
+        if not -0.75 <= pitch <= 0.75:
+            logger.warning(
+                "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
+                "clamping to nearest bound. Please update your code.",
+                pitch,
+            )
+            pitch = max(-0.75, min(0.75, pitch))
+        if not 0.3 <= pace <= 3.0:
+            raise ValueError("Pace must be between 0.3 and 3.0")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
-        if not 0.01 <= temperature <= 1.0:
-            raise ValueError("Temperature must be between 0.01 and 1.0")
+        if not 0.01 <= temperature <= 2.0:
+            raise ValueError("Temperature must be between 0.01 and 2.0")
         if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
             raise ValueError(
                 f"output_audio_bitrate must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
@@ -396,8 +420,14 @@ class TTS(tts.TTS):
             raise ValueError("min_buffer_size must be between 30 and 200")
         if not 50 <= max_chunk_length <= 500:
             raise ValueError("max_chunk_length must be between 50 and 500")
-        if speech_sample_rate not in [8000, 16000, 22050, 24000]:
-            raise ValueError("Sample rate must be 8000, 16000, 22050, or 24000 Hz")
+        if speech_sample_rate not in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+            raise ValueError(
+                "Sample rate must be one of 8000, 16000, 22050, 24000, 32000, 44100, or 48000 Hz"
+            )
+        if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+            raise ValueError(
+                f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+            )
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -423,11 +453,14 @@ class TTS(tts.TTS):
             min_buffer_size=min_buffer_size,
             max_chunk_length=max_chunk_length,
             enable_preprocessing=enable_preprocessing,
+            dict_id=dict_id,
+            enable_cached_responses=enable_cached_responses,
             api_key=self._api_key,
             base_url=base_url,
             ws_url=ws_url,
             word_tokenizer=word_tokenizer,
             send_completion_event=send_completion_event,
+            output_audio_codec=output_audio_codec,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -498,7 +531,10 @@ class TTS(tts.TTS):
         min_buffer_size: int | None = None,
         max_chunk_length: int | None = None,
         enable_preprocessing: bool | None = None,
+        dict_id: str | None = None,
+        enable_cached_responses: bool | None = None,
         send_completion_event: bool | None = None,
+        output_audio_codec: str | None = None,
     ) -> None:
         """Update TTS options with validation."""
         if target_language_code is not None:
@@ -533,13 +569,18 @@ class TTS(tts.TTS):
             self._opts.speaker = speaker
 
         if pitch is not None:
-            if not -20.0 <= pitch <= 20.0:
-                raise ValueError("Pitch must be between -20.0 and 20.0")
+            if not -0.75 <= pitch <= 0.75:
+                logger.warning(
+                    "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
+                    "clamping to nearest bound. Please update your code.",
+                    pitch,
+                )
+                pitch = max(-0.75, min(0.75, pitch))
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.5 <= pace <= 2.0:
-                raise ValueError("Pace must be between 0.5 and 2.0")
+            if not 0.3 <= pace <= 3.0:
+                raise ValueError("Pace must be between 0.3 and 3.0")
             self._opts.pace = pace
 
         if loudness is not None:
@@ -548,8 +589,8 @@ class TTS(tts.TTS):
             self._opts.loudness = loudness
 
         if temperature is not None:
-            if not 0.01 <= temperature <= 1.0:
-                raise ValueError("Temperature must be between 0.01 and 1.0")
+            if not 0.01 <= temperature <= 2.0:
+                raise ValueError("Temperature must be between 0.01 and 2.0")
             self._opts.temperature = temperature
 
         if output_audio_bitrate is not None:
@@ -573,8 +614,22 @@ class TTS(tts.TTS):
         if enable_preprocessing is not None:
             self._opts.enable_preprocessing = enable_preprocessing
 
+        if dict_id is not None:
+            self._opts.dict_id = dict_id
+
+        if enable_cached_responses is not None:
+            self._opts.enable_cached_responses = enable_cached_responses
+
         if send_completion_event is not None:
             self._opts.send_completion_event = send_completion_event
+
+        if output_audio_codec is not None:
+            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+                raise ValueError(
+                    "output_audio_codec must be one of "
+                    f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+                )
+            self._opts.output_audio_codec = output_audio_codec
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -624,20 +679,27 @@ class ChunkedStream(tts.ChunkedStream):
             "output_audio_bitrate": self._opts.output_audio_bitrate,
             "min_buffer_size": self._opts.min_buffer_size,
             "max_chunk_length": self._opts.max_chunk_length,
+            "output_audio_codec": self._opts.output_audio_codec,
         }
         # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
             payload["enable_preprocessing"] = self._opts.enable_preprocessing
+            if self._opts.enable_cached_responses is not None:
+                payload["enable_cached_responses"] = self._opts.enable_cached_responses
         # temperature is supported only for v3 and v3-beta; ignored for v2
         if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
             payload["temperature"] = self._opts.temperature
+        # dict_id is supported only for v3 (not v3-beta)
+        if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
+            payload["dict_id"] = self._opts.dict_id
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -667,7 +729,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=request_id or "unknown",
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/mp3",
+                    mime_type=mime_type,
                 )
                 # handle multiple audio chunks
                 for b64 in audios:
@@ -703,11 +765,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
+        mime_type = f"audio/{self._opts.output_audio_codec}"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
             num_channels=1,
-            mime_type="audio/mp3",
+            mime_type=mime_type,
             stream=True,
             frame_size_ms=50,
         )
@@ -780,16 +843,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
+                    "speech_sample_rate": self._opts.speech_sample_rate,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
                     data["loudness"] = self._opts.loudness
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
+                    data["output_audio_codec"] = self._opts.output_audio_codec
+                    if self._opts.enable_cached_responses is not None:
+                        data["enable_cached_responses"] = self._opts.enable_cached_responses
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
                     data["output_audio_bitrate"] = self._opts.output_audio_bitrate
                     data["min_buffer_size"] = self._opts.min_buffer_size
                     data["max_chunk_length"] = self._opts.max_chunk_length
+                    data["output_audio_codec"] = self._opts.output_audio_codec
+                if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
+                    data["dict_id"] = self._opts.dict_id
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
@@ -885,6 +955,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Use connection pool for WebSocket management
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 self._ws_conn = ws
                 self._connection_state = ConnectionState.CONNECTED
 

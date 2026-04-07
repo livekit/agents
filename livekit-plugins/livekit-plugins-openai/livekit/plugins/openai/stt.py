@@ -600,12 +600,19 @@ class SpeechStream(stt.SpeechStream):
                                 audio_duration = (end_ms - start_ms) / 1000.0
                             del item_audio_timing[item_id]
 
+                        # extract token usage if available
+                        usage = data.get("usage", {})
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                                 alternatives=[],
                                 recognition_usage=stt.RecognitionUsage(
-                                    audio_duration=audio_duration
+                                    audio_duration=audio_duration,
+                                    input_tokens=input_tokens,
+                                    output_tokens=output_tokens,
                                 ),
                             )
                         )
@@ -623,6 +630,9 @@ class SpeechStream(stt.SpeechStream):
         while True:
             closing_ws = False  # reset the flag
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._report_connection_acquired(
+                    self._pool.last_acquire_time, self._pool.last_connection_reused
+                )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

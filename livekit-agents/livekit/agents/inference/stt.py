@@ -31,17 +31,19 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 DeepgramModels = Literal[
-    "deepgram/flux-general",
-    "deepgram/flux-general-en",
     "deepgram/nova-3",
     "deepgram/nova-3-medical",
     "deepgram/nova-2",
     "deepgram/nova-2-medical",
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
+]
+DeepgramFluxModels = Literal[
+    "deepgram/flux-general",
+    "deepgram/flux-general-en",
 ]
 CartesiaModels = Literal["cartesia/ink-whisper",]
 AssemblyAIModels = Literal[
@@ -61,14 +63,38 @@ class DeepgramOptions(TypedDict, total=False):
     filler_words: bool  # default: True
     interim_results: bool  # default: True
     endpointing: int  # default: 25 (ms)
-    punctuate: bool  # default: False
+    punctuate: bool  # default: True
     smart_format: bool
     keywords: list[tuple[str, float]]
     keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
-    mip_opt_out: bool
+    mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
+    diarize: bool
+    dictation: bool
+    detect_language: bool
+    no_delay: bool  # default: True
+    utterance_end: bool
+    redact: str | list[str]
+    replace: str | list[str]
+    search: str | list[str]
+    tag: str | list[str]
+    channels: int
+    version: str
+    callback: str
+    callback_method: str
+    extra: str
+
+
+class DeepgramFluxOptions(TypedDict, total=False):
+    eager_eot_threshold: float  # range 0.3-0.9, default: 0.5
+    eot_threshold: float  # range 0.5-0.9
+    eot_timeout_ms: int
+    keyterm: str | list[str]
+    mip_opt_out: bool  # default: False
+    tag: str | list[str]
+    detect_language: bool
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -77,6 +103,8 @@ class AssemblyaiOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
+    language_detection: bool
+    inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
 
 
@@ -87,6 +115,7 @@ class ElevenlabsOptions(TypedDict, total=False):
     vad_threshold: float
     min_speech_duration_ms: int
     min_silence_duration_ms: int
+    language_code: str
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -136,6 +165,7 @@ def _normalize_fallback(
 
 STTModels = (
     DeepgramModels
+    | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
     | ElevenlabsModels
@@ -146,7 +176,6 @@ STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -194,6 +223,23 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: DeepgramFluxModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[DeepgramFluxOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -264,6 +310,7 @@ class STT(stt.STT):
             dict[str, Any]
             | CartesiaOptions
             | DeepgramOptions
+            | DeepgramFluxOptions
             | AssemblyaiOptions
             | ElevenlabsOptions
         ] = NOT_GIVEN,
@@ -302,11 +349,7 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
-        )
+        lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
         lk_api_key = (
             api_key
@@ -329,7 +372,7 @@ class STT(stt.STT):
             )
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback)
 
         self._opts = STTOptions(
             model=model,
@@ -612,7 +655,8 @@ class SpeechStream(stt.SpeechStream):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
             ws = await asyncio.wait_for(

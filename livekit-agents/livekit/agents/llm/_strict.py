@@ -62,7 +62,7 @@ def _ensure_strict_json_schema(
     # object types
     # { 'type': 'object', 'properties': { 'a':  {...} } }
     properties = json_schema.get("properties")
-    if is_dict(properties):
+    if is_dict(properties) and properties:
         json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
             key: _ensure_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
@@ -75,21 +75,30 @@ def _ensure_strict_json_schema(
     if is_dict(items):
         json_schema["items"] = _ensure_strict_json_schema(items, path=(*path, "items"), root=root)
 
-    # unions
-    any_of = json_schema.get("anyOf")
-    if is_list(any_of):
-        json_schema["anyOf"] = [
-            _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
-            for i, variant in enumerate(any_of)
-        ]
-
-    # unions (oneOf)
-    one_of = json_schema.get("oneOf")
-    if is_list(one_of):
-        json_schema["oneOf"] = [
-            _ensure_strict_json_schema(variant, path=(*path, "oneOf", str(i)), root=root)
-            for i, variant in enumerate(one_of)
-        ]
+    # unions (anyOf / oneOf)
+    # Strip empty schema objects ({}) — they are JSON Schema's identity element
+    # for anyOf (match anything) and cause OpenAI strict mode to reject the schema.
+    # Common when Union[..., Any] or ForwardRef patterns produce bare {} entries.
+    # Also convert oneOf → anyOf because OpenAI strict mode does not permit oneOf.
+    # Pydantic emits oneOf for discriminated unions, but anyOf is semantically equivalent
+    # for the LLM's purposes and is accepted by the API.
+    for union_key in ("anyOf", "oneOf"):
+        variants = json_schema.get(union_key)
+        if is_list(variants):
+            variants = [v for v in variants if v != {}]
+            if len(variants) == 1:
+                json_schema.update(
+                    _ensure_strict_json_schema(variants[0], path=(*path, union_key, "0"), root=root)
+                )
+                json_schema.pop(union_key, None)
+            elif len(variants) >= 2:
+                json_schema.pop(union_key, None)
+                json_schema["anyOf"] = [
+                    _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
+                    for i, variant in enumerate(variants)
+                ]
+            else:
+                json_schema.pop(union_key, None)
 
     # intersections
     all_of = json_schema.get("allOf")
@@ -162,12 +171,14 @@ def _ensure_strict_json_schema(
                 continue
 
             t = non_null["type"]
-            if isinstance(t, str):
-                non_null["type"] = [t, "null"]
+            non_null["type"] = [t, "null"] if isinstance(t, str) else t
+            enum = non_null.get("enum")
+            if is_list(enum):
+                enum.append(None)
 
-            merged = {k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")}
-            merged.update(non_null)
-            json_schema = merged
+            json_schema = {
+                k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")
+            } | non_null
             break
 
     return json_schema

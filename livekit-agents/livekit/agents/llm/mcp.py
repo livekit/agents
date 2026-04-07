@@ -6,7 +6,7 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -14,13 +14,18 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+from typing_extensions import Self
+
+from ..log import logger
+from .tool_context import Toolset
 
 try:
+    import httpx
     import mcp.types
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
+    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -57,7 +62,7 @@ MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     # TODO(theomonnom): handle images & binary messages
     if len(ctx.result.content) == 1:
-        return ctx.result.content[0].model_dump_json()
+        return str(ctx.result.content[0].model_dump_json())
     elif len(ctx.result.content) > 1:
         return json.dumps([item.model_dump() for item in ctx.result.content])
 
@@ -75,7 +80,6 @@ class MCPServer(ABC):
         tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
         self._client: ClientSession | None = None
-        self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
         self._tool_result_resolver: MCPToolResultResolver = (
             tool_result_resolver or _default_tool_result_resolver
@@ -83,6 +87,10 @@ class MCPServer(ABC):
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+
+        self._client_task: asyncio.Task[None] | None = None
+        self._closing_ev = asyncio.Event()
+        self._ready_fut: asyncio.Future[None] | None = None
 
     @property
     def initialized(self) -> bool:
@@ -92,23 +100,45 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
+        if self._client_task and not self._client_task.done():
+            logger.warning("MCPServer is already initializing")
+            if self._ready_fut:
+                await self._ready_fut
+            return
+
+        self._ready_fut = ready_fut = asyncio.Future[None]()
+        self._client_task = asyncio.create_task(
+            self._run_client(ready_fut), name=f"{type(self).__name__}._run_client"
+        )
+        await ready_fut
+
+    async def _run_client(self, ready_fut: asyncio.Future[None]) -> None:
         try:
-            streams = await self._exit_stack.enter_async_context(self.client_streams())
-            receive_stream, send_stream = streams[0], streams[1]
-            self._client = await self._exit_stack.enter_async_context(
-                ClientSession(
+            async with self.client_streams() as streams:
+                receive_stream, send_stream = streams[0], streams[1]
+                async with ClientSession(
                     receive_stream,
                     send_stream,
                     read_timeout_seconds=timedelta(seconds=self._read_timeout)
                     if self._read_timeout
                     else None,
-                )
-            )
-            await self._client.initialize()  # type: ignore[union-attr]
-            self._initialized = True
-        except Exception:
-            await self.aclose()
-            raise
+                ) as client:
+                    await client.initialize()
+                    self._client = client
+                    ready_fut.set_result(None)
+
+                    await self._closing_ev.wait()
+        except BaseException as e:
+            if not ready_fut.done():
+                ready_fut.set_exception(e)  # raising from `await initialize()`
+            else:
+                if isinstance(e, Exception):
+                    logger.exception("MCP client connection failed with unexpected error")
+                raise
+        finally:
+            self._client = None
+            self._lk_tools = None
+            self._closing_ev.clear()
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -168,11 +198,13 @@ class MCPServer(ABC):
         return function_tool(_tool_called, raw_schema=raw_schema)
 
     async def aclose(self) -> None:
+        self._closing_ev.set()
         try:
-            await self._exit_stack.aclose()
+            if self._client_task:
+                await self._client_task
+                self._client_task = None
         finally:
-            self._client = None
-            self._lk_tools = None
+            self._closing_ev.clear()
 
     @abstractmethod
     def client_streams(
@@ -271,12 +303,19 @@ class MCPServerHTTP(MCPServer):
         ]
     ]:
         if self._use_streamable_http:
-            return streamablehttp_client(  # type: ignore[no-any-return]
-                url=self.url,
-                headers=self.headers,
-                timeout=timedelta(seconds=self._timeout),
-                sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
-            )
+
+            @asynccontextmanager
+            async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
+                async with httpx.AsyncClient(
+                    headers=self.headers or {},
+                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+                ) as http_client:
+                    async with streamable_http_client(
+                        url=self.url, http_client=http_client
+                    ) as streams:
+                        yield streams
+
+            return _streamable_http_with_client()  # type: ignore[return-value]
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
@@ -361,3 +400,59 @@ class MCPServerStdio(MCPServer):
 
     def __repr__(self) -> str:
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
+
+
+class MCPToolset(Toolset):
+    """A toolset that exposes tools from a Model Context Protocol (MCP) server.
+
+    MCPToolset wraps an ``MCPServer`` instance and makes its tools available for
+    use by an ``Agent``. On ``setup()``, it connects to the MCP server (if not
+    already connected), fetches the available tools, and caches them locally.
+    """
+
+    def __init__(self, *, id: str, mcp_server: MCPServer) -> None:
+        super().__init__(id=id)
+        self._mcp_server = mcp_server
+        self._initialized = False
+        self._lock = asyncio.Lock()
+
+    async def setup(self, *, reload: bool = False) -> Self:
+        """Initialize the MCP server connection and fetch available tools.
+
+        If the MCP server is not yet connected, this will call
+        ``MCPServer.initialize()``. Subsequent calls are no-ops unless
+        ``reload=True``.
+
+        Args:
+            reload: If ``True``, invalidate the tool cache and re-fetch
+                tools from the MCP server even if already initialized.
+        """
+        await super().setup()
+        async with self._lock:
+            if not reload and self._initialized:
+                return self
+
+            if not self._mcp_server.initialized:
+                await self._mcp_server.initialize()
+            elif reload:
+                self._mcp_server.invalidate_cache()
+
+            tools = await self._mcp_server.list_tools()
+            self._tools = tools
+            self._initialized = True
+            return self
+
+    def filter_tools(self, filter_fn: Callable[[MCPTool], bool]) -> Self:
+        """Filter the toolset's tools in-place using a predicate."""
+        self._tools = [
+            tool for tool in self._tools if isinstance(tool, MCPTool) and filter_fn(tool)
+        ]
+        return self
+
+    async def aclose(self) -> None:
+        try:
+            await super().aclose()
+            await self._mcp_server.aclose()
+        finally:
+            self._initialized = False
+            self._tools = []

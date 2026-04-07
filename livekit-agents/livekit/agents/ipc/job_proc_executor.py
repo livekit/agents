@@ -30,6 +30,7 @@ class ProcJobExecutor(SupervisedProc):
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
+        session_end_timeout: float,
         memory_warn_mb: float,
         memory_limit_mb: float,
         ping_interval: float,
@@ -57,8 +58,9 @@ class ProcJobExecutor(SupervisedProc):
         self._running_job: RunningJobInfo | None = None
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._session_end_fnc = session_end_fnc
         self._text_response_fnc = text_response_fnc
+        self._session_end_fnc = session_end_fnc
+        self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = shortuuid("PCEXEC_")
@@ -99,6 +101,7 @@ class ProcJobExecutor(SupervisedProc):
             initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
             session_end_fnc=self._session_end_fnc,
+            session_end_timeout=self._session_end_timeout,
             log_cch=log_cch,
             mp_cch=cch,
             user_arguments=self._user_args,

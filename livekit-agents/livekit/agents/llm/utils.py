@@ -17,6 +17,7 @@ from typing import (
     get_type_hints,
 )
 
+import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined, from_json
@@ -28,7 +29,7 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool
+from .tool_context import FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -114,13 +115,24 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
-def is_context_type(ty: type) -> bool:
+def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
     from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is RunContext or origin is RunContext
 
-    return is_call_context
+    if not allow_subclasses:
+        return ty is RunContext or origin is RunContext
+
+    if origin is not None:
+        try:
+            return issubclass(origin, RunContext)
+        except TypeError:
+            return False
+
+    try:
+        return issubclass(ty, RunContext)
+    except TypeError:
+        return False
 
 
 @dataclass
@@ -200,10 +212,6 @@ def build_legacy_openai_schema(
     info = function_tool.info
     schema = model.model_json_schema()
 
-    # Ensure 'required' field exists for compatibility with strict APIs like Groq
-    if "required" not in schema:
-        schema["required"] = []
-
     if internally_tagged:
         return {
             "name": info.name,
@@ -229,10 +237,6 @@ def build_strict_openai_schema(
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
-
-    # Ensure 'required' field exists for compatibility with strict APIs
-    if "required" not in schema:
-        schema["required"] = []
 
     return {
         "type": "function",
@@ -324,7 +328,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     for param_name, param in signature.parameters.items():
         type_hint = type_hints[param_name]
 
-        if is_context_type(type_hint):
+        if is_context_type(type_hint, allow_subclasses=True):
             continue
 
         default_value = param.default if param.default is not param.empty else ...
@@ -369,7 +373,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str,  # raw function output from the LLM
+    json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
@@ -379,7 +383,13 @@ def prepare_function_arguments(
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-    args_dict = from_json(json_arguments)
+
+    if isinstance(json_arguments, str):
+        args_dict = from_json(json_arguments)
+        if args_dict is None:
+            args_dict = {}
+    else:
+        args_dict = json_arguments
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
@@ -412,12 +422,21 @@ def prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext if needed
+    # inject RunContext (or subclasses like AsyncRunContext) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if is_context_type(type_hint) and call_ctx is not None:
+        if not is_context_type(type_hint, allow_subclasses=True) or call_ctx is None:
+            continue
+
+        expected_type = get_origin(type_hint) or type_hint
+        if isinstance(call_ctx, expected_type):
             context_dict[param_name] = call_ctx
+        else:
+            logger.error(
+                f"context type mismatch for parameter '{param_name}': "
+                f"expected {expected_type.__name__}, got {type(call_ctx).__name__}"
+            )
 
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
@@ -602,6 +621,24 @@ async def execute_function_call(
             json_arguments=tool_call.arguments or "{}",
             call_ctx=call_ctx,
         )
+    except (pydantic.ValidationError, ValueError) as e:
+        # Surface argument validation errors to the LLM so it can self-correct.
+        # Without this, the LLM only sees "An internal error occurred" and has
+        # no signal about what was wrong with its arguments.
+        logger.warning(
+            f"invalid arguments for AI function `{tool_call.name}`: {e}",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
+    except Exception as e:
+        logger.exception(
+            f"exception preparing arguments for AI function `{tool_call.name}`",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+    try:
         result = function_tool(*fnc_args, **fnc_kwargs)
         if asyncio.iscoroutine(result):
             result = await result

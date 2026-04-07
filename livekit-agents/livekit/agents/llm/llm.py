@@ -45,6 +45,9 @@ class CompletionUsage(BaseModel):
     """The number of tokens read from the cache."""
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
+    service_tier: str | None = None
+    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
+    Returned by providers that support tiered processing (e.g. OpenAI)."""
 
 
 class FunctionToolCall(BaseModel):
@@ -320,6 +323,9 @@ class LLMStream(ABC):
             # set gen_ai attributes
             self._llm_request_span.set_attributes(
                 {
+                    trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                    trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+                    trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
                     trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: metrics.prompt_tokens,
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
                 },
