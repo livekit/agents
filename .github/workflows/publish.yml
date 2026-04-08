@@ -131,8 +131,7 @@ jobs:
             --base "$BASE_BRANCH" \
             --head "$branch" \
             --title "v${VERSION}" \
-            --body "Merging this PR will publish all packages as **v${VERSION}** to PyPI." \
-            --label "release"
+            --body "Merging this PR will publish all packages as **v${VERSION}** to PyPI."
 
   # ── Step 2: Publish on merge ──────────────────────────────────
   discover:
