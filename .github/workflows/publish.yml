@@ -1,7 +1,6 @@
 name: Publish to PyPI
 
 on:
-  # Step 1: Dispatch creates a version bump PR
   workflow_dispatch:
     inputs:
       version:
@@ -17,13 +16,13 @@ on:
           - "major-rc    (1.5.1 → 2.0.0.rc1)"
           - "next-rc     (.rc1 → .rc2)"
           - "promote     (1.6.0.rc2 → 1.6.0)"
+          - "republish   (retry failed publish, no version bump)"
       branch:
         description: "Branch to publish from (default: main)"
         type: string
         required: false
         default: "main"
 
-  # Step 2: Merging the release PR triggers build + publish
   pull_request:
     types: [closed]
 
@@ -34,10 +33,12 @@ permissions:
   actions: write
 
 jobs:
-  # ── Step 1: Create a version bump PR ──────────────────────────
+  # ── Create a version bump PR ────────────────────────────────
   bump:
     name: Create release PR
-    if: github.event_name == 'workflow_dispatch'
+    if: |
+      github.event_name == 'workflow_dispatch'
+      && !startsWith(inputs.version, 'republish')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -134,18 +135,23 @@ jobs:
             --title "v${VERSION}" \
             --body "Merging this PR will publish all packages as **v${VERSION}** to PyPI."
 
-  # ── Step 2: Publish on merge ──────────────────────────────────
+  # ── Discover, build, publish ────────────────────────────────
+  # Triggered by: merging a release PR OR republish dispatch
   discover:
     name: Discover packages
     if: |
-      github.event_name == 'pull_request'
-      && github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.head.ref, 'release/v')
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.merged == true
+        && startsWith(github.event.pull_request.head.ref, 'release/v'))
+      || (github.event_name == 'workflow_dispatch'
+        && startsWith(inputs.version, 'republish'))
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.list.outputs.packages }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
 
       - name: List publishable packages
         id: list
@@ -154,7 +160,6 @@ jobs:
 
           packages+=("livekit-agents")
 
-          # Read package name from pyproject.toml, falling back to setup.py, then dir name
           for dir in livekit-plugins/livekit-plugins-*; do
             if [ ! -d "$dir" ]; then continue; fi
 
@@ -179,6 +184,9 @@ jobs:
   tag:
     name: Tag release
     needs: discover
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
