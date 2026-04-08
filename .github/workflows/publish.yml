@@ -95,11 +95,7 @@ jobs:
       - name: Read new version
         id: version
         run: |
-          version=$(python -c "
-          import re, pathlib
-          m = re.search(r'__version__\s*=\s*[\"'\''](.*?)[\"'\'']', pathlib.Path('livekit-agents/livekit/agents/version.py').read_text())
-          print(m.group(1))
-          ")
+          version=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "New version: $version"
 
