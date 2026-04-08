@@ -679,17 +679,16 @@ class TestAsyncToolsetDedup:
         assert names.count("get_running_tasks") == 1
         assert names.count("cancel_task") == 1
 
-    def test_async_toolset_registry_lifecycle(self):
-        """setup() registers, aclose() unregisters from the module-level registry."""
-        import asyncio
+    def test_async_toolset_same_id_no_conflict(self):
+        """Two AsyncToolsets with the same id should not conflict."""
+        from livekit.agents.llm.async_toolset import AsyncToolset
 
-        from livekit.agents.llm.async_toolset import AsyncToolset, _ActiveToolsets
+        ts1 = AsyncToolset(id="same_id", tools=[mock_tool_1])
+        ts2 = AsyncToolset(id="same_id", tools=[mock_tool_2])
 
-        ts = AsyncToolset(id="lifecycle_test", tools=[mock_tool_1])
-        assert ts not in _ActiveToolsets
+        # should not raise
+        ctx = ToolContext([ts1, ts2])
 
-        asyncio.get_event_loop().run_until_complete(ts.setup())
-        assert ts in _ActiveToolsets
-
-        asyncio.get_event_loop().run_until_complete(ts.aclose())
-        assert ts not in _ActiveToolsets
+        names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
+        assert names.count("get_running_tasks") == 1
+        assert names.count("cancel_task") == 1
