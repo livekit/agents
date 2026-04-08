@@ -44,13 +44,15 @@ jobs:
           ref: ${{ inputs.branch }}
 
       - name: Guard non-main branches
+        env:
+          VERSION: ${{ inputs.version }}
+          BRANCH: ${{ inputs.branch }}
         run: |
-          key=$(echo "${{ inputs.version }}" | awk '{print $1}')
-          branch="${{ inputs.branch }}"
-          if [ "$branch" != "main" ]; then
+          key=$(echo "$VERSION" | awk '{print $1}')
+          if [ "$BRANCH" != "main" ]; then
             case "$key" in
               *-rc|next-rc) ;; # allowed
-              *) echo "::error::Only RC releases are allowed from non-main branches (got '$key' on '$branch')"; exit 1 ;;
+              *) echo "::error::Only RC releases are allowed from non-main branches (got '$key' on '$BRANCH')"; exit 1 ;;
             esac
           fi
 
@@ -63,8 +65,10 @@ jobs:
         run: pip install click packaging pyyaml colorama
 
       - name: Bump versions
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          key=$(echo "${{ inputs.version }}" | awk '{print $1}')
+          key=$(echo "$VERSION" | awk '{print $1}')
 
           case "$key" in
             patch|minor|major)
@@ -101,7 +105,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Close any open PRs from release/* branches
           gh pr list --state open --json number,headRefName \
             --jq '.[] | select(.headRefName | startswith("release/v")) | .number' | while read -r pr; do
             echo "Superseding release PR #$pr"
@@ -112,22 +115,23 @@ jobs:
       - name: Create release PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BASE_BRANCH: ${{ inputs.branch }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          branch="release/v${version}"
+          branch="release/v${VERSION}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add -A
-          git commit -m "v${version}"
+          git commit -m "v${VERSION}"
           git push --force origin "$branch"
 
           gh pr create \
-            --base "${{ inputs.branch }}" \
+            --base "$BASE_BRANCH" \
             --head "$branch" \
-            --title "v${version}" \
-            --body "Merging this PR will publish all packages as **v${version}** to PyPI." \
+            --title "v${VERSION}" \
+            --body "Merging this PR will publish all packages as **v${VERSION}** to PyPI." \
             --label "release"
 
   # ── Step 2: Publish on merge ──────────────────────────────────
@@ -180,9 +184,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Create git tag
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          version="${{ github.event.pull_request.head.ref }}"
-          version="${version#release/}"
+          version="${HEAD_REF#release/}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "$version"

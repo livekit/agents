@@ -17,21 +17,22 @@ jobs:
       - name: Check release PR requirements
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          head_ref="${{ github.event.pull_request.head.ref }}"
-
-          if [[ "$head_ref" != release/v* ]]; then
+          if [[ "$HEAD_REF" != release/v* ]]; then
             echo "Not a release PR, skipping"
             exit 0
           fi
 
-          author="${{ github.event.pull_request.user.login }}"
-          if [ "$author" != "github-actions[bot]" ]; then
-            echo "::error::Release PRs must be created by the publish workflow, not by '$author'"
+          if [ "$PR_AUTHOR" != "github-actions[bot]" ]; then
+            echo "::error::Release PRs must be created by the publish workflow, not by '$PR_AUTHOR'"
             exit 1
           fi
 
-          approvals=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+          approvals=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
             --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | length')
           echo "Approvals: $approvals"
           if [ "$approvals" -lt 2 ]; then
