@@ -42,9 +42,15 @@ async def get_running_tasks(ctx: RunContext) -> list[dict]:
 @function_tool
 async def cancel_task(ctx: RunContext, call_id: str) -> str:
     """Cancel a running async tool call by call_id."""
-    for toolset in _ActiveToolsets.get(ctx.session, ()):
-        if await toolset.cancel(call_id):
-            return f"Task {call_id} cancelled successfully."
+    toolset: AsyncToolset | None = None
+    for ts in _ActiveToolsets.get(ctx.session, ()):
+        if call_id in ts._running_tasks:
+            toolset = ts
+            break
+
+    if toolset is not None:
+        await toolset.cancel(call_id)
+        return f"Task {call_id} cancelled successfully."
     return f"Task {call_id} not found or already completed."
 
 
