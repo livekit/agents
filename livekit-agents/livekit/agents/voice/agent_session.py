@@ -25,7 +25,7 @@ from livekit import rtc
 
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
-from ..job import JobContext, get_job_context
+from ..job import get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
@@ -615,16 +615,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # configure observability first
             record_is_given = is_given(record)
-            job_ctx: JobContext | None = None
-            try:
+            job_ctx = get_job_context(required=False)
+            if not is_given(record):
                 # defer to server-side setting for recording
-                job_ctx = get_job_context()
-                if not is_given(record):
-                    record = job_ctx.job.enable_recording
-            except RuntimeError:
-                # JobContext is not available in evals, will not be able to record
-                if not is_given(record):
-                    record = False
+                record = job_ctx.job.enable_recording if job_ctx else False
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
 

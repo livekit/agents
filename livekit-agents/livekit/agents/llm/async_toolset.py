@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
 from .. import utils
+from ..job import JobContext, get_job_context
 from ..llm.chat_context import ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
@@ -23,33 +24,28 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
 
-# registry of active AsyncToolsets grouped by session.
-# Toolsets lazily register on first tool call, unregister in aclose().
-# When a session's set becomes empty, the entry is removed.
-_ActiveToolsets: dict[AgentSession, set[AsyncToolset]] = {}
+# Module-level registry of running async tasks, keyed by (JobContext | None, call_id).
+# Registered when a task starts in _wrap_tool, auto-removed via done callback.
+_RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
 
 
 @function_tool
-async def get_running_tasks(ctx: RunContext) -> list[dict]:
+async def get_running_tasks() -> list[dict]:
     """Get the list of running async tool calls across all async toolsets."""
-    results = []
-    for toolset in _ActiveToolsets.get(ctx.session, ()):
-        for task in toolset._running_tasks.values():
-            results.append(task.ctx.function_call.model_dump())
-    return results
+    job_ctx = get_job_context(required=False)
+    return [
+        task.ctx.function_call.model_dump()
+        for (ctx, _), task in _RunningTasks.items()
+        if ctx is job_ctx
+    ]
 
 
 @function_tool
-async def cancel_task(ctx: RunContext, call_id: str) -> str:
+async def cancel_task(call_id: str) -> str:
     """Cancel a running async tool call by call_id."""
-    toolset: AsyncToolset | None = None
-    for ts in _ActiveToolsets.get(ctx.session, ()):
-        if call_id in ts._running_tasks:
-            toolset = ts
-            break
-
-    if toolset is not None:
-        await toolset.cancel(call_id)
+    job_ctx = get_job_context(required=False)
+    task = _RunningTasks.get((job_ctx, call_id))
+    if task and await task.ctx._toolset.cancel(call_id):
         return f"Task {call_id} cancelled successfully."
     return f"Task {call_id} not found or already completed."
 
@@ -190,7 +186,6 @@ class AsyncToolset(Toolset):
         ]
         self._tools.extend([get_running_tasks, cancel_task])
 
-        self._session: AgentSession | None = None
         self._running_tasks: dict[str, _RunningTask] = {}
 
         # speech delivery — shared across all tools in this toolset
@@ -205,14 +200,13 @@ class AsyncToolset(Toolset):
         return False
 
     async def aclose(self) -> None:
-        """Cancel all tasks and unregister from the global registry."""
+        """Cancel all tasks."""
         await super().aclose()
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if self._reply_task is not None:
             tasks.append(self._reply_task)
         await utils.aio.cancel_and_wait(*tasks)
         self._running_tasks.clear()
-        self._unregister()
 
     def _wrap_tool(self, tool: FunctionTool | RawFunctionTool) -> FunctionTool | RawFunctionTool:
         if not _has_async_context_param(tool):
@@ -293,9 +287,18 @@ class AsyncToolset(Toolset):
             exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
             _pass_through_activity_task_info(exe_task)
 
-            self._register(ctx.session)
-            self._running_tasks[call_id] = _RunningTask(ctx=async_ctx, exe_task=exe_task)
-            exe_task.add_done_callback(lambda _: self._running_tasks.pop(call_id, None))
+            running_task = _RunningTask(ctx=async_ctx, exe_task=exe_task)
+            self._running_tasks[call_id] = running_task
+
+            # register in the module-level registry
+            task_key = (get_job_context(required=False), call_id)
+            _RunningTasks[task_key] = running_task
+
+            def _on_done(_: asyncio.Task[Any]) -> None:
+                self._running_tasks.pop(call_id, None)
+                _RunningTasks.pop(task_key, None)
+
+            exe_task.add_done_callback(_on_done)
 
             return await async_ctx._pending_fut
 
@@ -382,22 +385,6 @@ class AsyncToolset(Toolset):
             )
 
         return None
-
-    def _register(self, session: AgentSession) -> None:
-        """Lazily register this toolset for the given session."""
-        if self._session is not None:
-            return
-        _ActiveToolsets.setdefault(session, set()).add(self)
-        self._session = session
-
-    def _unregister(self) -> None:
-        if self._session is not None:
-            toolsets = _ActiveToolsets.get(self._session)
-            if toolsets is not None:
-                toolsets.discard(self)
-                if not toolsets:
-                    _ActiveToolsets.pop(self._session, None)
-            self._session = None
 
 
 def _is_async_context_type(ty: type) -> bool:

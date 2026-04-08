@@ -27,7 +27,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urlparse
 
 import aiohttp
@@ -64,9 +64,17 @@ if TYPE_CHECKING:
     from .voice.report import SessionReport
 
 
-def get_job_context() -> JobContext:
+@overload
+def get_job_context(*, required: Literal[True] = True) -> JobContext: ...
+
+
+@overload
+def get_job_context(*, required: Literal[False]) -> JobContext | None: ...
+
+
+def get_job_context(*, required: bool = True) -> JobContext | None:
     ctx = _JobContextVar.get(None)
-    if ctx is None:
+    if ctx is None and required:
         raise RuntimeError(
             "no job context found, are you running this code inside a job entrypoint?"
         )
