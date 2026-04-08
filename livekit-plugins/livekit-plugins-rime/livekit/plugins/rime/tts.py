@@ -87,6 +87,15 @@ class _Mistv2Options:
 NUM_CHANNELS = 1
 
 
+def _timeout_for_model(model: TTSModels | str) -> int:
+    if model == "arcana":
+        return ARCANA_MODEL_TIMEOUT
+    elif model == "mistv3":
+        return MISTV3_MODEL_TIMEOUT
+    else:
+        return MISTV2_MODEL_TIMEOUT
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -161,12 +170,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._base_url = base_url
 
-        if model == "arcana":
-            self._total_timeout = ARCANA_MODEL_TIMEOUT
-        elif model == "mistv3":
-            self._total_timeout = MISTV3_MODEL_TIMEOUT
-        else:
-            self._total_timeout = MISTV2_MODEL_TIMEOUT
+        self._total_timeout = _timeout_for_model(model)
 
     @property
     def model(self) -> str:
@@ -210,6 +214,7 @@ class TTS(tts.TTS):
             self._base_url = base_url
         if is_given(model):
             self._opts.model = model
+            self._total_timeout = _timeout_for_model(model)
 
             if model == "arcana" and self._opts.arcana_options is None:
                 self._opts.arcana_options = _ArcanaOptions()
