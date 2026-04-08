@@ -151,10 +151,19 @@ jobs:
           packages+=("livekit-agents")
 
           # Read actual package name from pyproject.toml (handles dir/name mismatches)
-          for dir in livekit-plugins/livekit-plugins-* livekit-plugins/livekit-blingfire livekit-plugins/livekit-blockguard livekit-plugins/livekit-durable; do
+          for dir in livekit-plugins/livekit-plugins-*; do
             if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
               name=$(grep -m1 '^name = ' "$dir/pyproject.toml" | sed 's/name = "\(.*\)"/\1/')
-              packages+=("$name")
+              if [ -n "$name" ]; then
+                packages+=("$name")
+              fi
+            fi
+          done
+
+          # Special packages (use setup.py, have custom build jobs in build.yml)
+          for special in livekit-blingfire livekit-blockguard livekit-durable; do
+            if [ -d "livekit-plugins/$special" ]; then
+              packages+=("$special")
             fi
           done
 
