@@ -128,8 +128,8 @@ jobs:
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$branch" \
-            --title "v${VERSION}" \
-            --body "Merging this PR will publish all packages as **v${VERSION}** to PyPI."
+            --title "livekit-agents@${VERSION}" \
+            --body "Merging this PR will publish all packages as **${VERSION}** to PyPI."
 
   # ── Discover, build, publish ────────────────────────────────
   # Triggered by: merging a release PR OR republish dispatch
