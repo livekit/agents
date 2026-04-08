@@ -33,7 +33,7 @@ jobs:
           fi
 
           approvals=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | length')
+            --jq '[group_by(.user.login)[] | sort_by(.submitted_at) | last | select(.state == "APPROVED") | .user.login] | length')
           echo "Approvals: $approvals"
           if [ "$approvals" -lt 2 ]; then
             echo "::error::Release PRs require at least 2 approvals (got $approvals)"

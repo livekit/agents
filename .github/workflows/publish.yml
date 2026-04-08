@@ -155,7 +155,7 @@ jobs:
           packages+=("livekit-agents")
 
           # Read package name from pyproject.toml, falling back to setup.py, then dir name
-          for dir in livekit-plugins/livekit-*; do
+          for dir in livekit-plugins/livekit-plugins-*; do
             if [ ! -d "$dir" ]; then continue; fi
 
             name=""
