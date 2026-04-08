@@ -34,7 +34,6 @@ from livekit.plugins import (
     neuphonic,
     resemble,
     rime,
-    smallestai,
     speechify,
     spitch,
 )
@@ -246,13 +245,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.mistral.ai:443",
         },
         id="mistralai",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": smallestai.TTS(),
-            "proxy-upstream": "api.smallest.ai:443",
-        },
-        id="smallestai",
     ),
 ]
 

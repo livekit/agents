@@ -33,7 +33,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSEncoding, TTSModels
 from .version import __version__
 
@@ -103,12 +102,6 @@ class TTS(tts.TTS):
             raise ValueError(
                 "Smallest.ai API key is required, either as argument or set"
                 " SMALLEST_API_KEY environment variable"
-            )
-
-        if (consistency or similarity or enhancement) and model != "lightning-v2":
-            logger.warning(
-                "consistency, similarity, and enhancement are only supported for lightning-v2 "
-                "and will be ignored for other models."
             )
 
         self._opts = _TTSOptions(

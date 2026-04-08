@@ -88,7 +88,6 @@ class _STTOptions:
     model: STTModels | str
     api_key: str
     language: str  # BCP-47 code, e.g. "en", "hi"; use "multi" for auto-detection
-    interim_results: bool
     sample_rate: int
     encoding: STTEncoding | str
     word_timestamps: bool
@@ -103,7 +102,6 @@ class STT(stt.STT):
         *,
         model: STTModels | str = "pulse",
         language: str = "en",
-        interim_results: bool = True,
         sample_rate: int = 16000,
         encoding: STTEncoding | str = "linear16",
         word_timestamps: bool = True,
@@ -119,7 +117,6 @@ class STT(stt.STT):
             model: STT model to use. Currently only "pulse" is available.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi"
                 for automatic language detection across 39 supported languages.
-            interim_results: Whether to emit non-final transcripts while speaking.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
                 24000, 44100, 48000. Defaults to 16000.
             encoding: PCM encoding of the audio stream. Use "linear16" for raw
@@ -139,7 +136,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=interim_results,
+                interim_results=False,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
             )
@@ -156,7 +153,6 @@ class STT(stt.STT):
             model=model,
             api_key=api_key,
             language=language,
-            interim_results=interim_results,
             sample_rate=sample_rate,
             encoding=encoding,
             word_timestamps=word_timestamps,
@@ -250,7 +246,6 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        interim_results: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -260,8 +255,6 @@ class STT(stt.STT):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
-        if is_given(interim_results):
-            self._opts.interim_results = interim_results
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         if is_given(encoding):
@@ -273,7 +266,6 @@ class STT(stt.STT):
             stream.update_options(
                 model=model,
                 language=language,
-                interim_results=interim_results,
                 sample_rate=sample_rate,
                 encoding=encoding,
                 eou_timeout_ms=eou_timeout_ms,
@@ -315,7 +307,6 @@ class SpeechStream(stt.SpeechStream):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        interim_results: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -324,8 +315,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
-        if is_given(interim_results):
-            self._opts.interim_results = interim_results
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         if is_given(encoding):
