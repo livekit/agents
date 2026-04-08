@@ -31,6 +31,7 @@ permissions:
   contents: write
   pull-requests: write
   id-token: write
+  actions: write
 
 jobs:
   # ── Step 1: Create a version bump PR ──────────────────────────
@@ -188,11 +189,13 @@ jobs:
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          version="${HEAD_REF#release/}"
+          # HEAD_REF is release/v1.5.2 → extract 1.5.2
+          version="${HEAD_REF#release/v}"
+          tag="livekit-agents@${version}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$version"
-          git push origin "$version"
+          git tag "$tag"
+          git push origin "$tag"
 
   build:
     name: Build ${{ matrix.package }}
