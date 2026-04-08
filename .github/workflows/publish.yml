@@ -212,6 +212,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.package }}
     needs: [discover, build]
+    if: always() && needs.discover.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
