@@ -1,0 +1,220 @@
+name: Publish to PyPI
+
+on:
+  # Step 1: Dispatch creates a version bump PR
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "What to publish"
+        type: choice
+        required: true
+        options:
+          - "patch       (1.5.1 → 1.5.2)"
+          - "minor       (1.5.1 → 1.6.0)"
+          - "major       (1.5.1 → 2.0.0)"
+          - "patch-rc    (1.5.1 → 1.5.2.rc1)"
+          - "minor-rc    (1.5.1 → 1.6.0.rc1)"
+          - "major-rc    (1.5.1 → 2.0.0.rc1)"
+          - "next-rc     (.rc1 → .rc2)"
+          - "promote     (1.6.0.rc2 → 1.6.0)"
+      branch:
+        description: "Branch to publish from (default: main)"
+        type: string
+        required: false
+        default: "main"
+
+  # Step 2: Merging the release PR triggers build + publish
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # ── Step 1: Create a version bump PR ──────────────────────────
+  bump:
+    name: Create release PR
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Guard non-main branches
+        run: |
+          key=$(echo "${{ inputs.version }}" | awk '{print $1}')
+          branch="${{ inputs.branch }}"
+          if [ "$branch" != "main" ]; then
+            case "$key" in
+              *-rc|next-rc) ;; # allowed
+              *) echo "::error::Only RC releases are allowed from non-main branches (got '$key' on '$branch')"; exit 1 ;;
+            esac
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install click packaging pyyaml colorama
+
+      - name: Bump versions
+        run: |
+          key=$(echo "${{ inputs.version }}" | awk '{print $1}')
+
+          case "$key" in
+            patch|minor|major)
+              python .github/update_versions.py bump \
+                --ignore-changesets --bump-type "$key"
+              ;;
+            patch-rc|minor-rc|major-rc)
+              bump="${key%-rc}"
+              python .github/update_versions.py bump \
+                --ignore-changesets --bump-type "$bump"
+              python .github/update_versions.py bump --pre rc
+              ;;
+            next-rc)
+              python .github/update_versions.py bump --pre rc
+              ;;
+            promote)
+              python .github/update_versions.py bump \
+                --ignore-changesets --bump-type release
+              ;;
+          esac
+
+      - name: Read new version
+        id: version
+        run: |
+          version=$(python -c "
+          import re, pathlib
+          m = re.search(r'__version__\s*=\s*[\"'\''](.*?)[\"'\'']', pathlib.Path('livekit-agents/livekit/agents/version.py').read_text())
+          print(m.group(1))
+          ")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "New version: $version"
+
+      - name: Close existing release PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Close any open PRs from release/* branches
+          gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("release/v")) | .number' | while read -r pr; do
+            echo "Superseding release PR #$pr"
+            gh pr comment "$pr" --body "Superseded by a new release."
+            gh pr close "$pr" --delete-branch || true
+          done
+
+      - name: Create release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          branch="release/v${version}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "v${version}"
+          git push --force origin "$branch"
+
+          gh pr create \
+            --base "${{ inputs.branch }}" \
+            --head "$branch" \
+            --title "v${version}" \
+            --body "Merging this PR will publish all packages as **v${version}** to PyPI." \
+            --label "release"
+
+  # ── Step 2: Publish on merge ──────────────────────────────────
+  discover:
+    name: Discover packages
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List publishable packages
+        id: list
+        run: |
+          packages=()
+
+          packages+=("livekit-agents")
+
+          for dir in livekit-plugins/livekit-plugins-*; do
+            if [ -d "$dir" ]; then
+              packages+=("$(basename "$dir")")
+            fi
+          done
+
+          for special in livekit-blingfire livekit-blockguard livekit-durable; do
+            if [ -d "livekit-plugins/$special" ]; then
+              packages+=("$special")
+            fi
+          done
+
+          json=$(printf '%s\n' "${packages[@]}" | jq -R . | jq -sc .)
+          echo "packages=$json" >> "$GITHUB_OUTPUT"
+          echo "Will publish: $json"
+
+  tag:
+    name: Tag release
+    needs: discover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create git tag
+        run: |
+          version="${{ github.event.pull_request.head.ref }}"
+          version="${version#release/}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$version"
+          git push origin "$version"
+
+  build:
+    name: Build ${{ matrix.package }}
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    uses: ./.github/workflows/build.yml
+    with:
+      package: ${{ matrix.package }}
+      artifact_name: dist-${{ matrix.package }}
+
+  publish:
+    name: Publish ${{ matrix.package }}
+    needs: [discover, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+
+      - name: List distributions
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
