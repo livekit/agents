@@ -58,7 +58,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
-from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
+from .remote_session import RoomSessionTransport, SessionHost
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .turn import (
@@ -72,7 +72,6 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
@@ -422,9 +421,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
-        self._session_transport: SessionTransport | None = None
-        self._session_transport_audio_input: TcpAudioInput | None = None
-        self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: SessionHost | None = None
 
         self._agent: Agent | None = None
@@ -686,14 +682,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 c.acquire_io(loop=self._loop, session=self)
-
-                if c._tcp_transport is not None:
-                    self._session_host = SessionHost(
-                        c._tcp_transport,
-                        audio_input=c._tcp_audio_input,
-                        audio_output=c._tcp_audio_output,
-                    )
-                    self._session_host.register_session(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
@@ -727,8 +715,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.start()
 
                 if is_primary:
-                    # only the primary session can have a session transport
-                    self._session_transport = RoomSessionTransport(room)
+                    # only the primary session can have a session host
+                    transport = RoomSessionTransport(room)
+                    self._session_host = SessionHost(transport)
+                    self._session_host.register_session(self)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -779,35 +769,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state = RunResult(output_type=None)
                 self._global_run_state = run_state
 
-            # Phase 1: connect to room and wait for RoomIO init (participant
-            # detection, simulator attribute check, audio lock) before starting
-            # the activity — otherwise STT/audio may start before being disabled.
-            if tasks:
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
-
-            if self._room_io:
-                await self._room_io.wait_for_ready()
-
-            if self._session_transport is not None:
-                self._session_host = SessionHost(
-                    self._session_transport,
-                    audio_input=self._session_transport_audio_input,
-                    audio_output=self._session_transport_audio_output,
-                )
-                self._session_host.register_session(self)
-                await self._session_host.start()
-
-            # Phase 2: start the agent activity (LLM, STT, etc.)
-            activity_task = asyncio.create_task(
-                self._update_activity(self._agent, wait_on_enter=False)
+            # it is ok to await it directly, there is no previous task to drain
+            tasks.append(
+                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
             )
+
             try:
-                await activity_task
+                await asyncio.gather(*tasks)
             finally:
-                await utils.aio.cancel_and_wait(activity_task)
+                await utils.aio.cancel_and_wait(*tasks)
+
+            if self._session_host is not None:
+                await self._session_host.start()
 
             # important: no await should be done after this!
 
