@@ -686,11 +686,10 @@ class TestAsyncToolsetDedup:
         from livekit.agents.llm.async_toolset import AsyncToolset, _ActiveToolsets
 
         ts = AsyncToolset(id="lifecycle_test", tools=[mock_tool_1])
-        assert "lifecycle_test" not in _ActiveToolsets
+        assert ts not in _ActiveToolsets
 
         asyncio.get_event_loop().run_until_complete(ts.setup())
-        assert "lifecycle_test" in _ActiveToolsets
-        assert _ActiveToolsets["lifecycle_test"] is ts
+        assert ts in _ActiveToolsets
 
         asyncio.get_event_loop().run_until_complete(ts.aclose())
-        assert "lifecycle_test" not in _ActiveToolsets
+        assert ts not in _ActiveToolsets

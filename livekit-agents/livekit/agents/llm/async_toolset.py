@@ -26,14 +26,14 @@ if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
 
 # registry of active AsyncToolset instances, populated in setup(), removed in aclose()
-_ActiveToolsets: dict[str, AsyncToolset] = {}
+_ActiveToolsets: set[AsyncToolset] = set()
 
 
 @function_tool
 async def get_running_tasks() -> list[dict]:
     """Get the list of running async tool calls across all async toolsets."""
     results = []
-    for toolset in _ActiveToolsets.values():
+    for toolset in _ActiveToolsets:
         for task in toolset._running_tasks.values():
             results.append(task.ctx.function_call.model_dump())
     return results
@@ -42,7 +42,7 @@ async def get_running_tasks() -> list[dict]:
 @function_tool
 async def cancel_task(call_id: str) -> str:
     """Cancel a running async tool call by call_id."""
-    for toolset in _ActiveToolsets.values():
+    for toolset in _ActiveToolsets:
         if await toolset.cancel(call_id):
             return f"Task {call_id} cancelled successfully."
     return f"Task {call_id} not found or already completed."
@@ -192,7 +192,7 @@ class AsyncToolset(Toolset):
 
     async def setup(self) -> Self:
         await super().setup()
-        _ActiveToolsets[self._id] = self
+        _ActiveToolsets.add(self)
         return self
 
     async def cancel(self, call_id: str) -> bool:
@@ -210,7 +210,7 @@ class AsyncToolset(Toolset):
             tasks.append(self._reply_task)
         await utils.aio.cancel_and_wait(*tasks)
         self._running_tasks.clear()
-        _ActiveToolsets.pop(self._id, None)
+        _ActiveToolsets.discard(self)
 
     def _wrap_tool(self, tool: FunctionTool | RawFunctionTool) -> FunctionTool | RawFunctionTool:
         if not _has_async_context_param(tool):
