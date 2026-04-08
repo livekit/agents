@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.1",
-    "mistralai>=2.0.0,<3.0.0",
+    "mistralai[realtime]>=2.0.0,<3.0.0",
 ]
 
 [project.urls]
@@ -39,3 +39,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

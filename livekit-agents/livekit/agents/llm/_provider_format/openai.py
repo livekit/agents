@@ -63,8 +63,10 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
             result = {"role": msg.role, "content": list_content}
 
         # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            result["extra_content"] = {"google": msg.extra["google"]}
+        provider_keys = ("google", "livekit")
+        extra_content = {k: msg.extra[k] for k in provider_keys if msg.extra.get(k)}
+        if extra_content:
+            result["extra_content"] = extra_content
         return result
 
     elif msg.type == "function_call":
