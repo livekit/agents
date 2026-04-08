@@ -6,6 +6,9 @@ on:
   pull_request_review:
     types: [submitted, dismissed]
 
+permissions:
+  pull-requests: read
+
 jobs:
   release-gate:
     name: Release gate
