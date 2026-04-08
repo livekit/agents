@@ -150,15 +150,11 @@ jobs:
 
           packages+=("livekit-agents")
 
-          for dir in livekit-plugins/livekit-plugins-*; do
-            if [ -d "$dir" ]; then
-              packages+=("$(basename "$dir")")
-            fi
-          done
-
-          for special in livekit-blingfire livekit-blockguard livekit-durable; do
-            if [ -d "livekit-plugins/$special" ]; then
-              packages+=("$special")
+          # Read actual package name from pyproject.toml (handles dir/name mismatches)
+          for dir in livekit-plugins/livekit-plugins-* livekit-plugins/livekit-blingfire livekit-plugins/livekit-blockguard livekit-plugins/livekit-durable; do
+            if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
+              name=$(grep -m1 '^name = ' "$dir/pyproject.toml" | sed 's/name = "\(.*\)"/\1/')
+              packages+=("$name")
             fi
           done
 

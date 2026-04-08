@@ -30,7 +30,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           approvals=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-            --jq '[.[] | select(.state == "APPROVED")] | length')
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | length')
           echo "Approvals: $approvals"
           if [ "$approvals" -lt 2 ]; then
             echo "::error::Release PRs require at least 2 approvals (got $approvals)"
