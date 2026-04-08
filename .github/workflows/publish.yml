@@ -150,21 +150,22 @@ jobs:
 
           packages+=("livekit-agents")
 
-          # Read actual package name from pyproject.toml (handles dir/name mismatches)
-          for dir in livekit-plugins/livekit-plugins-*; do
-            if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
-              name=$(grep -m1 '^name = ' "$dir/pyproject.toml" | sed 's/name = "\(.*\)"/\1/')
-              if [ -n "$name" ]; then
-                packages+=("$name")
-              fi
-            fi
-          done
+          # Read package name from pyproject.toml, falling back to setup.py, then dir name
+          for dir in livekit-plugins/livekit-*; do
+            if [ ! -d "$dir" ]; then continue; fi
 
-          # Special packages (use setup.py, have custom build jobs in build.yml)
-          for special in livekit-blingfire livekit-blockguard livekit-durable; do
-            if [ -d "livekit-plugins/$special" ]; then
-              packages+=("$special")
+            name=""
+            if [ -f "$dir/pyproject.toml" ]; then
+              name=$(grep -m1 '^name\s*=\s*"' "$dir/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')
             fi
+            if [ -z "$name" ] && [ -f "$dir/setup.py" ]; then
+              name=$(grep -m1 'name\s*=\s*"' "$dir/setup.py" | sed 's/.*"\(.*\)".*/\1/')
+            fi
+            if [ -z "$name" ]; then
+              name=$(basename "$dir")
+            fi
+
+            packages+=("$name")
           done
 
           json=$(printf '%s\n' "${packages[@]}" | jq -R . | jq -sc .)
