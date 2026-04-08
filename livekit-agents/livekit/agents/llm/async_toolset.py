@@ -35,7 +35,7 @@ async def get_running_tasks() -> list[dict]:
     job_ctx = get_job_context(required=False)
     return [
         task.ctx.function_call.model_dump()
-        for (ctx, _), task in _RunningTasks.items()
+        for (ctx, _), task in list(_RunningTasks.items())
         if ctx is job_ctx
     ]
 
