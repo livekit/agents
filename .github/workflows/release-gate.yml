@@ -3,6 +3,8 @@ name: Release gate
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - "**/version.py"
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -12,28 +14,21 @@ permissions:
 jobs:
   release-gate:
     name: Release gate
+    if: startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Check release PR requirements
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify PR was created by GitHub Actions
         run: |
-          head_ref="${{ github.event.pull_request.head.ref }}"
-
-          # Not a release PR — nothing to check
-          if [[ "$head_ref" != release/v* ]]; then
-            echo "Not a release PR, skipping"
-            exit 0
-          fi
-
-          # Must be created by the publish workflow
           author="${{ github.event.pull_request.user.login }}"
           if [ "$author" != "github-actions[bot]" ]; then
             echo "::error::Release PRs must be created by the publish workflow, not by '$author'"
             exit 1
           fi
 
-          # Must have at least 2 approvals
+      - name: Require at least 2 approvals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           approvals=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
             --jq '[.[] | select(.state == "APPROVED")] | length')
           echo "Approvals: $approvals"
