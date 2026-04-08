@@ -77,7 +77,7 @@ NUM_CHANNELS = 1
 
 
 def _is_mist_model(model: TTSModels | str) -> bool:
-    return model in ("mistv2", "mistv3")
+    return "mist" in model
 
 
 def _timeout_for_model(model: TTSModels | str) -> int:
