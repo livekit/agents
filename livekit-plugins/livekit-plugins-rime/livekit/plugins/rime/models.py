@@ -7,5 +7,4 @@ ArcanaVoices = Literal[
     "luna", "celeste", "orion", "ursa", "astra", "esther", "estelle", "andromeda"
 ]
 
-DefaultMistv2Voice = "cove"
-DefaultMistv3Voice = "cove"
+DefaultMistVoice = "cove"
