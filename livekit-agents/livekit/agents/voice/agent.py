@@ -700,6 +700,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+        preserve_function_call_history: bool = False,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -733,6 +734,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__fut = asyncio.Future[TaskResult_T]()
         self.__inactive_ev = asyncio.Event()
         self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
+        self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
 
@@ -892,7 +894,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     run_state._watch_handle(speech_handle)
 
                 merged_chat_ctx = old_agent.chat_ctx.merge(
-                    self.chat_ctx, exclude_function_call=True, exclude_instructions=True
+                    self.chat_ctx,
+                    exclude_function_call=not self._preserve_function_call_history,
+                    exclude_instructions=True,
                 )
                 # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
                 old_agent._chat_ctx.items[:] = merged_chat_ctx.items
@@ -940,3 +944,9 @@ def _set_activity_task_info(
 
 def _get_activity_task_info(task: asyncio.Task[Any]) -> _ActivityTaskInfo | None:
     return getattr(task, "__livekit_agents_activity_task", None)
+
+
+def _pass_through_activity_task_info(task: asyncio.Task[Any]) -> None:
+    current_task = asyncio.current_task()
+    if current_task and (info := _get_activity_task_info(current_task)):
+        setattr(task, "__livekit_agents_activity_task", info)

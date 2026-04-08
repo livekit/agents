@@ -126,6 +126,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             await aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
+        self._room.off("track_unpublished", self._on_track_unavailable)
         self._room.off("token_refreshed", self._on_token_refreshed)
         self._data_ch.close()
 
@@ -149,9 +150,15 @@ class _ParticipantInputStream(Generic[T], ABC):
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
-            await self._data_ch.send(cast(T, event.frame))
+            frame = cast(T, event.frame)
+            self._process_frame(frame)
+            await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
+
+    def _process_frame(self, frame: T) -> None:
+        """Hook for subclasses to process frames in-place before forwarding."""
+        pass
 
     @abstractmethod
     def _create_stream(
@@ -240,6 +247,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         | NoiseCancellationSelector
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None,
+        auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
@@ -262,6 +270,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
         self._pre_connect_audio_handler = pre_connect_audio_handler
+        self._apm: rtc.AudioProcessingModule | None = None
+        if auto_gain_control:
+            self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
+
+    @override
+    def _process_frame(self, frame: rtc.AudioFrame) -> None:
+        if self._apm is not None:
+            self._apm.process_stream(frame)
 
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:

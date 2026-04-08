@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from collections import Counter
 from collections.abc import Sequence
@@ -623,6 +624,7 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
+        t0 = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -631,6 +633,7 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0, False)
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }

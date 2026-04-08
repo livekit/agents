@@ -39,6 +39,8 @@ from .proto import (
     InferenceResponse,
     InitializeRequest,
     ShutdownRequest,
+    ShutdownRequestAck,
+    ShuttingDown,
     StartJobRequest,
 )
 
@@ -48,6 +50,7 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    session_end_timeout: float
     user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
@@ -72,8 +75,9 @@ def proc_main(args: ProcStartArgs) -> None:
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
         args.session_end_fnc,
-        JobExecutorType.PROCESS,
-        args.user_arguments,
+        session_end_timeout=args.session_end_timeout,
+        executor_type=JobExecutorType.PROCESS,
+        user_arguments=args.user_arguments,
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
@@ -177,6 +181,8 @@ class _JobProc:
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Any],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
+        *,
+        session_end_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
@@ -185,6 +191,7 @@ class _JobProc:
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
+        self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -220,7 +227,10 @@ class _JobProc:
 
                     self._start_job(msg)
                 if isinstance(msg, ShutdownRequest):
+                    await self._client.send(ShutdownRequestAck())
+
                     if not self.has_running_job:
+                        await self._client.send(ShuttingDown())
                         self._exit_proc_flag.set()
                         break  # exit immediately
 
@@ -348,17 +358,31 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
-        # TODO(theomonnom): move this code?
+        # wait for the entrypoint to finish, cancel if it takes too long
+        if not job_entry_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(job_entry_task), timeout=15)
+            except asyncio.TimeoutError:
+                logger.warning("entrypoint did not exit in time, cancelling")
+                await aio.cancel_and_wait(job_entry_task)
+
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()
 
         if self._session_end_fnc:
             try:
-                await self._session_end_fnc(self._job_ctx)
+                await asyncio.wait_for(
+                    self._session_end_fnc(self._job_ctx),
+                    timeout=self._session_end_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error("on_session_end timed out after %ds", self._session_end_timeout)
             except Exception:
                 logger.exception("error while executing the on_session_end callback")
 
         await self._job_ctx._on_session_end()
+
+        await self._client.send(ShuttingDown())
 
         logger.debug(
             "shutting down job task",
@@ -393,6 +417,7 @@ class ThreadStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    session_end_timeout: float
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
@@ -409,8 +434,9 @@ def thread_main(
             args.initialize_process_fnc,
             args.job_entrypoint_fnc,
             args.session_end_fnc,
-            JobExecutorType.THREAD,
-            args.user_arguments,
+            session_end_timeout=args.session_end_timeout,
+            executor_type=JobExecutorType.THREAD,
+            user_arguments=args.user_arguments,
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)

@@ -60,10 +60,24 @@ class SpeechData:
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
+    source_languages: list[LanguageCode] | None = None
+    """the source languages spoken by the user. populated by STT services that support translation,
+    where `language` holds the target language and `source_languages` holds the original spoken language(s).
+    may contain multiple entries when a single utterance spans multiple source languages."""
+    source_texts: list[str] | None = None
+    """the original transcription segments in the source language(s), when translation is active.
+    each entry corresponds to the same-indexed entry in `source_languages`."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
             self.language = LanguageCode(self.language)
+        if self.source_languages is not None:
+            self.source_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.source_languages
+            ]
 
 
 @dataclass
@@ -307,6 +321,23 @@ class RecognizeStream(ABC):
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
         self._start_time_offset = value
+
+    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
+        """Report connection timing as an STTMetrics event with zero usage."""
+        self._stt.emit(
+            "metrics_collected",
+            STTMetrics(
+                request_id="",
+                timestamp=time.time(),
+                duration=0.0,
+                label=self._stt._label,
+                audio_duration=0.0,
+                streamed=True,
+                acquire_time=acquire_time,
+                connection_reused=connection_reused,
+                metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+            ),
+        )
 
     @abstractmethod
     async def _run(self) -> None: ...

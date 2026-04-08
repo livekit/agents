@@ -61,8 +61,10 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append({"type": "text", "text": text_content})
             result = {"role": msg.role, "content": list_content}
 
-        if msg.extra:
-            result["extra_content"] = msg.extra
+        provider_keys = ("google", "livekit", "xai")
+        extra_content = {k: msg.extra[k] for k in provider_keys if msg.extra.get(k)}
+        if extra_content:
+            result["extra_content"] = extra_content
         return result
 
     elif msg.type == "function_call":

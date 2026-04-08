@@ -521,6 +521,7 @@ class LLMStream(llm.LLMStream):
                     if usage.input_tokens_details
                     else 0,
                     total_tokens=usage.total_tokens,
+                    service_tier=getattr(event.response, "service_tier", None),
                 ),
             )
         return chunk
