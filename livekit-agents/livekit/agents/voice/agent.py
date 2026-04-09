@@ -912,7 +912,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             if pending_on_enter_task:
                 try:
                     await asyncio.shield(pending_on_enter_task)
-                except Exception:
+                except BaseException:
                     logger.exception("error in on_enter task of agent %s", self.id)
 
             if session.current_agent != self:
