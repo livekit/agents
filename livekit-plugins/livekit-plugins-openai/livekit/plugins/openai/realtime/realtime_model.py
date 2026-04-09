@@ -1956,7 +1956,7 @@ class RealtimeSession(
 
         provider_label = self._realtime_model._provider_label
         logger.error(
-            f"{provider_label} returned an error",
+            f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
         self._emit_error(
