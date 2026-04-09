@@ -2484,6 +2484,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
+                extra=llm_gen_data.extra if llm_gen_data.extra else NOT_GIVEN,
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)

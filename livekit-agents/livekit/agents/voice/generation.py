@@ -50,6 +50,7 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
@@ -175,6 +176,9 @@ async def _llm_inference_task(
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
+
+                if chunk.delta.extra:
+                    data.extra.update(chunk.delta.extra)
 
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
