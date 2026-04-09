@@ -61,6 +61,7 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
     "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
     "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
 # models that don't support reasoning_effort when function tools are present
@@ -125,6 +126,7 @@ XAIModels = Literal[
     "xai/grok-4-1-fast-reasoning",
     "xai/grok-4.20-0309-non-reasoning",
     "xai/grok-4.20-0309-reasoning",
+    "xai/grok-4.20-multi-agent-0309",
 ]
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
