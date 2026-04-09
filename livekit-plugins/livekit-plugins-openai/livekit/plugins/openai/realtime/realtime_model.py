@@ -1466,6 +1466,11 @@ class RealtimeSession(
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
 
+        if is_given(instructions) and self._instructions:
+            # in OpenAI realtime, the session-level instructions are completely replaced
+            # by the new instructions for this response
+            instructions = f"{self._instructions}\n{instructions}"
+
         params = RealtimeResponseCreateParams(
             instructions=instructions or None,
             metadata={"client_event_id": event_id},
