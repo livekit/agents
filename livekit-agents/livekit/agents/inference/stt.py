@@ -31,7 +31,7 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -655,7 +655,8 @@ class SpeechStream(stt.SpeechStream):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
             ws = await asyncio.wait_for(

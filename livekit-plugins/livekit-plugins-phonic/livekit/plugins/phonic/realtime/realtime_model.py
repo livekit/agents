@@ -66,6 +66,7 @@ class _RealtimeOptions:
     audio_speed: NotGivenOr[float]
     phonic_tools: NotGivenOr[list[str]]
     boosted_keywords: NotGivenOr[list[str]]
+    min_words_to_interrupt: NotGivenOr[int]
     generate_no_input_poke_text: NotGivenOr[bool]
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
@@ -116,6 +117,7 @@ class RealtimeModel(llm.RealtimeModel):
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
         generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
@@ -146,6 +148,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
+            min_words_to_interrupt: Minimum number of user words required to interrupt the assistant.
             generate_no_input_poke_text: When True, auto-generate poke text when the user is silent.
             no_input_poke_sec: Seconds of silence before sending a poke message.
             no_input_poke_text: Custom poke message text. Ignored when
@@ -161,9 +164,10 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=True,
                 manual_function_calls=False,
+                mid_session_chat_ctx_update=True,
                 mid_session_instructions_update=True,
-                mid_session_context_update=True,
                 mid_session_tools_update=True,
+                per_response_tool_choice=False,
             )
         )
 
@@ -201,6 +205,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed=audio_speed,
             phonic_tools=phonic_tools,
             boosted_keywords=boosted_keywords,
+            min_words_to_interrupt=min_words_to_interrupt,
             generate_no_input_poke_text=generate_no_input_poke_text,
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
@@ -368,7 +373,7 @@ class RealtimeSession(llm.RealtimeSession):
         if self._config_sent:
             logger.warning(
                 "update_tools called after config was already sent. "
-                "Use reset() for mid-session tool updates."
+                "Use update_session() for mid-session tool updates."
             )
             return
 
@@ -412,8 +417,14 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning("push_video is not supported by the Phonic realtime model.")
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Phonic Realtime API, ignoring")
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,
         )
@@ -523,6 +534,7 @@ class RealtimeSession(llm.RealtimeSession):
             "audio_speed": self._opts.audio_speed,
             "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
             "boosted_keywords": self._opts.boosted_keywords,
+            "min_words_to_interrupt": self._opts.min_words_to_interrupt,
             "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
             "no_input_poke_sec": self._opts.no_input_poke_sec,
             "no_input_poke_text": self._opts.no_input_poke_text,
@@ -530,33 +542,35 @@ class RealtimeSession(llm.RealtimeSession):
         }
         return {k: v for k, v in raw.items() if v is not NOT_GIVEN}
 
-    async def reset(
+    async def update_session(
         self,
         *,
-        instructions: str,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        session_reused: bool,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
-        if not session_reused:
-            await super().reset(
+        if not self._config_sent:
+            await super().update_session(
                 instructions=instructions,
                 chat_ctx=chat_ctx,
                 tools=tools,
-                session_reused=False,
             )
             return
 
-        self._opts.instructions = instructions
-        self._tools = llm.ToolContext(tools)
-        self._tool_definitions = self._get_tool_definitions(tools)
+        if is_given(instructions):
+            self._opts.instructions = instructions
+        if is_given(tools):
+            self._tools = llm.ToolContext(tools)
+            self._tool_definitions = self._get_tool_definitions(tools)
+        if is_given(chat_ctx):
+            self._chat_ctx = chat_ctx.copy()
 
-        system_prompt = instructions
-        history = self._build_turn_history(chat_ctx)
-        if history:
-            system_prompt += _CONVERSATION_HISTORY_PREFIX + history
+        system_prompt = self._opts.instructions
+        if is_given(chat_ctx):
+            history = self._build_turn_history(chat_ctx)
+            if history:
+                system_prompt += _CONVERSATION_HISTORY_PREFIX + history
 
-        self._chat_ctx = chat_ctx.copy()
         self._close_current_generation(interrupted=True)
 
         tools_payload: list[dict | str] = []
@@ -569,7 +583,7 @@ class RealtimeSession(llm.RealtimeSession):
             tools_payload=tools_payload,
         )
         if self._socket:
-            logger.info("Sending mid-session reset to Phonic")
+            logger.info("Sending mid-session update to Phonic")
             await self._socket.send_reset(ResetPayload(config=ConfigOptions(**config_options)))
 
     @utils.log_exceptions(logger=logger)
@@ -577,8 +591,10 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
+            t0 = time.perf_counter()
             self._socket_ctx = self._client.conversations.connect()
             self._socket = await self._socket_ctx.__aenter__()
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             # Need to wait for instructions and tools before sending config
             await self._instructions_ready.wait()

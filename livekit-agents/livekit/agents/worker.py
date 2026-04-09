@@ -208,6 +208,8 @@ class ServerOptions:
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 10.0
     """Maximum amount of time to wait for a job to shut down gracefully"""
+    session_end_timeout: float = 300.0
+    """Maximum amount of time to wait for on_session_end to complete (default: 5 minutes)."""
     initialize_process_timeout: float = 10.0
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
@@ -304,6 +306,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: int = 1800,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
         max_retry: int = 16,
@@ -338,6 +341,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._drain_timeout = drain_timeout
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
+        self._session_end_timeout = session_end_timeout
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
         self._max_retry = max_retry
@@ -408,6 +412,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             drain_timeout=options.drain_timeout,
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
+            session_end_timeout=options.session_end_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
@@ -596,6 +601,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                session_end_timeout=self._session_end_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
@@ -685,6 +691,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
+
+            for p in Plugin.registered_plugins:
+                logger.info(
+                    "plugin registered",
+                    extra={
+                        "plugin": p.title,
+                        "version": p.version,
+                    },
+                )
 
             if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
@@ -789,6 +804,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
     ) -> None:
         if not self._closed:
@@ -826,6 +842,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(shutdown_process_timeout):
             self._shutdown_process_timeout = shutdown_process_timeout
+
+        if is_given(session_end_timeout):
+            self._session_end_timeout = session_end_timeout
 
     @property
     def id(self) -> str:

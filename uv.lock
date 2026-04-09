@@ -1727,7 +1727,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.1.3"
+version = "1.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1735,13 +1735,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/91/28/293ae58c752ed40ae3e266130d787fe6270f123808fbbfca033038b736e5/livekit-1.1.3.tar.gz", hash = "sha256:68825cf74225c3d4af93187953240fbfeb56227d4e11369c9c5b7d8202714d1b", size = 320483, upload-time = "2026-03-23T22:42:09.755Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/e8/101379a874e8d7ad75659d0165fef4d58cfe58c2799c6e7476787446fcbc/livekit-1.1.5.tar.gz", hash = "sha256:bf2e5154bdcd99f7c32da045bbde8b76592f9ac33902ea62944178d5d278a6c4", size = 330482, upload-time = "2026-04-03T19:21:03.139Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/8d/5d3a399904f6cbde1bc23e5fac87a4f056a8e76c8b3ac995ed677f3ac7ec/livekit-1.1.3-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:db7bfb25141c2f665054044f8b3ef2c93c5ee633c8f5a9f9f43bd0f9c1e6f035", size = 9890232, upload-time = "2026-03-23T22:41:59.521Z" },
-    { url = "https://files.pythonhosted.org/packages/85/37/4a6d2aff39bbe2daa965c6f71498059338878e98d632e8b1a14dd0d863ff/livekit-1.1.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2ef963a9731215c542e142df94c4d6ba385490a058d01328a66161340b181bf4", size = 8691926, upload-time = "2026-03-23T22:42:01.937Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/93/bbee45bd3e5ea46a9683716a7aebd5b2e3e4c2d82ebc537abbc11b87671f/livekit-1.1.3-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:97e47e0723127a0a98775634334dac799fb2cb72894b743e0c78b6961f710092", size = 9712001, upload-time = "2026-03-23T22:42:04.021Z" },
-    { url = "https://files.pythonhosted.org/packages/d6/c9/47da7ae46ab666a7151044627e75621e4a77fb8275edace915294d837565/livekit-1.1.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:b268998a06d57b32335b017f859566e7548aeebf9c64deea3a1add2fbb3baa05", size = 11085841, upload-time = "2026-03-23T22:42:05.898Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/a8/68a7cf4b710b0eb80e3657098e50bebfca5b5b4e19d8ac0e3efb19ed5393/livekit-1.1.3-py3-none-win_amd64.whl", hash = "sha256:87647d68c5b64a024098d167a503ee5e69061fe4b16e431f7a011aa4c73dd4d9", size = 10413627, upload-time = "2026-03-23T22:42:08.006Z" },
+    { url = "https://files.pythonhosted.org/packages/46/74/af8c9622d3c5090bd6908f51485466c7d991b31cfd826d58965982a77b17/livekit-1.1.5-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:79f5f56dc1f3e81f738a8260809cfbe90daee3bb174361e7f8f806a87e4380ce", size = 10110595, upload-time = "2026-04-03T19:20:50.935Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/b2/14a76e90d9ceaf8b9a0d6781fef8e2e979a3b23405fcb653dc901f7f85bf/livekit-1.1.5-py3-none-macosx_11_0_arm64.whl", hash = "sha256:75cebfe58aab52e740fd89d342ad3bd3e046adf717827d677b4f89cb10bf4a48", size = 8931838, upload-time = "2026-04-03T19:20:53.375Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/35/b2434dc9bd66c57657900e48acd77c9284cb216875694574b8e0706e57ea/livekit-1.1.5-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:b2ef18f71ad36d9b4a2f66d9ba79b205b9010a3e8c93b91d62157fb4ffbd5865", size = 9936475, upload-time = "2026-04-03T19:20:55.52Z" },
+    { url = "https://files.pythonhosted.org/packages/42/b9/9313bf6ec2ca3dbf572674b2f8fb8d4f75d9093e1c2bd8fbba0cfa652e0f/livekit-1.1.5-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f1150617c7d41efb83e770b0af04747e3b8881889ff20f08e56cb56c13c1b7d4", size = 11336865, upload-time = "2026-04-03T19:20:58.183Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/11/7f8dd10248e1b064b03223f97cdc4579e6b181a492ffaf3bc52a76c163ea/livekit-1.1.5-py3-none-win_amd64.whl", hash = "sha256:7334aa31107a9556fbb6a6cc73bc3f7b6edfc8cb8932f0552cabbf1c1034ff3f", size = 10682067, upload-time = "2026-04-03T19:21:00.655Z" },
 ]
 
 [[package]]
@@ -1970,7 +1970,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = "==1.1.3" },
+    { name = "livekit", specifier = "==1.1.5" },
     { name = "livekit-api", specifier = ">=1.0.7,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
@@ -2677,7 +2677,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = "==0.31.10" },
+    { name = "phonic", specifier = ">=0.31.10" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -2721,13 +2721,13 @@ requires-dist = [
 name = "livekit-plugins-sarvam"
 source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
 dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -3765,7 +3765,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.31.10"
+version = "0.31.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -3774,9 +3774,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/60/63/ca0d688a73dd67fec5274905360ad37f3a69f0151d92a5f567416fd576ab/phonic-0.31.10.tar.gz", hash = "sha256:cd55834b83a0495d3aba6d555f8d64b97e9d60af2b82ddb5d6cd2619b9470f00", size = 115287, upload-time = "2026-04-01T23:19:51.918Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/ee/eb11ef3e249da7ef327d527c28506cbac5ed8fde573e8789a9cfe81e082d/phonic-0.31.11.tar.gz", hash = "sha256:cfb6a27340397d14cec4160d8d9c6763674de744974ce137fcf9244e061533ba", size = 115153, upload-time = "2026-04-02T06:53:44.685Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/fd/6e63ed29f5ea89c489b90ebd22268644dd8a540916b583a05111713cddf0/phonic-0.31.10-py3-none-any.whl", hash = "sha256:a754d72a1050ab1df0c08671311b6c372a6849c7464fd7c632fe776d4e03e623", size = 270601, upload-time = "2026-04-01T23:19:52.808Z" },
+    { url = "https://files.pythonhosted.org/packages/54/e6/021d7db46158bb20c8d5b0b748e0e241ee245765e5b2794c18a26bff269c/phonic-0.31.11-py3-none-any.whl", hash = "sha256:2e35f4f24d7ac7d73858fff317d7c1b411b9fae5aaedfa4432044a8880db2612", size = 270464, upload-time = "2026-04-02T06:53:45.577Z" },
 ]
 
 [[package]]

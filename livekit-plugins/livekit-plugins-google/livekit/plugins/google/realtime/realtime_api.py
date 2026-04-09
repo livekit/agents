@@ -286,6 +286,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
                 mid_session_instructions_update=True,
                 mid_session_tools_update=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -548,6 +549,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str) -> None:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "update_instructions is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            self._opts.instructions = instructions
+            return
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
 
@@ -574,6 +581,17 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        if self._opts.model == "gemini-3.1-flash-live-preview":
+            logger.warning(
+                "update_chat_ctx is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+            )
+            self._chat_ctx = chat_ctx.copy(
+                exclude_handoff=True,
+                exclude_instructions=True,
+                exclude_empty_message=True,
+                exclude_config_update=True,
+            )
+            return
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
             1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
@@ -683,8 +701,14 @@ class RealtimeSession(llm.RealtimeSession):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
         if self._opts.model == "gemini-3.1-flash-live-preview":
             logger.warning(
                 "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
@@ -803,9 +827,11 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
 

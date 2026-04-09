@@ -95,6 +95,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `audio_speed` | `float` | Audio playback speed |
 | `phonic_tools` | `list[str]` | [Phonic Webhook tool](https://docs.phonic.co/docs/using-tools/tools_overview#webhook-tools) names available to the assistant |
 | `boosted_keywords` | `list[str]` | Keywords to boost in speech recognition |
+| `min_words_to_interrupt` | `int` | Minimum number of user words required to interrupt the assistant |
 | `generate_no_input_poke_text` | `bool` | Auto-generate poke text when user is silent |
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |

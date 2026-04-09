@@ -18,8 +18,6 @@ from livekit.agents.metrics.base import Metadata
 from .. import inference, llm, stt, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
-    FunctionToolInfo,
-    RawFunctionToolInfo,
     StopResponse,
     ToolFlag,
     get_fnc_tool_names,
@@ -33,7 +31,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as trace_utils
+from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -64,7 +62,6 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
-    _LLMGenerationData,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -103,12 +100,19 @@ class _ReusableResources:
     rt_session: llm.RealtimeSession | None = None
 
     async def cleanup(self) -> None:
+        tasks = []
         if self.stt_pipeline is not None:
-            await self.stt_pipeline.aclose()
+            tasks.append(self.stt_pipeline.aclose())
             self.stt_pipeline = None
         if self.rt_session is not None:
-            await self.rt_session.aclose()
+            tasks.append(self.rt_session.aclose())
             self.rt_session = None
+
+        if tasks:
+            outputs = await asyncio.gather(*tasks, return_exceptions=True)
+            for output in outputs:
+                if isinstance(output, Exception):
+                    logger.error("error cleaning up reusable resources", exc_info=output)
 
 
 @dataclass
@@ -120,15 +124,6 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
-
-
-@dataclass
-class _PipelineGeneration:
-    chat_ctx: llm.ChatContext
-    llm_gen_data: _LLMGenerationData
-    tts_gen_data: _TTSGenerationData | None
-    tasks: list[asyncio.Task[Any]]
-    llm_output_tee: utils.aio.itertools.Tee[str | FlushSentinel]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -166,6 +161,8 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        self._authorization_allowed = asyncio.Event()
+        self._authorization_allowed.set()
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
@@ -588,56 +585,64 @@ class AgentActivity(RecognitionHooks):
         """Detach reusable resources for handoff to *new_activity*."""
         resources = _ReusableResources()
 
-        # stt pipeline
-        if (
-            self._audio_recognition
-            and self.stt is not None
-            and type(self.agent).stt_node is type(new_activity.agent).stt_node
-            and self.stt is new_activity.stt
-        ):
-            resources.stt_pipeline = await self._audio_recognition.detach_stt()
+        try:
+            # stt pipeline
+            if (
+                self._audio_recognition
+                and self.stt is not None
+                and type(self.agent).stt_node is type(new_activity.agent).stt_node
+                and self.stt is new_activity.stt
+            ):
+                resources.stt_pipeline = await self._audio_recognition.detach_stt()
 
-        # rt session
-        if (
-            self._rt_session is not None
-            and isinstance(self.llm, llm.RealtimeModel)
-            and self.llm is new_activity.llm
-        ):
-            # context update is supported or chat context is equivalent
-            reusable = self.llm.capabilities.mid_session_context_update or (
-                self._rt_session.chat_ctx.copy(
-                    exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
-                ).is_equivalent(
-                    new_activity.agent.chat_ctx.copy(
+            # rt session
+            if (
+                self._rt_session is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+                and self.llm is new_activity.llm
+            ):
+                # context update is supported or chat context is equivalent
+                reusable = self.llm.capabilities.mid_session_chat_ctx_update or (
+                    self._rt_session.chat_ctx.copy(
                         exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
+                    ).is_equivalent(
+                        new_activity.agent.chat_ctx.copy(
+                            exclude_instructions=True,
+                            exclude_handoff=True,
+                            exclude_config_update=True,
+                        )
                     )
                 )
-            )
-            # instructions update is supported or instructions are the same
-            reusable = reusable and (
-                self.llm.capabilities.mid_session_instructions_update
-                or self.agent.instructions == new_activity.agent.instructions
-            )
-            # tools update is supported or tools are the same
-            reusable = reusable and (
-                self.llm.capabilities.mid_session_tools_update
-                or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
-            )
-
-            if reusable:
-                # detach: remove event listeners but don't close the session
-                self._rt_session.off("generation_created", self._on_generation_created)
-                self._rt_session.off("input_speech_started", self._on_input_speech_started)
-                self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
-                self._rt_session.off(
-                    "input_audio_transcription_completed",
-                    self._on_input_audio_transcription_completed,
+                # instructions update is supported or instructions are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mid_session_instructions_update
+                    or self.agent.instructions == new_activity.agent.instructions
                 )
-                self._rt_session.off("metrics_collected", self._on_metrics_collected)
-                self._rt_session.off("remote_item_added", self._on_remote_item_added)
-                self._rt_session.off("error", self._on_error)
-                resources.rt_session = self._rt_session
-                self._rt_session = None  # prevent _close_session from closing it
+                # tools update is supported or tools are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mid_session_tools_update
+                    or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
+                )
+
+                if reusable:
+                    # detach: remove event listeners but don't close the session
+                    self._rt_session.off("generation_created", self._on_generation_created)
+                    self._rt_session.off("input_speech_started", self._on_input_speech_started)
+                    self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
+                    self._rt_session.off(
+                        "input_audio_transcription_completed",
+                        self._on_input_audio_transcription_completed,
+                    )
+                    self._rt_session.off("metrics_collected", self._on_metrics_collected)
+                    self._rt_session.off("remote_item_added", self._on_remote_item_added)
+                    self._rt_session.off("error", self._on_error)
+                    resources.rt_session = self._rt_session
+                    self._rt_session = None  # prevent _close_session from closing it
+
+        except Exception:
+            # avoid leaking resources
+            await resources.cleanup()
+            raise
 
         return resources
 
@@ -716,11 +721,18 @@ class AgentActivity(RecognitionHooks):
             remove_instructions(self._agent._chat_ctx)
 
             capabilities = self.llm.capabilities
-            await self._rt_session.reset(
-                instructions=self._agent.instructions,
-                chat_ctx=self._agent.chat_ctx,
-                tools=llm.ToolContext(self.tools).flatten(),
-                session_reused=rt_reused,
+            reset_instructions = reset_chat_ctx = reset_tools = True
+            if rt_reused:
+                # skip the update if the session is reused and no mid-session update is supported
+                # this means the content is the same as the previous session
+                reset_instructions = capabilities.mid_session_instructions_update
+                reset_chat_ctx = capabilities.mid_session_chat_ctx_update
+                reset_tools = capabilities.mid_session_tools_update
+
+            await self._rt_session.update_session(
+                instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,
+                chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
+                tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
             )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
@@ -803,7 +815,11 @@ class AgentActivity(RecognitionHooks):
 
             # detach after speech tasks are done but before _close_session
             if new_activity is not None:
-                return await self._detach_reusable_resources(new_activity)
+                try:
+                    return await self._detach_reusable_resources(new_activity)
+                except BaseException:
+                    logger.exception("failed to detach reusable resources")
+
             return None
 
     async def _pause_scheduling_task(
@@ -1058,6 +1074,7 @@ class AgentActivity(RecognitionHooks):
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
@@ -1083,24 +1100,39 @@ class AgentActivity(RecognitionHooks):
                     # when generate_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
 
-        tools = self.tools
+        all_tools = self.tools.copy()
+
+        # resolve tool names to Tool objects if tools param is given
+        resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
+        if is_given(tools):
+            tool_ctx = llm.ToolContext(all_tools)
+            toolset_dict = {t.id: t for t in tool_ctx.toolsets}
+            tool_dict = {t.id: t for t in tool_ctx.flatten()}
+            resolved_tools = list[llm.Tool | llm.Toolset]()
+            for name in set(tools):
+                tool = toolset_dict.get(name) or tool_dict.get(name)
+                if tool is None:
+                    raise ValueError(
+                        f"tool '{name}' not found in agent's registered tools. "
+                        f"Available tools: {list(tool_ctx.function_tools.keys())}"
+                    )
+                resolved_tools.append(tool)
 
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
                 filtered_tools: list[llm.Tool | llm.Toolset] = []
-                for tool in tools:
-                    info: RawFunctionToolInfo | FunctionToolInfo | None = None
-                    if isinstance(tool, llm.RawFunctionTool | llm.FunctionTool):
-                        info = tool.info
-
-                    if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
+                to_filter = resolved_tools if is_given(resolved_tools) else all_tools
+                for tool in to_filter:
+                    if (
+                        isinstance(tool, llm.RawFunctionTool | llm.FunctionTool)
+                        and tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+                    ):
                         continue
 
                     # TODO(long): add IGNORE_ON_ENTER to ToolSet?
                     filtered_tools.append(tool)
-
-                tools = filtered_tools
+                to_filter[:] = filtered_tools
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
@@ -1120,7 +1152,7 @@ class AgentActivity(RecognitionHooks):
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
-                    # TODO(theomonnom): the list of tools should always be passed here
+                    tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
                 speech_handle=handle,
@@ -1132,7 +1164,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
-                    tools=tools,
+                    tools=resolved_tools if is_given(resolved_tools) else all_tools,
                     new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
@@ -1155,6 +1187,12 @@ class AgentActivity(RecognitionHooks):
         if self._preemptive_generation is not None:
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
+
+    def _pause_authorization(self) -> None:
+        self._authorization_allowed.clear()
+
+    def _resume_authorization(self) -> None:
+        self._authorization_allowed.set()
 
     def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
@@ -1359,6 +1397,7 @@ class AgentActivity(RecognitionHooks):
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
         self._session._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         self._session.emit(
             "session_usage_updated",
@@ -1912,6 +1951,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
         if info.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.started_speaking_at
 
@@ -2052,7 +2096,8 @@ class AgentActivity(RecognitionHooks):
 
         # See discussion in https://github.com/livekit/agents/issues/4432
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2354,7 +2399,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_agent_state("thinking")
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2471,6 +2517,17 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
+
+        if self.llm:
+            assistant_metrics["llm_metadata"] = {
+                "model_name": self.llm.model,
+                "model_provider": self.llm.provider,
+            }
+        if self.tts:
+            assistant_metrics["tts_metadata"] = {
+                "model_name": self.tts.model,
+                "model_provider": self.tts.provider,
+            }
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
@@ -2661,6 +2718,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         model_settings: ModelSettings,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         user_input: str | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
@@ -2669,7 +2727,8 @@ class AgentActivity(RecognitionHooks):
 
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2684,14 +2743,36 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
-        ori_tool_choice = self._tool_choice
-        if utils.is_given(model_settings.tool_choice):
-            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
-
+        ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+        ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         try:
+            if not (
+                per_response_tool_choice
+                := self._rt_session.realtime_model.capabilities.per_response_tool_choice
+            ):
+                # update the tool and tool choice at the session level if they are specified
+                if (
+                    is_given(model_settings.tool_choice)
+                    and model_settings.tool_choice != self._tool_choice
+                ):
+                    ori_tool_choice = self._tool_choice
+                    self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+
+                if tools is not None:
+                    ori_tools = self._rt_session.tools.flatten()
+                    await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
+
             try:
                 generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
+                    tools=(
+                        llm.ToolContext(tools).flatten()
+                        if per_response_tool_choice and tools is not None
+                        else NOT_GIVEN
+                    ),
                 )
             except llm.RealtimeError as e:
                 logger.error(
@@ -2710,12 +2791,18 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions,
             )
         finally:
-            # reset tool_choice value
-            if (
-                utils.is_given(model_settings.tool_choice)
-                and model_settings.tool_choice != ori_tool_choice
-            ):
-                self._rt_session.update_options(tool_choice=ori_tool_choice)
+            # reset tool_choice and tools
+            if is_given(ori_tool_choice):
+                try:
+                    self._rt_session.update_options(tool_choice=ori_tool_choice)
+                except Exception:
+                    logger.exception("failed to reset tool_choice")
+
+            if is_given(ori_tools):
+                try:
+                    await self._rt_session.update_tools(ori_tools)
+                except Exception:
+                    logger.exception("failed to reset tools")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -2778,7 +2865,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(self.tools)
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))

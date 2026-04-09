@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -200,7 +201,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-        self._current_connection: _Connection | None = None
+        self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
 
     @property
@@ -266,25 +267,31 @@ class TTS(tts.TTS):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
-        if changed and self._current_connection:
-            self._current_connection.mark_non_current()
-            self._current_connection = None
+        if changed and self.__current_connection:
+            self.__current_connection.mark_non_current()
+            self.__current_connection = None
 
-    async def current_connection(self) -> _Connection:
-        """Get the current connection, creating one if needed"""
+    async def _current_connection(self) -> tuple[_Connection, float, bool]:
+        """Get the current connection, creating one if needed.
+
+        Returns:
+            Tuple of (connection, acquire_time, connection_reused)
+        """
         async with self._connection_lock:
             if (
-                self._current_connection
-                and self._current_connection.is_current
-                and not self._current_connection._closed
+                self.__current_connection
+                and self.__current_connection.is_current
+                and not self.__current_connection._closed
             ):
-                return self._current_connection
+                return self.__current_connection, 0.0, True
 
             session = self._ensure_session()
             conn = _Connection(self._opts, session)
+            t0 = time.perf_counter()
             await conn.connect()
-            self._current_connection = conn
-            return conn
+            acquire_time = time.perf_counter() - t0
+            self.__current_connection = conn
+            return conn, acquire_time, False
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -303,9 +310,9 @@ class TTS(tts.TTS):
             await stream.aclose()
         self._streams.clear()
 
-        if self._current_connection:
-            await self._current_connection.aclose()
-            self._current_connection = None
+        if self.__current_connection:
+            await self.__current_connection.aclose()
+            self.__current_connection = None
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -406,8 +413,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
-            connection = await asyncio.wait_for(
-                self._tts.current_connection(), self._conn_options.timeout
+            connection, self._acquire_time, self._connection_reused = await asyncio.wait_for(
+                self._tts._current_connection(), self._conn_options.timeout
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e

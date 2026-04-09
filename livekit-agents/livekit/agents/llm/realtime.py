@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
@@ -12,11 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
+from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,9 +64,14 @@ class RealtimeCapabilities:
     auto_tool_reply_generation: bool
     audio_output: bool
     manual_function_calls: bool
-    mid_session_context_update: bool = False
+    mid_session_chat_ctx_update: bool = False
+    """Whether the chat context can be updated mid-session"""
     mid_session_instructions_update: bool = False
+    """Whether the instructions can be updated mid-session"""
     mid_session_tools_update: bool = False
+    """Whether the tools can be updated mid-session"""
+    per_response_tool_choice: bool = False
+    """Whether the tool and tool choice can be specified per response"""
 
 
 class RealtimeError(Exception):
@@ -154,6 +159,26 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         super().__init__()
         self._realtime_model = realtime_model
 
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        """Report connection timing as a RealtimeModelMetrics event with zero usage."""
+        from ..metrics.base import Metadata, RealtimeModelMetrics
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id="",
+                timestamp=time.time(),
+                acquire_time=acquire_time,
+                connection_reused=False,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
+
     @property
     def realtime_model(self) -> RealtimeModel:
         return self._realtime_model
@@ -191,6 +216,8 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # commit the input audio buffer to the server
@@ -219,28 +246,27 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
-    async def reset(
+    async def update_session(
         self,
         *,
-        instructions: str,
-        chat_ctx: ChatContext,
-        tools: list[Tool],
-        session_reused: bool,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
-        capabilities = self._realtime_model.capabilities
-        if not session_reused or capabilities.mid_session_instructions_update:
+
+        if is_given(instructions):
             try:
                 await self.update_instructions(instructions)
             except RealtimeError:
                 logger.exception("failed to update the instructions")
 
-        if not session_reused or capabilities.mid_session_context_update:
+        if is_given(chat_ctx):
             try:
                 await self.update_chat_ctx(chat_ctx)
             except RealtimeError:
                 logger.exception("failed to update the chat_ctx")
 
-        if not session_reused or capabilities.mid_session_tools_update:
+        if is_given(tools):
             try:
                 await self.update_tools(tools)
             except RealtimeError:
