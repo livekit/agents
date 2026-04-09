@@ -583,7 +583,7 @@ class RealtimeSession(llm.RealtimeSession):
             tools_payload=tools_payload,
         )
         if self._socket:
-            logger.info("Sending mid-session update to Phonic")
+            logger.info("Sending mid-session reset to Phonic")
             await self._socket.send_reset(ResetPayload(config=ConfigOptions(**config_options)))
 
     @utils.log_exceptions(logger=logger)
