@@ -849,6 +849,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         self.__inactive_ev.clear()
         suspended_handles: list[SpeechHandle | asyncio.Task[Any]] = []
+        pending_on_enter_task: asyncio.Task[None] | None = None
         try:
             # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
             # AgentTasks that require user input, but session.run() can't return until
@@ -871,6 +872,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     # watch the on_enter task as a guard so RunResult won't complete
                     # before on_enter has registered its own speech handles
                     run_state._watch_handle(on_enter_task)
+                    pending_on_enter_task = on_enter_task
                 else:
                     # no active run to guard — just wait for on_enter directly
                     await asyncio.shield(on_enter_task)
@@ -901,6 +903,18 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # run_state could have changed after self.__fut
             run_state = session._global_run_state
 
+            # re-watch the suspended handles so the resumed parent activity
+            # is tracked by the current RunResult again
+            if run_state and not run_state.done():
+                for handle in suspended_handles:
+                    run_state._watch_handle(handle)
+
+            if pending_on_enter_task:
+                try:
+                    await asyncio.shield(pending_on_enter_task)
+                except Exception:
+                    logger.exception("error in on_enter task of agent %s", self.id)
+
             if session.current_agent != self:
                 logger.warning(
                     f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
@@ -908,12 +922,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 )
                 await old_activity.aclose()
             else:
-                # re-watch the suspended handles so the resumed parent activity
-                # is tracked by the current RunResult again
-                if run_state and not run_state.done():
-                    for handle in suspended_handles:
-                        run_state._watch_handle(handle)
-
                 merged_chat_ctx = old_agent.chat_ctx.merge(
                     self.chat_ctx,
                     exclude_function_call=not self._preserve_function_call_history,
