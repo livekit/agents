@@ -2156,7 +2156,9 @@ class AgentActivity(RecognitionHooks):
             text_source = _read_text()
             audio_source = _read_text()
 
-        tasks: list[asyncio.Task[Any]] = []
+        tts_task: asyncio.Task[Any] | None = None
+        forward_audio_task: asyncio.Task[Any] | None = None
+        forward_text_task: asyncio.Task[Any] | None = None
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
@@ -2195,7 +2197,6 @@ class AgentActivity(RecognitionHooks):
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
                 )
-                tasks.append(tts_task)
                 if (
                     self.use_tts_aligned_transcript
                     and (tts := self.tts)
@@ -2204,16 +2205,14 @@ class AgentActivity(RecognitionHooks):
                 ):
                     text_source = timed_texts
 
-                forward_task, audio_out = perform_audio_forwarding(
+                forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
                 )
-                tasks.append(forward_task)
             else:
                 # use the provided audio
-                forward_task, audio_out = perform_audio_forwarding(
+                forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=audio
                 )
-                tasks.append(forward_task)
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
 
@@ -2222,16 +2221,24 @@ class AgentActivity(RecognitionHooks):
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
         text_out: _TextOutput | None = None
         if tr_node_result is not None:
-            forward_text, text_out = perform_text_forwarding(
+            forward_text_task, text_out = perform_text_forwarding(
                 text_output=tr_output,
                 source=tr_node_result,
             )
-            tasks.append(forward_text)
             if audio_output is None:
                 # update the agent state based on text if no audio output
                 text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        await speech_handle.wait_if_not_interrupted([*tasks])
+        all_tasks: list[asyncio.Future[Any]] = [
+            t for t in (tts_task, forward_audio_task, forward_text_task) if t is not None
+        ]
+        await speech_handle.wait_if_not_interrupted(all_tasks)
+
+        # check for errors in generation/forwarding tasks (e.g. missing audio file)
+        for task in (tts_task, forward_audio_task, forward_text_task):
+            if task is not None and task.done() and not task.cancelled():
+                if exc := task.exception():
+                    raise exc
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
@@ -2241,7 +2248,7 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*all_tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
