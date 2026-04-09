@@ -65,17 +65,9 @@ class AgentHandoffEvent:
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
-@dataclass
-class _WatchedHandle:
-    """A handle being tracked by RunResult, with its watch metadata."""
-
-    handle: SpeechHandle | asyncio.Task[Any]
-    propagate_exception: bool = False
-
-
 class RunResult(Generic[Run_T]):
     def __init__(self, *, user_input: str | None = None, output_type: type[Run_T] | None) -> None:
-        self._handles: dict[SpeechHandle | asyncio.Task, _WatchedHandle] = {}
+        self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
@@ -166,49 +158,33 @@ class RunResult(Generic[Run_T]):
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
 
-    def _watch_handle(
-        self, handle: SpeechHandle | asyncio.Task, *, propagate_exception: bool = False
-    ) -> None:
+    def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         if self._done_fut.done():
             return
 
-        self._handles[handle] = _WatchedHandle(
-            handle=handle, propagate_exception=propagate_exception
-        )
+        self._handles.add(handle)
 
         if isinstance(handle, SpeechHandle):
             handle._add_item_added_callback(self._item_added)
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> _WatchedHandle | None:
-        """Returns the WatchedHandle if it was being watched, None otherwise."""
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
         if handle not in self._handles:
-            return None
+            return False
 
-        watched = self._handles.pop(handle)
+        self._handles.discard(handle)
         handle.remove_done_callback(self._mark_done_if_needed)
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
-        return watched
+        return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        # propagate exception from a watched task if requested
-        if isinstance(handle, asyncio.Task) and (watched := self._handles.get(handle)):
-            if (
-                watched.propagate_exception
-                and not handle.cancelled()
-                and (exc := handle.exception())
-            ):
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    self._done_fut.set_exception(exc)
-                return
-
-        if all(h.done() for h in self._handles):
+        if all(handle.done() for handle in self._handles):
             self._mark_done()
 
     def _mark_done(self) -> None:
