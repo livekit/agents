@@ -733,3 +733,54 @@ def check_timestamp(
     assert abs(t_event - t_target) <= max_abs_diff, (
         f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
     )
+
+
+async def test_llm_extra_propagation() -> None:
+    """
+    Test that ChoiceDelta.extra is propagated to ChatMessage.extra.
+
+    This ensures message-level metadata (like Gemini thought signatures) flows
+    through the inference proxy path and is preserved in the chat context.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    # LLM response with extra data (simulating thought signatures)
+    actions.add_llm(
+        "I'm doing well, thank you!",
+        ttft=0.1,
+        duration=0.3,
+        extra={"thought_signature": "test_signature_123", "other_metadata": {"key": "value"}},
+    )
+    actions.add_tts(2.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # Find the assistant message
+    assistant_events = [
+        ev for ev in conversation_events if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert len(assistant_events) == 1
+
+    assistant_msg = assistant_events[0].item
+    assert assistant_msg.text_content == "I'm doing well, thank you!"
+
+    # Verify extra data is preserved
+    assert assistant_msg.extra is not None
+    assert assistant_msg.extra.get("thought_signature") == "test_signature_123"
+    assert assistant_msg.extra.get("other_metadata") == {"key": "value"}
+
+    # Also verify via chat context
+    assistant_items = [
+        item
+        for item in agent.chat_ctx.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+    assert len(assistant_items) == 1
+    assert assistant_items[0].extra.get("thought_signature") == "test_signature_123"
