@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -310,6 +311,14 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
+        # input buffer for replay on reconnect
+        self._input_buffer: collections.deque[rtc.AudioFrame | RecognizeStream._FlushSentinel] = (
+            collections.deque()
+        )
+        self._input_buffer_duration: float = 0.0
+        self._max_buffer_duration: float = 10.0  # seconds of audio to retain
+        self._input_ended: bool = False
+
         self._start_time_offset: float = 0.0
 
     @property
@@ -338,6 +347,17 @@ class RecognizeStream(ABC):
                 metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
             ),
         )
+
+    def _append_to_buffer(self, item: rtc.AudioFrame | RecognizeStream._FlushSentinel) -> None:
+        """Append a frame or flush sentinel to the input buffer, evicting old entries."""
+        self._input_buffer.append(item)
+        if isinstance(item, rtc.AudioFrame):
+            self._input_buffer_duration += item.duration
+        # evict oldest entries when over max duration
+        while self._input_buffer_duration > self._max_buffer_duration and self._input_buffer:
+            oldest = self._input_buffer.popleft()
+            if isinstance(oldest, rtc.AudioFrame):
+                self._input_buffer_duration -= oldest.duration
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -375,6 +395,13 @@ class RecognizeStream(ABC):
                         },
                     )
                     await asyncio.sleep(retry_interval)
+
+                    # replay buffered input into a fresh channel for retry
+                    self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
+                    for item in self._input_buffer:
+                        self._input_ch.send_nowait(item)
+                    if self._input_ended:
+                        self._input_ch.close()
 
                 self._num_retries += 1
 
@@ -443,8 +470,10 @@ class RecognizeStream(ABC):
             frames = self._resampler.push(frame)
             for frame in frames:
                 self._input_ch.send_nowait(frame)
+                self._append_to_buffer(frame)
         else:
             self._input_ch.send_nowait(frame)
+            self._append_to_buffer(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
@@ -454,13 +483,17 @@ class RecognizeStream(ABC):
         if self._resampler:
             for frame in self._resampler.flush():
                 self._input_ch.send_nowait(frame)
+                self._append_to_buffer(frame)
 
-        self._input_ch.send_nowait(self._FlushSentinel())
+        sentinel = self._FlushSentinel()
+        self._input_ch.send_nowait(sentinel)
+        self._append_to_buffer(sentinel)
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
         self.flush()
         self._input_ch.close()
+        self._input_ended = True
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""

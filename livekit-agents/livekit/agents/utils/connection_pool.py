@@ -25,6 +25,7 @@ class ConnectionPool(Generic[T]):
         mark_refreshed_on_get: bool = False,
         connect_cb: Callable[[float], Awaitable[T]] | None = None,
         close_cb: Callable[[T], Awaitable[None]] | None = None,
+        health_check_cb: Callable[[T], Awaitable[bool]] | None = None,
         connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
@@ -34,11 +35,13 @@ class ConnectionPool(Generic[T]):
             mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
+            health_check_cb: Optional async callback to verify a pooled connection is still alive
         """  # noqa: E501
         self._max_session_duration = max_session_duration
         self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb
         self._close_cb = close_cb
+        self._health_check_cb = health_check_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
@@ -107,16 +110,29 @@ class ConnectionPool(Generic[T]):
             while self._available:
                 conn = self._available.pop()
                 if (
-                    self._max_session_duration is None
-                    or now - self._connections[conn] <= self._max_session_duration
+                    self._max_session_duration is not None
+                    and now - self._connections[conn] > self._max_session_duration
                 ):
-                    if self._mark_refreshed_on_get:
-                        self._connections[conn] = now
-                    self.last_acquire_time = 0.0
-                    self.last_connection_reused = True
-                    return conn
-                # connection expired; mark it for resetting.
-                self.remove(conn)
+                    # connection expired; mark it for resetting.
+                    self.remove(conn)
+                    continue
+
+                # health check pooled connection before reuse
+                if self._health_check_cb is not None:
+                    try:
+                        healthy = await asyncio.wait_for(self._health_check_cb(conn), timeout=2.0)
+                        if not healthy:
+                            self.remove(conn)
+                            continue
+                    except Exception:
+                        self.remove(conn)
+                        continue
+
+                if self._mark_refreshed_on_get:
+                    self._connections[conn] = now
+                self.last_acquire_time = 0.0
+                self.last_connection_reused = True
+                return conn
 
             t0 = time.perf_counter()
             conn = await self._connect(timeout)
