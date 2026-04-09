@@ -136,6 +136,17 @@ async def test_generate_reply_with_instructions(rt_session: llm.RealtimeSession)
     assert "pineapple" in text.lower()
 
 
+@pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
+async def test_generate_reply_preserves_session_instructions(rt_session: llm.RealtimeSession):
+    await rt_session.update_instructions("Your name is Kelly. Always respond in English.")
+    gen_ev = await asyncio.wait_for(
+        rt_session.generate_reply(instructions="Tell the user what your name is."),
+        timeout=15,
+    )
+    text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
+    assert "kelly" in text.lower(), f"Expected 'kelly' in response, got: {text}"
+
+
 @pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
 async def test_multiple_sequential_replies(rt_session: llm.RealtimeSession):
     for i in range(2):
