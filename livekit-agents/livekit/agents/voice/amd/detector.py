@@ -234,6 +234,7 @@ class AMD:
             ctx.tagger.add(
                 f"lk.amd:{result.category.value}",
                 metadata={
+                    "category": result.category.value,
                     "speech_duration": result.speech_duration,
                     "reason": result.reason,
                     "transcript": result.transcript,
