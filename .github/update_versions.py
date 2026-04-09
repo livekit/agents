@@ -146,16 +146,16 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str
     
     for pypi_name, new_version in plugin_versions.items():
         if pypi_name.startswith("livekit-plugins-"):
-            dep_key = pypi_name[len("livekit-plugins-"):]
-            pattern = rf'({re.escape(dep_key)}\s*=\s*\["{re.escape(pypi_name)}>=)([\w\.\-]+)(\"])'
-            
-            def replacer(m: re.Match) -> str:
-                return f"{m.group(1)}{new_version}{m.group(3)}"
-            
+            # Match any dep key that references this PyPI package name
+            pattern = rf'(\w[\w-]*\s*=\s*\["{re.escape(pypi_name)}>=)([\w\.\-]+)(\"])'
+
+            def replacer(m: re.Match, _new_version=new_version) -> str:
+                return f"{m.group(1)}{_new_version}{m.group(3)}"
+
             updated_text = re.sub(pattern, replacer, new_text)
             if updated_text != new_text:
                 new_text = updated_text
-                print(f"Updated optional dependency {dep_key} to version {new_version}")
+                print(f"Updated optional dependency {pypi_name} to version {new_version}")
     
     if new_text != old_text:
         agents_pyproject.write_text(new_text)
