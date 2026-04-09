@@ -236,6 +236,7 @@ async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_update_chat_ctx(rt_session: llm.RealtimeSession):
     chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="assistant", content="What is your favorite number?")
     chat_ctx.add_message(role="user", content="My favorite number is seven")
     await asyncio.wait_for(rt_session.update_chat_ctx(chat_ctx), timeout=10)
 
