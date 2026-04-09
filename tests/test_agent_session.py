@@ -764,7 +764,9 @@ async def test_llm_extra_propagation() -> None:
 
     # Find the assistant message
     assistant_events = [
-        ev for ev in conversation_events if ev.item.type == "message" and ev.item.role == "assistant"
+        ev
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
     ]
     assert len(assistant_events) == 1
 
@@ -778,9 +780,7 @@ async def test_llm_extra_propagation() -> None:
 
     # Also verify via chat context
     assistant_items = [
-        item
-        for item in agent.chat_ctx.items
-        if item.type == "message" and item.role == "assistant"
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "assistant"
     ]
     assert len(assistant_items) == 1
     assert assistant_items[0].extra.get("thought_signature") == "test_signature_123"
