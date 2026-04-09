@@ -368,7 +368,6 @@ class RealtimeSession(llm.RealtimeSession):
         if sent_tool_call_output:
             self._start_new_assistant_turn()
 
-
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         if self._config_sent:
             logger.warning(
@@ -542,7 +541,7 @@ class RealtimeSession(llm.RealtimeSession):
         }
         return {k: v for k, v in raw.items() if v is not NOT_GIVEN}
 
-    async def update_session(
+    async def _update_session(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -550,11 +549,12 @@ class RealtimeSession(llm.RealtimeSession):
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
         if not self._config_sent:
-            await super().update_session(
-                instructions=instructions,
-                chat_ctx=chat_ctx,
-                tools=tools,
-            )
+            if is_given(instructions):
+                await self.update_instructions(instructions)
+            if is_given(chat_ctx):
+                await self.update_chat_ctx(chat_ctx)
+            if is_given(tools):
+                await self.update_tools(tools)
             return
 
         if is_given(instructions):
