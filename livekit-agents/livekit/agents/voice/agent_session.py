@@ -43,9 +43,8 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
-from .audio_recognition import DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT
 from .amd import AMD
-
+from .audio_recognition import DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT
 from .events import (
     AgentEvent,
     AgentState,
