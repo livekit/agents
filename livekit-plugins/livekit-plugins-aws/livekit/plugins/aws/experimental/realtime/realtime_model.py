@@ -1989,6 +1989,7 @@ class RealtimeSession(  # noqa: F811
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the model.
 
@@ -2033,6 +2034,10 @@ class RealtimeSession(  # noqa: F811
             update_chat_ctx() which sends interactive text to Nova Sonic.
             This method handles the instructions parameter for system-level prompts.
         """
+        if is_given(tools):
+            logger.warning(
+                "per-response tools is not supported by AWS Nova Sonic Realtime API, ignoring"
+            )
         # Check if generate_reply is supported (requires mixed modalities)
         if self._realtime_model.modalities != "mixed":
             logger.warning(

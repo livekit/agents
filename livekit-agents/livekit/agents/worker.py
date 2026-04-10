@@ -692,6 +692,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
 
+            for p in Plugin.registered_plugins:
+                logger.info(
+                    "plugin registered",
+                    extra={
+                        "plugin": p.title,
+                        "version": p.version,
+                    },
+                )
+
             if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})

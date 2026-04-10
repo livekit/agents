@@ -72,7 +72,6 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
@@ -443,6 +442,9 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
+        if self._session.amd is not None and not self._session.amd.started:
+            self._session.amd._on_first_audio()
+
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
 
@@ -730,6 +732,9 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
+            if self._session.amd is not None:
+                self._session.amd._on_transcript(transcript)
+
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
@@ -876,6 +881,9 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_started()
+
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
 
@@ -898,6 +906,9 @@ class AudioRecognition:
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
+
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
