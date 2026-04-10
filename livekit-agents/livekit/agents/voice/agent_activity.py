@@ -729,7 +729,7 @@ class AgentActivity(RecognitionHooks):
                 reset_chat_ctx = capabilities.mid_session_chat_ctx_update
                 reset_tools = capabilities.mid_session_tools_update
 
-            await self._rt_session.update_session(
+            await self._rt_session._update_session(
                 instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,
                 chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
                 tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,

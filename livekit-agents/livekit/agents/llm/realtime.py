@@ -246,7 +246,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
-    async def update_session(
+    async def _update_session(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
