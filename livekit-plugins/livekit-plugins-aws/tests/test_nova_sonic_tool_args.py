@@ -8,8 +8,10 @@ instead of a dict, causing:
 
     TypeError: string indices must be integers, not 'str'   (utils.py:404)
 
-The fix peels off one encoding layer so FunctionCall.arguments always holds
-a proper single-encoded JSON object string.
+The fix peels off one encoding layer *only* when the inner string is itself a
+valid JSON object.  Legitimate string-valued schemas (e.g. content="hello")
+must be left untouched so that raw tool schemas with primitive top-level types
+continue to work correctly.
 """
 
 import json
@@ -121,6 +123,29 @@ class TestHandleToolOutputContentEvent:
 
         assert len(captured) == 1
         assert captured[0].arguments == "not-valid-json"
+
+    async def test_string_primitive_schema_not_unwrapped(self):
+        """Regression: content is a JSON string literal (valid primitive schema).
+
+        Bedrock raw tool schemas may legitimately pass a string value such as
+        '"hello"'.  This must NOT be unwrapped to 'hello' (which would be invalid
+        JSON and cause from_json() to fail downstream).
+        """
+        from livekit.plugins.aws.experimental.realtime.realtime_model import (
+            RealtimeSession,
+        )
+
+        captured = []
+        session = _make_fake_session(captured)
+
+        string_arg = json.dumps("hello")  # produces '"hello"'
+        event = _make_tool_event(string_arg)
+
+        await RealtimeSession._handle_tool_output_content_event(session, event)
+
+        assert len(captured) == 1
+        # Must be the original '"hello"', not the bare string 'hello'
+        assert captured[0].arguments == string_arg
 
     async def test_tool_name_and_id_forwarded_correctly(self):
         """call_id and name are passed through regardless of args format."""
