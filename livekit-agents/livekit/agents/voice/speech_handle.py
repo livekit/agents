@@ -273,10 +273,13 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._generations[-1].set_result(None)
 
-    def _mark_done(self) -> None:
+    def _mark_done(self, error: BaseException | None = None) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            # will raise InvalidStateError if the future is already done (interrupted)
-            self._done_fut.set_result(None)
+            if error is not None:
+                self._done_fut.set_exception(error)
+            else:
+                self._done_fut.set_result(None)
+
             if self._generations:
                 self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
 

@@ -76,6 +76,8 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._room_connected_fut = asyncio.Future[None]()
 
+        self._simulator_mode = False
+        self._ready_fut: asyncio.Future[None] = asyncio.Future()
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
@@ -85,6 +87,8 @@ class RoomIO:
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
+        self._text_input_cb: TextInputCallback | None = None
+        self._text_stream_handler_registered = False
 
         self._text_input_cb: TextInputCallback | None = None
         self._chat_handler_registered = False
@@ -173,6 +177,7 @@ class RoomIO:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("participant_attributes_changed", self._on_participant_attributes_changed)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -213,6 +218,13 @@ class RoomIO:
                 self._room.unregister_text_stream_handler(TOPIC_CHAT)
             except ValueError:
                 pass
+
+        if self._text_stream_handler_registered:
+            try:
+                self._room.unregister_text_stream_handler(TOPIC_CHAT)
+            except ValueError:
+                pass
+            self._text_stream_handler_registered = False
 
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
@@ -333,6 +345,49 @@ class RoomIO:
         if self._user_tr_output:
             self._user_tr_output.set_participant(None)
 
+    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
+        self._text_input_cb = text_input_cb
+        if not self._text_stream_handler_registered:
+            try:
+                self._room.register_text_stream_handler(
+                    TOPIC_CHAT, self._on_user_text_input
+                )
+                self._text_stream_handler_registered = True
+            except ValueError:
+                logger.warning(
+                    f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
+                )
+
+    def _on_user_text_input(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        linked = self.linked_participant
+        if linked and participant_identity != linked.identity:
+            return
+
+        participant = self._room.remote_participants.get(participant_identity)
+        if not participant:
+            logger.warning("participant not found, ignoring text input")
+            return
+
+        if self._text_input_cb is None:
+            return
+
+        text_input_cb = self._text_input_cb
+
+        async def _read_text() -> None:
+            text = await reader.read_all()
+            result = text_input_cb(
+                self._agent_session,
+                TextInputEvent(text=text, info=reader.info, participant=participant),
+            )
+            if asyncio.iscoroutine(result):
+                await result
+
+        task = asyncio.create_task(_read_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     @utils.log_exceptions(logger=logger)
     async def _init_task(self) -> None:
         await self._room_connected_fut
@@ -344,23 +399,13 @@ class RoomIO:
         participant = await self._participant_available_fut
         self.set_participant(participant.identity)
 
-        # check if participant is a simulator - disable audio I/O for faster testing
-        if participant.attributes.get(ATTRIBUTE_SIMULATOR) == "true":
+        if ATTRIBUTE_SIMULATOR in participant.attributes:
+            self._simulator_mode = True
             logger.info(
-                "simulator participant detected, disabling audio I/O",
+                "simulator participant detected, audio I/O disabled",
                 extra={"participant": participant.identity},
             )
-            # disable audio input
-            if self._audio_input:
-                await self._audio_input.aclose()
-                self._audio_input = None
-                self._agent_session.input.audio = None
-
-            # disable audio output
-            if self._audio_output:
-                await self._audio_output.aclose()
-                self._audio_output = None
-                self._agent_session.output.audio = None
+            await self._force_disable_audio()
 
         # init outputs
         if self._agent_tr_output:
@@ -368,6 +413,31 @@ class RoomIO:
 
         if self._audio_output:
             await self._audio_output.start()
+
+        if not self._ready_fut.done():
+            self._ready_fut.set_result(None)
+
+    async def wait_for_ready(self) -> None:
+        """Wait until participant detection and audio setup are complete."""
+        await self._ready_fut
+
+    def _lock_audio(self) -> None:
+        self._agent_session.input.set_audio_enabled(False)
+        self._agent_session.input._audio_locked = True
+        self._agent_session.output.set_audio_enabled(False)
+        self._agent_session.output._audio_locked = True
+
+    async def _force_disable_audio(self) -> None:
+        self._lock_audio()
+        if self._audio_input:
+            await self._audio_input.aclose()
+            self._audio_input = None
+        self._agent_session.input.audio = None
+
+        if self._audio_output:
+            await self._audio_output.aclose()
+            self._audio_output = None
+        self._agent_session.output.audio = None
 
     @utils.log_exceptions(logger=logger)
     async def _forward_user_transcript(
@@ -380,6 +450,19 @@ class RoomIO:
             await self._user_tr_output.capture_text(ev.transcript)
             if ev.is_final:
                 self._user_tr_output.flush()
+
+    def _on_participant_attributes_changed(
+        self,
+        changed_attributes: dict[str, str],
+        participant: rtc.Participant,
+    ) -> None:
+        if ATTRIBUTE_SIMULATOR in changed_attributes and not self._simulator_mode:
+            self._simulator_mode = True
+            logger.info(
+                "simulator participant detected (late attribute), audio I/O disabled",
+                extra={"participant": participant.identity},
+            )
+            self._lock_audio()
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():

@@ -284,6 +284,7 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
+
         await utils.aio.cancel_and_wait(ping_task, monitor_task)
         await utils.aio.cancel_and_wait(*self._inference_tasks)
 
