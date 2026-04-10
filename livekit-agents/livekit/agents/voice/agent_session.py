@@ -1245,11 +1245,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent = agent
 
         if self._started:
-            # immediately pause the old activity's scheduling to prevent new user turns
-            # from being accepted during the transition window (before drain() runs)
-            if self._activity is not None and not self._activity._scheduling_paused:
-                self._activity._scheduling_paused = True
-                self._activity._wake_up_scheduling_task()
+            # immediately block the old activity from accepting new user turns
+            # during the transition window (before drain() formally pauses scheduling)
+            if self._activity is not None:
+                self._activity._new_turns_blocked = True
 
             self._update_activity_atask = task = asyncio.create_task(
                 self._update_activity_task(self._update_activity_atask, self._agent),
