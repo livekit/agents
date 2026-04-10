@@ -2056,7 +2056,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["agenthuman", "anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["agenthuman", "anam", "anthropic", "assemblyai", "asyncai", "avatario", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
