@@ -14,13 +14,7 @@ from typing_extensions import Required
 from livekit import rtc
 
 from .. import stt, utils
-from .._exceptions import (
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
-    create_api_error_from_http,
-)
+from .._exceptions import APIError
 from ..language import LanguageCode
 from ..log import logger
 from ..types import (
@@ -31,7 +25,8 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import get_default_inference_url
+from ._ws import InferenceWebSocket
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -485,7 +480,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._speaking = False
         self._speech_duration: float = 0
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._iws: InferenceWebSocket | None = None
 
     def update_options(
         self,
@@ -508,7 +503,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.extra_kwargs.update(extra)
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
-        if has_update and self._ws is not None and not self._ws.closed:
+        iws = self._iws
+        if has_update and iws is not None and not iws.closed:
             settings: dict[str, Any] = {}
             if is_given(model):
                 settings["model"] = model
@@ -524,107 +520,15 @@ class SpeechStream(stt.SpeechStream):
 
     async def _send_session_update(self, msg: dict[str, Any]) -> None:
         try:
-            if self._ws is not None and not self._ws.closed:
-                await self._ws.send_str(json.dumps(msg))
+            iws = self._iws
+            if iws is not None and not iws.closed:
+                await iws.send(json.dumps(msg))
         except Exception:
             logger.debug("failed to send session.update, ws may be closing")
 
-    async def _run(self) -> None:
-        """Main loop for streaming transcription."""
-        closing_ws = False
-
-        @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=self._opts.sample_rate // 20,  # 50ms
-            )
-
-            async for ev in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(ev, rtc.AudioFrame):
-                    frames.extend(audio_bstream.push(ev.data))
-                elif isinstance(ev, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    audio_bytes = frame.data.tobytes()
-                    base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-                    audio_msg = {
-                        "type": "input_audio",
-                        "audio": base64_audio,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
-
-            closing_ws = True
-            finalize_msg = {
-                "type": "session.finalize",
-            }
-            await ws.send_str(json.dumps(finalize_msg))
-
-        @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(
-                        message="LiveKit Inference STT connection closed unexpectedly"
-                    )
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
-                    continue
-
-                data = json.loads(msg.data)
-                msg_type = data.get("type")
-                if msg_type == "session.created":
-                    pass
-                elif msg_type == "interim_transcript":
-                    self._process_transcript(data, is_final=False)
-                elif msg_type == "final_transcript":
-                    self._process_transcript(data, is_final=True)
-                elif msg_type == "session.finalized":
-                    pass
-                elif msg_type == "session.closed":
-                    pass
-                elif msg_type == "error":
-                    raise APIError(f"LiveKit Inference STT returned error: {msg.data}")
-                else:
-                    logger.warning(
-                        "received unexpected message from LiveKit Inference STT: %s", data
-                    )
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        try:
-            ws = await self._connect_ws()
-            self._ws = ws
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            self._ws = None
-            if ws is not None:
-                await ws.close()
-
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit Inference STT WebSocket."""
+    def _build_session_create_params(self) -> dict[str, Any]:
         params: dict[str, Any] = {
+            "type": "session.create",
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
@@ -650,30 +554,84 @@ class SpeechStream(stt.SpeechStream):
                 "timeout": self._opts.conn_options.timeout,
                 "retries": self._opts.conn_options.max_retry,
             }
+        return params
 
-        base_url = self._opts.base_url
-        if base_url.startswith(("http://", "https://")):
-            base_url = base_url.replace("http", "ws", 1)
-        headers = {
-            **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
-        }
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    f"{base_url}/stt?model={self._opts.model}", headers=headers
-                ),
-                self._conn_options.timeout,
-            )
-            params["type"] = "session.create"
-            await ws.send_str(json.dumps(params))
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to LiveKit Inference STT") from e
-        return ws
+    async def _run(self) -> None:
+        """Main loop for streaming transcription."""
+
+        async with InferenceWebSocket(
+            session=self._session,
+            base_url=self._opts.base_url,
+            path=f"/stt?model={self._opts.model}",
+            api_key=self._opts.api_key,
+            api_secret=self._opts.api_secret,
+            timeout=self._conn_options.timeout,
+        ) as iws:
+            await iws.send(json.dumps(self._build_session_create_params()))
+            self._iws = iws
+
+            @utils.log_exceptions(logger=logger)
+            async def send_task() -> None:
+                audio_bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    samples_per_channel=self._opts.sample_rate // 20,  # 50ms
+                )
+
+                async for ev in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(ev, rtc.AudioFrame):
+                        frames.extend(audio_bstream.push(ev.data))
+                    elif isinstance(ev, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+
+                    for frame in frames:
+                        self._speech_duration += frame.duration
+                        audio_bytes = frame.data.tobytes()
+                        base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                        audio_msg = {
+                            "type": "input_audio",
+                            "audio": base64_audio,
+                        }
+                        await iws.send(json.dumps(audio_msg))
+
+                iws.mark_closing()
+                await iws.send(json.dumps({"type": "session.finalize"}))
+
+            @utils.log_exceptions(logger=logger)
+            async def recv_task() -> None:
+                async for data in iws.recv(str):
+                    parsed = json.loads(data)
+                    msg_type = parsed.get("type")
+                    if msg_type == "session.created":
+                        pass
+                    elif msg_type == "interim_transcript":
+                        self._process_transcript(parsed, is_final=False)
+                    elif msg_type == "final_transcript":
+                        self._process_transcript(parsed, is_final=True)
+                    elif msg_type in ("session.finalized", "session.closed"):
+                        pass
+                    elif msg_type == "error":
+                        raise APIError(
+                            f"LiveKit Inference STT returned error: {json.dumps(parsed)}"
+                        )
+                    else:
+                        logger.warning(
+                            "received unexpected message from LiveKit Inference STT: %s",
+                            parsed,
+                        )
+
+            try:
+                tasks = [
+                    asyncio.create_task(send_task()),
+                    asyncio.create_task(recv_task()),
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks)
+            finally:
+                self._iws = None
 
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)

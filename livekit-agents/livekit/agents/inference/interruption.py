@@ -49,8 +49,8 @@ from ._utils import (
     STAGING_INFERENCE_URL,
     create_access_token,
     get_default_inference_url,
-    get_inference_headers,
 )
+from ._ws import InferenceWebSocket
 
 SAMPLE_RATE = 16000
 THRESHOLD = 0.5
@@ -929,13 +929,24 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
         self._reconnect_event.set()
 
-    async def _run(self) -> None:
-        closing_ws = False
+    def _build_session_create_message(self) -> str:
+        settings = InterruptionWSSessionCreateSettings(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            threshold=self._opts.threshold,
+            min_frames=self._model._opts.min_frames,
+            encoding="s16le",
+        )
+        msg = InterruptionWSSessionCreateMessage(
+            type=InterruptionWSMessageType.SESSION_CREATE,
+            settings=settings,
+        )
+        return msg.model_dump_json()
 
+    async def _run(self) -> None:
         async def send_task(
-            ws: aiohttp.ClientWebSocketResponse, input_ch: aio.Chan[npt.NDArray[np.int16]]
+            iws: InferenceWebSocket, input_ch: aio.Chan[npt.NDArray[np.int16]]
         ) -> None:
-            nonlocal closing_ws
             timeout_ns = int(self._opts.inference_timeout * 1e9)
 
             async for audio_data in input_ch:
@@ -955,43 +966,21 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 await self._num_requests.increment()
                 created_at = perf_counter_ns()
                 header = struct.pack("<Q", created_at)  # 8 bytes
-                await ws.send_bytes(header + audio_data.tobytes())
+                await iws.send(header + audio_data.tobytes())
                 self._cache[created_at] = InterruptionCacheEntry(
                     created_at=created_at,
                     speech_input=audio_data,
                 )
 
-            closing_ws = True
-            msg = InterruptionWSSessionCloseMessage(
+            iws.mark_closing()
+            close_msg = InterruptionWSSessionCloseMessage(
                 type=InterruptionWSMessageType.SESSION_CLOSE,
             )
-            await ws.send_str(msg.model_dump_json())
+            await iws.send(close_msg.model_dump_json())
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-
-            while True:
-                ws_msg = await ws.receive()
-                if ws_msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(
-                        message=f"LiveKit Adaptive Interruption connection closed unexpectedly: {ws_msg.data}",
-                        status_code=ws.close_code or -1,
-                        body=f"{ws_msg.data=} {ws_msg.extra=}",
-                    )
-
-                if ws_msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning(
-                        "unexpected LiveKit Adaptive Interruption message type %s", ws_msg.type
-                    )
-                    continue
-
-                data = json.loads(ws_msg.data)
+        async def recv_task(iws: InferenceWebSocket) -> None:
+            async for raw_data in iws.recv(str):
+                data = json.loads(raw_data)
                 msg: AnyInterruptionWSMessage = InterruptionWSMessage.validate_python(data)
 
                 match msg:
@@ -1068,24 +1057,33 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             data,
                         )
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
         while True:
             data_ch = aio.Chan[npt.NDArray[np.int16]]()
-            try:
-                closing_ws = False
-                ws = await self._connect_ws()
+            async with InferenceWebSocket(
+                session=self._session,
+                base_url=self._opts.base_url,
+                path="/bargein",
+                api_key=self._opts.api_key,
+                api_secret=self._opts.api_secret,
+                timeout=self._conn_options.timeout,
+            ) as iws:
+                try:
+                    await iws.send(self._build_session_create_message())
+                except Exception as e:
+                    raise APIConnectionError(
+                        "failed to send session.create to adaptive interruption"
+                    ) from e
+
                 tasks = [
                     asyncio.create_task(self._forward_data(data_ch)),
-                    asyncio.create_task(send_task(ws, data_ch)),
-                    asyncio.create_task(recv_task(ws)),
+                    asyncio.create_task(send_task(iws, data_ch)),
+                    asyncio.create_task(recv_task(iws)),
                 ]
-                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
+                        [*tasks, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -1098,74 +1096,8 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 
                     self._reconnect_event.clear()
                 finally:
-                    closing_ws = True
-                    if ws is not None and not ws.closed:
-                        await ws.close()
-                        ws = None
+                    iws.mark_closing()
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    try:
-                        tasks_group.exception()
-                    except asyncio.CancelledError:
-                        pass
-            finally:
-                closing_ws = True
-                if ws is not None and not ws.closed:
-                    await ws.close()
-
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit Adaptive Interruption WebSocket."""
-        settings = InterruptionWSSessionCreateSettings(
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            threshold=self._opts.threshold,
-            min_frames=self._model._opts.min_frames,
-            encoding="s16le",
-        )
-
-        base_url = self._opts.base_url
-        if base_url.startswith(("http://", "https://")):
-            base_url = base_url.replace("http", "ws", 1)
-        headers = {
-            **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
-        }
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(f"{base_url}/bargein", headers=headers),
-                self._conn_options.timeout,
-            )
-        except (
-            aiohttp.ClientConnectorError,
-            asyncio.TimeoutError,
-            aiohttp.ClientResponseError,
-        ) as e:
-            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError(
-                    "LiveKit Adaptive Interruption quota exceeded",
-                    status_code=e.status,
-                    retryable=False,
-                ) from e
-            elif isinstance(e, asyncio.TimeoutError):
-                raise APIConnectionError(
-                    "failed to connect to LiveKit Adaptive Interruption: timeout",
-                    retryable=False,
-                ) from e
-            raise APIConnectionError("failed to connect to LiveKit Adaptive Interruption") from e
-
-        try:
-            msg = InterruptionWSSessionCreateMessage(
-                type=InterruptionWSMessageType.SESSION_CREATE,
-                settings=settings,
-            )
-            await ws.send_str(msg.model_dump_json())
-        except Exception as e:
-            await ws.close()
-            raise APIConnectionError(
-                "failed to send session.create message to LiveKit Adaptive Interruption"
-            ) from e
-
-        return ws
 
 
 # endregion
