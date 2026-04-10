@@ -944,6 +944,17 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         return msg.model_dump_json()
 
     async def _run(self) -> None:
+        async def wait_worker_tasks(tasks: list[asyncio.Task[None]]) -> None:
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+            for task in done:
+                task.result()
+
+            if pending:
+                done, _ = await asyncio.wait(pending)
+                for task in done:
+                    task.result()
+
         async def send_task(
             iws: InferenceWebSocket, input_ch: aio.Chan[npt.NDArray[np.int16]]
         ) -> None:
@@ -1079,11 +1090,12 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     asyncio.create_task(send_task(iws, data_ch)),
                     asyncio.create_task(recv_task(iws)),
                 ]
+                worker_tasks_done = asyncio.create_task(wait_worker_tasks(tasks))
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [*tasks, wait_reconnect_task],
+                        (worker_tasks_done, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -1097,7 +1109,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     self._reconnect_event.clear()
                 finally:
                     iws.mark_closing()
-                    await aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await aio.gracefully_cancel(worker_tasks_done, *tasks, wait_reconnect_task)
 
 
 # endregion
