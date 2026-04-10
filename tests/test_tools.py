@@ -653,3 +653,125 @@ class TestExecuteFunctionCallValidationErrors:
         assert result.fnc_call_out.is_error is True
         # Should contain error details, not generic message
         assert "An internal error occurred" not in result.fnc_call_out.output
+
+
+class _WeatherAgent(Agent):
+    def __init__(self):
+        super().__init__(instructions="You are a weather agent.")
+
+    @function_tool
+    async def get_weather(self, location: str) -> str:
+        """Get the weather for a location.
+
+        Args:
+            location: The city name
+        """
+        return f"The weather in {location} is sunny."
+
+
+def _weather_tool_call_responses() -> list:
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    return [
+        FakeLLMResponse(
+            input="What's the weather in Tokyo?",
+            content="",
+            ttft=0,
+            duration=0,
+            tool_calls=[
+                FunctionToolCall(
+                    name="get_weather",
+                    arguments='{"location": "Tokyo"}',
+                    call_id="1",
+                )
+            ],
+        ),
+        FakeLLMResponse(
+            input="mocked: sunny",
+            content="It's sunny in Tokyo!",
+            ttft=0,
+            duration=0,
+        ),
+    ]
+
+
+class TestMockToolArguments:
+    """Regression tests: mock_tools must pass arguments by name to mock functions."""
+
+    @pytest.mark.asyncio
+    async def test_mock_receives_args(self):
+        """Mock function should receive the tool arguments from the LLM."""
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.run_result import mock_tools
+
+        from .fake_llm import FakeLLM
+
+        received_args: dict[str, Any] = {}
+
+        def _mock_get_weather(location: str) -> str:
+            received_args["location"] = location
+            return "mocked: sunny"
+
+        fake_llm = FakeLLM(fake_responses=_weather_tool_call_responses())
+
+        async with fake_llm, AgentSession(llm=fake_llm) as session:
+            with mock_tools(_WeatherAgent, {"get_weather": _mock_get_weather}):
+                await session.start(_WeatherAgent())
+                result = await session.run(user_input="What's the weather in Tokyo?")
+                await result
+
+        assert received_args["location"] == "Tokyo"
+
+    @pytest.mark.asyncio
+    async def test_mock_receives_run_context(self):
+        """Mock function that declares a RunContext parameter should receive it."""
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.run_result import mock_tools
+
+        from .fake_llm import FakeLLM
+
+        received: dict[str, Any] = {}
+
+        def _mock_get_weather(ctx: RunContext, location: str) -> str:
+            received["ctx"] = ctx
+            received["location"] = location
+            return "mocked: sunny"
+
+        fake_llm = FakeLLM(fake_responses=_weather_tool_call_responses())
+
+        async with fake_llm, AgentSession(llm=fake_llm) as session:
+            with mock_tools(_WeatherAgent, {"get_weather": _mock_get_weather}):
+                await session.start(_WeatherAgent())
+                result = await session.run(user_input="What's the weather in Tokyo?")
+                await result
+
+        assert isinstance(received["ctx"], RunContext)
+        assert received["location"] == "Tokyo"
+
+    @pytest.mark.asyncio
+    async def test_mock_with_no_args(self):
+        """Mock with no parameters (e.g. lambda: error) should work."""
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.run_result import mock_tools
+
+        from .fake_llm import FakeLLM
+
+        mock_called = False
+
+        def _mock_get_weather() -> str:
+            nonlocal mock_called
+            mock_called = True
+            return "mocked: sunny"
+
+        fake_llm = FakeLLM(fake_responses=_weather_tool_call_responses())
+
+        async with fake_llm, AgentSession(llm=fake_llm) as session:
+            with mock_tools(_WeatherAgent, {"get_weather": _mock_get_weather}):
+                await session.start(_WeatherAgent())
+                result = await session.run(user_input="What's the weather in Tokyo?")
+                await result
+
+        assert mock_called
