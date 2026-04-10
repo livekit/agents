@@ -16,15 +16,13 @@ from ...types import (
 )
 from ...utils import resolve_env_var
 from .languages import LANGUAGES
-from .types import TurnDetectorEncoding
 
 if TYPE_CHECKING:
     from .stream import TurnDetectionStream
 
-INFERENCE_TIMEOUT = 1
+INFERENCE_TIMEOUT = 0.5
 
 DEFAULT_SAMPLE_RATE: int = 16000
-DEFAULT_ENCODING: TurnDetectorEncoding = "pcm_s16le"
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
@@ -38,7 +36,6 @@ class TurnDetectionEvent:
 
 @dataclass
 class TurnDetectorOptions:
-    encoding: TurnDetectorEncoding
     sample_rate: int
     base_url: str
     api_key: str
@@ -54,7 +51,6 @@ class MultiModalTurnDetector:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
-        encoding: TurnDetectorEncoding = DEFAULT_ENCODING,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
@@ -75,7 +71,6 @@ class MultiModalTurnDetector:
             )
 
         self._opts = TurnDetectorOptions(
-            encoding=encoding,
             sample_rate=sample_rate,
             base_url=lk_base_url,
             api_key=lk_api_key,
@@ -88,7 +83,7 @@ class MultiModalTurnDetector:
 
     @property
     def model(self) -> str:
-        return "multimodal"
+        return "eou-multimodal-multilingual"
 
     @property
     def provider(self) -> str:
@@ -115,7 +110,7 @@ class MultiModalTurnDetector:
         return stream
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float:
-        return LANGUAGES.get(language.language if language is not None else "en", 0.3)
+        return LANGUAGES.get(language.language if language is not None else "en", 0.35)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return language is not None and language.language in LANGUAGES
@@ -126,3 +121,4 @@ class MultiModalTurnDetector:
         if self._session:
             await self._session.close()
         self._session = None
+        self._streams = weakref.WeakSet()
