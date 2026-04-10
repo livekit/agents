@@ -169,12 +169,16 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
+        if handle not in self._handles:
+            return False
+
         self._handles.discard(handle)
         handle.remove_done_callback(self._mark_done_if_needed)
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
+        return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
         if isinstance(handle, SpeechHandle):

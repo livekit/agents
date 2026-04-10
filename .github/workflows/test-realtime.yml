@@ -52,4 +52,4 @@ jobs:
           AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
           # XAI_API_KEY not set — xAI rate-limits GitHub Actions IPs (429 on ws handshake)
         run: |
-          uv run pytest -v tests/test_realtime/ --tb=long -p no:xdist
+          uv run pytest -v tests/test_realtime/ -s --tb=long -p no:xdist

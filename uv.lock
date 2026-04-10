@@ -27,6 +27,7 @@ members = [
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
+    "livekit-plugins-did",
     "livekit-plugins-elevenlabs",
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
@@ -106,6 +107,7 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a2/01/92e9ab00f36e2899315f49eefcd5b4685fbb19016c7f19a9edf06da80bb0/aioboto3-15.5.0.tar.gz", hash = "sha256:ea8d8787d315594842fbfcf2c4dce3bac2ad61be275bc8584b2ce9a3402a6979", size = 255069, upload-time = "2025-10-30T13:37:16.122Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/3e/e8f5b665bca646d43b916763c901e00a07e40f7746c9128bdc912a089424/aioboto3-15.5.0-py3-none-any.whl", hash = "sha256:cc880c4d6a8481dd7e05da89f41c384dbd841454fc1998ae25ca9c39201437a6", size = 35913, upload-time = "2025-10-30T13:37:14.549Z" },
     { url = "https://files.pythonhosted.org/packages/e5/3e/e8f5b665bca646d43b916763c901e00a07e40f7746c9128bdc912a089424/aioboto3-15.5.0-py3-none-any.whl", hash = "sha256:cc880c4d6a8481dd7e05da89f41c384dbd841454fc1998ae25ca9c39201437a6", size = 35913, upload-time = "2025-10-30T13:37:14.549Z" },
 ]
 
@@ -1831,6 +1833,9 @@ codecs = [
 deepgram = [
     { name = "livekit-plugins-deepgram" },
 ]
+did = [
+    { name = "livekit-plugins-did" },
+]
 elevenlabs = [
     { name = "livekit-plugins-elevenlabs" },
 ]
@@ -1893,6 +1898,9 @@ minimax = [
 ]
 mistralai = [
     { name = "livekit-plugins-mistralai" },
+]
+murf = [
+    { name = "livekit-plugins-murf" },
 ]
 neuphonic = [
     { name = "livekit-plugins-neuphonic" },
@@ -1993,6 +2001,7 @@ requires-dist = [
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
     { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
+    { name = "livekit-plugins-did", marker = "extra == 'did'", editable = "livekit-plugins/livekit-plugins-did" },
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
@@ -2012,6 +2021,7 @@ requires-dist = [
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
     { name = "livekit-plugins-minimax-ai", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
     { name = "livekit-plugins-mistralai", marker = "extra == 'mistralai'", editable = "livekit-plugins/livekit-plugins-mistralai" },
+    { name = "livekit-plugins-murf", marker = "extra == 'murf'", editable = "livekit-plugins/livekit-plugins-murf" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
@@ -2035,7 +2045,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", specifier = ">=1.1.3,<2" },
+    { name = "livekit-protocol", specifier = ">=1.1.5,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.24.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -2347,6 +2357,16 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-did"
+source = { editable = "livekit-plugins/livekit-plugins-did" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-elevenlabs"
 source = { editable = "livekit-plugins/livekit-plugins-elevenlabs" }
 dependencies = [
@@ -2591,13 +2611,13 @@ name = "livekit-plugins-mistralai"
 source = { editable = "livekit-plugins/livekit-plugins-mistralai" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "mistralai" },
+    { name = "mistralai", extra = ["realtime"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "mistralai", specifier = ">=2.0.0,<3.0.0" },
+    { name = "mistralai", extras = ["realtime"], specifier = ">=2.0.0,<3.0.0" },
 ]
 
 [[package]]
@@ -2736,13 +2756,13 @@ requires-dist = [
 name = "livekit-plugins-sarvam"
 source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
 dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -2941,15 +2961,15 @@ requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "liv
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.3"
+version = "1.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/ca/d15e2a2cc8c8aa4ba621fe5f9ffd1806d88ac91c7b8fa4c09a3c0304dd92/livekit_protocol-1.1.3.tar.gz", hash = "sha256:cb4948d2513e81d91583f4a795bf80faa9026cedda509c5714999c7e33564287", size = 88746, upload-time = "2026-03-18T05:25:43.562Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/49/6137f28bfdc6c161e4b3327a05e103cda30bf521151736dcbf8bbdb2a5ca/livekit_protocol-1.1.5.tar.gz", hash = "sha256:54af234c15819a6f8e2b51511325fcfb181fed49a04547a7dfcd9b67ccd03767", size = 93740, upload-time = "2026-04-08T21:20:00.937Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/0e/f3d3e48628294df4559cffd0f8e1adf030127029e5a8da9beff9979090a0/livekit_protocol-1.1.3-py3-none-any.whl", hash = "sha256:fdae5640e064ab6549ec3d62d8bac75a3ef44d7ea73716069b419cbe8b360a5c", size = 107498, upload-time = "2026-03-18T05:25:42.077Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/cd/903f8a11a49332933ae2d5c34baa22ee2cb94f4426e25a3eff6d598ffb04/livekit_protocol-1.1.5-py3-none-any.whl", hash = "sha256:7d517ac2bab69a2b889f94ea65ae74be4f9db251d614513bbcf1e3d333008720", size = 114852, upload-time = "2026-04-08T21:19:59.341Z" },
 ]
 
 [[package]]
@@ -3165,6 +3185,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7d/98/5fe39d514c19477f06a07e088ce4a44c2e60ac9deebefb9e2c8ed8ef87d2/mistralai-2.1.3.tar.gz", hash = "sha256:0c5de4855b043cd0582406d5c1ddfd91e176f484a158e6ee0b4a0054231be266", size = 331929, upload-time = "2026-03-23T15:00:29.579Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/15/7c/f91a26bf469c1cff57325379afa112baeb113ac577d28e69dd408cee5745/mistralai-2.1.3-py3-none-any.whl", hash = "sha256:26daac3bdc69fc2dd58f2c421710eb34131be7883b44a9ea81904a6306e6a90a", size = 754931, upload-time = "2026-03-23T15:00:30.934Z" },
+]
+
+[package.optional-dependencies]
+realtime = [
+    { name = "websockets" },
 ]
 
 [[package]]
