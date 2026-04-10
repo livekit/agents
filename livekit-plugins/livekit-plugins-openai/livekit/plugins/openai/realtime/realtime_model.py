@@ -409,9 +409,9 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
-                mid_session_chat_ctx_update=True,
-                mid_session_instructions_update=True,
-                mid_session_tools_update=True,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
                 per_response_tool_choice=True,
             )
         )

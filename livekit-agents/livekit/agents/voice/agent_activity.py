@@ -602,7 +602,7 @@ class AgentActivity(RecognitionHooks):
                 and self.llm is new_activity.llm
             ):
                 # context update is supported or chat context is equivalent
-                reusable = self.llm.capabilities.mid_session_chat_ctx_update or (
+                reusable = self.llm.capabilities.mutable_chat_context or (
                     self._rt_session.chat_ctx.copy(
                         exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
                     ).is_equivalent(
@@ -615,12 +615,12 @@ class AgentActivity(RecognitionHooks):
                 )
                 # instructions update is supported or instructions are the same
                 reusable = reusable and (
-                    self.llm.capabilities.mid_session_instructions_update
+                    self.llm.capabilities.mutable_instructions
                     or self.agent.instructions == new_activity.agent.instructions
                 )
                 # tools update is supported or tools are the same
                 reusable = reusable and (
-                    self.llm.capabilities.mid_session_tools_update
+                    self.llm.capabilities.mutable_tools
                     or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
                 )
 
@@ -725,9 +725,9 @@ class AgentActivity(RecognitionHooks):
             if rt_reused:
                 # skip the update if the session is reused and no mid-session update is supported
                 # this means the content is the same as the previous session
-                reset_instructions = capabilities.mid_session_instructions_update
-                reset_chat_ctx = capabilities.mid_session_chat_ctx_update
-                reset_tools = capabilities.mid_session_tools_update
+                reset_instructions = capabilities.mutable_instructions
+                reset_chat_ctx = capabilities.mutable_chat_context
+                reset_tools = capabilities.mutable_tools
 
             await self._rt_session._update_session(
                 instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,

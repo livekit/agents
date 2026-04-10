@@ -64,11 +64,11 @@ class RealtimeCapabilities:
     auto_tool_reply_generation: bool
     audio_output: bool
     manual_function_calls: bool
-    mid_session_chat_ctx_update: bool = False
+    mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
-    mid_session_instructions_update: bool = False
+    mutable_instructions: bool = False
     """Whether the instructions can be updated mid-session"""
-    mid_session_tools_update: bool = False
+    mutable_tools: bool = False
     """Whether the tools can be updated mid-session"""
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
@@ -253,7 +253,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
-
         if is_given(instructions):
             try:
                 await self.update_instructions(instructions)
