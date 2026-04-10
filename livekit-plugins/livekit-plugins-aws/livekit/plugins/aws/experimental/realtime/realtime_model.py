@@ -1291,8 +1291,6 @@ class RealtimeSession(  # noqa: F811
         # Detect and unwrap so the framework receives a proper JSON object string.
         if isinstance(args, str):
             try:
-                import json
-
                 parsed = json.loads(args)
                 if isinstance(parsed, str):
                     # Double-encoded: the outer parse gave us a string, try again
