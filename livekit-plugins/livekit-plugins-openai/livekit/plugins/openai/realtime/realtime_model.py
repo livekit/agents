@@ -399,10 +399,15 @@ class RealtimeModel(llm.RealtimeModel):
             session = AgentSession(llm=model)
             ```
         """
-        api_version: str | None = kwargs.get("api_version") or None
-        if api_version:
+        api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
+        if kwargs.get("api_version"):
             logger.warning(
                 "The `api_version` parameter is deprecated and will be removed on April 30, 2026."
+            )
+        elif os.getenv("OPENAI_API_VERSION"):
+            logger.warning(
+                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
+                "on April 30, 2026."
             )
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
@@ -968,7 +973,7 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
-                    # Azure uses "input_text" for all content parts, while
+                    # Azure uses "text" for assistant content parts, while
                     # the new API uses "output_text" for assistant content.
                     if (
                         self._realtime_model._opts.is_azure
