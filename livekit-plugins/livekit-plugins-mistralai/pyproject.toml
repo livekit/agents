@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-mistralai"
 dynamic = ["version"]
-description = "LiveKit Agents Plugin for services from AWS"
+description = "LiveKit Agents Plugin for services from Mistral AI"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
@@ -22,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.5.1",
-    "mistralai>=1.9.11,<2.0.0",
+    "livekit-agents>=1.5.2",
+    "mistralai[realtime]>=2.0.0,<3.0.0",
 ]
 
 [project.urls]
@@ -39,3 +39,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

@@ -37,11 +37,11 @@ from livekit.agents.utils import is_given
 
 from .langs import TTSLangs
 from .log import logger
-from .models import ArcanaVoices, TTSModels
+from .models import ArcanaVoices, DefaultMistVoice, TTSModels
 
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
-MISTV2_MODEL_TIMEOUT = 30
+MIST_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
 
 
@@ -50,7 +50,7 @@ class _TTSOptions:
     model: TTSModels | str
     speaker: str
     arcana_options: _ArcanaOptions | None = None
-    mistv2_options: _Mistv2Options | None = None
+    mist_options: _MistOptions | None = None
 
 
 @dataclass
@@ -64,7 +64,7 @@ class _ArcanaOptions:
 
 
 @dataclass
-class _Mistv2Options:
+class _MistOptions:
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
@@ -74,6 +74,16 @@ class _Mistv2Options:
 
 
 NUM_CHANNELS = 1
+
+
+def _is_mist_model(model: TTSModels | str) -> bool:
+    return "mist" in model
+
+
+def _timeout_for_model(model: TTSModels | str) -> int:
+    if model == "arcana":
+        return ARCANA_MODEL_TIMEOUT
+    return MIST_MODEL_TIMEOUT
 
 
 class TTS(tts.TTS):
@@ -112,10 +122,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(speaker):
-            if model == "mistv2":
-                speaker = "cove"
-            else:
-                speaker = "astra"
+            speaker = DefaultMistVoice if _is_mist_model(model) else "astra"
 
         self._opts = _TTSOptions(
             model=model,
@@ -130,8 +137,8 @@ class TTS(tts.TTS):
                 lang=lang,
                 sample_rate=sample_rate,
             )
-        elif model == "mistv2":
-            self._opts.mistv2_options = _Mistv2Options(
+        elif _is_mist_model(model):
+            self._opts.mist_options = _MistOptions(
                 lang=lang,
                 sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
@@ -142,7 +149,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._base_url = base_url
 
-        self._total_timeout = ARCANA_MODEL_TIMEOUT if model == "arcana" else MISTV2_MODEL_TIMEOUT
+        self._total_timeout = _timeout_for_model(model)
 
     @property
     def model(self) -> str:
@@ -186,11 +193,12 @@ class TTS(tts.TTS):
             self._base_url = base_url
         if is_given(model):
             self._opts.model = model
+            self._total_timeout = _timeout_for_model(model)
 
             if model == "arcana" and self._opts.arcana_options is None:
                 self._opts.arcana_options = _ArcanaOptions()
-            elif model == "mistv2" and self._opts.mistv2_options is None:
-                self._opts.mistv2_options = _Mistv2Options()
+            elif _is_mist_model(model) and self._opts.mist_options is None:
+                self._opts.mist_options = _MistOptions()
 
         if is_given(speaker):
             self._opts.speaker = speaker
@@ -209,19 +217,19 @@ class TTS(tts.TTS):
             if is_given(sample_rate):
                 self._opts.arcana_options.sample_rate = sample_rate
 
-        elif self._opts.model == "mistv2" and self._opts.mistv2_options is not None:
+        elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(lang):
-                self._opts.mistv2_options.lang = lang
+                self._opts.mist_options.lang = lang
             if is_given(sample_rate):
-                self._opts.mistv2_options.sample_rate = sample_rate
+                self._opts.mist_options.sample_rate = sample_rate
             if is_given(speed_alpha):
-                self._opts.mistv2_options.speed_alpha = speed_alpha
+                self._opts.mist_options.speed_alpha = speed_alpha
             if is_given(reduce_latency):
-                self._opts.mistv2_options.reduce_latency = reduce_latency
+                self._opts.mist_options.reduce_latency = reduce_latency
             if is_given(pause_between_brackets):
-                self._opts.mistv2_options.pause_between_brackets = pause_between_brackets
+                self._opts.mist_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
-                self._opts.mistv2_options.phonemize_between_brackets = phonemize_between_brackets
+                self._opts.mist_options.phonemize_between_brackets = phonemize_between_brackets
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -254,21 +262,21 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["lang"] = arcana_opts.lang
             if is_given(arcana_opts.sample_rate):
                 payload["samplingRate"] = arcana_opts.sample_rate
-        elif self._opts.model == "mistv2":
-            mistv2_opts = self._opts.mistv2_options
-            assert mistv2_opts is not None
-            if is_given(mistv2_opts.lang):
-                payload["lang"] = mistv2_opts.lang
-            if is_given(mistv2_opts.sample_rate):
-                payload["samplingRate"] = mistv2_opts.sample_rate
-            if is_given(mistv2_opts.speed_alpha):
-                payload["speedAlpha"] = mistv2_opts.speed_alpha
-            if is_given(mistv2_opts.reduce_latency):
-                payload["reduceLatency"] = mistv2_opts.reduce_latency
-            if is_given(mistv2_opts.pause_between_brackets):
-                payload["pauseBetweenBrackets"] = mistv2_opts.pause_between_brackets
-            if is_given(mistv2_opts.phonemize_between_brackets):
-                payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
+        elif _is_mist_model(self._opts.model):
+            mist_opts = self._opts.mist_options
+            assert mist_opts is not None
+            if is_given(mist_opts.lang):
+                payload["lang"] = mist_opts.lang
+            if is_given(mist_opts.sample_rate):
+                payload["samplingRate"] = mist_opts.sample_rate
+            if is_given(mist_opts.speed_alpha):
+                payload["speedAlpha"] = mist_opts.speed_alpha
+            if self._opts.model == "mistv2" and is_given(mist_opts.reduce_latency):
+                payload["reduceLatency"] = mist_opts.reduce_latency
+            if is_given(mist_opts.pause_between_brackets):
+                payload["pauseBetweenBrackets"] = mist_opts.pause_between_brackets
+            if is_given(mist_opts.phonemize_between_brackets):
+                payload["phonemizeBetweenBrackets"] = mist_opts.phonemize_between_brackets
 
         try:
             async with self._tts._ensure_session().post(

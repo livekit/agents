@@ -409,6 +409,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                per_response_tool_choice=True,
             )
         )
 
@@ -463,6 +464,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
+        self._provider_label = "OpenAI Realtime API"
 
     @property
     def model(self) -> str:
@@ -790,7 +792,7 @@ class RealtimeSession(
 
         async def _reconnect() -> None:
             logger.debug(
-                "reconnecting to OpenAI Realtime API",
+                f"reconnecting to {self._realtime_model._provider_label}",
                 extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
             )
 
@@ -833,7 +835,7 @@ class RealtimeSession(
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
                     message=(
-                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                        f"Failed to send message to {self._realtime_model._provider_label} during session re-connection"
                     ),
                 ) from e
 
@@ -843,8 +845,9 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
+            self._close_current_generation("session reconnection")
 
-            logger.debug("reconnected to OpenAI Realtime API")
+            logger.debug(f"reconnected to {self._realtime_model._provider_label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
         reconnecting = False
@@ -863,7 +866,7 @@ class RealtimeSession(
                 elif num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"OpenAI Realtime API connection failed after {num_retries} attempts",
+                        f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
@@ -872,7 +875,7 @@ class RealtimeSession(
                         num_retries
                     )
                     logger.warning(
-                        f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
+                        f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={"attempt": num_retries, "max_retries": max_retries},
                     )
@@ -907,16 +910,21 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        t0 = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
+            return ws
         except aiohttp.ClientError as e:
-            raise APIConnectionError("OpenAI Realtime API client connection error") from e
+            raise APIConnectionError(
+                f"{self._realtime_model._provider_label} client connection error"
+            ) from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError(
-                message="OpenAI Realtime API connection timed out",
+                message=f"{self._realtime_model._provider_label} connection timed out",
             ) from e
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -965,7 +973,9 @@ class RealtimeSession(
                         return
 
                     # this will trigger a reconnection
-                    raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
+                    raise APIConnectionError(
+                        message=f"{self._realtime_model._provider_label} connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1351,7 +1361,7 @@ class RealtimeSession(
             self._tools = llm.ToolContext(retained_tools)
 
     # this function can be overrided
-    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+    def _convert_tools_to_oai(self, tools: list[llm.Tool]) -> list[RealtimeFunctionTool]:
         oai_tools: list[RealtimeFunctionTool] = []
 
         for tool in tools:
@@ -1366,7 +1376,8 @@ class RealtimeSession(
                 continue  # currently only xAI supports ProviderTools
             else:
                 logger.error(
-                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                    f"{self._realtime_model._provider_label} doesn't support this tool type",
+                    extra={"tool": tool},
                 )
                 continue
 
@@ -1375,10 +1386,15 @@ class RealtimeSession(
                 oai_tools.append(session_tool)
             except ValidationError:
                 logger.error(
-                    "OpenAI Realtime API doesn't support this tool",
+                    f"{self._realtime_model._provider_label} doesn't support this tool",
                     extra={"tool": tool_desc},
                 )
                 continue
+
+        return oai_tools
+
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        oai_tools = self._convert_tools_to_oai(tools)
 
         event = self._wrap_session_update(
             event_id=utils.shortuuid("tools_update_"),
@@ -1440,20 +1456,32 @@ class RealtimeSession(
         self._pushed_duration_s = 0
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
+
+        if is_given(instructions) and self._instructions:
+            # in OpenAI realtime, the session-level instructions are completely replaced
+            # by the new instructions for this response
+            instructions = f"{self._instructions}\n{instructions}"
+
+        params = RealtimeResponseCreateParams(
+            instructions=instructions or None,
+            metadata={"client_event_id": event_id},
+        )
+        if is_given(tool_choice):
+            params.tool_choice = to_oai_tool_choice(tool_choice)
+        if is_given(tools):
+            params.tools = self._convert_tools_to_oai(tools)  # type: ignore
+
         self.send_event(
-            ResponseCreateEvent(
-                type="response.create",
-                event_id=event_id,
-                response=RealtimeResponseCreateParams(
-                    instructions=instructions or None,
-                    metadata={"client_event_id": event_id},
-                ),
-            )
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
         )
 
         def _on_timeout() -> None:
@@ -1508,8 +1536,34 @@ class RealtimeSession(
                     self.send_event(ev)
 
     async def aclose(self) -> None:
+        self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask
+
+    def _close_current_generation(self, reason: str | None = None) -> None:
+        """Close all channels and resolve _done_fut for the current generation.
+
+        This prevents consumers from hanging indefinitely when a generation is
+        interrupted by a reconnection or session close.
+        """
+        if self._current_generation is None or self._current_generation._done_fut.done():
+            return
+
+        for generation in self._current_generation.messages.values():
+            generation.text_ch.close()
+            generation.audio_ch.close()
+            if not generation.modalities.done():
+                generation.modalities.set_result(self._realtime_model._opts.modalities)
+
+        self._current_generation.function_ch.close()
+        self._current_generation.message_ch.close()
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._current_generation._done_fut.set_result(None)
+        self._current_generation = None
+
+        if reason:
+            logger.warning(f"in-progress generation discarded due to {reason}")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
@@ -1611,7 +1665,9 @@ class RealtimeSession(
         assert (item_type := event.part.type) is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
-            logger.warning("Text response received from OpenAI Realtime API in audio modality.")
+            logger.warning(
+                f"Text response received from {self._realtime_model._provider_label} in audio modality."
+            )
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._current_generation.messages[item_id].modalities.set_result(
@@ -1673,7 +1729,7 @@ class RealtimeSession(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
         logger.error(
-            "OpenAI Realtime API failed to transcribe input audio",
+            f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
         )
 
@@ -1850,14 +1906,15 @@ class RealtimeSession(
         if event.response.status == "completed":
             return
 
+        provider_label = self._realtime_model._provider_label
         if event.response.status == "failed":
             if event.response.status_details and hasattr(event.response.status_details, "error"):
                 error_type = getattr(event.response.status_details.error, "type", "unknown")
                 error_body = event.response.status_details.error
-                message = f"OpenAI Realtime API response failed with error type: {error_type}"
+                message = f"{provider_label} response failed with error type: {error_type}"
             else:
                 error_body = None
-                message = "OpenAI Realtime API response failed with unknown error"
+                message = f"{provider_label} response failed with unknown error"
             self._emit_error(
                 APIError(
                     message=message,
@@ -1870,7 +1927,8 @@ class RealtimeSession(
             )
         elif event.response.status in {"cancelled", "incomplete"}:
             logger.debug(
-                "OpenAI Realtime API response done but not complete with status: %s",
+                "%s response done but not complete with status: %s",
+                provider_label,
                 event.response.status,
                 extra={
                     "event_id": event.response.id,
@@ -1884,13 +1942,14 @@ class RealtimeSession(
         if event.error.message.startswith("Cancellation failed"):
             return
 
+        provider_label = self._realtime_model._provider_label
         logger.error(
-            "OpenAI Realtime API returned an error",
+            f"{provider_label} returned an error",
             extra={"error": event.error},
         )
         self._emit_error(
             APIError(
-                message="OpenAI Realtime API returned an error",
+                message=f"{provider_label} returned an error",
                 body=event.error,
                 retryable=True,
             ),

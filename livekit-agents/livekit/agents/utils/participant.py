@@ -92,7 +92,7 @@ async def wait_for_participant(
 
         return p.kind == kind
 
-    def _on_participant_connected(p: rtc.RemoteParticipant) -> None:
+    def _on_participant_active(p: rtc.RemoteParticipant) -> None:
         if (identity is None or p.identity == identity) and kind_match(p):
             if not fut.done():
                 fut.set_result(p)
@@ -101,18 +101,19 @@ async def wait_for_participant(
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
-    room.on("participant_connected", _on_participant_connected)
+    room.on("participant_active", _on_participant_active)
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
         for p in room.remote_participants.values():
-            _on_participant_connected(p)
+            if p.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE:
+                _on_participant_active(p)
             if fut.done():
                 break
 
         return await fut
     finally:
-        room.off("participant_connected", _on_participant_connected)
+        room.off("participant_active", _on_participant_active)
         room.off("connection_state_changed", _on_connection_state_changed)
 
 
