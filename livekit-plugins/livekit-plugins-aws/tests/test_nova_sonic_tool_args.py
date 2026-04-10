@@ -26,12 +26,14 @@ _AWS_STUBS = [
     "aws_sdk_bedrock_runtime.client",
     "aws_sdk_bedrock_runtime.models",
     "aws_sdk_bedrock_runtime.config",
-    "aws_smithy_core",
-    "aws_smithy_core.aio",
-    "aws_smithy_core.aio.eventstream",
-    "aws_smithy_core.schemes",
-    "aws_smithy_http",
-    "aws_smithy_http.aio",
+    "smithy_aws_core",
+    "smithy_aws_core.identity",
+    "smithy_aws_event_stream",
+    "smithy_aws_event_stream.exceptions",
+    "smithy_core",
+    "smithy_core.aio",
+    "smithy_core.aio.interfaces",
+    "smithy_core.aio.interfaces.identity",
 ]
 for _mod in _AWS_STUBS:
     if _mod not in sys.modules:
