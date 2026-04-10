@@ -592,6 +592,8 @@ class SpeechStream(stt.SpeechStream):
                     pass
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
+                elif msg_type == "preflight_transcript":
+                    self._process_preflight_transcript(data)
                 elif msg_type == "final_transcript":
                     self._process_transcript(data, is_final=True)
                 elif msg_type == "session.finalized":
@@ -675,26 +677,15 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("failed to connect to LiveKit Inference STT") from e
         return ws
 
-    def _process_transcript(self, data: dict, is_final: bool) -> None:
-        request_id = data.get("request_id", self._request_id)
-        text = data.get("transcript", "")
+    def _build_speech_data(self, data: dict) -> stt.SpeechData:
         language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
-
-        if not text and not is_final:
-            return
-        # We'll have a more accurate way of detecting when speech started when we have VAD
-        if not self._speaking:
-            self._speaking = True
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
-
-        speech_data = stt.SpeechData(
+        return stt.SpeechData(
             language=language,
             start_time=self.start_time_offset + data.get("start", 0),
             end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
-            text=text,
+            text=data.get("transcript", ""),
             words=[
                 TimedString(
                     text=word.get("word", ""),
@@ -706,6 +697,34 @@ class SpeechStream(stt.SpeechStream):
                 for word in words
             ],
         )
+
+    def _process_preflight_transcript(self, data: dict) -> None:
+        text = data.get("transcript", "")
+        if not text or not self._speaking:
+            return
+
+        speech_data = self._build_speech_data(data)
+        request_id = data.get("request_id", self._request_id)
+        event = stt.SpeechEvent(
+            type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            request_id=request_id,
+            alternatives=[speech_data],
+        )
+        self._event_ch.send_nowait(event)
+
+    def _process_transcript(self, data: dict, is_final: bool) -> None:
+        request_id = data.get("request_id", self._request_id)
+        text = data.get("transcript", "")
+
+        if not text and not is_final:
+            return
+        # We'll have a more accurate way of detecting when speech started when we have VAD
+        if not self._speaking:
+            self._speaking = True
+            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+            self._event_ch.send_nowait(start_event)
+
+        speech_data = self._build_speech_data(data)
 
         if is_final:
             if self._speech_duration > 0:
