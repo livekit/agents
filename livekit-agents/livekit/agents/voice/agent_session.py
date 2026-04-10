@@ -42,7 +42,7 @@ from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
-from .agent_activity import AgentActivity
+from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
 from .events import (
     AgentEvent,
@@ -1292,30 +1292,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
-            # detach STT pipeline from old activity for potential reuse in the new one
-            _reuse_pipeline = (
-                await self._activity._detach_stt_pipeline_if_reusable(self._next_activity)
-                if self._activity is not None
-                else None
-            )
-
+            reuse_resources: _ReusableResources | None = None
             try:
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
-                        await activity.drain()
+                        reuse_resources = await activity.drain(new_activity=self._next_activity)
                         await activity.aclose()
                     elif previous_activity == "pause":
-                        await activity.pause(blocked_tasks=blocked_tasks or [])
+                        reuse_resources = await activity.pause(
+                            blocked_tasks=blocked_tasks or [], new_activity=self._next_activity
+                        )
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
                     logger.warning(
                         f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
                     )
-                    if _reuse_pipeline is not None:
-                        await _reuse_pipeline.aclose()
-                        _reuse_pipeline = None
+                    if reuse_resources is not None:
+                        await reuse_resources.cleanup()
+                        reuse_resources = None
                     self._next_activity = None
                     self._activity = None
                     return
@@ -1338,12 +1334,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
 
                 if new_activity == "start":
-                    await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
+                    await self._activity.start(reuse_resources=reuse_resources)
                 elif new_activity == "resume":
-                    await self._activity.resume(reuse_stt_pipeline=_reuse_pipeline)
+                    await self._activity.resume(reuse_resources=reuse_resources)
             except BaseException:
-                if _reuse_pipeline is not None:
-                    await _reuse_pipeline.aclose()
+                if reuse_resources is not None:
+                    await reuse_resources.cleanup()
                 raise
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent

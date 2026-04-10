@@ -265,7 +265,6 @@ class AMD:
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
     ) -> _AMDClassifier | None:
-
         if isinstance(llm, str):
             return _AMDClassifier(_InferenceLLM(llm))
         if isinstance(llm, _LLM):
