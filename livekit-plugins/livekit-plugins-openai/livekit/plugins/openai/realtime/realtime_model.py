@@ -203,13 +203,11 @@ def _oai_session_to_azure(session: RealtimeSessionCreateRequest) -> AzureSession
 def _normalize_azure_client_event(event: dict[str, Any]) -> None:
     """In-place normalization of client event dicts for legacy Azure compatibility.
 
-    The legacy Azure Realtime API uses "text" for assistant content parts, whereas
-    the newer OpenAI API uses "output_text".
+    The legacy Azure Realtime API uses "text" for assistant content parts,
+    while the newer OpenAI API uses "output_text".
     """
     item = event.get("item")
     if item is None:
-        return
-    if item.get("role") != "assistant":
         return
     for content_part in item.get("content", ()):
         if content_part.get("type") == "output_text":
@@ -299,6 +297,7 @@ class RealtimeModel(llm.RealtimeModel):
         azure_deployment: str | None = None,
         entra_token: str | None = None,
         api_key: str | None = None,
+        api_version: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
@@ -400,16 +399,11 @@ class RealtimeModel(llm.RealtimeModel):
             session = AgentSession(llm=model)
             ```
         """
-        if kwargs.get("api_version"):
+        api_version: str | None = kwargs.get("api_version") or None
+        if api_version:
             logger.warning(
                 "The `api_version` parameter is deprecated and will be removed on April 30, 2026."
             )
-        elif os.getenv("OPENAI_API_VERSION"):
-            logger.warning(
-                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
-                "on April 30, 2026."
-            )
-        api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
