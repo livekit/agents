@@ -139,6 +139,7 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -847,6 +848,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._scheduling_paused = False
+        self._new_turns_blocked = False
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
@@ -1508,7 +1510,7 @@ class AgentActivity(RecognitionHooks):
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
@@ -1770,6 +1772,7 @@ class AgentActivity(RecognitionHooks):
         if (
             not self._session.options.preemptive_generation
             or self._scheduling_paused
+            or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
             or not isinstance(self.llm, llm.LLM)
         ):
@@ -1806,7 +1809,7 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
@@ -1907,7 +1910,7 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -1940,7 +1943,7 @@ class AgentActivity(RecognitionHooks):
         elif self.llm is None:
             return  # skip response if no llm is set
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
