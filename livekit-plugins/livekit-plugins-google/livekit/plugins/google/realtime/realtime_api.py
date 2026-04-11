@@ -843,20 +843,20 @@ class RealtimeSession(llm.RealtimeSession):
                                 f"update_instructions() to set system-level context instead."
                             )
 
-                        if self._realtime_model.capabilities.mutable_chat_context:
-                            turns_dict, _ = self._chat_ctx.copy(
-                                exclude_function_call=True,
-                                exclude_handoff=True,
-                                exclude_instructions=True,
-                                exclude_empty_message=True,
-                                exclude_config_update=True,
-                            ).to_provider_format(format="google", inject_dummy_user_message=False)
-                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                            if turns:
-                                await session.send_client_content(
-                                    turns=turns,  # type: ignore
-                                    turn_complete=False,
-                                )
+                        turns_dict, _ = self._chat_ctx.copy(
+                            exclude_function_call=True,
+                            exclude_handoff=True,
+                            exclude_instructions=True,
+                            exclude_empty_message=True,
+                            exclude_config_update=True,
+                        ).to_provider_format(format="google", inject_dummy_user_message=False)
+                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        if turns:
+                            await session.send_client_content(
+                                turns=turns,  # type: ignore
+                                turn_complete=False,
+                            )
+
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -1058,6 +1058,9 @@ class RealtimeSession(llm.RealtimeSession):
         tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
+            history_config=types.HistoryConfig(initial_history_in_client_content=True)
+            if not self.capabilities.mutable_chat_context
+            else None,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
