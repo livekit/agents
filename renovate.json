@@ -6,11 +6,17 @@
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
-      "groupName": "github workflows"
+      "groupName": "github actions"
     },
     {
       "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
-      "groupName": "python deps"
+      "matchPackageNames": ["livekit", "livekit-*"],
+      "groupName": "livekit deps"
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "excludePackageNames": ["livekit", "livekit-*"],
+      "groupName": "third party deps"
     }
   ]
 }
