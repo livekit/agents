@@ -274,10 +274,15 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
-                if vertexai
+                if use_vertexai
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
 
@@ -303,11 +308,6 @@ class RealtimeModel(llm.RealtimeModel):
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
-        use_vertexai = (
-            vertexai
-            if is_given(vertexai)
-            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
 
         if use_vertexai:
