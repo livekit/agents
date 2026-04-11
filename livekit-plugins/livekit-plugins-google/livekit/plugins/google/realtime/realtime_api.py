@@ -559,13 +559,12 @@ class RealtimeSession(llm.RealtimeSession):
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
 
-            
             async with self._session_lock:
                 if not self._active_session:
                     # No active session yet — restart will pick up new instructions via _build_connect_config
                     self._mark_restart_needed()
                     return
-                
+
             if not self._realtime_model.capabilities.mutable_instructions:
                 return
 
@@ -711,9 +710,7 @@ class RealtimeSession(llm.RealtimeSession):
             )
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(
-                    f"generate_reply is not compatible with '{self._opts.model}'"
-                )
+                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -856,7 +853,6 @@ class RealtimeSession(llm.RealtimeSession):
                             ).to_provider_format(format="google", inject_dummy_user_message=False)
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
                             if turns:
-                                turns = [types.Content.model_validate(turn) for turn in turns_dict]
                                 await session.send_client_content(
                                     turns=turns,  # type: ignore
                                     turn_complete=False,
