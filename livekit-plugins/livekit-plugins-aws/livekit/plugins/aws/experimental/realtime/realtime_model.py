@@ -1286,17 +1286,21 @@ class RealtimeSession(  # noqa: F811
         tool_name = event_data["event"]["toolUse"]["toolName"]
         args = event_data["event"]["toolUse"]["content"]
 
-        # Nova Sonic sometimes double-encodes tool arguments as a JSON string
-        # containing another JSON string (e.g. "\"{\\\"order_id\\\":\\\"1234\\\"}\"").
-        # Detect and unwrap so the framework receives a proper JSON object string.
+        # Nova Sonic sometimes double-encodes tool arguments: the outer JSON parse
+        # yields a string whose contents are themselves a JSON object string
+        # (e.g. "\"{\\\"order_id\\\":\\\"1234\\\"}\"").
+        # Only peel one layer when the inner string is a JSON object so that
+        # legitimate string-valued schemas (e.g. content="hello") are preserved.
         if isinstance(args, str):
             try:
-                import json
-
                 parsed = json.loads(args)
                 if isinstance(parsed, str):
-                    # Double-encoded: the outer parse gave us a string, try again
-                    args = parsed
+                    try:
+                        inner = json.loads(parsed)
+                        if isinstance(inner, dict):
+                            args = parsed
+                    except (json.JSONDecodeError, TypeError):
+                        pass  # inner string is a plain value, leave args untouched
             except (json.JSONDecodeError, TypeError):
                 pass
 
