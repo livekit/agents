@@ -1059,7 +1059,7 @@ class RealtimeSession(llm.RealtimeSession):
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             history_config=types.HistoryConfig(initial_history_in_client_content=True)
-            if not self.capabilities.mutable_chat_context
+            if not self.model.capabilities.mutable_chat_context
             else None,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
