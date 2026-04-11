@@ -599,7 +599,11 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.closed":
                     pass
                 elif msg_type == "error":
-                    raise APIError(f"LiveKit Inference STT returned error: {msg.data}")
+                    raise APIStatusError(
+                        f"LiveKit Inference STT returned error: {data.get('message')}",
+                        status_code=data.get('code', -1),
+                        body=data,
+                    )
                 else:
                     logger.warning(
                         "received unexpected message from LiveKit Inference STT: %s", data

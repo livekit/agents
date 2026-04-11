@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: Get PR details and check authorization
         id: pr-info
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const comment = context.payload.comment.body.trim();
@@ -114,7 +114,7 @@ jobs:
 
       - name: Trigger workflow
         if: steps.pr-info.outputs.is_command == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
@@ -148,19 +148,19 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
           fetch-depth: 0
           lfs: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "latest"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -214,7 +214,7 @@ jobs:
 
       - name: Post results to PR
         if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const fs = require('fs');
