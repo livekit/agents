@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.10"
+          python-version: "3.14"
 
       - name: Install the project
         run: uv sync --all-extras --dev
