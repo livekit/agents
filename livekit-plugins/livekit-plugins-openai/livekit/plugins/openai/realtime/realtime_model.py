@@ -501,6 +501,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> RealtimeModel:
         """
@@ -521,6 +522,7 @@ class RealtimeModel(llm.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
@@ -626,6 +628,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             entra_token=entra_token,
             base_url=base_url,
+            max_session_duration=max_session_duration,
         )
 
     def update_options(
