@@ -16,7 +16,6 @@ from livekit import rtc
 from .. import stt, utils
 from .._exceptions import (
     APIConnectionError,
-    APIError,
     APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
@@ -601,7 +600,7 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "error":
                     raise APIStatusError(
                         f"LiveKit Inference STT returned error: {data.get('message')}",
-                        status_code=data.get('code', -1),
+                        status_code=data.get("code", -1),
                         body=data,
                     )
                 else:
