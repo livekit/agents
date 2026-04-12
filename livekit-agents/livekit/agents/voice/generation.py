@@ -555,15 +555,21 @@ async def _execute_tools_task(
                 )
 
             except (ValidationError, ValueError) as e:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                # Surface argument validation errors to the LLM so it can self-correct.
+                # Without this, the LLM only sees "An internal error occurred" and has
+                # no signal about what was wrong with its arguments.
+                logger.warning(
+                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                tool_error = ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}")
+                _tool_completed(
+                    make_tool_output(fnc_call=fnc_call, output=None, exception=tool_error)
+                )
                 continue
 
             if not tool_output.first_tool_started_fut.done():
