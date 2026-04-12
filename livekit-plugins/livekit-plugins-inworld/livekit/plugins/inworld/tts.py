@@ -729,7 +729,7 @@ class _ConnectionPool:
             if conn:
                 try:
                     ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
-                except Exception:
+                except BaseException:
                     # Release reservation since we didn't get a context
                     conn.release_reservation()
                     # Remove failed new connection from pool
