@@ -43,6 +43,8 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import _supports_reasoning_effort
 
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 
@@ -141,7 +143,7 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
-    service_tier: NotGivenOr[str]
+    service_tier: NotGivenOr[ServiceTier]
     use_websocket: bool
 
 
@@ -161,7 +163,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
-        service_tier: NotGivenOr[str] = NOT_GIVEN,
+        service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
