@@ -419,6 +419,9 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
                 per_response_tool_choice=True,
             )
         )
@@ -507,6 +510,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
         **kwargs: Any,
     ) -> RealtimeModel:
@@ -527,6 +531,7 @@ class RealtimeModel(llm.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
@@ -638,6 +643,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             entra_token=entra_token,
             base_url=base_url,
+            max_session_duration=max_session_duration,
         )
 
     def update_options(
@@ -1318,6 +1324,14 @@ class RealtimeSession(
             try:
                 await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
             except asyncio.TimeoutError:
+                # clean up timed-out futures so late server responses don't hit
+                # InvalidStateError when calling set_result on cancelled futures
+                for ev in events:
+                    if isinstance(ev, ConversationItemDeleteEvent):
+                        self._item_delete_future.pop(ev.item_id, None)
+                    elif isinstance(ev, ConversationItemCreateEvent):
+                        assert ev.item.id is not None
+                        self._item_create_future.pop(ev.item.id, None)
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
     def _create_update_chat_ctx_events(
@@ -1727,7 +1741,10 @@ class RealtimeSession(
             )
 
         if fut := self._item_create_future.pop(event.item.id, None):
-            fut.set_result(None)
+            if fut.cancelled():
+                logger.error(f"item create future for `{event.item.id}` was already cancelled")
+            else:
+                fut.set_result(None)
 
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
@@ -1740,7 +1757,10 @@ class RealtimeSession(
             )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
-            fut.set_result(None)
+            if fut.cancelled():
+                logger.error(f"item delete future for `{event.item_id}` was already cancelled")
+            else:
+                fut.set_result(None)
 
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
@@ -1981,7 +2001,7 @@ class RealtimeSession(
 
         provider_label = self._realtime_model._provider_label
         logger.error(
-            f"{provider_label} returned an error",
+            f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
         self._emit_error(

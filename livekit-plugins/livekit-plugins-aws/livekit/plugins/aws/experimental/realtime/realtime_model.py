@@ -1286,6 +1286,24 @@ class RealtimeSession(  # noqa: F811
         tool_name = event_data["event"]["toolUse"]["toolName"]
         args = event_data["event"]["toolUse"]["content"]
 
+        # Nova Sonic sometimes double-encodes tool arguments: the outer JSON parse
+        # yields a string whose contents are themselves a JSON object string
+        # (e.g. "\"{\\\"order_id\\\":\\\"1234\\\"}\"").
+        # Only peel one layer when the inner string is a JSON object so that
+        # legitimate string-valued schemas (e.g. content="hello") are preserved.
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+                if isinstance(parsed, str):
+                    try:
+                        inner = json.loads(parsed)
+                        if isinstance(inner, dict):
+                            args = parsed
+                    except (json.JSONDecodeError, TypeError):
+                        pass  # inner string is a plain value, leave args untouched
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         # Emit function call to LiveKit framework
         self._current_generation.function_ch.send_nowait(
             llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
