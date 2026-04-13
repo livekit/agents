@@ -295,6 +295,7 @@ class SarvamTTSOptions:
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
         word_tokenizer: Tokenizer for processing text
+        max_session_duration: Maximum WebSocket session reuse duration in seconds (0 = fresh per request)
     """
 
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
@@ -318,6 +319,7 @@ class SarvamTTSOptions:
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
     output_audio_codec: str = "mp3"
+    max_session_duration: float = 3600
 
 
 class TTS(tts.TTS):
@@ -347,6 +349,10 @@ class TTS(tts.TTS):
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
         output_audio_codec: Optionally choose the output codec format (mp3)
+        max_session_duration: Maximum WebSocket connection reuse duration in seconds.
+            Connections are recycled after this period. Set to 0 for a fresh
+            connection per request, which may improve audio quality with some
+            providers. Defaults to 3600 (1 hour).
     """
 
     def __init__(
@@ -373,6 +379,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
         output_audio_codec: str = "mp3",
+        max_session_duration: float = 3600,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -428,6 +435,8 @@ class TTS(tts.TTS):
             raise ValueError(
                 f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
             )
+        if max_session_duration < 0:
+            raise ValueError("max_session_duration must be >= 0")
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -461,6 +470,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             send_completion_event=send_completion_event,
             output_audio_codec=output_audio_codec,
+            max_session_duration=max_session_duration,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -468,7 +478,7 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
+            max_session_duration=self._opts.max_session_duration,
             mark_refreshed_on_get=False,
         )
 
