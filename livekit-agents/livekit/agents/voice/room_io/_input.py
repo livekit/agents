@@ -122,6 +122,9 @@ class _ParticipantInputStream(Generic[T], ABC):
             await self._stream.aclose()
             self._stream = None
         self._publication = None
+        if self._processor:
+            self._processor._close()
+            self._processor = None
         if self._forward_atask:
             await aio.cancel_and_wait(self._forward_atask)
 

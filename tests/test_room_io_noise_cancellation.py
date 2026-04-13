@@ -253,3 +253,27 @@ async def test_token_refresh_does_not_hit_closed_processor_after_track_unpublish
     assert len(processor.credentials_calls) == 1
 
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_active_processor() -> None:
+    """aclose() must deterministically close an active FrameProcessor
+    rather than relying on garbage collection."""
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    stream = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
+    ):
+        stream._on_track_available(track, publication, participant)
+
+    assert stream._processor is processor
+
+    await stream.aclose()
+
+    assert processor.close_calls == 1
+    assert stream._processor is None
