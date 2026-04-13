@@ -112,9 +112,7 @@ async def test_selector_frame_processor_receives_lifecycle_calls() -> None:
 
     track, publication, participant = _make_track_available_args()
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is processor
@@ -144,9 +142,7 @@ async def test_selector_noise_cancellation_options_does_not_set_processor() -> N
 
     track, publication, participant = _make_track_available_args()
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is None
@@ -173,9 +169,7 @@ async def test_selector_closes_previous_processor_on_track_switch() -> None:
     track1, pub1, participant = _make_track_available_args(sid="TR_001")
     track2, pub2, _ = _make_track_available_args(sid="TR_002")
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track1, pub1, participant)
         stream._on_track_available(track2, pub2, participant)
 
@@ -206,9 +200,7 @@ async def test_selector_clears_processor_when_returning_options_after_processor(
     track1, pub1, participant = _make_track_available_args(sid="TR_001")
     track2, pub2, _ = _make_track_available_args(sid="TR_002")
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track1, pub1, participant)
 
         assert stream._processor is processor
@@ -233,9 +225,7 @@ async def test_token_refresh_does_not_hit_closed_processor_after_track_unpublish
 
     track, publication, participant = _make_track_available_args()
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is processor
@@ -266,9 +256,7 @@ async def test_aclose_closes_active_processor() -> None:
 
     track, publication, participant = _make_track_available_args()
 
-    with patch(
-        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
-    ):
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is processor
