@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from livekit.agents import LanguageCode, llm
@@ -69,5 +70,52 @@ class LLMTurnDetector:
     async def predict_end_of_turn(
         self, chat_ctx: ChatContext, *, timeout: float | None = None
     ) -> float:
-        # Implemented in Task 3.
-        raise NotImplementedError
+        user_messages = [m for m in chat_ctx.messages() if m.role == "user"]
+        if not user_messages:
+            return 1.0
+
+        prompt_ctx = self._build_prompt_ctx(chat_ctx)
+        effective_timeout = timeout if timeout is not None else self._timeout
+
+        try:
+            response = await asyncio.wait_for(
+                self._llm.chat(chat_ctx=prompt_ctx).collect(),
+                timeout=effective_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "LLMTurnDetector: classifier timed out after %.2fs", effective_timeout
+            )
+            return _NEUTRAL_PROBABILITY
+        except Exception:
+            logger.warning("LLMTurnDetector: classifier call failed", exc_info=True)
+            return _NEUTRAL_PROBABILITY
+
+        return self._parse_probability(response.text or "")
+
+    def _build_prompt_ctx(self, chat_ctx: ChatContext) -> ChatContext:
+        messages = chat_ctx.messages()[-self._max_history_turns :]
+        lines: list[str] = []
+        for i, msg in enumerate(messages):
+            text = msg.text_content or ""
+            marker = "[CURRENT] " if i == len(messages) - 1 and msg.role == "user" else ""
+            lines.append(f"{marker}{msg.role}: {text}")
+        rendered = "\n".join(lines)
+
+        prompt_ctx = ChatContext.empty()
+        prompt_ctx.add_message(role="system", content=self._instructions)
+        prompt_ctx.add_message(role="user", content=rendered)
+        return prompt_ctx
+
+    def _parse_probability(self, content: str) -> float:
+        stripped = content.strip()
+        if not stripped:
+            logger.warning("LLMTurnDetector: empty response")
+            return _NEUTRAL_PROBABILITY
+        first = stripped[0]
+        if first == "1":
+            return _COMPLETE_PROBABILITY
+        if first == "0":
+            return _INCOMPLETE_PROBABILITY
+        logger.warning("LLMTurnDetector: unexpected response token %r", stripped[:16])
+        return _NEUTRAL_PROBABILITY
