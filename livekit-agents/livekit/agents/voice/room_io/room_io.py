@@ -26,11 +26,11 @@ if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
 
+from ...job import DEFAULT_PARTICIPANT_KINDS
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
 from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 from .types import (
     DEFAULT_CLOSE_ON_DISCONNECT_REASONS,
-    DEFAULT_PARTICIPANT_KINDS,
     RoomInputOptions,
     RoomOptions,
     RoomOutputOptions,
@@ -202,6 +202,7 @@ class RoomIO:
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
+        self._room.off("participant_disconnected", self._on_participant_disconnected)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
@@ -234,6 +235,11 @@ class RoomIO:
 
         if self._tr_synchronizer:
             await self._tr_synchronizer.aclose()
+
+        if self._user_tr_output:
+            await self._user_tr_output.aclose()
+        if self._agent_tr_output:
+            await self._agent_tr_output.aclose()
 
         if self._audio_output:
             await self._audio_output.aclose()

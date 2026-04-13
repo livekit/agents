@@ -28,6 +28,7 @@ livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
+livekit-plugins-krisp = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true}
@@ -64,10 +65,12 @@ livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
+livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
+    "livekit-plugins/community",
     "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",

@@ -42,7 +42,8 @@ from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
-from .agent_activity import AgentActivity
+from .agent_activity import AgentActivity, _ReusableResources
+from .amd import AMD
 from .events import (
     AgentEvent,
     AgentState,
@@ -400,7 +401,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
-        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
+        self._input = io.AgentInput(
+            self._on_video_input_changed,
+            self._on_audio_input_changed,
+            audio_enabled_cb=self._on_audio_enabled_changed,
+        )
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -446,8 +451,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
 
-        # ivr activity
+        # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
+        self._amd: AMD | None = None
+
+    @property
+    def amd(self) -> AMD | None:
+        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
+        return self._amd
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -732,13 +743,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             tasks.append(task)
 
                 if self.options.ivr_detection:
-                    self._ivr_activity = IVRActivity(self)
-
-                    # inject the IVR activity tools into the session tools
-                    self._tools.extend(self._ivr_activity.tools)
-
                     tasks.append(
-                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                        asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
@@ -904,6 +910,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
+            if self._amd is not None:
+                await self._amd.aclose()
+                self._amd = None
+
             activity = self._activity
             while activity and isinstance(agent_task := activity.agent, AgentTask):
                 # notify AgentTask to complete and wait it to resume the parent agent
@@ -1055,6 +1065,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 turn_detection=turn_detection,
             )
 
+    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
+        """Start IVR detection on this session.
+
+        This method injects the DTMF tool and enables loop/silence detection,
+        allowing the agent to navigate IVR phone trees. Safe to call after AMD resolves.
+
+        Args:
+            transcript (str | None, optional): The transcript to start IVR detection with.
+        """
+        if self._ivr_activity is not None:
+            logger.warning("IVR detection already started, skipping")
+            return
+
+        self._ivr_activity = IVRActivity(self)
+        self._tools.extend(self._ivr_activity.tools)
+        await self._ivr_activity.start()
+        if transcript is not None:
+            logger.debug("IVR detection started with transcript", extra={"transcript": transcript})
+            self._ivr_activity._on_user_input_transcribed(
+                UserInputTranscribedEvent(transcript=transcript, is_final=True)
+            )
+
     def say(
         self,
         text: str | AsyncIterable[str],
@@ -1095,6 +1127,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         input_modality: Literal["text", "audio"] = "text",
@@ -1107,6 +1140,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
+            tools (NotGivenOr[list[str]], optional): List of tool IDs to make available for this response.
+                When set, only the specified tools can be used. Tool IDs must match registered tools on the
+                agent. For function tools, the ID is the function name (accessible via ``my_tool.id``).
+                For toolsets, the ID is the one provided at construction (accessible via ``my_toolset.id``).
             allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
             chat_ctx (NotGivenOr[ChatContext], optional): The chat context to use for generating the reply.
                 Defaults to the chat context of the current agent if not provided.
@@ -1140,6 +1177,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 user_message=user_message if user_message else None,
                 instructions=instructions,
                 tool_choice=tool_choice,
+                tools=tools,
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
                 input_details=InputDetails(modality=input_modality),
@@ -1207,6 +1245,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent = agent
 
         if self._started:
+            # immediately block the old activity from accepting new user turns
+            # during the transition window (before drain() formally pauses scheduling)
+            if self._activity is not None:
+                self._activity._new_turns_blocked = True
+
             self._update_activity_atask = task = asyncio.create_task(
                 self._update_activity_task(self._update_activity_atask, self._agent),
                 name="_update_activity_task",
@@ -1216,6 +1259,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # don't mark the RunResult as done, if there is currently an agent transition happening.  # noqa: E501
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
+
+    async def wait_for_inactive(self) -> None:
+        if self._activity is not None:
+            await self._activity._wait_for_inactive()
 
     async def _update_activity(
         self,
@@ -1250,30 +1297,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
-            # detach STT pipeline from old activity for potential reuse in the new one
-            _reuse_pipeline = (
-                await self._activity._detach_stt_pipeline_if_reusable(self._next_activity)
-                if self._activity is not None
-                else None
-            )
-
+            reuse_resources: _ReusableResources | None = None
             try:
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
-                        await activity.drain()
+                        reuse_resources = await activity.drain(new_activity=self._next_activity)
                         await activity.aclose()
                     elif previous_activity == "pause":
-                        await activity.pause(blocked_tasks=blocked_tasks or [])
+                        reuse_resources = await activity.pause(
+                            blocked_tasks=blocked_tasks or [], new_activity=self._next_activity
+                        )
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
                     logger.warning(
                         f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
                     )
-                    if _reuse_pipeline is not None:
-                        await _reuse_pipeline.aclose()
-                        _reuse_pipeline = None
+                    if reuse_resources is not None:
+                        await reuse_resources.cleanup()
+                        reuse_resources = None
                     self._next_activity = None
                     self._activity = None
                     return
@@ -1296,12 +1339,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
 
                 if new_activity == "start":
-                    await self._activity.start(reuse_stt_pipeline=_reuse_pipeline)
+                    await self._activity.start(reuse_resources=reuse_resources)
                 elif new_activity == "resume":
-                    await self._activity.resume(reuse_stt_pipeline=_reuse_pipeline)
+                    await self._activity.resume(reuse_resources=reuse_resources)
             except BaseException:
-                if _reuse_pipeline is not None:
-                    await _reuse_pipeline.aclose()
+                if reuse_resources is not None:
+                    await reuse_resources.cleanup()
                 raise
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
@@ -1513,6 +1556,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 created_at=last_speaking_time or time.time(),
             ),
         )
+
+    def _on_audio_enabled_changed(self, enabled: bool) -> None:
+        """End user speaking state when audio is disabled by default."""
+        if not enabled and self._user_state == "speaking":
+            if self._activity is not None:
+                self._activity.on_end_of_speech(None)
+            else:
+                self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self.user_state == "away" and ev.is_final:

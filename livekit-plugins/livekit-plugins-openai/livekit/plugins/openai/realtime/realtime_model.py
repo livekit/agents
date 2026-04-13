@@ -201,17 +201,17 @@ def _oai_session_to_azure(session: RealtimeSessionCreateRequest) -> AzureSession
 
 
 def _normalize_azure_client_event(event: dict[str, Any]) -> None:
-    """In-place normalization of client event dicts for Azure compatibility.
+    """In-place normalization of client event dicts for legacy Azure compatibility.
 
-    Azure uses "input_text" for all text content parts (including assistant messages),
-    while the new OpenAI API uses "output_text" for assistant content.
+    The legacy Azure Realtime API uses "text" for assistant content parts,
+    while the newer OpenAI API uses "output_text".
     """
     item = event.get("item")
     if item is None:
         return
     for content_part in item.get("content", ()):
         if content_part.get("type") == "output_text":
-            content_part["type"] = "input_text"
+            content_part["type"] = "text"
 
 
 @dataclass
@@ -344,10 +344,10 @@ class RealtimeModel(llm.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         azure_deployment: str | None = None,
         entra_token: str | None = None,
-        api_version: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
+        **kwargs: Any,
     ) -> None:
         """
         Initialize a Realtime model client for OpenAI or Azure OpenAI.
@@ -368,7 +368,6 @@ class RealtimeModel(llm.RealtimeModel):
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
             entra_token (str | None): Azure Entra token auth (alternative to api_key).
-            api_version (str | None): Azure OpenAI API version appended as query parameter.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             conn_options (APIConnectOptions): Retry/backoff and connection settings.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
@@ -400,6 +399,17 @@ class RealtimeModel(llm.RealtimeModel):
             session = AgentSession(llm=model)
             ```
         """
+        api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
+        if kwargs.get("api_version"):
+            logger.warning(
+                "The `api_version` parameter is deprecated and will be removed on April 30, 2026."
+            )
+        elif os.getenv("OPENAI_API_VERSION"):
+            logger.warning(
+                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
+                "on April 30, 2026."
+            )
+
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -409,6 +419,10 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
                 manual_function_calls=True,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
+                per_response_tool_choice=True,
             )
         )
 
@@ -463,6 +477,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
+        self._provider_label = "OpenAI Realtime API"
 
     @property
     def model(self) -> str:
@@ -480,7 +495,6 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         azure_deployment: str,
         azure_endpoint: str | None = None,
-        api_version: str | None = None,
         api_key: str | None = None,
         entra_token: str | None = None,
         base_url: str | None = None,
@@ -496,7 +510,9 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
+        **kwargs: Any,
     ) -> RealtimeModel:
         """
         Create a RealtimeModel configured for Azure OpenAI.
@@ -504,7 +520,6 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
             azure_endpoint (str | None): Azure endpoint URL; if None, taken from AZURE_OPENAI_ENDPOINT.
-            api_version (str | None): Azure API version; if None, taken from OPENAI_API_VERSION.
             api_key (str | None): Azure API key; if None, taken from AZURE_OPENAI_API_KEY. Omit if using `entra_token`.
             entra_token (str | None): Azure Entra token for AAD auth. Provide instead of `api_key`.
             base_url (str | None): Explicit base URL. Mutually exclusive with `azure_endpoint`. If provided, used as-is.
@@ -516,13 +531,14 @@ class RealtimeModel(llm.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
             RealtimeModel: Configured client for Azure OpenAI Realtime.
 
         Raises:
-            ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
+            ValueError: If credentials are missing, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
 
         Examples:
             Azure usage with api-version 2024-10-01-preview:
@@ -575,6 +591,17 @@ class RealtimeModel(llm.RealtimeModel):
             )
             ```
         """
+        if kwargs.get("api_version"):
+            logger.warning(
+                "The `api_version` parameter in `with_azure` is deprecated and will be removed "
+                "on April 30, 2026."
+            )
+        elif os.getenv("OPENAI_API_VERSION"):
+            logger.warning(
+                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
+                "on April 30, 2026."
+            )
+
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
@@ -582,12 +609,7 @@ class RealtimeModel(llm.RealtimeModel):
                 "or the `AZURE_OPENAI_API_KEY` environment variable."
             )
 
-        api_version = api_version or os.getenv("OPENAI_API_VERSION")
-        if api_version is None:
-            raise ValueError(
-                "Must provide either the `api_version` argument or the "
-                "`OPENAI_API_VERSION` environment variable"
-            )
+        api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
 
         if base_url is None:
             azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -621,6 +643,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             entra_token=entra_token,
             base_url=base_url,
+            max_session_duration=max_session_duration,
         )
 
     def update_options(
@@ -716,17 +739,32 @@ def process_base_url(
     parsed_url = urlparse(url)
     query_params = parse_qs(parsed_url.query)
 
-    # ensure "/realtime" is added if the path is empty OR "/v1"
-    if not parsed_url.path or parsed_url.path.rstrip("/") in ["", "/v1", "/openai", "/openai/v1"]:
-        path = parsed_url.path.rstrip("/") + "/realtime"
+    path_stripped = parsed_url.path.rstrip("/")
+    if is_azure:
+        if path_stripped in ["", "/openai"]:
+            # newer Azure API (no api_version) uses /v1/realtime; legacy uses /realtime
+            path = path_stripped + ("/v1/realtime" if not api_version else "/realtime")
+        elif path_stripped == "/openai/v1":
+            path = "/openai/v1/realtime"
+        else:
+            path = parsed_url.path
     else:
-        path = parsed_url.path
+        if not parsed_url.path or path_stripped in ["", "/v1", "/openai", "/openai/v1"]:
+            path = path_stripped + "/realtime"
+        else:
+            path = parsed_url.path
 
     if is_azure:
+        query_params.pop("api-version", None)  # remove from endpoint URL if present
         if api_version:
+            # legacy Azure API: use api-version + deployment query params
             query_params["api-version"] = [api_version]
-        if azure_deployment:
-            query_params["deployment"] = [azure_deployment]
+            if azure_deployment:
+                query_params["deployment"] = [azure_deployment]
+        else:
+            # newer Azure API: use azure_deployment as model query param
+            if "model" not in query_params and azure_deployment:
+                query_params["model"] = [azure_deployment]
 
     else:
         if "model" not in query_params:
@@ -790,7 +828,7 @@ class RealtimeSession(
 
         async def _reconnect() -> None:
             logger.debug(
-                "reconnecting to OpenAI Realtime API",
+                f"reconnecting to {self._realtime_model._provider_label}",
                 extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
             )
 
@@ -824,7 +862,10 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
-                    if self._realtime_model._opts.is_azure:
+                    if (
+                        self._realtime_model._opts.is_azure
+                        and self._realtime_model._opts.api_version
+                    ):
                         _normalize_azure_client_event(ev)
 
                     self.emit("openai_client_event_queued", ev)
@@ -833,7 +874,7 @@ class RealtimeSession(
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
                     message=(
-                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                        f"Failed to send message to {self._realtime_model._provider_label} during session re-connection"
                     ),
                 ) from e
 
@@ -845,7 +886,7 @@ class RealtimeSession(
             self._response_created_futures.clear()
             self._close_current_generation("session reconnection")
 
-            logger.debug("reconnected to OpenAI Realtime API")
+            logger.debug(f"reconnected to {self._realtime_model._provider_label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
         reconnecting = False
@@ -864,7 +905,7 @@ class RealtimeSession(
                 elif num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"OpenAI Realtime API connection failed after {num_retries} attempts",
+                        f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
@@ -873,7 +914,7 @@ class RealtimeSession(
                         num_retries
                     )
                     logger.warning(
-                        f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
+                        f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={"attempt": num_retries, "max_retries": max_retries},
                     )
@@ -908,16 +949,21 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
+        t0 = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0)
+            return ws
         except aiohttp.ClientError as e:
-            raise APIConnectionError("OpenAI Realtime API client connection error") from e
+            raise APIConnectionError(
+                f"{self._realtime_model._provider_label} client connection error"
+            ) from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError(
-                message="OpenAI Realtime API connection timed out",
+                message=f"{self._realtime_model._provider_label} connection timed out",
             ) from e
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -933,9 +979,12 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
-                    # Azure uses "input_text" for all content parts, while
+                    # Azure uses "text" for assistant content parts, while
                     # the new API uses "output_text" for assistant content.
-                    if self._realtime_model._opts.is_azure:
+                    if (
+                        self._realtime_model._opts.is_azure
+                        and self._realtime_model._opts.api_version
+                    ):
                         _normalize_azure_client_event(msg)
 
                     self.emit("openai_client_event_queued", msg)
@@ -966,7 +1015,9 @@ class RealtimeSession(
                         return
 
                     # this will trigger a reconnection
-                    raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
+                    raise APIConnectionError(
+                        message=f"{self._realtime_model._provider_label} connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1095,7 +1146,8 @@ class RealtimeSession(
         and returns a dict (since AzureSessionUpdateEvent is not part of
         the RealtimeClientEvent union).
         """
-        if self._realtime_model._opts.is_azure:
+        if self._realtime_model._opts.is_azure and self._realtime_model._opts.api_version:
+            # legacy Azure API: convert to old flat format
             return AzureSessionUpdateEvent(
                 type="session.update",
                 session=_oai_session_to_azure(session),
@@ -1272,6 +1324,14 @@ class RealtimeSession(
             try:
                 await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
             except asyncio.TimeoutError:
+                # clean up timed-out futures so late server responses don't hit
+                # InvalidStateError when calling set_result on cancelled futures
+                for ev in events:
+                    if isinstance(ev, ConversationItemDeleteEvent):
+                        self._item_delete_future.pop(ev.item_id, None)
+                    elif isinstance(ev, ConversationItemCreateEvent):
+                        assert ev.item.id is not None
+                        self._item_create_future.pop(ev.item.id, None)
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
     def _create_update_chat_ctx_events(
@@ -1352,7 +1412,7 @@ class RealtimeSession(
             self._tools = llm.ToolContext(retained_tools)
 
     # this function can be overrided
-    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+    def _convert_tools_to_oai(self, tools: list[llm.Tool]) -> list[RealtimeFunctionTool]:
         oai_tools: list[RealtimeFunctionTool] = []
 
         for tool in tools:
@@ -1367,7 +1427,8 @@ class RealtimeSession(
                 continue  # currently only xAI supports ProviderTools
             else:
                 logger.error(
-                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                    f"{self._realtime_model._provider_label} doesn't support this tool type",
+                    extra={"tool": tool},
                 )
                 continue
 
@@ -1376,10 +1437,15 @@ class RealtimeSession(
                 oai_tools.append(session_tool)
             except ValidationError:
                 logger.error(
-                    "OpenAI Realtime API doesn't support this tool",
+                    f"{self._realtime_model._provider_label} doesn't support this tool",
                     extra={"tool": tool_desc},
                 )
                 continue
+
+        return oai_tools
+
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        oai_tools = self._convert_tools_to_oai(tools)
 
         event = self._wrap_session_update(
             event_id=utils.shortuuid("tools_update_"),
@@ -1441,20 +1507,32 @@ class RealtimeSession(
         self._pushed_duration_s = 0
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
+
+        if is_given(instructions) and self._instructions:
+            # in OpenAI realtime, the session-level instructions are completely replaced
+            # by the new instructions for this response
+            instructions = f"{self._instructions}\n{instructions}"
+
+        params = RealtimeResponseCreateParams(
+            instructions=instructions or None,
+            metadata={"client_event_id": event_id},
+        )
+        if is_given(tool_choice):
+            params.tool_choice = to_oai_tool_choice(tool_choice)
+        if is_given(tools):
+            params.tools = self._convert_tools_to_oai(tools)  # type: ignore
+
         self.send_event(
-            ResponseCreateEvent(
-                type="response.create",
-                event_id=event_id,
-                response=RealtimeResponseCreateParams(
-                    instructions=instructions or None,
-                    metadata={"client_event_id": event_id},
-                ),
-            )
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
         )
 
         def _on_timeout() -> None:
@@ -1638,7 +1716,9 @@ class RealtimeSession(
         assert (item_type := event.part.type) is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
-            logger.warning("Text response received from OpenAI Realtime API in audio modality.")
+            logger.warning(
+                f"Text response received from {self._realtime_model._provider_label} in audio modality."
+            )
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._current_generation.messages[item_id].modalities.set_result(
@@ -1661,7 +1741,10 @@ class RealtimeSession(
             )
 
         if fut := self._item_create_future.pop(event.item.id, None):
-            fut.set_result(None)
+            if fut.cancelled():
+                logger.error(f"item create future for `{event.item.id}` was already cancelled")
+            else:
+                fut.set_result(None)
 
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
@@ -1674,7 +1757,10 @@ class RealtimeSession(
             )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
-            fut.set_result(None)
+            if fut.cancelled():
+                logger.error(f"item delete future for `{event.item_id}` was already cancelled")
+            else:
+                fut.set_result(None)
 
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
@@ -1700,7 +1786,7 @@ class RealtimeSession(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
         logger.error(
-            "OpenAI Realtime API failed to transcribe input audio",
+            f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
         )
 
@@ -1877,14 +1963,15 @@ class RealtimeSession(
         if event.response.status == "completed":
             return
 
+        provider_label = self._realtime_model._provider_label
         if event.response.status == "failed":
             if event.response.status_details and hasattr(event.response.status_details, "error"):
                 error_type = getattr(event.response.status_details.error, "type", "unknown")
                 error_body = event.response.status_details.error
-                message = f"OpenAI Realtime API response failed with error type: {error_type}"
+                message = f"{provider_label} response failed with error type: {error_type}"
             else:
                 error_body = None
-                message = "OpenAI Realtime API response failed with unknown error"
+                message = f"{provider_label} response failed with unknown error"
             self._emit_error(
                 APIError(
                     message=message,
@@ -1897,7 +1984,8 @@ class RealtimeSession(
             )
         elif event.response.status in {"cancelled", "incomplete"}:
             logger.debug(
-                "OpenAI Realtime API response done but not complete with status: %s",
+                "%s response done but not complete with status: %s",
+                provider_label,
                 event.response.status,
                 extra={
                     "event_id": event.response.id,
@@ -1911,13 +1999,14 @@ class RealtimeSession(
         if event.error.message.startswith("Cancellation failed"):
             return
 
+        provider_label = self._realtime_model._provider_label
         logger.error(
-            "OpenAI Realtime API returned an error",
+            f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
         self._emit_error(
             APIError(
-                message="OpenAI Realtime API returned an error",
+                message=f"{provider_label} returned an error",
                 body=event.error,
                 retryable=True,
             ),

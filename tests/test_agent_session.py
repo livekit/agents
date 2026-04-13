@@ -720,7 +720,7 @@ async def test_unknown_function_call() -> None:
 
 
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.5
+    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.

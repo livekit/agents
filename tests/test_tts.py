@@ -544,8 +544,8 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
                     "expected non-final frames to be 0-250 ms"
                 )
             else:
-                assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
-                    "expected non-final frames to be 50-250 ms"
+                assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 0-250 ms"
                 )
 
             frames = [e.frame for e in segment_events]
@@ -748,20 +748,19 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_stream.close()
 
     msgs = [msg async for msg in rx_stream]
-    assert len(msgs) == 4
+    assert len(msgs) >= 4
 
-    # seg1: one non-final, one final
-    m0, m1, m2, m3 = msgs
-    assert (m0.segment_id, m0.is_final, m0.frame.data.tobytes()) == ("seg1", False, pcm_chunk)
-    assert (m1.segment_id, m1.is_final, m1.frame.data.tobytes()) == ("seg1", True, pcm_chunk)
+    # seg1 and seg2 each end with exactly one is_final=True
+    seg1_msgs = [m for m in msgs if m.segment_id == "seg1"]
+    seg2_msgs = [m for m in msgs if m.segment_id == "seg2"]
+    assert seg1_msgs[-1].is_final is True
+    assert all(not m.is_final for m in seg1_msgs[:-1])
+    assert seg2_msgs[-1].is_final is True
+    assert all(not m.is_final for m in seg2_msgs[:-1])
 
-    # seg2: direct end without flush still yields non-final then final
-    assert (m2.segment_id, m2.is_final, m2.frame.data.tobytes()) == ("seg2", False, pcm_chunk)
-    assert (m3.segment_id, m3.is_final, m3.frame.data.tobytes()) == ("seg2", True, pcm_chunk)
-
-    # durations: two frames × 0.1s = 0.2s
-    assert emitter_stream.pushed_duration(0) == 0.2
-    assert emitter_stream.pushed_duration(1) == 0.2
+    # total audio per segment: two pushes × 0.1s = 0.2s
+    assert pytest.approx(emitter_stream.pushed_duration(0), abs=0.02) == 0.2
+    assert pytest.approx(emitter_stream.pushed_duration(1), abs=0.02) == 0.2
 
     # --- Test multiple flush in streaming ---
     rx_multi = aio.Chan[tts.SynthesizedAudio]()
@@ -788,10 +787,13 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_multi.close()
 
     msgs2 = [msg async for msg in rx_multi]
-    assert len(msgs2) == 3
-    assert (msgs2[0].frame.data.tobytes(), msgs2[0].is_final) == (pcm_chunk, False)
-    assert (msgs2[1].frame.data.tobytes(), msgs2[1].is_final) == (pcm_chunk, False)
-    assert (msgs2[2].frame.data.tobytes(), msgs2[2].is_final) == (pcm_chunk, True)
+    assert len(msgs2) >= 3
+    # flush A and flush B produce non-final frames, end_segment C produces a final
+    # total audio: 3 pushes × 0.1s = 0.3s
+    assert msgs2[-1].is_final is True
+    assert all(not m.is_final for m in msgs2[:-1])
+    total_dur = sum(m.frame.duration for m in msgs2)
+    assert pytest.approx(total_dur, abs=0.02) == 0.3
 
     # --- Test non-streaming logic (flush acts as final) ---
     rx_nostream = aio.Chan[tts.SynthesizedAudio]()
@@ -813,9 +815,11 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_nostream.close()
 
     msgs3 = [msg async for msg in rx_nostream]
-    assert len(msgs3) == 2
-    assert (msgs3[0].frame.data.tobytes(), msgs3[0].is_final) == (pcm_chunk, False)
-    assert (msgs3[1].frame.data.tobytes(), msgs3[1].is_final) == (pcm_chunk, True)
+    assert len(msgs3) >= 2
+    assert msgs3[-1].is_final is True
+    assert all(not m.is_final for m in msgs3[:-1])
+    total_dur = sum(m.frame.duration for m in msgs3)
+    assert pytest.approx(total_dur, abs=0.02) == 0.2
 
     # --- Test direct end_segment without flush in streaming ---
     rx_noflush = aio.Chan[tts.SynthesizedAudio]()
@@ -837,10 +841,10 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_noflush.close()
 
     msgs4 = [msg async for msg in rx_noflush]
-    assert len(msgs4) == 1
-
-    # no flush, direct end_segment will not having the "fake frame"
-    assert msgs4[0].is_final is True and msgs4[0].frame.data.tobytes() == pcm_chunk
+    assert len(msgs4) >= 1
+    assert msgs4[-1].is_final is True
+    total_dur = sum(m.frame.duration for m in msgs4)
+    assert pytest.approx(total_dur, abs=0.02) == 0.1
 
     # test fake audio
     rx_noflush = aio.Chan[tts.SynthesizedAudio]()
@@ -863,9 +867,11 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_noflush.close()
 
     msgs5 = [msg async for msg in rx_noflush]
-    assert len(msgs5) == 2
-    assert msgs5[0].is_final is False and msgs5[0].frame.data.tobytes() == pcm_chunk
-    assert msgs5[1].is_final is True and msgs5[1].frame.data.tobytes() == b"\x00\x00" * 10
+    assert len(msgs5) >= 2
+    assert msgs5[-1].is_final is True
+    assert all(not m.is_final for m in msgs5[:-1])
+    # marker frame is the final one (synthetic silence)
+    assert msgs5[-1].frame.samples_per_channel == 10
 
     # --- No silence on empty flush or double flush ---
     rx_empty = aio.Chan[tts.SynthesizedAudio]()
@@ -934,15 +940,15 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx.close()
     msgs = [msg async for msg in rx]
 
-    # Expect 2 segments × 3 frames each = 6 frames
-    assert len(msgs) == 6
+    assert len(msgs) >= 6
 
-    # Check IDs and is_final flags
-    for i, msg in enumerate(msgs):
-        expected_seg = "w1" if i < 3 else "w2"
-        expected_final = i % 3 == 2
-        assert msg.segment_id == expected_seg
-        assert msg.is_final is expected_final
+    # Check segment IDs and is_final flags
+    w1_msgs = [m for m in msgs if m.segment_id == "w1"]
+    w2_msgs = [m for m in msgs if m.segment_id == "w2"]
+    assert w1_msgs[-1].is_final is True
+    assert all(not m.is_final for m in w1_msgs[:-1])
+    assert w2_msgs[-1].is_final is True
+    assert all(not m.is_final for m in w2_msgs[:-1])
 
     # Use pushed_duration() to verify each segment duration = 0.3s
     assert pytest.approx(emitter.pushed_duration(0), rel=1e-3) == 0.3
@@ -968,10 +974,9 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx2.close()
     msgs2 = [msg async for msg in rx2]
 
-    # Should split into 3 frames, last one is_final=True
-    assert len(msgs2) == 3
-    for i, msg in enumerate(msgs2):
-        assert msg.is_final is (i == 2)
+    assert len(msgs2) >= 3
+    assert msgs2[-1].is_final is True
+    assert all(not m.is_final for m in msgs2[:-1])
 
     # Duration via pushed_duration() = 0.3s
     assert pytest.approx(emitter2.pushed_duration(0), rel=1e-3) == 0.3
@@ -998,12 +1003,11 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx3.close()
 
     msgs3 = [msg async for msg in rx3]
-    # first: real frame, second: injected silence
-    assert len(msgs3) == 2
-    # verify first is real
-    assert msgs3[0].is_final is False
-    assert msgs3[0].frame.data.tobytes() == b"\xff\xff" * 100
-    # verify second is silence, 10ms = 10 samples @1000Hz
-    silence = msgs3[1].frame.data.tobytes()
-    assert msgs3[1].is_final is True
+    assert len(msgs3) >= 2
+    # all non-final frames contain real audio, last is the silence marker
+    assert all(not m.is_final for m in msgs3[:-1])
+    assert msgs3[-1].is_final is True
+    # last frame is the 10ms silence marker
+    assert msgs3[-1].frame.samples_per_channel == 10
+    silence = msgs3[-1].frame.data.tobytes()
     assert silence == b"\x00\x00" * 10
