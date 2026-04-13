@@ -21,9 +21,9 @@ from livekit.agents import Plugin
 
 from .base import EOUPlugin
 from .english import _EUORunnerEn
+from .llm_based import LLMTurnDetector
 from .multilingual import _EUORunnerMultilingual
 from .version import __version__
-from .llm_based import LLMTurnDetector
 
 __all__ = ["LLMTurnDetector", "english", "multilingual", "__version__"]
 
