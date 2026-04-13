@@ -205,6 +205,28 @@ class DumpStackTraceRequest:
         pass
 
 
+@dataclass
+class ShutdownRequestAck:
+    MSG_ID: ClassVar[int] = 10
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
+@dataclass
+class ShuttingDown:
+    MSG_ID: ClassVar[int] = 11
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -216,4 +238,6 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
+    ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
+    ShuttingDown.MSG_ID: ShuttingDown,
 }

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from livekit import api, rtc
 
 from ... import llm, stt, tts, utils, vad
-from ...job import get_job_context
+from ...job import DEFAULT_PARTICIPANT_KINDS, get_job_context
 from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...log import logger
@@ -228,10 +228,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._set_result(ToolError(f"room closed: {rtc.DisconnectReason.Name(reason)}"))
 
     def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if participant.kind not in (
-            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-            rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-        ):
+        if participant.kind not in DEFAULT_PARTICIPANT_KINDS:
             return
 
         logger.info(f"participant disconnected from caller room: {participant.identity}, closing")

@@ -252,6 +252,11 @@ ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 # The metrics are stored in a dict, since some fields may not be relevant
 # in certain context (e.g., text-only mode or when using a speech-to-speech model).
+class MetricsMetadata(TypedDict, total=False):
+    model_name: str
+    model_provider: str
+
+
 class MetricsReport(TypedDict, total=False):
     started_speaking_at: float
     stopped_speaking_at: float
@@ -291,6 +296,10 @@ class MetricsReport(TypedDict, total=False):
 
     Assistant `ChatMessage` only
     """
+
+    llm_metadata: MetricsMetadata
+    tts_metadata: MetricsMetadata
+    stt_metadata: MetricsMetadata
 
 
 class ChatMessage(BaseModel):
@@ -635,7 +644,11 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["google"],
+        *,
+        inject_dummy_user_message: bool = True,
+        thought_signatures: dict[str, bytes] | None = None,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload

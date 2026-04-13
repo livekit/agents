@@ -320,6 +320,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         async_context_id = str(uuid.uuid4())
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),
