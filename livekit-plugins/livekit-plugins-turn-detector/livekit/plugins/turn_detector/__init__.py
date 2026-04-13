@@ -23,8 +23,9 @@ from .base import EOUPlugin
 from .english import _EUORunnerEn
 from .multilingual import _EUORunnerMultilingual
 from .version import __version__
+from .llm_based import LLMTurnDetector
 
-__all__ = ["english", "multilingual", "__version__"]
+__all__ = ["LLMTurnDetector", "english", "multilingual", "__version__"]
 
 Plugin.register_plugin(EOUPlugin(_EUORunnerEn))
 Plugin.register_plugin(EOUPlugin(_EUORunnerMultilingual))
