@@ -83,9 +83,7 @@ class LLMTurnDetector:
                 timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning(
-                "LLMTurnDetector: classifier timed out after %.2fs", effective_timeout
-            )
+            logger.warning("LLMTurnDetector: classifier timed out after %.2fs", effective_timeout)
             return _NEUTRAL_PROBABILITY
         except Exception:
             logger.warning("LLMTurnDetector: classifier call failed", exc_info=True)
