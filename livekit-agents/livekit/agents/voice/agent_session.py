@@ -121,6 +121,34 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
     return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
+class PreemptiveGenerationOptions(TypedDict, total=False):
+    """Configuration for preemptive generation."""
+
+    max_speech_duration: float
+    """Maximum user speech duration (s) for which preemptive generation
+    is attempted. Beyond this threshold, preemptive generation is skipped
+    since long utterances are more likely to change and users may expect
+    slower responses. Defaults to ``10.0``."""
+
+    max_retries: int
+    """Maximum number of preemptive generation attempts per user turn.
+    The counter resets when the turn completes. Defaults to ``3``."""
+
+
+_PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
+    "max_speech_duration": 10.0,
+    "max_retries": 3,
+}
+
+
+def _resolve_preemptive_generation(
+    config: bool | PreemptiveGenerationOptions,
+) -> PreemptiveGenerationOptions | None:
+    if isinstance(config, bool):
+        return PreemptiveGenerationOptions(**_PREEMPTIVE_GENERATION_DEFAULTS) if config else None
+    return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
+
+
 @dataclass
 class SessionConnectOptions:
     stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -135,7 +163,7 @@ class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
     max_tool_steps: int
     user_away_timeout: float | None
-    preemptive_generation: bool
+    preemptive_generation: PreemptiveGenerationOptions | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -226,7 +254,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        preemptive_generation: bool = True,
+        preemptive_generation: bool | PreemptiveGenerationOptions = True,
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
@@ -292,12 +320,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
-            preemptive_generation (bool):
+            preemptive_generation (bool | PreemptiveGenerationOptions):
                 Whether to speculatively begin LLM and TTS requests before an end-of-turn is
                 detected. When True, the agent sends inference calls as soon as a user
                 transcript is received rather than waiting for a definitive turn boundary. This
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
+                Pass a ``PreemptiveGenerationOptions`` dict for fine-grained control
+                (e.g. ``{"max_speech_duration": 5.0}``).
                 Defaults to ``True``.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
@@ -358,7 +388,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
-            preemptive_generation=preemptive_generation,
+            preemptive_generation=_resolve_preemptive_generation(preemptive_generation),
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms

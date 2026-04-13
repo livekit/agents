@@ -162,6 +162,7 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        self._preemptive_generation_count: int = 0
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
@@ -1769,8 +1770,9 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
+        preemptive_opts = self._session.options.preemptive_generation
         if (
-            not self._session.options.preemptive_generation
+            not preemptive_opts
             or self._scheduling_paused
             or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
@@ -1779,6 +1781,17 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._cancel_preemptive_generation()
+
+        if (
+            info.started_speaking_at is not None
+            and time.time() - info.started_speaking_at > preemptive_opts["max_speech_duration"]
+        ):
+            return
+
+        if self._preemptive_generation_count >= preemptive_opts["max_retries"]:
+            return
+
+        self._preemptive_generation_count += 1
 
         user_message = llm.ChatMessage(
             role="user",
@@ -1860,6 +1873,8 @@ class AgentActivity(RecognitionHooks):
             # In practice this is OK because most speeches will be interrupted if a new turn
             # is detected. So the previous execution should complete quickly.
             await old_task
+
+        self._preemptive_generation_count = 0
 
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled

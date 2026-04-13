@@ -92,6 +92,7 @@ from .voice import (
     room_io,
     text_transforms,
 )
+from .voice.agent_session import PreemptiveGenerationOptions
 from .voice.amd import (
     AMD,
     AMDCategory,
@@ -231,6 +232,7 @@ __all__ = [
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
+    "PreemptiveGenerationOptions",
 ]
 
 # Cleanup docs of unexported modules
