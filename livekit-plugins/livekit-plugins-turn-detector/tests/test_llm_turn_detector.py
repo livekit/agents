@@ -117,3 +117,27 @@ async def test_predict_returns_low_probability_when_llm_says_zero():
     det = LLMTurnDetector(llm=fake)
     prob = await det.predict_end_of_turn(_ctx_with_user("so i was thinking that"))
     assert prob == pytest.approx(0.05)
+
+
+@pytest.mark.asyncio
+async def test_predict_tolerates_whitespace_around_token():
+    fake = _QueuedLLM([_Behavior(content=" 1 \n")])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("done speaking"))
+    assert prob == pytest.approx(0.95)
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_neutral_on_garbage():
+    fake = _QueuedLLM([_Behavior(content="yes definitely")])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("finished"))
+    assert prob == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_neutral_on_empty_response():
+    fake = _QueuedLLM([_Behavior(content="")])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("something"))
+    assert prob == pytest.approx(0.5)
