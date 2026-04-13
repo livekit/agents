@@ -163,3 +163,23 @@ async def test_predict_swallows_llm_exception():
     det = LLMTurnDetector(llm=fake)
     prob = await det.predict_end_of_turn(_ctx_with_user("anyone there"))
     assert prob == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_complete_for_empty_ctx():
+    fake = _QueuedLLM([])  # no behaviors — should never be called
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(ChatContext.empty())
+    assert prob == pytest.approx(1.0)
+    assert fake.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_complete_when_only_assistant_messages():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="assistant", content="hello, how can I help?")
+    fake = _QueuedLLM([])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(ctx)
+    assert prob == pytest.approx(1.0)
+    assert fake.calls == 0
