@@ -149,6 +149,10 @@ dmypy.json
 # trunk
 .trunk/
 
+# Agent local metadata
+.agents/
+.serena/
+
 # Pyre type checker
 .pyre/
 
