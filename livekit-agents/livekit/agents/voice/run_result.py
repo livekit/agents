@@ -79,7 +79,16 @@ class RunResult(Generic[Run_T]):
 
     @property
     def events(self) -> list[RunEvent]:
-        """List of all recorded events generated during the run."""
+        """List of recorded events generated during the run.
+
+        This is the primary testing-facing surface for inspecting what happened in a
+        run. Events are kept in chronological order and contain typed items such as
+        message, function_call, function_call_output, and agent_handoff.
+
+        For most external consumers, `events` is the smallest honest seam to depend
+        on. It intentionally avoids exposing broader session analytics, room state,
+        transcripts, or raw audio payloads.
+        """
         return self._recorded_items
 
     @functools.cached_property
@@ -106,6 +115,11 @@ class RunResult(Generic[Run_T]):
     def final_output(self) -> Run_T:
         """
         Returns the final output of the run after completion.
+
+        `final_output` is optional and may not be present for every run shape.
+        External consumers that want a stable, minimal result surface should prefer
+        `events` first and only read `final_output` when it is naturally produced by
+        the agent under test.
 
         Raises:
             RuntimeError: If the run is not complete or no output is set.
