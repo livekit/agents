@@ -287,6 +287,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else self._noise_cancellation
         )
 
+        if isinstance(noise_cancellation, rtc.FrameProcessor):
+            self._processor = noise_cancellation
+
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
