@@ -630,6 +630,9 @@ class SpeechStream(stt.SpeechStream):
         while True:
             closing_ws = False  # reset the flag
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._report_connection_acquired(
+                    self._pool.last_acquire_time, self._pool.last_connection_reused
+                )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

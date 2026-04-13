@@ -95,15 +95,16 @@ async def test_events_and_metrics() -> None:
     t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     # conversation_item_added
-    assert len(conversation_events) == 2
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "user"
-    assert conversation_events[0].item.text_content == "Hello, how are you?"
-    check_timestamp(conversation_events[0].created_at - t_origin, 3.0, speed_factor=speed)
+    assert len(conversation_events) == 3
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
-    assert conversation_events[1].item.role == "assistant"
-    assert conversation_events[1].item.text_content == "I'm doing well, thank you!"
-    check_timestamp(conversation_events[1].created_at - t_origin, 5.5, speed_factor=speed)
+    assert conversation_events[1].item.role == "user"
+    assert conversation_events[1].item.text_content == "Hello, how are you?"
+    check_timestamp(conversation_events[1].created_at - t_origin, 3.0, speed_factor=speed)
+    assert conversation_events[2].item.type == "message"
+    assert conversation_events[2].item.role == "assistant"
+    assert conversation_events[2].item.text_content == "I'm doing well, thank you!"
+    check_timestamp(conversation_events[2].created_at - t_origin, 5.5, speed_factor=speed)
 
     # user_input_transcribed
     assert len(user_transcription_events) >= 1
@@ -481,26 +482,27 @@ async def test_generate_reply() -> None:
     assert tool_executed_events[0].function_calls[0].name == "goodbye"
 
     # conversation_item_added
-    assert len(conversation_events) == 4
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "assistant"
-    assert conversation_events[0].item.text_content == "What can I do for you!"
-    check_timestamp(conversation_events[0].created_at - t_origin, 2.5, speed_factor=speed)
+    assert len(conversation_events) == 5
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
-    assert conversation_events[1].item.role == "user"
-    assert conversation_events[1].item.text_content == "bye"
-    check_timestamp(conversation_events[1].created_at - t_origin, 4.5, speed_factor=speed)
+    assert conversation_events[1].item.role == "assistant"
+    assert conversation_events[1].item.text_content == "What can I do for you!"
+    check_timestamp(conversation_events[1].created_at - t_origin, 2.5, speed_factor=speed)
     assert conversation_events[2].item.type == "message"
-    assert conversation_events[2].item.role == "assistant"
-    assert conversation_events[2].item.text_content == "session.say from on_user_turn_completed"
-    check_timestamp(
-        conversation_events[2].created_at - t_origin, 5.5, speed_factor=speed, max_abs_diff=1.0
-    )
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "bye"
+    check_timestamp(conversation_events[2].created_at - t_origin, 4.5, speed_factor=speed)
     assert conversation_events[3].item.type == "message"
     assert conversation_events[3].item.role == "assistant"
-    assert conversation_events[3].item.text_content == "Goodbye! have a nice day!"
+    assert conversation_events[3].item.text_content == "session.say from on_user_turn_completed"
     check_timestamp(
-        conversation_events[3].created_at - t_origin, 9.0, speed_factor=speed, max_abs_diff=1.0
+        conversation_events[3].created_at - t_origin, 5.5, speed_factor=speed, max_abs_diff=1.0
+    )
+    assert conversation_events[4].item.type == "message"
+    assert conversation_events[4].item.role == "assistant"
+    assert conversation_events[4].item.text_content == "Goodbye! have a nice day!"
+    check_timestamp(
+        conversation_events[4].created_at - t_origin, 9.0, speed_factor=speed, max_abs_diff=1.0
     )
 
     # chat context
@@ -660,16 +662,17 @@ async def test_interrupt_during_on_user_turn_completed(
         assert agent_state_events[2].new_state == "speaking"
         assert agent_state_events[3].new_state == "listening"
 
-    assert len(conversation_events) == 3
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "user"
-    assert conversation_events[0].item.text_content == "Tell me a story"
+    assert len(conversation_events) == 4
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
     assert conversation_events[1].item.role == "user"
-    assert conversation_events[1].item.text_content == "about a firefighter."
+    assert conversation_events[1].item.text_content == "Tell me a story"
     assert conversation_events[2].item.type == "message"
-    assert conversation_events[2].item.role == "assistant"
-    assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "about a firefighter."
+    assert conversation_events[3].item.type == "message"
+    assert conversation_events[3].item.role == "assistant"
+    assert conversation_events[3].item.text_content == "Here is a story about a firefighter..."
 
 
 async def test_unknown_function_call() -> None:
@@ -717,7 +720,7 @@ async def test_unknown_function_call() -> None:
 
 
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.5
+    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.

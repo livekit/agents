@@ -438,6 +438,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            self._acquire_time = self._tts._pool.last_acquire_time
+            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

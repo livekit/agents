@@ -35,6 +35,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
+        session_end_timeout: float,
         inference_executor: inference_executor.InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
@@ -50,6 +51,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._close_timeout = close_timeout
+        self._session_end_timeout = session_end_timeout
         self._inf_executor = inference_executor
         self._initialize_timeout = initialize_timeout
         self._loop = loop
@@ -168,6 +170,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 session_end_fnc=self._session_end_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                session_end_timeout=self._session_end_timeout,
                 inference_executor=self._inf_executor,
                 ping_interval=2.5,
                 high_ping_threshold=0.5,
@@ -181,6 +184,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 session_end_fnc=self._session_end_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
+                session_end_timeout=self._session_end_timeout,
                 inference_executor=self._inf_executor,
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
