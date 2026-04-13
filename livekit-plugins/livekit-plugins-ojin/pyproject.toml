@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.5.1",
+    "livekit-agents>=1.5.2",
     "ojin-client>=0.6.3",
     "Pillow>=10.3.0",
 ]
@@ -41,3 +41,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
