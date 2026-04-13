@@ -188,3 +188,68 @@ async def test_selector_closes_previous_processor_on_track_switch() -> None:
     assert len(processors[1].credentials_calls) == 1
 
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_selector_clears_processor_when_returning_options_after_processor() -> None:
+    """When a selector returns a FrameProcessor for one track but
+    NoiseCancellationOptions for the next, self._processor must be
+    cleared to prevent stale lifecycle calls on the closed processor."""
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={})
+    results = iter([processor, nc_options])
+
+    stream = _make_audio_input_stream(room, noise_cancellation=lambda _params: next(results))
+    stream.set_participant("test-user")
+
+    track1, pub1, participant = _make_track_available_args(sid="TR_001")
+    track2, pub2, _ = _make_track_available_args(sid="TR_002")
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
+    ):
+        stream._on_track_available(track1, pub1, participant)
+
+        assert stream._processor is processor
+        assert len(processor.stream_info_calls) == 1
+
+        stream._on_track_available(track2, pub2, participant)
+
+    assert processor.close_calls == 1
+    assert stream._processor is None
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_token_refresh_does_not_hit_closed_processor_after_track_unpublish() -> None:
+    """After a track is unpublished with no replacement, _on_token_refreshed
+    must not call _on_credentials_updated on the closed processor."""
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    stream = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
+    ):
+        stream._on_track_available(track, publication, participant)
+
+    assert stream._processor is processor
+    assert len(processor.credentials_calls) == 1
+
+    stream._on_track_unavailable(publication, participant)
+
+    assert processor.close_calls == 1
+    assert stream._processor is None
+
+    room._token = "refreshed-token"
+    room._server_url = "wss://refreshed.livekit.cloud"
+    stream._on_token_refreshed()
+
+    assert len(processor.credentials_calls) == 1
+
+    await stream.aclose()
