@@ -23,7 +23,7 @@ from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 CartesiaModels = Literal[
     "cartesia",
@@ -429,6 +429,7 @@ class TTS(tts.TTS):
             base_url = base_url.replace("http", "ws", 1)
 
         headers = {
+            **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         ws = None
@@ -637,6 +638,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

@@ -66,7 +66,8 @@ class EvaluationResult:
         """True if more than half of the judgments passed."""
         if not self.judgments:
             return True
-        return self.score > len(self.judgments) / 2
+        passed_count = sum(1 for j in self.judgments.values() if j.passed)
+        return passed_count > len(self.judgments) / 2
 
     @property
     def none_failed(self) -> bool:

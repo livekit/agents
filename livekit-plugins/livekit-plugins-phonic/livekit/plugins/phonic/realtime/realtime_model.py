@@ -61,6 +61,7 @@ class _RealtimeOptions:
     audio_speed: NotGivenOr[float]
     phonic_tools: NotGivenOr[list[str]]
     boosted_keywords: NotGivenOr[list[str]]
+    min_words_to_interrupt: NotGivenOr[int]
     generate_no_input_poke_text: NotGivenOr[bool]
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
@@ -111,6 +112,7 @@ class RealtimeModel(llm.RealtimeModel):
         audio_speed: NotGivenOr[float] = NOT_GIVEN,
         phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
         boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
         generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
@@ -141,6 +143,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed: Audio playback speed multiplier.
             phonic_tools: Phonic tool names available to the assistant.
             boosted_keywords: Keywords to boost in speech recognition.
+            min_words_to_interrupt: Minimum number of user words required to interrupt the assistant.
             generate_no_input_poke_text: When True, auto-generate poke text when the user is silent.
             no_input_poke_sec: Seconds of silence before sending a poke message.
             no_input_poke_text: Custom poke message text. Ignored when
@@ -156,6 +159,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=True,
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -193,6 +197,7 @@ class RealtimeModel(llm.RealtimeModel):
             audio_speed=audio_speed,
             phonic_tools=phonic_tools,
             boosted_keywords=boosted_keywords,
+            min_words_to_interrupt=min_words_to_interrupt,
             generate_no_input_poke_text=generate_no_input_poke_text,
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
@@ -460,8 +465,14 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Phonic Realtime API, ignoring")
         payload = GenerateReplyPayload(
             system_message=instructions if is_given(instructions) else None,
         )
@@ -544,8 +555,10 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
+            t0 = time.perf_counter()
             self._socket_ctx = self._client.conversations.connect()
             self._socket = await self._socket_ctx.__aenter__()
+            self._report_connection_acquired(time.perf_counter() - t0)
 
             # Need to wait for instructions and tools before sending config
             await self._instructions_ready.wait()
@@ -581,6 +594,7 @@ class RealtimeSession(llm.RealtimeSession):
                 "audio_speed": self._opts.audio_speed,
                 "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
                 "boosted_keywords": self._opts.boosted_keywords,
+                "min_words_to_interrupt": self._opts.min_words_to_interrupt,
                 "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
                 "no_input_poke_sec": self._opts.no_input_poke_sec,
                 "no_input_poke_text": self._opts.no_input_poke_text,
