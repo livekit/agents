@@ -155,3 +155,11 @@ async def test_predict_returns_neutral_on_timeout():
 
     assert prob == pytest.approx(0.5)
     assert elapsed < 0.2, f"expected early timeout, elapsed={elapsed:.3f}"
+
+
+@pytest.mark.asyncio
+async def test_predict_swallows_llm_exception():
+    fake = _QueuedLLM([_Behavior(raise_exc=RuntimeError("provider down"))])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("anyone there"))
+    assert prob == pytest.approx(0.5)
