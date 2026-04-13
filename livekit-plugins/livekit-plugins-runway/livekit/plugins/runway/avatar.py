@@ -101,7 +101,7 @@ class AvatarSession:
             )
 
         job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
+        self._local_participant_identity = job_ctx.local_participant_identity
 
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
@@ -109,7 +109,7 @@ class AvatarSession:
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity})
             .to_jwt()
         )
 
@@ -134,6 +134,7 @@ class AvatarSession:
                 "url": livekit_url,
                 "token": livekit_token,
                 "roomName": room_name,
+                "agentIdentity": self._local_participant_identity,
             },
         }
 
