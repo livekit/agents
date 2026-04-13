@@ -160,6 +160,7 @@ class RealtimeModel(llm.RealtimeModel):
                 audio_output=True,
                 manual_function_calls=False,
                 per_response_tool_choice=False,
+                supports_say=True,
             )
         )
 
@@ -413,14 +414,10 @@ class RealtimeSession(llm.RealtimeSession):
     def say(
         self,
         text: str | AsyncIterable[str],
-        *,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._generate_reply_task and not self._generate_reply_task.done():
             self._generate_reply_task.cancel()
-        self._generate_reply_task = asyncio.create_task(
-            self._send_say(text, allow_interruptions=allow_interruptions), name="phonic-say"
-        )
+        self._generate_reply_task = asyncio.create_task(self._send_say(text), name="phonic-say")
 
         self._close_current_generation(interrupted=False)
 
@@ -460,7 +457,6 @@ class RealtimeSession(llm.RealtimeSession):
             await self._socket.send_say(
                 SayPayload(
                     text=full_text,
-                    interruptible=allow_interruptions if is_given(allow_interruptions) else None,
                 )
             )
 

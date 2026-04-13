@@ -72,6 +72,8 @@ class RealtimeCapabilities:
     """Whether the tools can be updated mid-session"""
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
+    supports_say: bool = False
+    """Whether the model supports session.say()"""
 
 
 class RealtimeError(Exception):
@@ -278,8 +280,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def say(
         self,
         text: str | AsyncIterable[str],
-        *,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
         raise NotImplementedError(
             f"{type(self).__name__} does not implement say(). use a TTS model instead"

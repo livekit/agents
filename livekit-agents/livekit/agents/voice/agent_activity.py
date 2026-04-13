@@ -1040,7 +1040,7 @@ class AgentActivity(RecognitionHooks):
         if (
             not is_given(audio)
             and not self.tts
-            and self._rt_session is None
+            and not (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
             and self._session.output.audio
             and self._session.output.audio_enabled
         ):
@@ -1062,8 +1062,8 @@ class AgentActivity(RecognitionHooks):
         )
 
         if self._rt_session is not None and not is_given(audio) and not self.tts:
-            task = self._create_speech_task(
-                self._realtime_say_task(
+            self._create_speech_task(
+                self._realtime_reply_task(
                     speech_handle=handle,
                     text=text,
                     model_settings=ModelSettings(),
@@ -1083,8 +1083,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=handle,
                 name="AgentActivity.tts_say",
             )
-
-        task.add_done_callback(self._on_pipeline_reply_done)
+            task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -2742,47 +2741,6 @@ class AgentActivity(RecognitionHooks):
                 self._session._tool_items_added(tool_messages)
 
     @utils.log_exceptions(logger=logger)
-    async def _realtime_say_task(
-        self,
-        *,
-        speech_handle: SpeechHandle,
-        text: str | AsyncIterable[str],
-        model_settings: ModelSettings,
-    ) -> None:
-        assert self._rt_session is not None, "rt_session is not available"
-
-        authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
-        ]
-        if speech_handle.allow_interruptions:
-            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
-        await speech_handle.wait_if_not_interrupted(authorization_tasks)
-        if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*authorization_tasks)
-            return
-
-        try:
-            generation_ev = await self._rt_session.say(
-                text, allow_interruptions=speech_handle.allow_interruptions
-            )
-        except NotImplementedError:
-            logger.error(
-                "say() is not implemented for %s; use a TTS model instead",
-                self._rt_session.realtime_model.provider,
-            )
-            return
-        except llm.RealtimeError as e:
-            logger.error("failed to say text: %s", str(e))
-            self._session._update_agent_state("listening")
-            return
-
-        await self._realtime_generation_task(
-            speech_handle=speech_handle,
-            generation_ev=generation_ev,
-            model_settings=model_settings,
-        )
-
-    @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
         self,
         *,
@@ -2792,9 +2750,9 @@ class AgentActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
+        text: str | AsyncIterable[str] | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
-
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
@@ -2805,6 +2763,20 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
+
+        if text is not None:
+            try:
+                generation_ev = await self._rt_session.say(text)
+            except llm.RealtimeError as e:
+                logger.error("failed to say text: %s", str(e))
+                return
+
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+            return
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
