@@ -183,3 +183,46 @@ async def test_predict_returns_complete_when_only_assistant_messages():
     prob = await det.predict_end_of_turn(ctx)
     assert prob == pytest.approx(1.0)
     assert fake.calls == 0
+
+
+class _CapturingLLM(_QueuedLLM):
+    def __init__(self, behaviors: list[_Behavior]) -> None:
+        super().__init__(behaviors)
+        self.captured_ctx: ChatContext | None = None
+
+    def chat(
+        self,
+        *,
+        chat_ctx,
+        tools=None,
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls=None,
+        tool_choice=None,
+        extra_kwargs=None,
+    ):
+        self.captured_ctx = chat_ctx
+        return super().chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_trims_history_to_max_history_turns():
+    ctx = ChatContext.empty()
+    for i in range(10):
+        role = "user" if i % 2 == 0 else "assistant"
+        ctx.add_message(role=role, content=f"turn-{i}")
+
+    fake = _CapturingLLM([_Behavior(content="1")])
+    det = LLMTurnDetector(llm=fake, max_history_turns=3)
+    await det.predict_end_of_turn(ctx)
+
+    assert fake.captured_ctx is not None
+    rendered = fake.captured_ctx.messages()[-1].text_content or ""
+    # last 3 turns are turn-7 (assistant), turn-8 (user), turn-9 (assistant)
+    assert "turn-7" in rendered
+    assert "turn-8" in rendered
+    assert "turn-9" in rendered
+    assert "turn-6" not in rendered
