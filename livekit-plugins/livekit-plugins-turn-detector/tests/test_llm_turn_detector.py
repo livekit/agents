@@ -100,3 +100,20 @@ async def test_supports_language_always_true():
 async def test_unlikely_threshold_returns_ctor_value():
     det = LLMTurnDetector(llm=_QueuedLLM([]), unlikely_threshold=0.7)
     assert await det.unlikely_threshold(None) == 0.7
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_high_probability_when_llm_says_one():
+    fake = _QueuedLLM([_Behavior(content="1")])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("the meeting is at three"))
+    assert prob == pytest.approx(0.95)
+    assert fake.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_low_probability_when_llm_says_zero():
+    fake = _QueuedLLM([_Behavior(content="0")])
+    det = LLMTurnDetector(llm=fake)
+    prob = await det.predict_end_of_turn(_ctx_with_user("so i was thinking that"))
+    assert prob == pytest.approx(0.05)
