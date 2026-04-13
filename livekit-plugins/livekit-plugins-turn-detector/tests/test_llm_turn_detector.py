@@ -226,3 +226,16 @@ async def test_prompt_trims_history_to_max_history_turns():
     assert "turn-8" in rendered
     assert "turn-9" in rendered
     assert "turn-6" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_custom_instructions_replace_default_system_prompt():
+    custom = "Custom classifier instructions for domain X."
+    fake = _CapturingLLM([_Behavior(content="1")])
+    det = LLMTurnDetector(llm=fake, instructions=custom)
+    await det.predict_end_of_turn(_ctx_with_user("sample"))
+
+    assert fake.captured_ctx is not None
+    system_msg = fake.captured_ctx.messages()[0]
+    assert system_msg.role == "system"
+    assert system_msg.text_content == custom
