@@ -141,3 +141,17 @@ async def test_predict_returns_neutral_on_empty_response():
     det = LLMTurnDetector(llm=fake)
     prob = await det.predict_end_of_turn(_ctx_with_user("something"))
     assert prob == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_predict_returns_neutral_on_timeout():
+    # LLM sleeps 0.5s, but timeout is 0.05s
+    fake = _QueuedLLM([_Behavior(content="1", sleep=0.5)])
+    det = LLMTurnDetector(llm=fake, timeout=0.05)
+
+    start = asyncio.get_event_loop().time()
+    prob = await det.predict_end_of_turn(_ctx_with_user("hello there"))
+    elapsed = asyncio.get_event_loop().time() - start
+
+    assert prob == pytest.approx(0.5)
+    assert elapsed < 0.2, f"expected early timeout, elapsed={elapsed:.3f}"
