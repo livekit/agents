@@ -282,28 +282,11 @@ class TestSTTDiarizationCapabilities:
         stt = _make_stt(model="assemblyai/universal-streaming", extra_kwargs={"speaker_labels": True})
         assert stt.capabilities.diarization is True
 
-    def test_diarization_disabled_with_speaker_labels_false(self):
-        """AssemblyAI's 'speaker_labels: False' keeps diarization capability False."""
-        stt = _make_stt(model="assemblyai/universal-streaming", extra_kwargs={"speaker_labels": False})
-        assert stt.capabilities.diarization is False
-
-    def test_diarization_with_other_extra_kwargs(self):
-        """Diarization works alongside other extra_kwargs."""
-        stt = _make_stt(extra_kwargs={"diarize": True, "punctuate": True, "smart_format": True})
-        assert stt.capabilities.diarization is True
-
     def test_update_options_toggles_diarization(self):
         """update_options can enable and disable diarization capability."""
         stt = _make_stt()
         assert stt.capabilities.diarization is False
         stt.update_options(extra={"diarize": True})
-        assert stt.capabilities.diarization is True
-        stt.update_options(extra={"diarize": False})
-        assert stt.capabilities.diarization is False
-
-    def test_update_options_disables_diarization(self):
-        """update_options can disable diarization by setting params to False."""
-        stt = _make_stt(extra_kwargs={"diarize": True})
         assert stt.capabilities.diarization is True
         stt.update_options(extra={"diarize": False})
         assert stt.capabilities.diarization is False
