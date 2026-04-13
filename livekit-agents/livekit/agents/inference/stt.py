@@ -70,7 +70,7 @@ class DeepgramOptions(TypedDict, total=False):
     numerals: bool
     mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
-    diarize: bool
+    diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
@@ -105,6 +105,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     language_detection: bool
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    speaker_labels: bool  # when True, enables speaker diarization (default off)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -332,10 +333,19 @@ class STT(stt.STT):
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
+        # Check extra_kwargs for diarization parameters across different providers
+        # Deepgram uses "diarize", AssemblyAI uses "speaker_labels"
+        diarization_enabled = False
+        if is_given(extra_kwargs):
+            diarization_enabled = bool(
+                extra_kwargs.get("diarize") or extra_kwargs.get("speaker_labels")
+            )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
@@ -452,6 +462,12 @@ class STT(stt.STT):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            # Update diarization capability based on extra_kwargs
+            diarization_enabled = bool(
+                self._opts.extra_kwargs.get("diarize")
+                or self._opts.extra_kwargs.get("speaker_labels")
+            )
+            self._capabilities = replace(self._capabilities, diarization=diarization_enabled)
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
@@ -689,6 +705,7 @@ class SpeechStream(stt.SpeechStream):
             end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
+            speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
@@ -696,6 +713,7 @@ class SpeechStream(stt.SpeechStream):
                     end_time=word.get("end", 0) + self.start_time_offset,
                     start_time_offset=self.start_time_offset,
                     confidence=word.get("confidence", 0.0),
+                    speaker_id=word.get("speaker_id"),
                 )
                 for word in words
             ],

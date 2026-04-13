@@ -120,6 +120,7 @@ class TimedString(str):
     confidence: NotGivenOr[float]
     start_time_offset: NotGivenOr[float]
     # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+    speaker_id: str | None
 
     def __new__(
         cls,
@@ -128,10 +129,12 @@ class TimedString(str):
         end_time: NotGivenOr[float] = NOT_GIVEN,
         confidence: NotGivenOr[float] = NOT_GIVEN,
         start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+        speaker_id: str | None = None,
     ) -> "TimedString":
         obj = super().__new__(cls, text)
         obj.start_time = start_time
         obj.end_time = end_time
         obj.confidence = confidence
         obj.start_time_offset = start_time_offset
+        obj.speaker_id = speaker_id
         return obj
