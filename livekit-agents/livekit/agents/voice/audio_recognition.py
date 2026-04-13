@@ -36,8 +36,6 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
-DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT: float = 2.0
-"""Default seconds to wait for the final transcript when committing a user turn."""
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 

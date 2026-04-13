@@ -44,7 +44,6 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
-from .audio_recognition import DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT
 from .events import (
     AgentEvent,
     AgentState,
@@ -142,7 +141,7 @@ class AgentSessionOptions:
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
     aec_warmup_duration: float | None
-    session_close_transcript_timeout: float = DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT
+    session_close_transcript_timeout: float
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -232,7 +231,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
-        session_close_transcript_timeout: float = DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT,
+        session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -308,8 +307,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Set to ``None`` to disable. Default ``3.0`` s.
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
-                Defaults to ``DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT`` (same as
-                ``commit_user_turn``'s ``transcript_timeout``).
+                Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -1220,7 +1218,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def commit_user_turn(
         self,
         *,
-        transcript_timeout: float = DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT,
+        transcript_timeout: float = 2.0,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
     ) -> asyncio.Future[str]:
@@ -1232,8 +1230,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
-                Defaults to ``DEFAULT_COMMIT_USER_TURN_TRANSCRIPT_TIMEOUT``.
-                Increase this value if the STT is slow to respond.
+                Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript.
                 Default ``2.0`` s.
