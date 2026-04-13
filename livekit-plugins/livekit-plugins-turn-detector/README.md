@@ -44,6 +44,34 @@ session = AgentSession(
 )
 ```
 
+### LLM-based detector
+
+`LLMTurnDetector` is an additional turn-detection option that delegates the
+classification call to any `livekit.agents.llm.LLM` instance. It plugs into the
+same `turn_detection=` slot as the ONNX models above.
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import openai
+from livekit.plugins.turn_detector import LLMTurnDetector
+
+session = AgentSession(
+    ...
+    turn_detection=LLMTurnDetector(llm=openai.LLM(model="gpt-4o-mini")),
+)
+```
+
+Configuration:
+
+- `instructions`: override the default classification prompt (e.g., for
+  domain-specific tuning).
+- `unlikely_threshold` (default `0.5`): probability below which endpointing
+  treats the turn as likely-incomplete and waits longer.
+- `timeout` (default `1.5`): hard cap on the classifier call; on timeout the
+  detector returns a neutral probability rather than blocking the agent.
+- `max_history_turns` (default `6`): how many trailing chat messages are
+  included in the classifier prompt.
+
 ## Running your agent
 
 This plugin requires model files. Before starting your agent for the first time, or when building Docker images for deployment, run the following command to download the model files:
@@ -69,47 +97,3 @@ The model requires <500MB of RAM and runs within a shared inference server, supp
 The plugin source code is licensed under the Apache-2.0 license.
 
 The end-of-turn model is licensed under the [LiveKit Model License](https://huggingface.co/livekit/turn-detector/blob/main/LICENSE).
-
-## LLM-based turn detection (opt-in)
-
-`LLMTurnDetector` is an alternative to the ONNX EOU model that uses any
-`livekit.agents.llm.LLM` to classify turn completion. Useful when you already
-pay for an LLM in the same conversation loop, want multilingual coverage
-without a language table, or need semantic reasoning over the full context.
-
-### Usage
-
-```python
-from livekit.agents import AgentSession
-from livekit.plugins import openai
-from livekit.plugins.turn_detector import LLMTurnDetector
-
-session = AgentSession(
-    turn_detection=LLMTurnDetector(llm=openai.LLM(model="gpt-4o-mini")),
-    # ... STT, TTS, LLM, etc.
-)
-```
-
-### Tradeoffs vs the ONNX EOU model
-
-| Dimension         | ONNX EOU                      | `LLMTurnDetector`             |
-|-------------------|-------------------------------|-------------------------------|
-| Cost per turn     | Free after download           | Paid LLM call                 |
-| Latency           | ~10–50 ms CPU                 | 200–800 ms typical            |
-| Setup             | Model download step           | Drop in any `llm.LLM`         |
-| Language coverage | Fixed language table          | Whatever your LLM supports    |
-| Reasoning quality | Classifier-only               | Full LLM semantics            |
-
-The ONNX detector remains the default for most deployments. Reach for
-`LLMTurnDetector` when its tradeoffs match your workload.
-
-### Configuration
-
-- `instructions`: override the default classification prompt (e.g., for
-  non-English voice apps or domain-specific tuning).
-- `unlikely_threshold` (default `0.5`): probability below which endpointing
-  treats the turn as likely-incomplete and waits longer.
-- `timeout` (default `1.5`): hard cap on the classifier call; on timeout the
-  detector returns a neutral probability rather than blocking the agent.
-- `max_history_turns` (default `6`): how many trailing chat messages are
-  included in the classifier prompt.
