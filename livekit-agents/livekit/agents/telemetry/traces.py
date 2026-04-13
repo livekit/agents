@@ -281,6 +281,11 @@ def _setup_cloud_tracer(
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
     role_to_event = {
         "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        # OpenAI's `developer` role is the successor to `system` on the
+        # Chat Completions API and carries equivalent instructional content,
+        # so surface it as the system-message span event rather than dropping
+        # it on the floor.
+        "developer": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
         "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
         "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
     }

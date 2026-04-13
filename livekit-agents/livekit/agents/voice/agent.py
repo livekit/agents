@@ -483,7 +483,7 @@ class Agent:
 
         extra_state: dict[str, Any] = {}
         if self._setup_fnc is not None:
-            import cloudpickle
+            import cloudpickle  # type: ignore
 
             try:
                 extra_state["__setup_fnc"] = cloudpickle.dumps(self._setup_fnc)
@@ -982,7 +982,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # fallback to switch to the old agent when the AgentTask is rehydrated without being awaited
             self._update_agent_task = asyncio.create_task(
                 self.__switch_to_old_agent(
-                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+                    old_agent=self._old_agent,
+                    session=self.session,
+                    suspended_handles=[speech_handle] if speech_handle else None,
                 )
             )
             if run_state:
@@ -1009,7 +1011,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 return await asyncio.shield(self.__fut)
             finally:
                 await self.__switch_to_old_agent(
-                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+                    old_agent=self._old_agent,
+                    session=self.session,
+                    suspended_handles=[speech_handle] if speech_handle else None,
                 )
                 self.__inactive_ev.set()
 
@@ -1079,9 +1083,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         self.__inactive_ev.clear()
+        suspended_handles: list[SpeechHandle | asyncio.Task[Any]] = []
+        pending_on_enter_task: asyncio.Task[None] | None = None
         try:
+            # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
+            # AgentTasks that require user input, but session.run() can't return until
+            # all watched handles complete — creating a circular wait.
             await session._update_activity(
-                self, previous_activity="pause", blocked_tasks=blocked_tasks
+                self, previous_activity="pause", blocked_tasks=blocked_tasks, wait_on_enter=False
             )
 
             if not self._activity and not self.done():
@@ -1091,14 +1100,29 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     )
                 )
 
-            # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
             run_state = session._global_run_state
-            if speech_handle and run_state and not run_state.done():
-                # make sure to not deadlock on the current speech handle
-                run_state._unwatch_handle(speech_handle)
-                # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
-                # so handles added inside the on_enter will make sure we're not completing the run_state too early.
-                run_state._mark_done_if_needed(None)
+
+            if self._activity and (on_enter_task := self._activity._on_enter_task):
+                if run_state and not run_state.done():
+                    # watch the on_enter task as a guard so RunResult won't complete
+                    # before on_enter has registered its own speech handles
+                    run_state._watch_handle(on_enter_task)
+                    pending_on_enter_task = on_enter_task
+                else:
+                    # no active run to guard — just wait for on_enter directly
+                    await asyncio.shield(on_enter_task)
+
+            # now unwatch the parent speech handle and blocked tasks that belong to the
+            # old activity — they can't complete while this AgentTask is running, and
+            # keeping them watched would block RunResult from completing.
+            if run_state and not run_state.done():
+                if speech_handle and run_state._unwatch_handle(speech_handle):
+                    suspended_handles.append(speech_handle)
+                for task in blocked_tasks:
+                    if run_state._unwatch_handle(task):
+                        suspended_handles.append(task)
+                if suspended_handles:
+                    run_state._mark_done_if_needed(None)
         except Exception:
             self.__inactive_ev.set()
             raise
@@ -1108,7 +1132,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         finally:
             await self.__switch_to_old_agent(
-                old_agent=self._old_agent, session=session, speech_handle=speech_handle
+                old_agent=self._old_agent,
+                session=session,
+                suspended_handles=suspended_handles,
+                pending_on_enter_task=pending_on_enter_task,
             )
             if speech_handle:
                 with contextlib.suppress(RuntimeError):
@@ -1116,10 +1143,27 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self.__inactive_ev.set()
 
     async def __switch_to_old_agent(
-        self, *, old_agent: Agent, session: AgentSession, speech_handle: SpeechHandle | None
+        self,
+        *,
+        old_agent: Agent,
+        session: AgentSession,
+        suspended_handles: list[SpeechHandle | asyncio.Task[Any]] | None,
+        pending_on_enter_task: asyncio.Task[None] | None = None,
     ) -> None:
         # run_state could have changed after self.__fut
         run_state = session._global_run_state
+
+        # re-watch the suspended handles so the resumed parent activity
+        # is tracked by the current RunResult again
+        if run_state and not run_state.done() and suspended_handles:
+            for handle in suspended_handles:
+                run_state._watch_handle(handle)
+
+        if pending_on_enter_task:
+            try:
+                await asyncio.shield(pending_on_enter_task)
+            except BaseException:
+                logger.exception("error in on_enter task of agent %s", self.id)
 
         if session.current_agent != self:
             logger.warning(
@@ -1129,9 +1173,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             if old_agent._activity:
                 await old_agent._activity.aclose()
         else:
-            if speech_handle and run_state and not run_state.done():
-                run_state._watch_handle(speech_handle)
-
             merged_chat_ctx = old_agent.chat_ctx.merge(
                 self.chat_ctx,
                 exclude_function_call=True,

@@ -107,20 +107,26 @@ class FrontDeskAgent(Agent):
             )
         except SlotUnavailableError:
             ctx.userdata.slot_unavailable_count += 1
-            get_job_context().tagger.add(
-                "slot:unavailable",
-                metadata={"count": ctx.userdata.slot_unavailable_count},
-            )
+            try:
+                get_job_context().tagger.add(
+                    "slot:unavailable",
+                    metadata={"count": ctx.userdata.slot_unavailable_count},
+                )
+            except RuntimeError:
+                pass
             # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
         local = slot.start_time.astimezone(self.tz)
         ctx.userdata.booked_times.append(local.isoformat())
-        get_job_context().tagger.add(
-            "appointment:booked",
-            metadata={"time": ctx.userdata.booked_times},
-        )
+        try:
+            get_job_context().tagger.add(
+                "appointment:booked",
+                metadata={"time": ctx.userdata.booked_times},
+            )
+        except RuntimeError:
+            pass
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
     @function_tool
