@@ -1,12 +1,16 @@
 import os
 
 from opentelemetry import metrics as metrics_api
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 import prometheus_client
 import psutil
 
 from .. import utils
 
-_meter = metrics_api.get_meter("livekit-server")
+_meter = metrics_api.get_meter("livekit-agent-server")
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -56,6 +60,22 @@ class _AgentServerMetricsState:
 
 
 _agent_server_metrics_state = _AgentServerMetricsState()
+
+
+def setup_worker_observability_metrics() -> None:
+    current_meter_provider = metrics_api.get_meter_provider()
+    if isinstance(current_meter_provider, SdkMeterProvider):
+        return
+
+    metric_exporter = OTLPMetricExporter()
+    reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+    meter_provider = SdkMeterProvider(
+        resource=Resource.create(
+            {SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "livekit-agent-server")}
+        ),
+        metric_readers=[reader],
+    )
+    metrics_api.set_meter_provider(meter_provider)
 
 
 def _node_attrs() -> dict[str, str]:
