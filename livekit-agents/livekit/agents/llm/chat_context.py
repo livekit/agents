@@ -26,6 +26,7 @@ from livekit import rtc
 
 from .. import utils
 from ..log import logger
+from ..metrics.base import HandoffMetrics
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
@@ -361,6 +362,7 @@ class AgentHandoff(BaseModel):
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
     old_agent_id: str | None = None
     new_agent_id: str
+    metrics: HandoffMetrics | None = None
     created_at: float = Field(default_factory=time.time)
 
 

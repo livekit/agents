@@ -1,6 +1,7 @@
 from .base import (
     AgentMetrics,
     EOUMetrics,
+    HandoffMetrics,
     InterruptionMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
@@ -29,6 +30,7 @@ __all__ = [
     "TTSMetrics",
     "RealtimeModelMetrics",
     "InterruptionMetrics",
+    "HandoffMetrics",
     # New model usage classes
     "LLMModelUsage",
     "TTSModelUsage",

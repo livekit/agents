@@ -181,6 +181,26 @@ class InterruptionMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class HandoffMetrics(_BaseMetrics):
+    type: Literal["handoff_metrics"] = "handoff_metrics"
+    timestamp: float
+    """The timestamp when the handoff started."""
+    duration: float
+    """Total handoff duration in seconds (drain + close/pause + start/resume)."""
+    drain_duration: float
+    """Time in seconds to drain the old activity (on_exit + pending speech tasks)."""
+    new_activity_duration: float
+    """Time in seconds to start or resume the new activity."""
+    on_enter_duration: float
+    """Time in seconds for the new agent's on_enter callback to complete."""
+    stt_reused: bool = False
+    """Whether the STT pipeline was reused from the previous agent."""
+    realtime_session_reused: bool = False
+    """Whether the realtime session was reused from the previous agent."""
+    old_agent_id: str | None = None
+    new_agent_id: str | None = None
+
+
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
@@ -189,4 +209,5 @@ AgentMetrics = (
     | EOUMetrics
     | RealtimeModelMetrics
     | InterruptionMetrics
+    | HandoffMetrics
 )

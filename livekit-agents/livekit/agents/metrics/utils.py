@@ -6,6 +6,7 @@ from ..log import logger as default_logger
 from .base import (
     AgentMetrics,
     EOUMetrics,
+    HandoffMetrics,
     InterruptionMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
@@ -19,7 +20,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
         logger = default_logger
 
     metadata: dict[str, str | float] = {}
-    if metrics.metadata:
+    if hasattr(metrics, "metadata") and metrics.metadata:
         metadata |= {
             "model_name": metrics.metadata.model_name or "unknown",
             "model_provider": metrics.metadata.model_provider or "unknown",
@@ -102,5 +103,20 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "num_interruptions": metrics.num_interruptions,
                 "num_backchannels": metrics.num_backchannels,
                 "num_requests": metrics.num_requests,
+            },
+        )
+    elif isinstance(metrics, HandoffMetrics):
+        logger.info(
+            "Handoff metrics",
+            extra=metadata
+            | {
+                "duration": round(metrics.duration, 3),
+                "drain_duration": round(metrics.drain_duration, 3),
+                "new_activity_duration": round(metrics.new_activity_duration, 3),
+                "on_enter_duration": round(metrics.on_enter_duration, 3),
+                "stt_reused": metrics.stt_reused,
+                "realtime_session_reused": metrics.realtime_session_reused,
+                "old_agent_id": metrics.old_agent_id,
+                "new_agent_id": metrics.new_agent_id,
             },
         )

@@ -29,7 +29,7 @@ from ..job import get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import AgentSessionUsage, ModelUsageCollector
+from ..metrics import AgentSessionUsage, HandoffMetrics, ModelUsageCollector
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -52,6 +52,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    MetricsCollectedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -1277,6 +1278,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         blocked_tasks: list[asyncio.Task] | None = None,
         wait_on_enter: bool = True,
     ) -> None:
+        handoff_start = time.monotonic()
+        drain_duration = 0.0
+        new_activity_duration = 0.0
+        stt_reused = False
+        rt_session_reused = False
+
         async with self._activity_lock:
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
@@ -1305,6 +1312,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             try:
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
+                    drain_start = time.monotonic()
                     if previous_activity == "close":
                         reuse_resources = await activity.drain(new_activity=self._next_activity)
                         await activity.aclose()
@@ -1312,6 +1320,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         reuse_resources = await activity.pause(
                             blocked_tasks=blocked_tasks or [], new_activity=self._next_activity
                         )
+                    drain_duration = time.monotonic() - drain_start
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
@@ -1328,6 +1337,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
+                stt_reused = (
+                    reuse_resources is not None and reuse_resources.stt_pipeline is not None
+                )
+                rt_session_reused = (
+                    reuse_resources is not None and reuse_resources.rt_session is not None
+                )
+
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
                     old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
@@ -1342,10 +1358,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._chat_ctx.insert(handoff_item)
                 self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
 
+                new_activity_start = time.monotonic()
                 if new_activity == "start":
                     await self._activity.start(reuse_resources=reuse_resources)
                 elif new_activity == "resume":
                     await self._activity.resume(reuse_resources=reuse_resources)
+                new_activity_duration = time.monotonic() - new_activity_start
             except BaseException:
                 if reuse_resources is not None:
                     await reuse_resources.cleanup()
@@ -1353,8 +1371,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
+            on_enter_start = time.monotonic()
             assert self._activity._on_enter_task is not None
             await asyncio.shield(self._activity._on_enter_task)
+            on_enter_duration = time.monotonic() - on_enter_start
+        else:
+            on_enter_duration = 0
+
+        total_duration = time.monotonic() - handoff_start
+
+        handoff_metrics = HandoffMetrics(
+            timestamp=time.time(),
+            duration=total_duration,
+            drain_duration=drain_duration,
+            new_activity_duration=new_activity_duration,
+            on_enter_duration=on_enter_duration,
+            stt_reused=stt_reused,
+            realtime_session_reused=rt_session_reused,
+            old_agent_id=handoff_item.old_agent_id,
+            new_agent_id=handoff_item.new_agent_id,
+        )
+        handoff_item.metrics = handoff_metrics
+        self.emit("metrics_collected", MetricsCollectedEvent(metrics=handoff_metrics))
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(
