@@ -141,6 +141,7 @@ class AgentSessionOptions:
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
     aec_warmup_duration: float | None
+    session_close_transcript_timeout: float
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -230,6 +231,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -303,6 +305,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
                 Set to ``None`` to disable. Default ``3.0`` s.
+            session_close_transcript_timeout (float, optional): Seconds to wait for the
+                final STT transcript when closing the session (after audio is detached).
+                Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -370,6 +375,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(use_tts_aligned_transcript)
             else None,
             aec_warmup_duration=aec_warmup_duration,
+            session_close_transcript_timeout=session_close_transcript_timeout,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -944,7 +950,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
+                    audio_recognition.commit_user_turn(
+                        audio_detached=True,
+                        transcript_timeout=self._opts.session_close_transcript_timeout,
+                    )
 
                 await activity.aclose()
             self._activity = None
@@ -1215,9 +1224,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
-                Increase this value if the STT is slow to respond.
+                Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
                 to flush the buffer and generate the final transcript.
+                Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
