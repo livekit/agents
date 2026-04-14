@@ -24,6 +24,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     APITimeoutError,
     LanguageCode,
     create_api_error_from_http,
@@ -61,7 +62,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model: TTSModels | str = "lightning-v3.1",
-        voice_id: str = "emily",
+        voice_id: str = "sophia",
         sample_rate: int = 24000,
         speed: float = 1.0,
         consistency: float = 0.5,
@@ -207,7 +208,9 @@ class ChunkedStream(tts.ChunkedStream):
                 json=data,
                 timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
             ) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise create_api_error_from_http(body, status=resp.status)
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -225,6 +228,8 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from None
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 

@@ -429,8 +429,13 @@ class SpeechStream(stt.SpeechStream):
             "sample_rate": self._opts.sample_rate,
             "word_timestamps": str(self._opts.word_timestamps).lower(),
             "diarize": str(self._opts.diarize).lower(),
-            "eou_timeout_ms": self._opts.eou_timeout_ms,
         }
+        # Only send eou_timeout_ms when explicitly set (non-zero).
+        # When 0, omit the parameter and let the server use its default,
+        # which avoids adding server-side silence latency on top of LiveKit's
+        # own end-of-turn detection.
+        if self._opts.eou_timeout_ms > 0:
+            params["eou_timeout_ms"] = self._opts.eou_timeout_ms
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             + f"/{self._opts.model}/get_text"
