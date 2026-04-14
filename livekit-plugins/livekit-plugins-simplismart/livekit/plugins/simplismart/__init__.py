@@ -22,10 +22,10 @@ For API access, visit https://simplismart.ai/
 """
 
 from .stt import STT
-from .tts import TTS
+from .tts import TTS, QwenTTSOptions, SimplismartTTSOptions
 from .version import __version__
 
-__all__ = ["STT", "TTS", "__version__"]
+__all__ = ["STT", "TTS", "QwenTTSOptions", "SimplismartTTSOptions", "__version__"]
 
 
 from livekit.agents import Plugin
