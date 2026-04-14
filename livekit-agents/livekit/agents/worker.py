@@ -34,6 +34,20 @@ import aiohttp
 import jwt
 from aiohttp import web
 from google.protobuf.json_format import MessageToDict
+from opentelemetry import metrics as metrics_api
+from opentelemetry.exporter.otlp.proto.http import Compression
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics import (
+    Counter as SdkCounter,
+    Histogram as SdkHistogram,
+    MeterProvider as SdkMeterProvider,
+    ObservableCounter as SdkObservableCounter,
+    ObservableGauge as SdkObservableGauge,
+    ObservableUpDownCounter as SdkObservableUpDownCounter,
+    UpDownCounter as SdkUpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -60,6 +74,31 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+
+
+def _setup_worker_observability_metrics(observability_url: str) -> None:
+    current_meter_provider = metrics_api.get_meter_provider()
+    if isinstance(current_meter_provider, SdkMeterProvider):
+        return
+
+    metric_exporter = OTLPMetricExporter(
+        endpoint=f"{observability_url}/observability/metrics/otlp/v0",
+        compression=Compression.Gzip,
+        preferred_temporality={
+            SdkCounter: AggregationTemporality.DELTA,
+            SdkUpDownCounter: AggregationTemporality.DELTA,
+            SdkHistogram: AggregationTemporality.DELTA,
+            SdkObservableCounter: AggregationTemporality.DELTA,
+            SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+            SdkObservableGauge: AggregationTemporality.DELTA,
+        },
+    )
+    reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+    meter_provider = SdkMeterProvider(
+        resource=Resource.create({SERVICE_NAME: "livekit-agents"}),
+        metric_readers=[reader],
+    )
+    metrics_api.set_meter_provider(meter_provider)
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -686,6 +725,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             os.environ["LIVEKIT_URL"] = self._ws_url
             os.environ["LIVEKIT_API_KEY"] = self._api_key
             os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+
+            if otel_metrics_export_url := os.environ.get("AGENT_SERVER_OTEL_METRICS_EXPORT_URL"):
+                _setup_worker_observability_metrics(observability_url=otel_metrics_export_url)
 
             logger.info(
                 "starting worker",
