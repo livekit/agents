@@ -126,6 +126,7 @@ def to_fnc_ctx(
     for tool in tool_ctx.function_tools.values():
         if isinstance(tool, llm.RawFunctionTool):
             from livekit.plugins.google.utils import _GeminiJsonSchema
+
             info = tool.info
             json_schema = _GeminiJsonSchema(info.raw_schema.get("parameters", {})).simplify()
             schema = {
