@@ -1,6 +1,6 @@
 # Inworld plugin for LiveKit Agents
 
-Support for voice synthesis with [Inworld TTS](https://docs.inworld.ai/docs/tts/tts).
+Support for voice synthesis and speech-to-text with [Inworld](https://docs.inworld.ai).
 
 See [https://docs.livekit.io/agents/integrations/tts/inworld/](https://docs.livekit.io/agents/integrations/tts/inworld/) for more information.
 
@@ -16,8 +16,9 @@ Set `INWORLD_API_KEY` in your `.env` file ([get one here](https://platform.inwor
 
 ## Usage
 
-Use Inworld TTS within an `AgentSession` or as a standalone speech generator. For example,
-you can use this TTS in the [Voice AI quickstart](/agents/start/voice-ai/).
+### TTS
+
+Use Inworld TTS within an `AgentSession` or as a standalone speech generator.
 
 ```python
 from livekit.plugins import inworld
@@ -43,7 +44,7 @@ tts = inworld.TTS(
 )
 ```
 
-## Streaming
+### TTS Streaming
 
 Inworld TTS supports WebSocket streaming for lower latency real-time synthesis. Use the
 `stream()` method for streaming text as it's generated:
@@ -71,4 +72,43 @@ stream.end_input()  # Signal end of input
 async for audio in stream:
     # Process audio frames
     pass
+```
+
+### STT
+
+Use Inworld STT for streaming speech-to-text. Multiple models are supported.
+
+```python
+from livekit.plugins import inworld
+
+session = AgentSession(
+   stt=inworld.STT()
+   # ... llm, tts, etc.
+)
+```
+
+With a specific model and voice profile detection:
+
+```python
+from livekit.plugins import inworld
+
+session = AgentSession(
+   stt=inworld.STT(
+       model="inworld/inworld-stt-1",
+       enable_voice_profile=True,
+   )
+   # ... llm, tts, etc.
+)
+```
+
+### Combined TTS + STT
+
+```python
+from livekit.plugins import inworld
+
+session = AgentSession(
+   tts=inworld.TTS(voice="Hades"),
+   stt=inworld.STT(),
+   # ... llm, etc.
+)
 ```
