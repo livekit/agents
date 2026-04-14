@@ -122,6 +122,9 @@ class _ParticipantInputStream(Generic[T], ABC):
             await self._stream.aclose()
             self._stream = None
         self._publication = None
+        if self._processor:
+            self._processor._close()
+            self._processor = None
         if self._forward_atask:
             await aio.cancel_and_wait(self._forward_atask)
 
@@ -174,6 +177,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._publication = None
         if self._processor:
             self._processor._close()
+            self._processor = None
 
     def _on_track_available(
         self,
@@ -286,6 +290,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             if callable(self._noise_cancellation)
             else self._noise_cancellation
         )
+
+        if isinstance(noise_cancellation, rtc.FrameProcessor):
+            self._processor = noise_cancellation
+        elif callable(self._noise_cancellation):
+            self._processor = None
 
         return rtc.AudioStream.from_track(
             track=track,
