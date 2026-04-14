@@ -1,9 +1,12 @@
 import os
 
+from opentelemetry import metrics as metrics_api
 import prometheus_client
 import psutil
 
 from .. import utils
+
+_meter = metrics_api.get_meter("livekit-server")
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -35,12 +38,56 @@ CPU_LOAD_GAUGE = prometheus_client.Gauge(
     ["nodename"],
 )
 
+OTEL_PROC_INITIALIZE_TIME = _meter.create_histogram(
+    "lk.agents.server.proc_initialize_time",
+    unit="s",
+    description="Time taken to initialize a worker process",
+)
+OTEL_RUNNING_JOB_COUNTER = _meter.create_up_down_counter(
+    "lk.agents.server.active_job_count",
+    description="Active jobs on the agent server",
+)
+
+
+class _AgentServerMetricsState:
+    def __init__(self) -> None:
+        self.child_process_count = 0
+        self.worker_load = 0.0
+
+
+_agent_server_metrics_state = _AgentServerMetricsState()
+
+
+def _node_attrs() -> dict[str, str]:
+    return {"nodename": utils.nodename()}
+
+
+def _observe_child_process_count() -> list[metrics_api.Observation]:
+    return [metrics_api.Observation(_agent_server_metrics_state.child_process_count, attributes=_node_attrs())]
+
+
+def _observe_worker_load() -> list[metrics_api.Observation]:
+    return [metrics_api.Observation(_agent_server_metrics_state.worker_load, attributes=_node_attrs())]
+
+
+_meter.create_observable_gauge(
+    "lk.agents.server.child_process_count",
+    callbacks=[lambda options: _observe_child_process_count()],
+    description="Child process count on the agent server",
+)
+_meter.create_observable_gauge(
+    "lk.agents.server.worker_load",
+    callbacks=[lambda options: _observe_worker_load()],
+    description="Worker load percentage",
+)
+
 
 # Note: set_function() is not supported in multiprocess mode.# We need to update this metric explicitly.
 def _update_child_proc_count() -> None:
     """Update child process count metric. Must be called periodically in the main process."""
     try:
         count = len(psutil.Process(os.getpid()).children(recursive=True))
+        _agent_server_metrics_state.child_process_count = count
         CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set(count)
     except Exception:
         # Process might not exist anymore or access denied
@@ -48,16 +95,20 @@ def _update_child_proc_count() -> None:
 
 
 def _update_worker_load(worker_load: float) -> None:
+    _agent_server_metrics_state.worker_load = worker_load
     CPU_LOAD_GAUGE.labels(nodename=utils.nodename()).set(worker_load)
 
 
 def job_started() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).inc()
+    OTEL_RUNNING_JOB_COUNTER.add(1, attributes=_node_attrs())
 
 
 def job_ended() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).dec()
+    OTEL_RUNNING_JOB_COUNTER.add(-1, attributes=_node_attrs())
 
 
 def proc_initialized(*, time_elapsed: float) -> None:
     PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)
+    OTEL_PROC_INITIALIZE_TIME.record(time_elapsed, attributes=_node_attrs())
