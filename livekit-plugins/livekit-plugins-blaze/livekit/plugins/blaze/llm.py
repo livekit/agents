@@ -6,11 +6,18 @@ LLM plugin that interfaces with Blaze's chatbot service.
 API Endpoint: POST /v1/voicebot-call/{bot_id}/chat-conversion-stream
 Input: JSON array of messages [{ "role": "user"|"assistant", "content": str }]
 Output: SSE streaming with data: { "content": str } format
+
+Supports:
+  - Streaming chat completion via SSE
+  - Deep search and agentic search modes
+  - User demographics for personalization
+  - Function/tool calling (when enabled and supported by the bot)
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -37,15 +44,15 @@ class LLM(llm.LLM):
     Blaze LLM Plugin for conversational AI.
 
     Interfaces with Blaze's chatbot service for voice agent conversations.
+    Supports streaming chat, demographics-based personalization, and
+    function calling.
 
     Args:
         bot_id: Blaze bot identifier (required).
-        api_url: Base URL for the chat service. If not provided,
-                 reads from BLAZE_API_URL environment.
-        auth_token: Bearer token for authentication. If not provided,
-                    reads from BLAZE_API_TOKEN environment.
-        deep_search: Enable deep search mode for enhanced retrieval.
-        agentic_search: Enable agentic search capabilities.
+        api_url: Base URL for the chat service.
+        auth_token: Bearer token for authentication.
+        deep_search: Enable deep search mode.
+        agentic_search: Enable agentic search mode.
         enable_tools: Enable tool/function calling.
         demographics: Optional user demographics dict (gender, age).
         timeout: Request timeout in seconds (default: 60.0).
@@ -57,17 +64,8 @@ class LLM(llm.LLM):
         >>> # Basic usage
         >>> llm = blaze.LLM(bot_id="my-bot-123")
         >>>
-        >>> # With search features
-        >>> llm = blaze.LLM(
-        ...     bot_id="my-bot-123",
-        ...     deep_search=True,
-        ...     agentic_search=True,
-        ...     demographics={"gender": "female", "age": 30}
-        ... )
-        >>>
-        >>> # Using shared config
-        >>> config = blaze.BlazeConfig(api_url="https://api.blaze.vn")
-        >>> llm = blaze.LLM(config=config, bot_id="support-bot")
+        >>> # With function calling
+        >>> llm = blaze.LLM(bot_id="my-bot", enable_tools=True)
     """
 
     def __init__(
@@ -85,10 +83,7 @@ class LLM(llm.LLM):
     ) -> None:
         super().__init__()
 
-        # Load configuration
         self._config = config or BlazeConfig()
-
-        # Resolve settings
         self._api_url = api_url or self._config.api_url
         self._bot_id = bot_id
         self._auth_token = auth_token or self._config.api_token
@@ -97,27 +92,20 @@ class LLM(llm.LLM):
         self._enable_tools = enable_tools
         self._demographics = demographics
         self._timeout = timeout if timeout is not None else self._config.llm_timeout
-
-        # Build chat URL
         self._chat_url = f"{self._api_url}/v1/voicebot-call/{bot_id}/chat-conversion-stream"
-
-        # Shared HTTP client for connection pooling
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
-        logger.info(f"BlazeLLM initialized: url={self._api_url}, bot_id={bot_id}")
+        logger.info("BlazeLLM initialized: url=%s, bot_id=%s", self._api_url, bot_id)
 
     @property
     def provider(self) -> str:
-        """Returns the provider name."""
         return "Blaze"
 
     @property
     def bot_id(self) -> str:
-        """Returns the configured bot ID."""
         return self._bot_id
 
     async def aclose(self) -> None:
-        """Close the shared HTTP client and release connections."""
         await self._client.aclose()
         await super().aclose()
 
@@ -130,16 +118,7 @@ class LLM(llm.LLM):
         demographics: dict[str, Any] | None = None,
         auth_token: str | None = None,
     ) -> None:
-        """
-        Update LLM options at runtime.
-
-        Args:
-            deep_search: Enable/disable deep search
-            agentic_search: Enable/disable agentic search
-            enable_tools: Enable/disable tool calling
-            demographics: Update user demographics
-            auth_token: New authentication token
-        """
+        """Update LLM options at runtime."""
         if deep_search is not None:
             self._deep_search = deep_search
         if agentic_search is not None:
@@ -164,23 +143,25 @@ class LLM(llm.LLM):
         """Start a streaming chat completion.
 
         Args:
-            chat_ctx: Chat context containing message history
-            tools: List of tools (not used by Blaze LLM)
-            conn_options: API connection options (retry, timeout)
-            parallel_tool_calls: Parallel tool calls (not used)
-            tool_choice: Tool choice (not used)
-            extra_kwargs: Extra kwargs (not used)
+            chat_ctx: Chat context containing message history.
+            tools: List of tools available for function calling.
+                   Requires ``enable_tools=True`` in constructor.
+            conn_options: API connection options (retry, timeout).
+            parallel_tool_calls: Not used by Blaze LLM.
+            tool_choice: Not used by Blaze LLM.
+            extra_kwargs: Not used by Blaze LLM.
 
         Returns:
-            LLMStream that yields response chunks
+            LLMStream that yields response chunks (text and/or tool calls).
         """
-        if tools:
+        if tools and not self._enable_tools:
             logger.warning(
-                "Blaze LLM does not support function calling. "
-                "%d tool(s) provided will be ignored: %s",
+                "Tools provided but enable_tools=False. "
+                "%d tool(s) will be ignored: %s",
                 len(tools),
                 ", ".join(t.id for t in tools),
             )
+            tools = None
 
         return LLMStream(
             self,
@@ -191,7 +172,16 @@ class LLM(llm.LLM):
 
 
 class LLMStream(llm.LLMStream):
-    """Streaming LLM implementation for Blaze chatbot."""
+    """Streaming LLM implementation for Blaze chatbot.
+
+    Handles both plain text responses and function call responses.
+
+    Function call response format from Blaze API::
+
+        data: {"tool_calls": [{"id": "call_xxx", "function": {"name": "fn", "arguments": "{...}"}}]}
+        data: {"content": "text response"}
+        data: [DONE]
+    """
 
     def __init__(
         self,
@@ -212,86 +202,117 @@ class LLMStream(llm.LLMStream):
     def _convert_messages(self) -> list[dict[str, str]]:
         """Convert chat context messages to Blaze format.
 
-        ChatRole is Literal['developer', 'system', 'user', 'assistant'] — string comparisons.
-        ChatMessage.content is list[ChatContent]; use text_content to get the string form.
+        System/developer messages are SKIPPED because the Blaze chatapp already
+        loads the voicebot prompt from the database. Sending them again would
+        cause double-prompting and format conflicts.
 
-        System messages are collected and merged into a single context
-        message prepended to the conversation, preserving their original order.
+        Function call results are included as user messages so the LLM can
+        continue the conversation after tool execution.
         """
         messages: list[dict[str, str]] = []
-        system_parts: list[str] = []
 
         for msg in self._chat_ctx.messages():
             text = msg.text_content
             if not text:
                 continue
             if msg.role in ("system", "developer"):
-                system_parts.append(text)
+                continue
             elif msg.role == "user":
                 messages.append({"role": "user", "content": text})
             elif msg.role == "assistant":
-                messages.append({"role": "assistant", "content": text})
-
-        # Merge all system messages and prepend as unified context
-        if system_parts:
-            system_text = "\n\n".join(system_parts)
-            messages.insert(0, {"role": "user", "content": f"[System Instructions]\n{system_text}"})
+                clean = re.sub(r"<img>[^<]*</img>", "", text, flags=re.IGNORECASE).strip()
+                if clean:
+                    messages.append({"role": "assistant", "content": clean})
 
         return messages
+
+    def _build_tools_param(self) -> list[dict[str, Any]] | None:
+        """Serialize tools into the format expected by Blaze API.
+
+        Returns None if no tools are configured.
+
+        Blaze API accepts OpenAI-compatible tool format::
+
+            [{"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}]
+        """
+        if not self._tools:
+            return None
+
+        tool_defs: list[dict[str, Any]] = []
+        for tool in self._tools:
+            # FunctionTool has callable_function with description and parameters
+            if hasattr(tool, "callable_function"):
+                fn = tool.callable_function
+                tool_def: dict[str, Any] = {
+                    "type": "function",
+                    "function": {
+                        "name": fn.name,
+                    },
+                }
+                if fn.description:
+                    tool_def["function"]["description"] = fn.description
+                if fn.parameters:
+                    tool_def["function"]["parameters"] = fn.parameters
+                tool_defs.append(tool_def)
+            else:
+                # Generic tool — use id as name
+                tool_defs.append({
+                    "type": "function",
+                    "function": {"name": tool.id},
+                })
+
+        return tool_defs if tool_defs else None
 
     async def _run(self) -> None:
         """Execute the chat completion and yield response chunks.
 
-        This method makes a single streaming HTTP request. Retry logic is
-        handled by the base class ``_main_task()``, which catches ``APIError``
-        subclasses and retries according to ``conn_options``.
-
-        Raises:
-            APIStatusError: On non-200 HTTP responses.
-            APITimeoutError: On request timeouts.
-            APIConnectionError: On network errors.
+        Handles both text content and function/tool call responses.
+        Retry logic is handled by the base class ``_main_task()``.
         """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
         messages = self._convert_messages()
-
         if not messages:
             logger.warning("[%s] No messages to send to chatbot", request_id)
             return
 
-        # Build URL with query parameters using httpx for proper encoding
         blaze = self._blaze_llm
         query_params: dict[str, str] = {
             "is_voice_call": "true",
+            "agent_stream": "true",
             "use_tool_based": "true" if blaze._enable_tools else "false",
         }
         if blaze._deep_search:
             query_params["deep_search"] = "true"
         if blaze._agentic_search:
             query_params["agentic_search"] = "true"
-
-        # Add demographics if available
         if blaze._demographics:
             gender = blaze._demographics.get("gender")
             if gender and gender != "unknown":
                 query_params["gender"] = str(gender)
             age = blaze._demographics.get("age")
-            if age is not None:  # Allow age=0
+            if age is not None:
                 query_params["age"] = str(age)
 
         url = str(httpx.URL(blaze._chat_url, params=query_params))
 
-        # Prepare headers
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if blaze._auth_token:
             headers["Authorization"] = f"Bearer {blaze._auth_token}"
 
+        # Build request body
+        body: dict[str, Any] = {"messages": messages}
+        tools_param = self._build_tools_param()
+        if tools_param:
+            body["tools"] = tools_param
+
         logger.info(
-            "[%s] LLM chat request: %d messages, bot=%s",
+            "[%s] LLM chat request: %d messages, bot=%s, tools=%d",
             request_id,
             len(messages),
             blaze._bot_id,
+            len(self._tools),
         )
 
         full_response = ""
@@ -299,7 +320,7 @@ class LLMStream(llm.LLMStream):
             async with blaze._client.stream(
                 "POST",
                 url,
-                json=messages,
+                json=messages if not tools_param else body,
                 headers=headers,
             ) as response:
                 if response.status_code != 200:
@@ -315,60 +336,42 @@ class LLMStream(llm.LLMStream):
                     if not line.strip():
                         continue
 
-                    # Handle SSE format
-                    if line.startswith("data: "):
-                        data_str = line[6:]
+                    data_str = line[6:] if line.startswith("data: ") else line
 
-                        if data_str.strip() == "[DONE]":
-                            logger.debug(
-                                "[%s] Stream completed with [DONE]",
-                                request_id,
-                            )
-                            break
+                    if data_str.strip() == "[DONE]":
+                        break
 
-                        try:
-                            data = json.loads(data_str)
-                            content = self._extract_content(data)
-                            if content:
-                                full_response += content
-                                chunk = llm.ChatChunk(
-                                    id=request_id,
-                                    delta=llm.ChoiceDelta(
-                                        role="assistant",
-                                        content=content,
-                                    ),
-                                )
-                                self._event_ch.send_nowait(chunk)
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                "[%s] Failed to parse SSE data: %s",
-                                request_id,
-                                data_str[:100],
-                            )
-                            continue
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        logger.warning("[%s] Failed to parse data: %s", request_id, data_str[:100])
+                        continue
 
-                    # Handle raw JSON lines format
-                    else:
-                        try:
-                            data = json.loads(line)
-                            content = self._extract_content(data)
-                            if content:
-                                full_response += content
-                                chunk = llm.ChatChunk(
-                                    id=request_id,
-                                    delta=llm.ChoiceDelta(
-                                        role="assistant",
-                                        content=content,
-                                    ),
-                                )
-                                self._event_ch.send_nowait(chunk)
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                "[%s] Failed to parse JSON line: %s",
-                                request_id,
-                                line[:100],
-                            )
-                            continue
+                    # Handle tool calls
+                    tool_calls = self._extract_tool_calls(data)
+                    if tool_calls:
+                        chunk = llm.ChatChunk(
+                            id=request_id,
+                            delta=llm.ChoiceDelta(
+                                role="assistant",
+                                tool_calls=tool_calls,
+                            ),
+                        )
+                        self._event_ch.send_nowait(chunk)
+                        continue
+
+                    # Handle text content
+                    content = self._extract_content(data)
+                    if content:
+                        full_response += content
+                        chunk = llm.ChatChunk(
+                            id=request_id,
+                            delta=llm.ChoiceDelta(
+                                role="assistant",
+                                content=content,
+                            ),
+                        )
+                        self._event_ch.send_nowait(chunk)
 
         except httpx.TimeoutException as e:
             raise APITimeoutError(f"LLM request timed out: {e}") from e
@@ -389,18 +392,59 @@ class LLMStream(llm.LLMStream):
 
     def _extract_content(self, data: dict[str, Any]) -> str | None:
         """Extract text content from various response formats."""
-        # Format: {"content": "..."}
         if "content" in data and data["content"] is not None:
             return str(data["content"])
-
-        # Format: {"text": "..."}
         if "text" in data and data["text"] is not None:
             return str(data["text"])
-
-        # Format: {"delta": {"text": "..."}}
         if "delta" in data:
             delta = data.get("delta", {})
             if isinstance(delta, dict) and delta.get("text") is not None:
                 return str(delta["text"])
-
+            if isinstance(delta, dict) and delta.get("content") is not None:
+                return str(delta["content"])
         return None
+
+    def _extract_tool_calls(self, data: dict[str, Any]) -> list[llm.FunctionToolCall]:
+        """Extract function tool calls from the response data.
+
+        Supports OpenAI-compatible format::
+
+            {"tool_calls": [{"id": "call_xxx", "function": {"name": "fn", "arguments": "{...}"}}]}
+
+        Also supports delta format::
+
+            {"delta": {"tool_calls": [...]}}
+        """
+        raw_calls = data.get("tool_calls")
+        if raw_calls is None and "delta" in data:
+            delta = data.get("delta", {})
+            if isinstance(delta, dict):
+                raw_calls = delta.get("tool_calls")
+
+        if not raw_calls or not isinstance(raw_calls, list):
+            return []
+
+        result: list[llm.FunctionToolCall] = []
+        for call in raw_calls:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function", {})
+            if not isinstance(fn, dict):
+                continue
+            name = fn.get("name", "")
+            if not name:
+                continue
+            arguments = fn.get("arguments", "")
+            if isinstance(arguments, dict):
+                arguments = json.dumps(arguments)
+            call_id = call.get("id", f"call_{uuid.uuid4().hex[:8]}")
+
+            result.append(
+                llm.FunctionToolCall(
+                    name=name,
+                    arguments=arguments,
+                    call_id=call_id,
+                )
+            )
+
+        return result
