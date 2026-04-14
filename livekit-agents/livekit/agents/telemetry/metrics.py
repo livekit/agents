@@ -1,12 +1,12 @@
 import os
 
+import prometheus_client
+import psutil
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-import prometheus_client
-import psutil
 
 from .. import utils
 
@@ -108,16 +108,26 @@ def shutdown_worker_observability_metrics() -> None:
         _worker_meter_provider_owned = False
 
 
-def _node_attrs() -> dict[str, str]:
-    return {"nodename": utils.nodename()}
+def _metric_attrs(metric_name: str) -> dict[str, str]:
+    return {"nodename": utils.nodename(), "metric_name": metric_name}
 
 
 def _observe_child_process_count() -> list[metrics_api.Observation]:
-    return [metrics_api.Observation(_agent_server_metrics_state.child_process_count, attributes=_node_attrs())]
+    return [
+        metrics_api.Observation(
+            _agent_server_metrics_state.child_process_count,
+            attributes=_metric_attrs("child_process_count"),
+        )
+    ]
 
 
 def _observe_worker_load() -> list[metrics_api.Observation]:
-    return [metrics_api.Observation(_agent_server_metrics_state.worker_load, attributes=_node_attrs())]
+    return [
+        metrics_api.Observation(
+            _agent_server_metrics_state.worker_load,
+            attributes=_metric_attrs("worker_load"),
+        )
+    ]
 
 
 _meter.create_observable_gauge(
@@ -151,14 +161,17 @@ def _update_worker_load(worker_load: float) -> None:
 
 def job_started() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).inc()
-    OTEL_RUNNING_JOB_COUNTER.add(1, attributes=_node_attrs())
+    OTEL_RUNNING_JOB_COUNTER.add(1, attributes=_metric_attrs("active_job_count"))
 
 
 def job_ended() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).dec()
-    OTEL_RUNNING_JOB_COUNTER.add(-1, attributes=_node_attrs())
+    OTEL_RUNNING_JOB_COUNTER.add(-1, attributes=_metric_attrs("active_job_count"))
 
 
 def proc_initialized(*, time_elapsed: float) -> None:
     PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)
-    OTEL_PROC_INITIALIZE_TIME.record(time_elapsed, attributes=_node_attrs())
+    OTEL_PROC_INITIALIZE_TIME.record(
+        time_elapsed,
+        attributes=_metric_attrs("proc_initialize_time"),
+    )
