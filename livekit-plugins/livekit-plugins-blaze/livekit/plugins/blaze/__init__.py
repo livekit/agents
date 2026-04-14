@@ -34,7 +34,7 @@ from ._config import BlazeConfig
 from .llm import LLM, LLMStream
 from .log import logger
 from .stt import STT
-from .tts import TTS
+from .tts import TTS, ChunkedStream
 from .version import __version__
 
 __all__ = [
@@ -45,6 +45,7 @@ __all__ = [
     # Plugins
     "STT",
     "TTS",
+    "ChunkedStream",
     "LLM",
     "LLMStream",
 ]
