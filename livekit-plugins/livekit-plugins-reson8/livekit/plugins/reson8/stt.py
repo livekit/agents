@@ -9,14 +9,19 @@ from urllib.parse import urlencode
 
 import httpx
 import websockets
-from livekit.agents import stt, utils
-from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITimeoutError
-from livekit.agents.language import LanguageCode
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from livekit.agents.utils import is_given
 from websockets.asyncio.client import ClientConnection
 
 from livekit import rtc
+from livekit.agents import stt, utils
+from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from livekit.agents.language import LanguageCode
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 
 @dataclass
@@ -134,7 +139,11 @@ class STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=resp.json().get("text", ""), language=LanguageCode(opts.language))],
+            alternatives=[
+                stt.SpeechData(
+                    text=resp.json().get("text", ""), language=LanguageCode(opts.language)
+                )
+            ],
         )
 
 
@@ -144,12 +153,18 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
 
     async def _run(self) -> None:
-        base = self._opts.api_url.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
-        url = f"{base}/v1/speech-to-text/realtime?{urlencode(self._opts.query_params(interim=True))}"
+        base = (
+            self._opts.api_url.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
+        )
+        url = (
+            f"{base}/v1/speech-to-text/realtime?{urlencode(self._opts.query_params(interim=True))}"
+        )
 
         try:
             ws = await websockets.connect(
-                url, additional_headers={"Authorization": f"ApiKey {self._opts.api_key}"}, proxy=None
+                url,
+                additional_headers={"Authorization": f"ApiKey {self._opts.api_key}"},
+                proxy=None,
             )
         except websockets.exceptions.InvalidStatus as e:
             raise APIStatusError(
@@ -197,7 +212,9 @@ class SpeechStream(stt.RecognizeStream):
                 stt.SpeechEvent(
                     type=event_type,
                     alternatives=[
-                        stt.SpeechData(text=msg.get("text", ""), language=LanguageCode(self._opts.language)),
+                        stt.SpeechData(
+                            text=msg.get("text", ""), language=LanguageCode(self._opts.language)
+                        ),
                     ],
                 )
             )
