@@ -34,6 +34,7 @@ class FakeLLMResponse(BaseModel):
     ttft: float
     duration: float
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
     def speed_up(self, factor: float) -> FakeLLMResponse:
         obj = copy.deepcopy(self)
@@ -98,10 +99,14 @@ class FakeLLMStream(LLMStream):
 
         await asyncio.sleep(resp.duration - (time.perf_counter() - start_time))
 
-        self._send_chunk(tool_calls=resp.tool_calls)
+        self._send_chunk(tool_calls=resp.tool_calls, extra=resp.extra if resp.extra else None)
 
     def _send_chunk(
-        self, *, delta: str | None = None, tool_calls: list[FunctionToolCall] | None = None
+        self,
+        *,
+        delta: str | None = None,
+        tool_calls: list[FunctionToolCall] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self._event_ch.send_nowait(
             ChatChunk(
@@ -110,6 +115,7 @@ class FakeLLMStream(LLMStream):
                     role="assistant",
                     content=delta,
                     tool_calls=tool_calls or [],
+                    extra=extra,
                 ),
             )
         )

@@ -148,6 +148,7 @@ class FakeActions:
         input: NotGivenOr[str] = NOT_GIVEN,
         ttft: float = 0.1,
         duration: float = 0.3,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         if (
             not utils.is_given(input)
@@ -167,6 +168,7 @@ class FakeActions:
                 ttft=ttft,
                 duration=duration,
                 tool_calls=tool_calls or [],
+                extra=extra or {},
             )
         )
 
