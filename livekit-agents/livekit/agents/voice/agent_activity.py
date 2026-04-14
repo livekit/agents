@@ -1028,7 +1028,6 @@ class AgentActivity(RecognitionHooks):
         if (
             isinstance(self.llm, llm.RealtimeModel)
             and self.llm.capabilities.turn_detection
-            and self.tts
             and allow_interruptions is False
         ):
             logger.warning(
@@ -1044,12 +1043,10 @@ class AgentActivity(RecognitionHooks):
             and self._session.output.audio
             and self._session.output.audio_enabled
         ):
-            model_info = (
-                "a RealtimeSession that implements say()"
-                if isinstance(self.llm, llm.RealtimeModel)
-                else "a TTS model"
+            raise RuntimeError(
+                "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
+                "add a TTS model to AgentSession to enable say()"
             )
-            raise RuntimeError(f"trying to generate speech from text without {model_info}")
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
