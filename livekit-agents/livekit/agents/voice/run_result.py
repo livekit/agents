@@ -79,7 +79,17 @@ class RunResult(Generic[Run_T]):
 
     @property
     def events(self) -> list[RunEvent]:
-        """List of all recorded events generated during the run."""
+        """List of recorded run events in chronological order.
+
+        This surface is intentionally small and testing-oriented. Each item is one of:
+        - ``ChatMessageEvent`` for chat messages
+        - ``FunctionCallEvent`` for tool/function calls
+        - ``FunctionCallOutputEvent`` for tool/function results
+        - ``AgentHandoffEvent`` for agent transitions
+
+        Use this to assert on the observable flow of a run in tests without depending
+        on lower-level session internals, room state, or raw media artifacts.
+        """
         return self._recorded_items
 
     @functools.cached_property
