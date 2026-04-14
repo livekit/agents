@@ -29,7 +29,7 @@ from livekit.agents.utils import is_given
 class STTOptions:
     api_key: str
     api_url: str
-    language: str
+    language: str | None
     custom_model_id: str | None
     sample_rate: int
     include_timestamps: bool
@@ -38,11 +38,12 @@ class STTOptions:
 
     def query_params(self, *, interim: bool) -> dict[str, str]:
         params: dict[str, str] = {
-            "language": self.language,
             "encoding": "pcm_s16le",
             "sample_rate": str(self.sample_rate),
             "channels": "1",
         }
+        if self.language:
+            params["language"] = self.language
         if interim:
             params["include_interim"] = "true"
         if self.custom_model_id:
@@ -62,7 +63,7 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         api_url: str | None = None,
-        language: str = "nl",
+        language: str | None = None,
         custom_model_id: str | None = None,
         sample_rate: int = 16000,
         include_timestamps: bool = False,
@@ -142,7 +143,7 @@ class STT(stt.STT):
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
                 stt.SpeechData(
-                    text=resp.json().get("text", ""), language=LanguageCode(opts.language)
+                    text=resp.json().get("text", ""), language=LanguageCode(opts.language or "")
                 )
             ],
         )
@@ -213,7 +214,7 @@ class SpeechStream(stt.RecognizeStream):
                     type=event_type,
                     alternatives=[
                         stt.SpeechData(
-                            text=msg.get("text", ""), language=LanguageCode(self._opts.language)
+                            text=msg.get("text", ""), language=LanguageCode(self._opts.language or "")
                         ),
                     ],
                 )
