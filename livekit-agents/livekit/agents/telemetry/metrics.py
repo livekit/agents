@@ -11,6 +11,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from .. import utils
 
 _meter = metrics_api.get_meter("livekit-agent-server")
+_METRIC_GROUP = "agent_server"
 _METRIC_EXPORT_ENDPOINT_ENV_VARS = (
     "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -109,7 +110,11 @@ def shutdown_worker_observability_metrics() -> None:
 
 
 def _metric_attrs(metric_name: str) -> dict[str, str]:
-    return {"nodename": utils.nodename(), "metric_name": metric_name}
+    return {
+        "nodename": utils.nodename(),
+        "metric_name": metric_name,
+        "livekit.metric_group": _METRIC_GROUP,
+    }
 
 
 def _observe_child_process_count() -> list[metrics_api.Observation]:
