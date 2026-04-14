@@ -11,6 +11,10 @@ import psutil
 from .. import utils
 
 _meter = metrics_api.get_meter("livekit-agent-server")
+_METRIC_EXPORT_ENDPOINT_ENV_VARS = (
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+)
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -60,11 +64,26 @@ class _AgentServerMetricsState:
 
 
 _agent_server_metrics_state = _AgentServerMetricsState()
+_worker_meter_provider_owned = False
+
+
+def _otel_metrics_configured() -> bool:
+    return any(os.environ.get(env_var) for env_var in _METRIC_EXPORT_ENDPOINT_ENV_VARS)
+
+
+def worker_observability_metrics_enabled() -> bool:
+    current_meter_provider = metrics_api.get_meter_provider()
+    return _otel_metrics_configured() or isinstance(current_meter_provider, SdkMeterProvider)
 
 
 def setup_worker_observability_metrics() -> None:
+    global _worker_meter_provider_owned
+
     current_meter_provider = metrics_api.get_meter_provider()
     if isinstance(current_meter_provider, SdkMeterProvider):
+        return
+
+    if not _otel_metrics_configured():
         return
 
     metric_exporter = OTLPMetricExporter()
@@ -76,6 +95,17 @@ def setup_worker_observability_metrics() -> None:
         metric_readers=[reader],
     )
     metrics_api.set_meter_provider(meter_provider)
+    _worker_meter_provider_owned = True
+
+
+def shutdown_worker_observability_metrics() -> None:
+    global _worker_meter_provider_owned
+
+    meter_provider = metrics_api.get_meter_provider()
+    if _worker_meter_provider_owned and isinstance(meter_provider, SdkMeterProvider):
+        meter_provider.force_flush()
+        meter_provider.shutdown()
+        _worker_meter_provider_owned = False
 
 
 def _node_attrs() -> dict[str, str]:
