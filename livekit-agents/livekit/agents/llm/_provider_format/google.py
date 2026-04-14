@@ -125,11 +125,13 @@ def to_fnc_ctx(
     tools: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
         if isinstance(tool, llm.RawFunctionTool):
+            from livekit.plugins.google.utils import _GeminiJsonSchema
             info = tool.info
+            json_schema = _GeminiJsonSchema(info.raw_schema.get("parameters", {})).simplify()
             schema = {
                 "name": info.name,
                 "description": info.raw_schema.get("description", ""),
-                "parameters_json_schema": info.raw_schema.get("parameters", {}),
+                "parameters": json_schema or None,
             }
             if tool_behavior is not None:
                 schema["behavior"] = tool_behavior
