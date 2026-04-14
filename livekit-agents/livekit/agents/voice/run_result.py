@@ -964,15 +964,15 @@ class ChatMessageAssert:
         current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, reason)
 
         if usage:
-            current_span.set_attributes(
-                {
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
-                }
-            )
+            judge_attrs: dict[str, int] = {
+                trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
+                trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
+            }
+            if usage.prompt_cached_tokens:
+                judge_attrs[trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
+                    usage.prompt_cached_tokens
+                )
+            current_span.set_attributes(judge_attrs)
 
         if not success:
             self._raise(f"Judgement failed: {reason}")
