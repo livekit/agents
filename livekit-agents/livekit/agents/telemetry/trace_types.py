@@ -70,12 +70,12 @@ ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
-ATTR_GEN_AI_USAGE_DETAILS_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.details.output_audio_tokens" 
+ATTR_GEN_AI_USAGE_DETAILS_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.details.output_audio_tokens"
 # The following two experimental fields have recently been adopted by
-# pydantic (https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259) 
+# pydantic (https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259)
 # and LangFuse (https://github.com/langfuse/langfuse/pull/13110) to support audio token counting.
-ATTR_GEN_AI_USAGE_DETAILS_INPUT_AUDIO_TOKENS = "gen_ai.usage.details.input_audio_tokens" # pydantic proposed  https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259
-ATTR_GEN_AI_USAGE_DETAILS_CACHE_AUDIO_READ_TOKENS = "gen_ai.usage.details.cache_audio_read_tokens" # pddantic proposed https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259
+ATTR_GEN_AI_USAGE_DETAILS_INPUT_AUDIO_TOKENS = "gen_ai.usage.details.input_audio_tokens"  # pydantic proposed  https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259
+ATTR_GEN_AI_USAGE_DETAILS_CACHE_AUDIO_READ_TOKENS = "gen_ai.usage.details.cache_audio_read_tokens"  # pddantic proposed https://github.com/open-telemetry/semantic-conventions/issues/1959#issuecomment-3135486259
 
 
 # OpenTelemetry GenAI event names (for structured logging)
