@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import uuid
@@ -177,17 +178,15 @@ class SpeechStream(stt.RecognizeStream):
         async with ws:
             send_task = asyncio.create_task(self._send_loop(ws))
             recv_task = asyncio.create_task(self._recv_loop(ws))
+            tasks = asyncio.gather(send_task, recv_task)
             try:
-                done, _ = await asyncio.wait(
-                    [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    task.result()
+                await tasks
+            except Exception:
+                raise
             finally:
-                for t in (send_task, recv_task):
-                    if not t.done():
-                        t.cancel()
-                await ws.close()
+                tasks.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await tasks
 
     async def _send_loop(self, ws: ClientConnection) -> None:
         async for data in self._input_ch:
@@ -195,6 +194,7 @@ class SpeechStream(stt.RecognizeStream):
                 await ws.send(data.data.tobytes())
             elif isinstance(data, self._FlushSentinel):
                 await ws.send(json.dumps({"type": "flush_request", "id": str(uuid.uuid4())}))
+        await ws.close()
 
     async def _recv_loop(self, ws: ClientConnection) -> None:
         async for raw in ws:
