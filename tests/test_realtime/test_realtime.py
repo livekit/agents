@@ -247,8 +247,7 @@ async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_update_chat_ctx(rt_session: llm.RealtimeSession):
     chat_ctx = llm.ChatContext()
-    # TODO(long): fix assistant message for openai azure
-    # chat_ctx.add_message(role="assistant", content="What is your favorite number?")
+    chat_ctx.add_message(role="assistant", content="What is your favorite number?")
     chat_ctx.add_message(role="user", content="My favorite number is seven")
     await asyncio.wait_for(rt_session.update_chat_ctx(chat_ctx), timeout=10)
 
@@ -378,12 +377,7 @@ async def test_function_tool_reply(rt_session: llm.RealtimeSession):
 # -- Session reuse across handoffs --
 
 
-@pytest.mark.parametrize(
-    "model_factory",
-    [
-        pytest.param(_openai_model, id="openai"),
-    ],
-)
+@pytest.mark.parametrize("model_factory", OPENAI_AND_AZURE)
 async def test_reuse_session_across_handoff(model_factory: Callable[[], llm.RealtimeModel]):
     """Populate a session with long history, simulate agent handoffs in four modes,
     validate correctness, and print handoff + first reply timing."""
