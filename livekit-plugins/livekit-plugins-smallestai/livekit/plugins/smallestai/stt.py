@@ -106,7 +106,7 @@ class STT(stt.STT):
         encoding: STTEncoding | str = "linear16",
         word_timestamps: bool = True,
         diarize: bool = False,
-        eou_timeout_ms: int = 800,
+        eou_timeout_ms: int = 0,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
@@ -126,8 +126,9 @@ class STT(stt.STT):
             diarize: Enable speaker diarization. When True, each word includes a
                 speaker ID (integer during streaming). Defaults to False.
             eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Range: 100–10 000.
-                Defaults to 800.
+                utterance complete and emits a final transcript. Set to 0 to disable
+                server-side end-of-utterance detection, which is recommended when using
+                LiveKit's built-in turn detection to minimise latency. Defaults to 0.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -136,7 +137,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=False,
+                interim_results=True,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
             )
