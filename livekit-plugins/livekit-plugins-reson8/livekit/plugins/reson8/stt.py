@@ -163,13 +163,16 @@ class SpeechStream(stt.RecognizeStream):
             send_task = asyncio.create_task(self._send_loop(ws))
             recv_task = asyncio.create_task(self._recv_loop(ws))
             try:
-                await send_task
-                await ws.close()
-                await recv_task
+                done, _ = await asyncio.wait(
+                    [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    task.result()
             finally:
                 for t in (send_task, recv_task):
                     if not t.done():
                         t.cancel()
+                await ws.close()
 
     async def _send_loop(self, ws: ClientConnection) -> None:
         async for data in self._input_ch:
