@@ -153,6 +153,7 @@ class SpeechStream(stt.RecognizeStream):
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
+        self._closing = asyncio.Event()
 
     async def _run(self) -> None:
         base = (
@@ -182,8 +183,6 @@ class SpeechStream(stt.RecognizeStream):
             tasks = asyncio.gather(send_task, recv_task)
             try:
                 await tasks
-            except Exception:
-                raise
             finally:
                 tasks.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -195,14 +194,17 @@ class SpeechStream(stt.RecognizeStream):
                 await ws.send(data.data.tobytes())
             elif isinstance(data, self._FlushSentinel):
                 await ws.send(json.dumps({"type": "flush_request", "id": str(uuid.uuid4())}))
-        await ws.close()
+        self._closing.set()
 
     async def _recv_loop(self, ws: ClientConnection) -> None:
         async for raw in ws:
             if isinstance(raw, bytes):
                 continue
             msg = json.loads(raw)
-            if msg.get("type") != "transcript":
+            msg_type = msg.get("type")
+            if msg_type == "flush_confirmation" and self._closing.is_set():
+                return
+            if msg_type != "transcript":
                 continue
             event_type = (
                 stt.SpeechEventType.FINAL_TRANSCRIPT
@@ -214,7 +216,8 @@ class SpeechStream(stt.RecognizeStream):
                     type=event_type,
                     alternatives=[
                         stt.SpeechData(
-                            text=msg.get("text", ""), language=LanguageCode(self._opts.language or "")
+                            text=msg.get("text", ""),
+                            language=LanguageCode(self._opts.language or ""),
                         ),
                     ],
                 )
