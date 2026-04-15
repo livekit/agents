@@ -92,6 +92,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=enable_interim_results,
+                diarization=enable_diarization,
                 aligned_transcript="word",
             )
         )
@@ -320,6 +321,7 @@ class SpeechStream(stt.RecognizeStream):
 
         while True:
             try:
+                closing_ws = False
                 ws = await self._connect_ws()
                 self._server_ready.clear()
                 tasks = [
