@@ -1,7 +1,5 @@
 from typing import Literal
 
-STTAudioEncoding = Literal["pcm", "mulaw", "alaw"]
-
 STTLanguages = Literal[
     "ar",
     "cs",

@@ -4,7 +4,7 @@ from . import realtime, responses
 from .stt import STT
 from .tools import FileSearch, WebSearch, XSearch
 from .tts import TTS
-from .types import STTAudioEncoding, STTLanguages, TTSLanguages
+from .types import STTLanguages, TTSLanguages
 from .version import __version__
 
 __all__ = [
@@ -13,7 +13,6 @@ __all__ = [
     "WebSearch",
     "XSearch",
     "STT",
-    "STTAudioEncoding",
     "STTLanguages",
     "TTS",
     "TTSLanguages",
