@@ -1058,7 +1058,18 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        if self._rt_session is not None and not is_given(audio) and not self.tts:
+        if (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        ):
+            if not add_to_chat_ctx:
+                logger.warning(
+                    "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
+                    "the message will still be added to the chat context"
+                )
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
