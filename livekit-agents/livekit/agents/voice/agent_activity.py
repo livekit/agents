@@ -2383,8 +2383,8 @@ class AgentActivity(RecognitionHooks):
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
-        read_transcript_from_tts = False
-        if audio_output is not None:
+
+        async def _start_tts_inference() -> tuple[asyncio.Task[bool], _TTSGenerationData]:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
                 node=self._agent.tts_node,
@@ -2394,15 +2394,16 @@ class AgentActivity(RecognitionHooks):
                 model=self.tts.model if self.tts else None,
                 provider=self.tts.provider if self.tts else None,
             )
+            return tts_task, tts_gen_data
+
+        # start preemptive tts inference if enabled
+        if (
+            audio_output is not None
+            and (opt := self._session.options.preemptive_generation)
+            and opt["preemptive_tts"]
+        ):
+            tts_task, tts_gen_data = await _start_tts_inference()
             tasks.append(tts_task)
-            if (
-                self.use_tts_aligned_transcript
-                and (tts := self.tts)
-                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-                and (timed_texts := await tts_gen_data.timed_texts_fut)
-            ):
-                tr_input = timed_texts
-                read_transcript_from_tts = True
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
@@ -2420,6 +2421,22 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
             await text_tee.aclose()
             return
+
+        # start tts inference if not already started and audio output is enabled
+        if audio_output is not None and tts_task is None:
+            tts_task, tts_gen_data = await _start_tts_inference()
+            tasks.append(tts_task)
+
+        read_transcript_from_tts = False
+        if (
+            tts_gen_data is not None
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+            and (timed_texts := await tts_gen_data.timed_texts_fut)
+        ):
+            tr_input = timed_texts
+            read_transcript_from_tts = True
 
         self._session._update_agent_state("thinking")
 

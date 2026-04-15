@@ -124,6 +124,11 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
 class PreemptiveGenerationOptions(TypedDict, total=False):
     """Configuration for preemptive generation."""
 
+    preemptive_tts: bool
+    """Whether to also run TTS preemptively before the turn is confirmed.
+    When ``False`` (default), only LLM runs preemptively; TTS starts once the
+    turn is confirmed and the speech is scheduled."""
+
     max_speech_duration: float
     """Maximum user speech duration (s) for which preemptive generation
     is attempted. Beyond this threshold, preemptive generation is skipped
@@ -136,6 +141,7 @@ class PreemptiveGenerationOptions(TypedDict, total=False):
 
 
 _PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
+    "preemptive_tts": False,
     "max_speech_duration": 10.0,
     "max_retries": 3,
 }
