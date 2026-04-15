@@ -1028,10 +1028,14 @@ class AgentActivity(RecognitionHooks):
         if (
             not is_given(audio)
             and not self.tts
+            and not (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
             and self._session.output.audio
             and self._session.output.audio_enabled
         ):
-            raise RuntimeError("trying to generate speech from text without a TTS model")
+            raise RuntimeError(
+                "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
+                "add a TTS model to AgentSession to enable say()"
+            )
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -1054,18 +1058,40 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        task = self._create_speech_task(
-            self._tts_task(
+        if (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        ):
+            if not add_to_chat_ctx:
+                logger.warning(
+                    "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
+                    "the message will still be added to the chat context"
+                )
+            self._create_speech_task(
+                self._realtime_reply_task(
+                    speech_handle=handle,
+                    text=text,
+                    model_settings=ModelSettings(),
+                ),
                 speech_handle=handle,
-                text=text,
-                audio=audio or None,
-                add_to_chat_ctx=add_to_chat_ctx,
-                model_settings=ModelSettings(),
-            ),
-            speech_handle=handle,
-            name="AgentActivity.tts_say",
-        )
-        task.add_done_callback(self._on_pipeline_reply_done)
+                name="AgentActivity.realtime_say",
+            )
+        else:
+            task = self._create_speech_task(
+                self._tts_task(
+                    speech_handle=handle,
+                    text=text,
+                    audio=audio or None,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=ModelSettings(),
+                ),
+                speech_handle=handle,
+                name="AgentActivity.tts_say",
+            )
+            task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -2732,9 +2758,9 @@ class AgentActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
+        text: str | AsyncIterable[str] | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
-
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
@@ -2745,6 +2771,20 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
+
+        if text is not None:
+            try:
+                generation_ev = await self._rt_session.say(text)
+            except llm.RealtimeError as e:
+                logger.error("failed to say text: %s", str(e))
+                return
+
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+            return
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
