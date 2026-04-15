@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import uuid
@@ -165,16 +166,23 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
+    def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
+        config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = language
+        return config
+
     def stream(
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
-            opts=self._opts,
+            opts=config,
             api_key=self._api_key,
             http_session=self._ensure_session(),
         )
