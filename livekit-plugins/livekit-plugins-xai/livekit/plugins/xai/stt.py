@@ -33,6 +33,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -167,6 +168,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         stream = SpeechStream(
@@ -205,7 +207,7 @@ class STT(stt.STT):
 
         for stream in self._streams:
             stream.update_options(
-                interim_results=interim_results,
+                enable_interim_results=interim_results,
                 sample_rate=sample_rate,
                 enable_diarization=enable_diarization,
                 language=language,
@@ -228,6 +230,7 @@ class SpeechStream(stt.RecognizeStream):
         self._api_key = api_key
         self._session = http_session
         self._speaking = False
+        self._emitted_chunk_final = False
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -354,11 +357,11 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         params = {
-            "encoding": self._opts.encoding,
-            "sample_rate": self._opts.sample_rate,
+            "encoding": str(self._opts.encoding),
+            "sample_rate": str(self._opts.sample_rate),
             "interim_results": str(self._opts.enable_interim_results).lower(),
             "diarize": str(self._opts.enable_diarization).lower(),
-            "language": self._opts.language,
+            "language": str(self._opts.language),
         }
         try:
             ws = await asyncio.wait_for(
@@ -405,21 +408,39 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             if is_final:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[
-                            _words_to_speech_data(
-                                words,
-                                text,
-                                language=language,
-                                enable_diarization=self._opts.enable_diarization,
-                            )
-                        ],
+                if not speech_final:
+                    self._emitted_chunk_final = True
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            request_id=self._request_id,
+                            alternatives=[
+                                _words_to_speech_data(
+                                    words,
+                                    text,
+                                    language=language,
+                                    enable_diarization=self._opts.enable_diarization,
+                                )
+                            ],
+                        )
                     )
-                )
-                if speech_final:
+                else:
+                    if not self._emitted_chunk_final:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    _words_to_speech_data(
+                                        words,
+                                        text,
+                                        language=language,
+                                        enable_diarization=self._opts.enable_diarization,
+                                    )
+                                ],
+                            )
+                        )
+                    self._emitted_chunk_final = False
                     self._speaking = False
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
@@ -430,7 +451,9 @@ class SpeechStream(stt.RecognizeStream):
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             request_id=self._request_id,
-                            alternatives=[stt.SpeechData(language=language, text=text)],
+                            alternatives=[
+                                stt.SpeechData(language=LanguageCode(language), text=text)
+                            ],
                         )
                     )
 
@@ -473,7 +496,7 @@ def _words_to_speech_data(
         else None
     )
     return stt.SpeechData(
-        language=language,
+        language=LanguageCode(language),
         text=text,
         start_time=words[0].get("start", 0.0) if words else 0.0,
         end_time=words[-1].get("end", 0.0) if words else 0.0,
