@@ -2613,6 +2613,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
+            extra_kwargs: dict = {}
+            if llm_gen_data.generated_extra:
+                extra_kwargs["extra"] = llm_gen_data.generated_extra
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -2620,6 +2623,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
+                **extra_kwargs,
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
