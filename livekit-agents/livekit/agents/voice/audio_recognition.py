@@ -70,7 +70,6 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
@@ -441,6 +440,9 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
+        if self._session.amd is not None and not self._session.amd.started:
+            self._session.amd._on_first_audio()
+
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
 
@@ -719,6 +721,7 @@ class AudioRecognition:
             ):
                 self._last_language = language
 
+            self._final_transcript_received.set()
             if not transcript:
                 return
 
@@ -728,6 +731,9 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
+            if self._session.amd is not None:
+                self._session.amd._on_transcript(transcript)
+
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
@@ -740,7 +746,6 @@ class AudioRecognition:
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
-            self._final_transcript_received.set()
 
             if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
@@ -826,6 +831,18 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
+            # STT EOT changes user state from speaking to listening without updating VAD internal states
+            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
+            # and user state won't be updated until a new VAD SOS is received
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
+            if self._vad:
+                if self._speaking:
+                    logger.warning(
+                        "stt end of speech received while user is speaking, resetting vad"
+                    )
+                self.update_vad(self._vad)
+
             self._speaking = False
             self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
@@ -862,6 +879,9 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_started()
+
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
 
@@ -884,6 +904,9 @@ class AudioRecognition:
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
+
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
@@ -1086,6 +1109,13 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+
+            # reset the speaking state to prevent stuck user speaking state during handoff
+            if self._speaking:
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
+                self._speaking = False
+                self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(

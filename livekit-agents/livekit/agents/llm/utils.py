@@ -115,13 +115,24 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
-def is_context_type(ty: type) -> bool:
+def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
     from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is RunContext or origin is RunContext
 
-    return is_call_context
+    if not allow_subclasses:
+        return ty is RunContext or origin is RunContext
+
+    if origin is not None:
+        try:
+            return issubclass(origin, RunContext)
+        except TypeError:
+            return False
+
+    try:
+        return issubclass(ty, RunContext)
+    except TypeError:
+        return False
 
 
 @dataclass
@@ -317,7 +328,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     for param_name, param in signature.parameters.items():
         type_hint = type_hints[param_name]
 
-        if is_context_type(type_hint):
+        if is_context_type(type_hint, allow_subclasses=True):
             continue
 
         default_value = param.default if param.default is not param.empty else ...
@@ -362,7 +373,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str,  # raw function output from the LLM
+    json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
@@ -372,9 +383,28 @@ def prepare_function_arguments(
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-    args_dict = from_json(json_arguments)
-    if args_dict is None:
-        args_dict = {}
+
+    if isinstance(json_arguments, str):
+        args_dict = from_json(json_arguments)
+        # some providers (e.g. Nova Sonic) double-encode tool arguments as nested
+        # JSON strings. unwrap until we reach a non-string value.
+        while isinstance(args_dict, str):
+            try:
+                args_dict = from_json(args_dict)
+            except Exception:
+                raise ValueError(
+                    f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
+                ) from None
+
+        if args_dict is None:
+            args_dict = {}
+        elif not isinstance(args_dict, dict):
+            raise ValueError(
+                f"expected dict from function arguments, "
+                f"got {type(args_dict).__name__}: {json_arguments[:200]}"
+            )
+    else:
+        args_dict = json_arguments
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
@@ -407,12 +437,21 @@ def prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext if needed
+    # inject RunContext (or subclasses like AsyncRunContext) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if is_context_type(type_hint) and call_ctx is not None:
+        if not is_context_type(type_hint, allow_subclasses=True) or call_ctx is None:
+            continue
+
+        expected_type = get_origin(type_hint) or type_hint
+        if isinstance(call_ctx, expected_type):
             context_dict[param_name] = call_ctx
+        else:
+            logger.error(
+                f"context type mismatch for parameter '{param_name}': "
+                f"expected {expected_type.__name__}, got {type(call_ctx).__name__}"
+            )
 
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()

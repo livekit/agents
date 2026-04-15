@@ -27,7 +27,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urlparse
 
 import aiohttp
@@ -38,7 +38,7 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report
+from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
@@ -64,9 +64,17 @@ if TYPE_CHECKING:
     from .voice.report import SessionReport
 
 
-def get_job_context() -> JobContext:
+@overload
+def get_job_context(*, required: Literal[True] = True) -> JobContext: ...
+
+
+@overload
+def get_job_context(*, required: Literal[False]) -> JobContext | None: ...
+
+
+def get_job_context(*, required: bool = True) -> JobContext | None:
     ctx = _JobContextVar.get(None)
-    if ctx is None:
+    if ctx is None and required:
         raise RuntimeError(
             "no job context found, are you running this code inside a job entrypoint?"
         )
@@ -109,6 +117,7 @@ class RunningJobInfo:
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
@@ -248,6 +257,8 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
+        otel_metrics.flush_turn_metrics(session.history)
+
         c = AgentsConsole.get_instance()
         report = self.make_session_report(session)
 
@@ -268,7 +279,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
         if (any(report.recording_options.values()) or has_evals) and obs_url:
             try:
@@ -476,6 +487,11 @@ class JobContext:
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
         """
+
+        # handle connection automatically, otherwise wait_for_participant will raise an error
+        if not self._room.isconnected():
+            await self.connect()
+
         return await wait_for_participant(self._room, identity=identity, kind=kind)
 
     async def connect(

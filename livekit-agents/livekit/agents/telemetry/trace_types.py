@@ -94,6 +94,13 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
 
+# AMD (Answering Machine Detection) attributes
+ATTR_AMD_CATEGORY = "lk.amd.category"
+ATTR_AMD_REASON = "lk.amd.reason"
+ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
+ATTR_AMD_DELAY = "lk.amd.delay"
+ATTR_AMD_TRANSCRIPT = "lk.amd.transcript"
+
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"
 ATTR_INTERRUPTION_PROBABILITY = "lk.interruption.probability"
