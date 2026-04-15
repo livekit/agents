@@ -1026,17 +1026,6 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
-        ):
-            logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
-            )
-            allow_interruptions = NOT_GIVEN
-
-        if (
             not is_given(audio)
             and not self.tts
             and not (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
@@ -1047,6 +1036,17 @@ class AgentActivity(RecognitionHooks):
                 "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
                 "add a TTS model to AgentSession to enable say()"
             )
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and allow_interruptions is False
+        ):
+            logger.warning(
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
+            )
+            allow_interruptions = NOT_GIVEN
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
