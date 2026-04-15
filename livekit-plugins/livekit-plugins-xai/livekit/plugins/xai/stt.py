@@ -404,7 +404,7 @@ class SpeechStream(stt.RecognizeStream):
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
 
-            if speech_final:
+            if is_final:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -419,16 +419,10 @@ class SpeechStream(stt.RecognizeStream):
                         ],
                     )
                 )
-                self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-            elif is_final:
-                if self._opts.enable_interim_results:
+                if speech_final:
+                    self._speaking = False
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            request_id=self._request_id,
-                            alternatives=[stt.SpeechData(language=language, text=text)],
-                        )
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
             else:
                 if self._opts.enable_interim_results:
