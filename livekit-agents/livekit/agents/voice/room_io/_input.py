@@ -175,9 +175,6 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._tasks.add(task)
             self._stream = None
             self._publication = None
-        if self._processor:
-            self._processor._close()
-            self._processor = None
 
     def _on_track_available(
         self,
@@ -291,10 +288,15 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else self._noise_cancellation
         )
 
+        previous_processor = self._processor
+        next_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
         if isinstance(noise_cancellation, rtc.FrameProcessor):
-            self._processor = noise_cancellation
-        elif callable(self._noise_cancellation):
-            self._processor = None
+            next_processor = noise_cancellation
+
+        if previous_processor is not None and previous_processor is not next_processor:
+            previous_processor._close()
+
+        self._processor = next_processor
 
         return rtc.AudioStream.from_track(
             track=track,
@@ -303,6 +305,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             noise_cancellation=noise_cancellation,
             frame_size_ms=self._frame_size_ms,
         )
+
+    @override
+    def _on_track_unavailable(
+        self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        current_processor = self._processor
+        super()._on_track_unavailable(publication, participant)
+        if self._stream is None and self._processor is current_processor and current_processor is not None:
+            current_processor._close()
+            self._processor = None
 
     @override
     async def _forward_task(

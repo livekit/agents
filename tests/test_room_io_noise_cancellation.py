@@ -102,6 +102,28 @@ def _make_audio_input_stream(
 
 
 @pytest.mark.asyncio
+async def test_direct_frame_processor_survives_initial_subscription() -> None:
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    stream = _make_audio_input_stream(room, noise_cancellation=processor)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        stream._on_track_available(track, publication, participant)
+
+    assert stream._processor is processor
+    assert processor.close_calls == 0
+    assert len(processor.stream_info_calls) == 1
+    assert len(processor.credentials_calls) == 1
+
+    await stream.aclose()
+
+    assert processor.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_selector_frame_processor_receives_lifecycle_calls() -> None:
     """When a NoiseCancellationSelector returns a FrameProcessor, it should
     receive _on_stream_info_updated and _on_credentials_updated calls."""
