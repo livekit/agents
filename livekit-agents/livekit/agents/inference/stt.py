@@ -51,6 +51,7 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
+XaiModels = Literal["xai/stt-1",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -118,6 +119,14 @@ class ElevenlabsOptions(TypedDict, total=False):
     language_code: str
 
 
+class XaiOptions(TypedDict, total=False):
+    diarize: bool  # when True, enables speaker diarization (default off)
+    endpointing: int  # silence duration in ms before utterance-final (0-5000)
+    format: bool  # enable text formatting / ITN (requires language)
+    multichannel: bool  # enable multichannel transcription
+    channels: int  # number of channels (2-8, requires multichannel=true)
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -169,6 +178,7 @@ STTModels = (
     | CartesiaModels
     | AssemblyAIModels
     | ElevenlabsModels
+    | XaiModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -281,6 +291,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: XaiModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -313,6 +340,7 @@ class STT(stt.STT):
             | DeepgramFluxOptions
             | AssemblyaiOptions
             | ElevenlabsOptions
+            | XaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
