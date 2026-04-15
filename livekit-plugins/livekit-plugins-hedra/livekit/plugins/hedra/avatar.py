@@ -10,6 +10,6 @@ class AvatarSession:
 
     def __init__(self, **kwargs: object) -> None:
         raise HedraException(
-            "The Hedra realtime avatar service has been disabled. "
-            "Please use another avatar provider, such as Anam (livekit-plugins-anam)."
+            "The Hedra realtime avatar service has been disabled. This plugin no longer functions."
+            "Please browse our other avatar integrations instead at https://docs.livekit.io/agents/models/avatar/."
         )
