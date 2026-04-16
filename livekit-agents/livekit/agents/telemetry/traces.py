@@ -583,24 +583,46 @@ async def _upload_session_report(
     logger.debug("finished uploading")
 
 
-def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
-        logger.debug("shutting down telemetry tracer provider")
-        tracer_provider.force_flush()
-        tracer_provider.shutdown()
+_TELEMETRY_SHUTDOWN_TIMEOUT = 5.0
 
-    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
-        # remove the OTLP LoggingHandler before flushing to avoid deadlock —
-        # force_flush triggers log export which emits new logs back through the handler
+
+def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+    """Shut down OTel providers with a hard wall-clock bound.
+
+    ``provider.shutdown()`` internally joins its exporter worker with a 30s
+    default timeout per provider (and ``force_flush`` ignores its timeout arg
+    in the current SDK). Across tracer/logger/meter that's up to ~90s — enough
+    to stall the caller's event loop past the supervisor's 60s ping/pong
+    deadline when the OTLP endpoint is rate-limiting or unreachable. We run
+    the teardown in a daemon thread with a wall-clock bound; any unfinished
+    work stays on existing daemon threads and is discarded at process exit.
+    """
+    # Detach the OTLP LoggingHandler first: shutdown emits logs through the
+    # root logger and would re-enter the handler, causing a deadlock.
+    logger_provider = get_logger_provider()
+    if isinstance(logger_provider, LoggerProvider):
         root = logging.getLogger()
-        for h in root.handlers[:]:
+        for h in list(root.handlers):
             if isinstance(h, LoggingHandler):
                 root.removeHandler(h)
 
-        logger_provider.force_flush()
-        logger_provider.shutdown()  # type: ignore
+    providers: list[Any] = []
+    if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
+        providers.append(tp)
+    if isinstance(logger_provider, LoggerProvider):
+        providers.append(logger_provider)
+    if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
+        providers.append(mp)
 
-    if isinstance(meter_provider := metrics_api.get_meter_provider(), SdkMeterProvider):
-        logger.debug("shutting down telemetry meter provider")
-        meter_provider.force_flush()
-        meter_provider.shutdown()
+    def _teardown() -> None:
+        for provider in providers:
+            try:
+                provider.shutdown()
+            except Exception:
+                logger.exception("failed to shut down telemetry provider")
+
+    t = threading.Thread(target=_teardown, name="livekit-telemetry-shutdown", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        logger.warning("telemetry shutdown exceeded %.1fs; continuing", timeout)
