@@ -306,15 +306,28 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             frame_size_ms=self._frame_size_ms,
         )
 
+    def _close_selector_processor(self) -> None:
+        if isinstance(self._noise_cancellation, rtc.FrameProcessor):
+            return
+        if self._processor is not None:
+            self._processor._close()
+            self._processor = None
+
+    @override
+    def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
+        previous_processor = self._processor
+        super().set_participant(participant)
+        if self._stream is None and self._processor is previous_processor:
+            self._close_selector_processor()
+
     @override
     def _on_track_unavailable(
         self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
         current_processor = self._processor
         super()._on_track_unavailable(publication, participant)
-        if self._stream is None and self._processor is current_processor and current_processor is not None:
-            current_processor._close()
-            self._processor = None
+        if self._stream is None and self._processor is current_processor:
+            self._close_selector_processor()
 
     @override
     async def _forward_task(
