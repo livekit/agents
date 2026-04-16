@@ -10,6 +10,7 @@ from livekit.agents import (
     Agent,
     AgentSession,
     EndpointingOptions,
+    InterruptionOptions,
     NotGivenOr,
     TurnHandlingOptions,
     utils,
@@ -43,10 +44,17 @@ def create_session(
         min_delay=0.5 / speed_factor,
         max_delay=6.0 / speed_factor,
     )
-    # allowing overriding default endpointing options
+    default_interruption = InterruptionOptions(
+        min_duration=0.5 / speed_factor,
+        false_interruption_timeout=2.0 / speed_factor,
+    )
+    # allowing overriding default endpointing and interruption options
     turn_handling = turn_handling or {}
     turn_handling["endpointing"] = EndpointingOptions(
         **{**default_endpointing, **turn_handling.get("endpointing", {})}
+    )
+    turn_handling["interruption"] = InterruptionOptions(
+        **{**default_interruption, **turn_handling.get("interruption", {})}
     )
 
     stt = FakeSTT(fake_user_speeches=user_speeches)

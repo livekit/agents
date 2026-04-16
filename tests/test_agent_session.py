@@ -290,7 +290,7 @@ async def test_interruption_options() -> None:
     session = create_session(
         actions,
         speed_factor=speed,
-        turn_handling={"interruption": {"min_interruption_words": 3}},
+        turn_handling={"interruption": {"min_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -603,7 +603,7 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
     session.on("agent_state_changed", agent_state_events.append)
     session.on("user_state_changed", user_state_events.append)
 
-    await asyncio.wait_for(run_session(session, agent, drain_delay=5), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
     assert len(user_state_events) == 2
     assert user_state_events[0].old_state == "listening"
     assert user_state_events[0].new_state == "speaking"
