@@ -27,6 +27,7 @@ class LLM(openai.responses.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
@@ -44,4 +45,5 @@ class LLM(openai.responses.LLM):
             tool_choice=tool_choice,
             reasoning=reasoning,
             timeout=timeout,
+            max_output_tokens=max_output_tokens,
         )
