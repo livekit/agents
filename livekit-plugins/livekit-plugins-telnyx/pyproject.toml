@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-telnyx"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Telnyx implementation for LiveKit Agents"
 dependencies = [
     "livekit-agents>=1.5.3",
