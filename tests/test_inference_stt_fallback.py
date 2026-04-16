@@ -290,3 +290,21 @@ class TestSTTDiarizationCapabilities:
         assert stt.capabilities.diarization is True
         stt.update_options(extra={"diarize": False})
         assert stt.capabilities.diarization is False
+
+    def test_diarization_enabled_with_xai_diarize(self):
+        """xAI shares the 'diarize' key with Deepgram; capability flips True."""
+        stt = _make_stt(model="xai/stt-1", extra_kwargs={"diarize": True})
+        assert stt.capabilities.diarization is True
+
+    def test_update_options_extra_preserves_unrelated_flags(self):
+        """Partial extra updates merge into existing extra_kwargs instead of
+        replacing them — so a prior diarize=True is retained when the new
+        extra only mentions an unrelated key.
+        """
+        stt = _make_stt(extra_kwargs={"diarize": True})
+        assert stt.capabilities.diarization is True
+        stt.update_options(extra={"endpointing": 500})
+        # diarize should still be active after the partial update.
+        assert stt._opts.extra_kwargs.get("diarize") is True
+        assert stt._opts.extra_kwargs.get("endpointing") == 500
+        assert stt.capabilities.diarization is True

@@ -122,9 +122,25 @@ class ElevenlabsOptions(TypedDict, total=False):
 class XaiOptions(TypedDict, total=False):
     diarize: bool  # when True, enables speaker diarization (default off)
     endpointing: int  # silence duration in ms before utterance-final (0-5000)
-    format: bool  # enable text formatting / ITN (requires language)
-    multichannel: bool  # enable multichannel transcription
-    channels: int  # number of channels (2-8, requires multichannel=true)
+    format: bool  # adds punctuation/capitalization to transcripts (requires language)
+    interim_results: bool  # default True; set False to opt out of interim transcripts
+
+
+# Diarization is requested via different extra_kwargs keys across
+# providers. Keep this list in one place so adding a new provider is a
+# single-line change and there's no divergence between __init__ and
+# update_options capability inference.
+_DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
+    "diarize",  # Deepgram, xAI
+    "speaker_labels",  # AssemblyAI
+)
+
+
+def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
+    """Return True if any known provider diarization flag is truthy."""
+    if not extra_kwargs:
+        return False
+    return any(bool(extra_kwargs.get(key)) for key in _DIARIZATION_EXTRA_KEYS)
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -361,13 +377,12 @@ class STT(stt.STT):
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
-        # Check extra_kwargs for diarization parameters across different providers
-        # Deepgram uses "diarize", AssemblyAI uses "speaker_labels"
-        diarization_enabled = False
-        if is_given(extra_kwargs):
-            diarization_enabled = bool(
-                extra_kwargs.get("diarize") or extra_kwargs.get("speaker_labels")
-            )
+        # Infer diarization capability from provider-specific extra_kwargs
+        # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
+        # Deepgram); AssemblyAI uses "speaker_labels".
+        diarization_enabled = _diarization_enabled(
+            dict(extra_kwargs) if is_given(extra_kwargs) else None
+        )
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -490,12 +505,10 @@ class STT(stt.STT):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
-            # Update diarization capability based on extra_kwargs
-            diarization_enabled = bool(
-                self._opts.extra_kwargs.get("diarize")
-                or self._opts.extra_kwargs.get("speaker_labels")
+            self._capabilities = replace(
+                self._capabilities,
+                diarization=_diarization_enabled(self._opts.extra_kwargs),
             )
-            self._capabilities = replace(self._capabilities, diarization=diarization_enabled)
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
