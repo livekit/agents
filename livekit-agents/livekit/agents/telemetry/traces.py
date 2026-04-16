@@ -583,7 +583,7 @@ async def _upload_session_report(
     logger.debug("finished uploading")
 
 
-_TELEMETRY_SHUTDOWN_TIMEOUT = 5.0
+_TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
 
 
 def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
