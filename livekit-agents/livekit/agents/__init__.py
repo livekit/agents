@@ -92,7 +92,6 @@ from .voice import (
     room_io,
     text_transforms,
 )
-from .voice.agent_session import PreemptiveGenerationOptions
 from .voice.amd import (
     AMD,
     AMDCategory,
@@ -112,7 +111,12 @@ from .voice.run_result import (
     RunResult,
     mock_tools,
 )
-from .voice.turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
+from .voice.turn import (
+    EndpointingOptions,
+    InterruptionOptions,
+    PreemptiveGenerationOptions,
+    TurnHandlingOptions,
+)
 from .worker import (
     AgentServer,
     WorkerOptions,

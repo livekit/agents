@@ -64,11 +64,13 @@ from .speech_handle import InputDetails, SpeechHandle
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
+    PreemptiveGenerationOptions,
     TurnDetectionMode,
     TurnHandlingOptions,
     _migrate_turn_handling,
     _resolve_endpointing,
     _resolve_interruption,
+    _resolve_preemptive_generation,
 )
 
 if TYPE_CHECKING:
@@ -121,40 +123,6 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
     return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
-class PreemptiveGenerationOptions(TypedDict, total=False):
-    """Configuration for preemptive generation."""
-
-    preemptive_tts: bool
-    """Whether to also run TTS preemptively before the turn is confirmed.
-    When ``False`` (default), only LLM runs preemptively; TTS starts once the
-    turn is confirmed and the speech is scheduled."""
-
-    max_speech_duration: float
-    """Maximum user speech duration (s) for which preemptive generation
-    is attempted. Beyond this threshold, preemptive generation is skipped
-    since long utterances are more likely to change and users may expect
-    slower responses. Defaults to ``10.0``."""
-
-    max_retries: int
-    """Maximum number of preemptive generation attempts per user turn.
-    The counter resets when the turn completes. Defaults to ``3``."""
-
-
-_PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
-    "preemptive_tts": False,
-    "max_speech_duration": 10.0,
-    "max_retries": 3,
-}
-
-
-def _resolve_preemptive_generation(
-    config: bool | PreemptiveGenerationOptions,
-) -> PreemptiveGenerationOptions | None:
-    if isinstance(config, bool):
-        return PreemptiveGenerationOptions(**_PREEMPTIVE_GENERATION_DEFAULTS) if config else None
-    return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
-
-
 @dataclass
 class SessionConnectOptions:
     stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -169,7 +137,6 @@ class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
     max_tool_steps: int
     user_away_timeout: float | None
-    preemptive_generation: PreemptiveGenerationOptions | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -183,6 +150,10 @@ class AgentSessionOptions:
     @property
     def interruption(self) -> InterruptionOptions:
         return self.turn_handling["interruption"]
+
+    @property
+    def preemptive_generation(self) -> PreemptiveGenerationOptions:
+        return self.turn_handling["preemptive_generation"]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -235,6 +206,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "allow_interruptions": "Use turn_handling=TurnHandlingOptions(...) instead",
             "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingOptions(...) instead",
             "min_interruption_duration": "Use turn_handling=TurnHandlingOptions(...) instead",
+            "preemptive_generation": "Use turn_handling=TurnHandlingOptions(...) instead",
             "min_interruption_words": "Use turn_handling=TurnHandlingOptions(...) instead",
             "turn_detection": "Use turn_handling=TurnHandlingOptions(...) instead",
             "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingOptions(...) instead",
@@ -260,7 +232,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        preemptive_generation: bool | PreemptiveGenerationOptions = True,
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
@@ -268,6 +239,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
+        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
@@ -326,19 +298,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
-            preemptive_generation (bool | PreemptiveGenerationOptions):
-                Whether to speculatively begin LLM and TTS requests before an end-of-turn is
-                detected. When True, the agent sends inference calls as soon as a user
-                transcript is received rather than waiting for a definitive turn boundary. This
-                can reduce response latency by overlapping model inference with user audio,
-                but may incur extra compute if the user interrupts or revises mid-utterance.
-                Pass a ``PreemptiveGenerationOptions`` dict for fine-grained control
-                (e.g. ``{"max_speech_duration": 5.0}``).
-                Defaults to ``True``.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
                 Set to ``None`` to disable. Default ``3.0`` s.
+            preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -361,12 +325,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_handling = (
             _migrate_turn_handling(
                 # backward compatibility for deprecated parameters that had default values
-                min_endpointing_delay=min_endpointing_delay
-                if is_given(min_endpointing_delay)
-                else 0.5,
-                max_endpointing_delay=max_endpointing_delay
-                if is_given(max_endpointing_delay)
-                else 3.0,
+                min_endpointing_delay=(
+                    min_endpointing_delay if is_given(min_endpointing_delay) else 0.5
+                ),
+                max_endpointing_delay=(
+                    max_endpointing_delay if is_given(max_endpointing_delay) else 3.0
+                ),
                 false_interruption_timeout=false_interruption_timeout,
                 turn_detection=turn_detection,
                 discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -375,6 +339,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 allow_interruptions=allow_interruptions,
                 resume_false_interruption=resume_false_interruption,
                 agent_false_interruption_timeout=agent_false_interruption_timeout,
+                preemptive_generation=preemptive_generation,
             )
             if not is_given(turn_handling)
             else turn_handling
@@ -382,6 +347,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
         interruption = _resolve_interruption(turn_handling.get("interruption"))
+        preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
         raw_turn_detection = turn_handling.get("turn_detection", None)
 
         # This is the "global" chat_context, it holds the entire conversation history
@@ -391,10 +357,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 endpointing=endpointing,
                 interruption=interruption,
                 turn_detection=raw_turn_detection,
+                preemptive_generation=preemptive_gen,
             ),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
-            preemptive_generation=_resolve_preemptive_generation(preemptive_generation),
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms

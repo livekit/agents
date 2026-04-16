@@ -52,11 +52,21 @@ def create_session(
     if "resume_false_interruption" in extra:
         interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
 
+    turn_handling: dict[str, Any] = extra.pop("turn_handling", {})
+    turn_handling.update(
+        TurnHandlingOptions(
+            endpointing=EndpointingOptions(
+                min_delay=0.5 / speed_factor,
+                max_delay=6.0 / speed_factor,
+            ),
+            interruption=InterruptionOptions(**interruption_dict),
+        )
+    )
+
     stt = FakeSTT(fake_user_speeches=user_speeches)
 
-    extra_kwargs = extra_kwargs or {}
-    if "aec_warmup_duration" not in extra_kwargs:
-        extra_kwargs["aec_warmup_duration"] = None  # disable aec warmup by default
+    if "aec_warmup_duration" not in extra:
+        extra["aec_warmup_duration"] = None  # disable aec warmup by default
 
     session = AgentSession[None](
         vad=FakeVAD(
@@ -67,14 +77,8 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        turn_handling=TurnHandlingOptions(
-            endpointing=EndpointingOptions(
-                min_delay=0.5 / speed_factor,
-                max_delay=6.0 / speed_factor,
-            ),
-            interruption=InterruptionOptions(**interruption_dict),
-        ),
-        **extra_kwargs,
+        turn_handling=turn_handling,
+        **extra,
     )
 
     # setup io with transcription sync

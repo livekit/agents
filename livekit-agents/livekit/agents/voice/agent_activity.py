@@ -1772,7 +1772,7 @@ class AgentActivity(RecognitionHooks):
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         preemptive_opts = self._session.options.preemptive_generation
         if (
-            not preemptive_opts
+            not preemptive_opts["enabled"]
             or self._scheduling_paused
             or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
@@ -2397,10 +2397,11 @@ class AgentActivity(RecognitionHooks):
             return tts_task, tts_gen_data
 
         # start preemptive tts inference if enabled
+        preemptive_opts = self._session.options.preemptive_generation
         if (
             audio_output is not None
-            and (opt := self._session.options.preemptive_generation)
-            and opt["preemptive_tts"]
+            and preemptive_opts["enabled"]
+            and preemptive_opts["preemptive_tts"]
         ):
             tts_task, tts_gen_data = await _start_tts_inference()
             tasks.append(tts_task)
