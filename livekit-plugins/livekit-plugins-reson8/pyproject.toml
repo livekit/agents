@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-reson8"
+dynamic = ["version"]
+description = "Agent Framework plugin for speech-to-text using Reson8's API."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "Reson8 Labs", email = "support@reson8.dev" }]
+keywords = ["webrtc", "realtime", "audio", "livekit", "reson8", "stt", "speech-to-text"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["livekit-agents[codecs]>=1.5.2", "websockets>=13.0", "httpx>=0.28"]
+
+[project.urls]
+Documentation = "https://docs.reson8.dev"
+Website = "https://reson8.dev"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/reson8/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
