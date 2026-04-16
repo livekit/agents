@@ -279,7 +279,9 @@ class TestSTTDiarizationCapabilities:
 
     def test_diarization_enabled_with_assemblyai_speaker_labels(self):
         """AssemblyAI's 'speaker_labels' param enables diarization capability."""
-        stt = _make_stt(model="assemblyai/universal-streaming", extra_kwargs={"speaker_labels": True})
+        stt = _make_stt(
+            model="assemblyai/universal-streaming", extra_kwargs={"speaker_labels": True}
+        )
         assert stt.capabilities.diarization is True
 
     def test_update_options_toggles_diarization(self):
