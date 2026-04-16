@@ -237,7 +237,7 @@ async def test_interruption(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -288,7 +288,9 @@ async def test_interruption_options() -> None:
 
     # test min_interruption_words
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"min_interruption_words": 3}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"min_interruption_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -301,7 +303,9 @@ async def test_interruption_options() -> None:
 
     # test allow_interruptions=False
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"allow_interruptions": False}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"enabled": False}},
     )
     playback_finished_events.clear()
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -394,7 +398,7 @@ async def test_interruption_before_speaking(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -590,7 +594,7 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"turn_handling": {"preemptive_generation": preemptive_generation}},
+        turn_handling={"preemptive_generation": preemptive_generation},
     )
     agent = MyAgent()
 
@@ -648,7 +652,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"preemptive_generation": preemptive_generation},
+        turn_handling={"preemptive_generation": {"enabled": preemptive_generation}},
     )
     agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
 

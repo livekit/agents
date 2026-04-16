@@ -10,7 +10,6 @@ from livekit.agents import (
     Agent,
     AgentSession,
     EndpointingOptions,
-    InterruptionOptions,
     NotGivenOr,
     TurnHandlingOptions,
     utils,
@@ -32,6 +31,7 @@ def create_session(
     actions: FakeActions,
     *,
     speed_factor: float = 1.0,
+    turn_handling: TurnHandlingOptions | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
@@ -39,28 +39,14 @@ def create_session(
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
     extra = dict(extra_kwargs or {})
-
-    interruption_dict: dict[str, Any] = {
-        "min_duration": 0.5 / speed_factor,
-        "false_interruption_timeout": 2.0 / speed_factor,
-    }
-    if "min_interruption_words" in extra:
-        interruption_dict["min_words"] = extra.pop("min_interruption_words")
-    if "allow_interruptions" in extra:
-        if extra.pop("allow_interruptions") is False:
-            interruption_dict["enabled"] = False
-    if "resume_false_interruption" in extra:
-        interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
-
-    turn_handling: dict[str, Any] = extra.pop("turn_handling", {})
-    turn_handling.update(
-        TurnHandlingOptions(
-            endpointing=EndpointingOptions(
-                min_delay=0.5 / speed_factor,
-                max_delay=6.0 / speed_factor,
-            ),
-            interruption=InterruptionOptions(**interruption_dict),
-        )
+    default_endpointing = EndpointingOptions(
+        min_delay=0.5 / speed_factor,
+        max_delay=6.0 / speed_factor,
+    )
+    # allowing overriding default endpointing options
+    turn_handling = turn_handling or {}
+    turn_handling["endpointing"] = EndpointingOptions(
+        **{**default_endpointing, **turn_handling.get("endpointing", {})}
     )
 
     stt = FakeSTT(fake_user_speeches=user_speeches)
