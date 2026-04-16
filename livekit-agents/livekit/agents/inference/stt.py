@@ -122,7 +122,7 @@ class ElevenlabsOptions(TypedDict, total=False):
 class XaiOptions(TypedDict, total=False):
     diarize: bool  # when True, enables speaker diarization (default off)
     endpointing: int  # silence duration in ms before utterance-final (0-5000)
-    format: bool  # adds punctuation/capitalization to transcripts (requires language)
+    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
     interim_results: bool  # default True; set False to opt out of interim transcripts
 
 
