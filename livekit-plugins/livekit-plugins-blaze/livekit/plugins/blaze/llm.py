@@ -240,26 +240,13 @@ class LLMStream(llm.LLMStream):
 
         tool_defs: list[dict[str, Any]] = []
         for tool in self._tools:
-            # FunctionTool has callable_function with description and parameters
-            if hasattr(tool, "callable_function"):
-                fn = tool.callable_function
-                tool_def: dict[str, Any] = {
-                    "type": "function",
-                    "function": {
-                        "name": fn.name,
-                    },
-                }
-                if fn.description:
-                    tool_def["function"]["description"] = fn.description
-                if fn.parameters:
-                    tool_def["function"]["parameters"] = fn.parameters
-                tool_defs.append(tool_def)
-            else:
-                # Generic tool — use id as name
+            if isinstance(tool, llm.RawFunctionTool):
                 tool_defs.append({
                     "type": "function",
-                    "function": {"name": tool.id},
+                    "function": tool.info.raw_schema,
                 })
+            elif isinstance(tool, llm.FunctionTool):
+                tool_defs.append(llm.utils.build_legacy_openai_schema(tool))
 
         return tool_defs if tool_defs else None
 
@@ -320,7 +307,7 @@ class LLMStream(llm.LLMStream):
             async with blaze._client.stream(
                 "POST",
                 url,
-                json=messages if not tools_param else body,
+                json=body,
                 headers=headers,
             ) as response:
                 if response.status_code != 200:
