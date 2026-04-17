@@ -591,34 +591,39 @@ def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
 
     ``provider.shutdown()`` internally joins its exporter worker with a 30s
     default timeout per provider (and ``force_flush`` ignores its timeout arg
-    in the current SDK). Across tracer/logger/meter that's up to ~90s — enough
-    to stall the caller's event loop past the supervisor's 60s ping/pong
-    deadline when the OTLP endpoint is rate-limiting or unreachable. We run
-    the teardown in a daemon thread with a wall-clock bound; any unfinished
-    work stays on existing daemon threads and is discarded at process exit.
+    in the current SDK — see #4623). Across tracer/logger/meter that's up to
+    ~90s, enough to stall the caller's event loop past the supervisor's 60s
+    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
+    We run the teardown in a daemon thread with a wall-clock bound; any
+    unfinished work stays on existing daemon threads and is discarded at
+    process exit.
 
-    Upstream issues this works around:
+    Shutdown order matters: LoggerProvider goes first so its BatchProcessor's
+    ``_shutdown`` flag is set before anything else. Python's ``logging.shutdown()``
+    atexit handler may call ``LoggingHandler.flush()``, which spawns a
+    *non-daemon* thread running ``force_flush`` (opentelemetry-python PR #4636).
+    If the logger provider's ``_shutdown`` is already True, that ``force_flush``
+    returns immediately — otherwise the non-daemon thread could block process
+    exit on a stuck OTLP endpoint.
+
+    Upstream context:
     - https://github.com/open-telemetry/opentelemetry-python/issues/4623
-      (TracerProvider.shutdown() has no configurable timeout)
-    - https://github.com/open-telemetry/opentelemetry-python/issues/3309
-      (exporter shutdown takes >1min when export fails)
-    - https://github.com/open-telemetry/opentelemetry-python/issues/2284
-      (process never exits due to hang in BatchSpanProcessor worker_thread.join)
+      (TracerProvider.shutdown() has no configurable timeout — still open)
     """
-    # Detach the OTLP LoggingHandler first: shutdown emits logs through the
-    # root logger and would re-enter the handler, causing a deadlock.
-    logger_provider = get_logger_provider()
-    if isinstance(logger_provider, LoggerProvider):
-        root = logging.getLogger()
-        for h in list(root.handlers):
-            if isinstance(h, LoggingHandler):
-                root.removeHandler(h)
+    # Detach the OTLP LoggingHandler from the root logger. Belt to the
+    # suspenders of the logger-first ordering below: fewer chances for
+    # logging.shutdown() to touch a still-live handler.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if isinstance(h, LoggingHandler):
+            root.removeHandler(h)
 
     providers: list[Any] = []
+    # Logger first — see docstring.
+    if isinstance(lp := get_logger_provider(), LoggerProvider):
+        providers.append(lp)
     if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
         providers.append(tp)
-    if isinstance(logger_provider, LoggerProvider):
-        providers.append(logger_provider)
     if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
         providers.append(mp)
 
