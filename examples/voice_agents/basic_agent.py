@@ -105,6 +105,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
+            user_speech_limit={"max_duration": 10}
         ),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation

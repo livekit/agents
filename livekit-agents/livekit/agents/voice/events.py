@@ -99,6 +99,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
+    "user_speech_exceeded",
     "error",
     "close",
 ]
@@ -219,6 +220,21 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class UserSpeechExceededEvent(BaseModel):
+    type: Literal["user_speech_exceeded"] = "user_speech_exceeded"
+    transcript: str
+    """Transcript from the current (uncommitted) user turn only.
+    Previous turns in the accumulation window are already in the chat context."""
+    accumulated_transcript: str
+    """Full transcript across all user turns in the accumulation window,
+    including already-committed ones. Useful for inspection/logging."""
+    accumulated_word_count: int
+    """Total word count across all turns in the accumulation window."""
+    duration: float
+    """Wall-clock time (seconds) since the start of the accumulation window."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
@@ -255,6 +271,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
+    | UserSpeechExceededEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

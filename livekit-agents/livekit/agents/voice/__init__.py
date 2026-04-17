@@ -15,6 +15,7 @@ from .events import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
+    UserSpeechExceededEvent,
     UserStateChangedEvent,
 )
 from .room_io import (
@@ -47,6 +48,7 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
+    "UserSpeechExceededEvent",
     "TranscriptSynchronizer",
     "io",
     "room_io",
