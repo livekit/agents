@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -282,6 +283,11 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        # Wall-clock time (time.time()) when the first audio frame was sent to
+        # the server. Used to convert the server's stream-relative timestamp
+        # (returned in SpeechStarted.timestamp) into a wall-clock time so the
+        # framework can back-date _speech_start_time on START_OF_SPEECH.
+        self._stream_wall_start: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -378,6 +384,9 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    if self._stream_wall_start is None:
+                        # Anchor wall-clock time at first audio frame sent.
+                        self._stream_wall_start = time.time()
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
@@ -518,7 +527,22 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            # The server gates SpeechStarted behind the first partial with text
+            # (PR #15524), so it arrives ~750ms after actual speech onset. The
+            # `timestamp` field carries the server VAD's onset time in stream-
+            # relative ms. Convert to wall-clock by adding _stream_wall_start
+            # (recorded when the first audio frame was sent) so the framework
+            # records an accurate _speech_start_time instead of message arrival.
+            timestamp_ms = data.get("timestamp", 0)
+            speech_start_time: float | None = None
+            if timestamp_ms and self._stream_wall_start is not None:
+                speech_start_time = self._stream_wall_start + timestamp_ms / 1000
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    speech_start_time=speech_start_time,
+                )
+            )
             return
 
         if message_type == "Termination":
