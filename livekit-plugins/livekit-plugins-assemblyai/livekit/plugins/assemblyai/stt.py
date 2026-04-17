@@ -411,10 +411,12 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:
                         break
                     consecutive_timeouts += 1
-                    # 3 timeouts = 15s without any message from AAI
-                    if consecutive_timeouts == 3:
+                    # First warning at 15s, then every 15s while silence continues.
+                    # `session=None` here means WS connected but AAI never sent `Begin`.
+                    if consecutive_timeouts % 3 == 0:
                         logger.warning(
-                            "AssemblyAI no messages received for 15s session=%s",
+                            "AssemblyAI no messages received for %ds session=%s",
+                            consecutive_timeouts * 5,
                             self._session_id,
                         )
                     continue
