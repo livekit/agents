@@ -4,10 +4,10 @@ from collections.abc import AsyncGenerator, AsyncIterable
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, room_io
+from livekit.agents.types import TimedString
 from livekit.agents.voice.agent import ModelSettings
-from livekit.agents.voice.io import TimedString
-from livekit.plugins import silero
+from livekit.plugins import cartesia, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -43,13 +43,23 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
-        tts=inference.TTS("cartesia/sonic-3"),
+        tts=cartesia.TTS(),
         vad=silero.VAD.load(),
         # enable TTS-aligned transcript, can be configured at the Agent level as well
         use_tts_aligned_transcript=True,
     )
 
-    await session.start(agent=MyAgent(), room=ctx.room)
+    await session.start(
+        agent=MyAgent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            text_output=room_io.TextOutputOptions(
+                # Optional: get the timed transcript from the `lk.transcription` datastream topic as JSON dict
+                json_format=True,
+                sync_transcription=False,
+            )
+        ),
+    )
 
     session.generate_reply(instructions="say hello to the user")
 
