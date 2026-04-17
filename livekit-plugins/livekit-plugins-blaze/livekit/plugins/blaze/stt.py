@@ -102,9 +102,9 @@ class STT(stt.STT):
         self._last_recognize_time: float = 0.0
 
         # Safety limits
-        self._max_pending_duration: float = 5.0   # seconds of buffered audio
-        self._max_pending_segments: int = 3        # consecutive empty segments
-        self._pending_idle_timeout: float = 10.0   # auto-clear after idle gap
+        self._max_pending_duration: float = 5.0  # seconds of buffered audio
+        self._max_pending_segments: int = 3  # consecutive empty segments
+        self._pending_idle_timeout: float = 10.0  # auto-clear after idle gap
 
         logger.info("BlazeSTT initialized: url=%s, language=%s", self._api_url, self._language)
 
@@ -287,9 +287,7 @@ class STT(stt.STT):
             else 0.0
         )
         pending_duration = (
-            len(self._pending_pcm) / (sample_rate * bytes_per_sample)
-            if self._pending_pcm
-            else 0.0
+            len(self._pending_pcm) / (sample_rate * bytes_per_sample) if self._pending_pcm else 0.0
         )
 
         if not text.strip():
