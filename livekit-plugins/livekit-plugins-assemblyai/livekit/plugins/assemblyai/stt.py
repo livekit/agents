@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -282,6 +283,7 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -380,18 +382,36 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+                    self._last_frame_sent_at = time.time()
 
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            consecutive_timeouts = 0
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
+                    consecutive_timeouts += 1
+                    # Every 15s of recv silence, check whether the send side is
+                    # also idle. If frames are still flowing but no messages
+                    # arrive, the stall is downstream of this plugin; if
+                    # frames have stopped, the stall is upstream. Logging the
+                    # send-side silence makes that distinction explicit in
+                    # logs without needing external instrumentation.
+                    if consecutive_timeouts % 3 == 0 and self._last_frame_sent_at is not None:
+                        send_idle_s = time.time() - self._last_frame_sent_at
+                        if send_idle_s >= 15:
+                            logger.warning(
+                                "AssemblyAI no audio frames sent for %.0fs session=%s",
+                                send_idle_s,
+                                self._session_id,
+                            )
                     continue
 
                 if msg.type in (
