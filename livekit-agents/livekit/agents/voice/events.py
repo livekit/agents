@@ -99,7 +99,6 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
-    "user_speech_exceeded",
     "error",
     "close",
 ]
@@ -220,8 +219,8 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class UserSpeechExceededEvent(BaseModel):
-    type: Literal["user_speech_exceeded"] = "user_speech_exceeded"
+class UserTurnExceededEvent(BaseModel):
+    type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
     """Transcript from the current (uncommitted) user turn only.
     Previous turns in the accumulation window are already in the chat context."""
@@ -271,7 +270,6 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
-    | UserSpeechExceededEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

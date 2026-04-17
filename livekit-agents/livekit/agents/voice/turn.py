@@ -142,7 +142,7 @@ _PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
 }
 
 
-class UserSpeechLimitOptions(TypedDict, total=False):
+class UserTurnLimitOptions(TypedDict, total=False):
     """Configuration for detecting when a user has been speaking too long
     without the agent successfully responding.
 
@@ -165,7 +165,7 @@ class UserSpeechLimitOptions(TypedDict, total=False):
     duration-based limiting. Defaults to ``None``."""
 
 
-_USER_SPEECH_LIMIT_DEFAULTS: UserSpeechLimitOptions = {
+_USER_TURN_LIMIT_DEFAULTS: UserTurnLimitOptions = {
     "max_words": None,
     "max_duration": None,
 }
@@ -196,8 +196,8 @@ class TurnHandlingOptions(TypedDict, total=False):
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
     preemptive_generation: PreemptiveGenerationOptions
     """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
-    user_speech_limit: UserSpeechLimitOptions
-    """User speech limit configuration. Use ``{"max_words": 50}`` to enable."""
+    user_turn_limit: UserTurnLimitOptions
+    """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
 
 
 def _resolve_preemptive_generation(
@@ -225,13 +225,13 @@ def _resolve_interruption(
     return InterruptionOptions(**{**_INTERRUPTION_DEFAULTS, **config})
 
 
-def _resolve_user_speech_limit(
-    config: UserSpeechLimitOptions | None = None,
-) -> UserSpeechLimitOptions:
+def _resolve_user_turn_limit(
+    config: UserTurnLimitOptions | None = None,
+) -> UserTurnLimitOptions:
     """Fill in defaults for missing keys."""
     if config is None:
-        return UserSpeechLimitOptions(**_USER_SPEECH_LIMIT_DEFAULTS)
-    return UserSpeechLimitOptions(**{**_USER_SPEECH_LIMIT_DEFAULTS, **config})
+        return UserTurnLimitOptions(**_USER_TURN_LIMIT_DEFAULTS)
+    return UserTurnLimitOptions(**{**_USER_TURN_LIMIT_DEFAULTS, **config})
 
 
 def _migrate_turn_handling(

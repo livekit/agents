@@ -15,8 +15,8 @@ from .events import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
-    UserSpeechExceededEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
 )
 from .room_io import (
     _ParticipantAudioOutput,
@@ -48,7 +48,7 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
-    "UserSpeechExceededEvent",
+    "UserTurnExceededEvent",
     "TranscriptSynchronizer",
     "io",
     "room_io",

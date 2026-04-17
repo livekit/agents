@@ -67,12 +67,12 @@ from .turn import (
     PreemptiveGenerationOptions,
     TurnDetectionMode,
     TurnHandlingOptions,
-    UserSpeechLimitOptions,
+    UserTurnLimitOptions,
     _migrate_turn_handling,
     _resolve_endpointing,
     _resolve_interruption,
     _resolve_preemptive_generation,
-    _resolve_user_speech_limit,
+    _resolve_user_turn_limit,
 )
 
 if TYPE_CHECKING:
@@ -159,8 +159,8 @@ class AgentSessionOptions:
         return self.turn_handling["preemptive_generation"]
 
     @property
-    def user_speech_limit(self) -> UserSpeechLimitOptions:
-        return self.turn_handling["user_speech_limit"]
+    def user_turn_limit(self) -> UserTurnLimitOptions:
+        return self.turn_handling["user_turn_limit"]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -359,7 +359,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
         interruption = _resolve_interruption(turn_handling.get("interruption"))
         preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
-        user_speech_limit = _resolve_user_speech_limit(turn_handling.get("user_speech_limit"))
+        user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
         raw_turn_detection = turn_handling.get("turn_detection", None)
 
         # This is the "global" chat_context, it holds the entire conversation history
@@ -370,7 +370,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 interruption=interruption,
                 turn_detection=raw_turn_detection,
                 preemptive_generation=preemptive_gen,
-                user_speech_limit=user_speech_limit,
+                user_turn_limit=user_turn_limit,
             ),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,

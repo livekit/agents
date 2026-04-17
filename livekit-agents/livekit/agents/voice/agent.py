@@ -15,7 +15,7 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
-from .events import UserSpeechExceededEvent
+from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
@@ -255,8 +255,8 @@ class Agent:
         """
         pass
 
-    async def on_user_speech_exceeded(self, ev: UserSpeechExceededEvent) -> None:
-        """Called when the user has exceeded the configured speech limit.
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """Called when the user turn has exceeded the configured limit.
 
         The user has been speaking for too long without the agent successfully
         responding. By default, generates a reply using the current turn's

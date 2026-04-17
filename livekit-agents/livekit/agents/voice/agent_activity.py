@@ -48,7 +48,6 @@ from .audio_recognition import (
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
     _STTPipeline,
-    _UserSpeechExceededInfo,
 )
 from .endpointing import create_endpointing
 from .events import (
@@ -60,7 +59,7 @@ from .events import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
-    UserSpeechExceededEvent,
+    UserTurnExceededEvent,
 )
 from .generation import (
     ToolExecutionOutput,
@@ -172,8 +171,8 @@ class AgentActivity(RecognitionHooks):
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
 
-        self._speech_exceeded_task: asyncio.Task[None] | None = None
-        self._speech_exceeded_locked: bool = False
+        self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
+        self._user_turn_exceeded_locked: bool = False
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -2089,28 +2088,21 @@ class AgentActivity(RecognitionHooks):
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
-    def on_user_speech_exceeded(self, info: _UserSpeechExceededInfo) -> None:
-        if self._speech_exceeded_locked:
+    def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        if self._user_turn_exceeded_locked:
             return  # user callback is executing, drop
 
-        ev = UserSpeechExceededEvent(
-            transcript=info.transcript,
-            accumulated_transcript=info.accumulated_transcript,
-            accumulated_word_count=info.accumulated_word_count,
-            duration=info.duration,
-        )
-
         # cancel previous wait phase (if still waiting for EOU result)
-        if self._speech_exceeded_task is not None:
-            self._speech_exceeded_task.cancel()
+        if self._user_turn_exceeded_atask is not None:
+            self._user_turn_exceeded_atask.cancel()
 
-        self._speech_exceeded_task = self._create_speech_task(
-            self._invoke_on_user_speech_exceeded(ev),
-            name="AgentActivity._invoke_on_user_speech_exceeded",
+        self._user_turn_exceeded_atask = self._create_speech_task(
+            self._user_turn_exceeded_task(ev),
+            name="AgentActivity._user_turn_exceeded_task",
         )
 
     @utils.log_exceptions(logger=logger)
-    async def _invoke_on_user_speech_exceeded(self, ev: UserSpeechExceededEvent) -> None:
+    async def _user_turn_exceeded_task(self, ev: UserTurnExceededEvent) -> None:
         agent_speaking_fut = asyncio.Future[None]()
 
         def _on_agent_state_changed(state_ev: AgentStateChangedEvent) -> None:
@@ -2131,23 +2123,22 @@ class AgentActivity(RecognitionHooks):
                 (agent_speaking_fut, wait_inactive), return_when=asyncio.FIRST_COMPLETED
             )
             if agent_speaking_fut in done:
-                # agent started speaking, skip the user speech exceeded event
+                # agent started speaking, skip the user turn exceeded event
                 return
         finally:
             self._session.off("agent_state_changed", _on_agent_state_changed)
             if not wait_inactive.done():
                 wait_inactive.cancel()
 
-        # callback phase (locked) — user code, cannot be cancelled or replaced
-        self._speech_exceeded_locked = True
+        # callback phase (locked) — don't cancel user's callback
+        self._user_turn_exceeded_locked = True
         try:
-            self._session.emit("user_speech_exceeded", ev)
-            await self._agent.on_user_speech_exceeded(ev)
+            await self._agent.on_user_turn_exceeded(ev)
         except Exception:
-            logger.exception("error in on_user_speech_exceeded callback")
+            logger.exception("error in on_user_turn_exceeded callback")
         finally:
-            self._speech_exceeded_locked = False
-            self._speech_exceeded_task = None
+            self._user_turn_exceeded_locked = False
+            self._user_turn_exceeded_atask = None
 
     # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model  # noqa: E501
     def retrieve_chat_ctx(self) -> llm.ChatContext:

@@ -30,6 +30,7 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
+from .events import UserTurnExceededEvent
 from .turn import TurnDetectionMode as TurnDetectionMode
 
 if TYPE_CHECKING:
@@ -62,11 +63,10 @@ class _PreemptiveGenerationInfo:
 
 
 @dataclass
-class _UserSpeechExceededInfo:
-    transcript: str
-    accumulated_transcript: str
-    accumulated_word_count: int
-    duration: float
+class _UserTurnTracker:
+    words: int = 0
+    transcript: str = ""
+    started_at: float | None = None
 
 
 class RecognitionHooks(Protocol):
@@ -78,7 +78,7 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-    def on_user_speech_exceeded(self, info: _UserSpeechExceededInfo) -> None: ...
+    def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
@@ -198,10 +198,8 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
-        # user speech limit tracking — accumulates across turns until agent speaks
-        self._user_accumulated_words: int = 0
-        self._user_accumulated_transcript: str = ""
-        self._user_turn_started_at: float | None = None
+        # user turn limit tracking — accumulates across turns until agent speaks
+        self._turn_tracker = _UserTurnTracker()
         self._word_tokenizer = tokenize.basic.WordTokenizer()
 
     def update_options(
@@ -254,10 +252,8 @@ class AudioRecognition:
         self._agent_speaking = True
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
 
-        # reset user speech limit counters when agent starts speaking
-        self._user_accumulated_words = 0
-        self._user_accumulated_transcript = ""
-        self._user_turn_started_at = None
+        # reset user turn tracker when agent starts speaking
+        self._turn_tracker = _UserTurnTracker()
 
         if self.adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
@@ -593,57 +589,55 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
-    def _check_user_speech_limit(self) -> None:
-        """Check if accumulated user speech exceeds configured limits.
+    def _check_user_turn_limit(self) -> bool:
+        """Check if the user turn exceeds configured limits.
         Called after each final transcript is accumulated."""
-        opts = self._session.options.user_speech_limit
+        opts = self._session.options.user_turn_limit
         max_words = opts.get("max_words")
         max_duration = opts.get("max_duration")
 
         if max_words is None and max_duration is None:
-            return
+            return False
 
         now = time.time()
-        if self._user_turn_started_at is None:
-            self._user_turn_started_at = self._speech_start_time or now
+        if self._turn_tracker.started_at is None:
+            self._turn_tracker.started_at = self._speech_start_time or now
 
-        duration = now - self._user_turn_started_at
+        duration = now - self._turn_tracker.started_at
         time_exceeded = max_duration is not None and duration >= max_duration
 
         current_words = self._word_tokenizer.tokenize(self.current_transcript)
-        total_words = self._user_accumulated_words + len(current_words)
+        total_words = self._turn_tracker.words + len(current_words)
         words_exceeded = max_words is not None and total_words >= max_words
 
         if not time_exceeded and not words_exceeded:
-            return
+            return False
 
         accumulated_transcript = (
-            f"{self._user_accumulated_transcript} {self.current_transcript}".strip()
+            f"{self._turn_tracker.transcript} {self.current_transcript}".strip()
         )
-        info = _UserSpeechExceededInfo(
+        ev = UserTurnExceededEvent(
             transcript=self.current_transcript,
             accumulated_transcript=accumulated_transcript,
             accumulated_word_count=total_words,
             duration=duration,
         )
+        self._hooks.on_user_turn_exceeded(ev)
+        return True
 
-        self._hooks.on_user_speech_exceeded(info)
-
-    def _accumulate_user_turn_for_speech_limit(self, transcript: str) -> None:
-        """Called when a user turn is committed — accumulate its transcript
-        into the speech limit tracking so it carries across turns."""
-        opts = self._session.options.user_speech_limit
+    def _carry_over_user_turn(self, transcript: str) -> None:
+        """Called when a user turn is committed — carry its transcript into
+        the turn tracker so it persists across turns until the agent speaks."""
+        opts = self._session.options.user_turn_limit
         if opts.get("max_words") is None and opts.get("max_duration") is None:
             return
 
-        if self._user_turn_started_at is None:
-            self._user_turn_started_at = self._speech_start_time or time.time()
+        if self._turn_tracker.started_at is None:
+            self._turn_tracker.started_at = self._speech_start_time or time.time()
 
         words = self._word_tokenizer.tokenize(transcript)
-        self._user_accumulated_words += len(words)
-        self._user_accumulated_transcript = (
-            f"{self._user_accumulated_transcript} {transcript}".strip()
-        )
+        self._turn_tracker.words += len(words)
+        self._turn_tracker.transcript = f"{self._turn_tracker.transcript} {transcript}".strip()
 
     def commit_user_turn(
         self,
@@ -827,8 +821,8 @@ class AudioRecognition:
                 # and using that timestamp for _last_speaking_time
                 self._last_speaking_time = time.time()
 
-            # check user speech limit after accumulating transcript
-            self._check_user_speech_limit()
+            # check user turn limit after accumulating transcript
+            self._check_user_turn_limit()
 
             if self._vad_base_turn_detection or self._user_turn_committed:
                 if transcript_changed:
@@ -1104,8 +1098,8 @@ class AudioRecognition:
                 )
             )
             if committed:
-                # accumulate into speech limit tracking before clearing
-                self._accumulate_user_turn_for_speech_limit(self._audio_transcript)
+                # carry the committed turn into the tracker so it persists across turns
+                self._carry_over_user_turn(self._audio_transcript)
 
                 user_turn_span.set_attributes(
                     {
