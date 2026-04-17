@@ -195,6 +195,9 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=False,  # Tool responses handled via generate_reply
                 audio_output=Modality.AUDIO in modalities_list,
                 manual_function_calls=True,
+                mutable_chat_context=False,
+                mutable_instructions=True,
+                mutable_tools=True,
             )
         )
 
@@ -285,6 +288,7 @@ class RealtimeSession(
         self._tools = llm.ToolContext.empty()
         self._instructions: str | None = None
 
+        self._closing = False
         self._connection = None
         self._connection_ready = asyncio.Event()
         self._main_atask = asyncio.create_task(
@@ -334,6 +338,14 @@ class RealtimeSession(
             try:
                 await self._run_connection()
                 break
+            except asyncio.CancelledError:
+                if self._closing:
+                    raise
+                # Connection was cancelled externally (e.g., Azure SDK websocket drop)
+                # but session is still alive — reconnect
+                logger.warning("Azure Voice Live connection cancelled unexpectedly, reconnecting")
+                await asyncio.sleep(0.5)
+                continue
             except APIError as e:
                 # Server disconnect (idle timeout) - always reconnect without counting retries
                 if "Server closed connection" in str(e):
@@ -398,6 +410,9 @@ class RealtimeSession(
 
         except APIError:
             # Re-raise APIError to trigger retry logic in _main_task
+            raise
+        except asyncio.CancelledError:
+            # Re-raise CancelledError so _main_task can decide whether to reconnect
             raise
         except Exception as e:
             logger.error(f"Azure Voice Live connection error: {e}", exc_info=True)
@@ -472,7 +487,9 @@ class RealtimeSession(
             logger.info(f"[EVENT] Received: {event_type}")
 
         if event_type == ServerEventType.SESSION_UPDATED:
-            self._session_id = getattr(event.session, "id", None)
+            new_session_id = getattr(event.session, "id", None)
+            old_session_id = self._session_id
+            self._session_id = new_session_id
             logger.info(f"[SESSION] Azure session updated: {self._session_id}")
 
             # Log audio configuration for debugging
@@ -482,13 +499,17 @@ class RealtimeSession(
             if hasattr(session, "input_audio_format"):
                 logger.info(f"Input audio format: {session.input_audio_format}")
 
-            # Clean up any pending generate_reply futures from previous session
-            for fut in self._response_created_futures.values():
-                if not fut.done():
-                    fut.set_exception(
-                        llm.RealtimeError("pending response discarded due to session reconnection")
-                    )
-            self._response_created_futures.clear()
+            # Only discard pending futures on actual reconnection (new session ID),
+            # not on same-session updates (e.g. tool/instruction changes)
+            if old_session_id is not None and new_session_id != old_session_id:
+                for fut in self._response_created_futures.values():
+                    if not fut.done():
+                        fut.set_exception(
+                            llm.RealtimeError(
+                                "pending response discarded due to session reconnection"
+                            )
+                        )
+                self._response_created_futures.clear()
 
             self._connection_ready.set()
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
@@ -1034,6 +1055,8 @@ class RealtimeSession(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the model.
 
@@ -1236,6 +1259,7 @@ class RealtimeSession(
 
     async def aclose(self) -> None:
         """Close the session."""
+        self._closing = True
         self._main_atask.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_atask
