@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -594,32 +595,33 @@ def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
     in the current SDK — see #4623). Across tracer/logger/meter that's up to
     ~90s, enough to stall the caller's event loop past the supervisor's 60s
     ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
-    We run the teardown in a daemon thread with a wall-clock bound; any
-    unfinished work stays on existing daemon threads and is discarded at
-    process exit.
 
-    Shutdown order matters: LoggerProvider goes first so its BatchProcessor's
-    ``_shutdown`` flag is set before anything else. Python's ``logging.shutdown()``
-    atexit handler may call ``LoggingHandler.flush()``, which spawns a
-    *non-daemon* thread running ``force_flush`` (opentelemetry-python PR #4636).
-    If the logger provider's ``_shutdown`` is already True, that ``force_flush``
-    returns immediately — otherwise the non-daemon thread could block process
-    exit on a stuck OTLP endpoint.
+    Each provider is shut down in its *own* daemon thread, run in parallel.
+    That matters for two reasons:
+      1) Main-thread wait is bounded by ``max`` of the three, not the ``sum``.
+      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
+         action; running in parallel guarantees that flag gets set on every
+         provider within milliseconds, even if one hangs in ``worker_thread.join``.
+         Any later atexit re-entry (OTel registers one, and Python's
+         ``logging.shutdown()`` may spawn a *non-daemon* thread via
+         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
+         PR #4636) then short-circuits instead of hanging process exit.
+
+    Any unfinished work stays on existing daemon threads and is discarded at
+    process exit.
 
     Upstream context:
     - https://github.com/open-telemetry/opentelemetry-python/issues/4623
       (TracerProvider.shutdown() has no configurable timeout — still open)
     """
-    # Detach the OTLP LoggingHandler from the root logger. Belt to the
-    # suspenders of the logger-first ordering below: fewer chances for
-    # logging.shutdown() to touch a still-live handler.
+    # Detach the OTLP LoggingHandler from the root logger — belt to the
+    # suspenders of the parallel shutdown below.
     root = logging.getLogger()
     for h in list(root.handlers):
         if isinstance(h, LoggingHandler):
             root.removeHandler(h)
 
     providers: list[Any] = []
-    # Logger first — see docstring.
     if isinstance(lp := get_logger_provider(), LoggerProvider):
         providers.append(lp)
     if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
@@ -627,15 +629,27 @@ def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
     if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
         providers.append(mp)
 
-    def _teardown() -> None:
-        for provider in providers:
-            try:
-                provider.shutdown()
-            except Exception:
-                logger.exception("failed to shut down telemetry provider")
+    def _shutdown_one(provider: Any) -> None:
+        try:
+            provider.shutdown()
+        except Exception:
+            logger.exception("failed to shut down telemetry provider")
 
-    t = threading.Thread(target=_teardown, name="livekit-telemetry-shutdown", daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
+    threads = [
+        threading.Thread(
+            target=_shutdown_one,
+            args=(p,),
+            name=f"livekit-telemetry-shutdown-{type(p).__name__}",
+            daemon=True,
+        )
+        for p in providers
+    ]
+    for t in threads:
+        t.start()
+
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+    if any(t.is_alive() for t in threads):
         logger.warning("telemetry shutdown exceeded %.1fs; continuing", timeout)
