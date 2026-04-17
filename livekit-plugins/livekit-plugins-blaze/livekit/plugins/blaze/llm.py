@@ -156,8 +156,7 @@ class LLM(llm.LLM):
         """
         if tools and not self._enable_tools:
             logger.warning(
-                "Tools provided but enable_tools=False. "
-                "%d tool(s) will be ignored: %s",
+                "Tools provided but enable_tools=False. %d tool(s) will be ignored: %s",
                 len(tools),
                 ", ".join(t.id for t in tools),
             )
@@ -241,10 +240,12 @@ class LLMStream(llm.LLMStream):
         tool_defs: list[dict[str, Any]] = []
         for tool in self._tools:
             if isinstance(tool, llm.RawFunctionTool):
-                tool_defs.append({
-                    "type": "function",
-                    "function": tool.info.raw_schema,
-                })
+                tool_defs.append(
+                    {
+                        "type": "function",
+                        "function": tool.info.raw_schema,
+                    }
+                )
             elif isinstance(tool, llm.FunctionTool):
                 tool_defs.append(llm.utils.build_legacy_openai_schema(tool))
 
