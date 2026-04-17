@@ -289,6 +289,7 @@ class RealtimeSession(
         self._instructions: str | None = None
 
         self._closing = False
+        self._reconnecting = False
         self._connection = None
         self._connection_ready = asyncio.Event()
         self._main_atask = asyncio.create_task(
@@ -400,6 +401,10 @@ class RealtimeSession(
                 # Configure session
                 await self._configure_session(conn)
 
+                # On reconnection, re-send chat context to the new session
+                if self._reconnecting:
+                    await self._resync_chat_ctx(conn)
+
                 # Process events
                 async for event in conn:
                     await self._handle_event(event)
@@ -420,6 +425,55 @@ class RealtimeSession(
         finally:
             self._connection = None
             self._connection_ready.clear()
+            self._reconnecting = True
+
+    async def _resync_chat_ctx(self, conn: Any) -> None:
+        """Re-send chat context after a WebSocket reconnection.
+
+        On reconnection, the new Azure session starts with an empty conversation.
+        Reset _remote_chat_ctx so compute_chat_ctx_diff sees every item as new,
+        then re-create them on the server — mirroring the OpenAI plugin's _reconnect.
+        """
+        old_remote_ctx = self._remote_chat_ctx
+        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+
+        chat_ctx = old_remote_ctx.to_chat_ctx().copy(
+            exclude_function_call=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_handoff=True,
+            exclude_config_update=True,
+        )
+
+        if not chat_ctx.items:
+            logger.info("[RESYNC] No chat context items to re-send after reconnection")
+            return
+
+        logger.info(f"[RESYNC] Re-sending {len(chat_ctx.items)} chat context items after reconnection")
+        for chat_item in chat_ctx.items:
+            try:
+                azure_item = livekit_item_to_azure_item(chat_item)
+                await conn.conversation.item.create(item=azure_item)
+
+                prev_id = (
+                    self._remote_chat_ctx._tail.item.id
+                    if self._remote_chat_ctx._tail
+                    else None
+                )
+                self._remote_chat_ctx.insert(prev_id, chat_item)
+                logger.info(f"[RESYNC] Re-sent item type={chat_item.type}, id={chat_item.id}")
+            except Exception as e:
+                logger.error(f"[RESYNC] Failed to re-send item {chat_item.id}: {e}")
+
+        # Discard pending response futures — they belong to the old session
+        for fut in self._response_created_futures.values():
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError("pending response discarded due to session reconnection")
+                )
+        self._response_created_futures.clear()
+
+        logger.info("[RESYNC] Chat context re-sync complete")
 
     async def _configure_session(self, conn: Any) -> None:
         """Configure the Azure Voice Live session with initial settings."""
@@ -1158,6 +1212,22 @@ class RealtimeSession(
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Update chat context by sending conversation items to Azure."""
         async with self._update_chat_ctx_lock:
+            # Filter out internal framework items that Azure doesn't understand
+            chat_ctx = chat_ctx.copy(
+                exclude_handoff=True,
+                exclude_config_update=True,
+            )
+            # Remove instruction messages (already sent via _configure_session)
+            from livekit.agents.voice.generation import remove_instructions
+
+            remove_instructions(chat_ctx)
+
+            try:
+                await asyncio.wait_for(self._connection_ready.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for connection, cannot update chat context")
+                return
+
             if not self._connection:
                 logger.warning("No active connection, cannot update chat context")
                 return
