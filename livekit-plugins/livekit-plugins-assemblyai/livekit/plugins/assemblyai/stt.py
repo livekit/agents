@@ -19,7 +19,6 @@ import asyncio
 import dataclasses
 import json
 import os
-import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -369,9 +368,6 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            total_bytes_sent = 0
-            last_flow_log = time.monotonic()
-
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
@@ -383,18 +379,7 @@ class SpeechStream(stt.SpeechStream):
 
                 for frame in frames:
                     self._speech_duration += frame.duration
-                    frame_bytes = frame.data.tobytes()
-                    total_bytes_sent += len(frame_bytes)
-                    await ws.send_bytes(frame_bytes)
-
-                now = time.monotonic()
-                if now - last_flow_log >= 10.0:
-                    logger.debug(
-                        "AssemblyAI audio flow session=%s bytes_sent=%d",
-                        self._session_id,
-                        total_bytes_sent,
-                    )
-                    last_flow_log = now
+                    await ws.send_bytes(frame.data.tobytes())
 
             closing_ws = True
             logger.debug("AssemblyAI sending close message session=%s", self._session_id)
