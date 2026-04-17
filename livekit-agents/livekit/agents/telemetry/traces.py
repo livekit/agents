@@ -596,6 +596,14 @@ def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
     deadline when the OTLP endpoint is rate-limiting or unreachable. We run
     the teardown in a daemon thread with a wall-clock bound; any unfinished
     work stays on existing daemon threads and is discarded at process exit.
+
+    Upstream issues this works around:
+    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
+      (TracerProvider.shutdown() has no configurable timeout)
+    - https://github.com/open-telemetry/opentelemetry-python/issues/3309
+      (exporter shutdown takes >1min when export fails)
+    - https://github.com/open-telemetry/opentelemetry-python/issues/2284
+      (process never exits due to hang in BatchSpanProcessor worker_thread.join)
     """
     # Detach the OTLP LoggingHandler first: shutdown emits logs through the
     # root logger and would re-enter the handler, causing a deadlock.
