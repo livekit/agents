@@ -854,19 +854,18 @@ class AudioRecognition:
             self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
-            # Back-date onset using server-provided timestamp when available.
-            # Some STT plugins (e.g. AssemblyAI) gate SpeechStarted behind the
-            # first partial, so without this the speaking window is effectively
-            # zero and speech_duration~=0 for turns where local VAD doesn't
-            # fire independently. Falls back to arrival time when unset.
-            stt_speech_start_time = ev.speech_start_time or time.time()
+            # Fallback onset for the edge case where the STT server detected
+            # speech but the local VAD did not. If local VAD fired first,
+            # _speech_start_time already holds its back-dated value and we
+            # preserve it. Otherwise we fill from the STT's server timestamp
+            # (or arrival time, if the plugin doesn't provide one).
+            if self._speech_start_time is None:
+                self._speech_start_time = ev.speech_start_time or time.time()
 
             with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_start_of_speech(None, speech_start_time=stt_speech_start_time)
+                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
-            if self._speech_start_time is None:
-                self._speech_start_time = stt_speech_start_time
             self._last_speaking_time = time.time()
 
             if self._end_of_turn_task is not None:
