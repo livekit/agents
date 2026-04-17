@@ -18,7 +18,6 @@ Output: Streaming PCM audio chunks
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import re
 import time
@@ -117,9 +116,7 @@ def _find_batch_split(
     def _word_count(s: str) -> int:
         return len(re.findall(r"\S+", s))
 
-    def _safe_split_on_whitespace(
-        s: str, preferred_idx: int, floor_idx: int = 1
-    ) -> int:
+    def _safe_split_on_whitespace(s: str, preferred_idx: int, floor_idx: int = 1) -> int:
         """Try to split at a nearby whitespace boundary, otherwise keep preferred index."""
         idx = min(max(preferred_idx, 1), len(s))
         floor = max(1, min(floor_idx, idx))
@@ -240,9 +237,7 @@ class TTS(tts.TTS):
         self._model = model
         normalized_format = (audio_format or "pcm").strip().lower()
         if normalized_format not in {"pcm", "mp3", "wav"}:
-            logger.warning(
-                "Unsupported audio_format '%s', falling back to 'pcm'", audio_format
-            )
+            logger.warning("Unsupported audio_format '%s', falling back to 'pcm'", audio_format)
             normalized_format = "pcm"
         self._audio_format = normalized_format
         self._audio_speed = audio_speed
@@ -259,9 +254,7 @@ class TTS(tts.TTS):
         self._inter_sentence_silence_ms = inter_sentence_silence_ms
 
         # Build WebSocket URL (convert http(s) to ws(s))
-        ws_base = self._api_url.replace("https://", "wss://").replace(
-            "http://", "ws://"
-        )
+        ws_base = self._api_url.replace("https://", "wss://").replace("http://", "ws://")
         self._ws_url = f"{ws_base}/v1/tts/realtime"
 
         logger.info(
@@ -486,9 +479,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             params["audio_quality"] = self._blaze_tts._audio_quality
         return params
 
-    async def _ws_connect_and_auth(
-        self, ws: websockets.WebSocketClientProtocol, request_id: str
-    ) -> None:
+    async def _ws_connect_and_auth(self, ws: websockets.ClientConnection, request_id: str) -> None:
         """Perform the initial WS handshake: connection ack + authentication."""
         auth_start = time.monotonic()
 
@@ -683,11 +674,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                                 if st == "started-byte-stream":
                                     # Silence between TTS segments (not before the first)
-                                    if (
-                                        runtime_is_pcm
-                                        and has_prev_segment
-                                        and silence_pcm
-                                    ):
+                                    if runtime_is_pcm and has_prev_segment and silence_pcm:
                                         output_emitter.push(silence_pcm)
 
                                 elif st == "finished-byte-stream":
@@ -734,10 +721,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         if not normalized.strip():
                             return
                         batch_count += 1
-                        has_img_tag = "<img>" in normalized.lower() or "</img>" in normalized.lower()
-                        preview = normalized[:80] + (
-                            "..." if len(normalized) > 80 else ""
+                        has_img_tag = (
+                            "<img>" in normalized.lower() or "</img>" in normalized.lower()
                         )
+                        preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
                         logger.info(
                             "[%s] TTS batch %d — %d chars has_img_tag=%s: '%s'",
                             request_id,
