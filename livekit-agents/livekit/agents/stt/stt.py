@@ -95,13 +95,8 @@ class SpeechEvent:
     alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
     speech_start_time: float | None = None
-    """Server-reported wall-clock time of speech onset, when available.
-    Populated by STT plugins that receive separate speech-onset signals with
-    timing (e.g. AssemblyAI SpeechStarted.timestamp). Used by the framework
-    to back-date _speech_start_time on START_OF_SPEECH events so speech
-    duration metrics remain accurate when SpeechStarted and the first
-    transcript arrive in the same network burst. None means the framework
-    falls back to message arrival time."""
+    """server-reported wall-clock time of speech onset, when the provider sends
+    a separate speech-start signal carrying onset timing."""
 
 
 @dataclass
