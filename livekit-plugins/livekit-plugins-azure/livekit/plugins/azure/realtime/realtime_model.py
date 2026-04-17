@@ -449,16 +449,16 @@ class RealtimeSession(
             logger.info("[RESYNC] No chat context items to re-send after reconnection")
             return
 
-        logger.info(f"[RESYNC] Re-sending {len(chat_ctx.items)} chat context items after reconnection")
+        logger.info(
+            f"[RESYNC] Re-sending {len(chat_ctx.items)} chat context items after reconnection"
+        )
         for chat_item in chat_ctx.items:
             try:
                 azure_item = livekit_item_to_azure_item(chat_item)
                 await conn.conversation.item.create(item=azure_item)
 
                 prev_id = (
-                    self._remote_chat_ctx._tail.item.id
-                    if self._remote_chat_ctx._tail
-                    else None
+                    self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
                 )
                 self._remote_chat_ctx.insert(prev_id, chat_item)
                 logger.info(f"[RESYNC] Re-sent item type={chat_item.type}, id={chat_item.id}")
