@@ -25,7 +25,6 @@ These providers allow direct image upload to create custom avatars:
 
 - **[Agent Human](./agenthuman/)** - [Platform](https://agenthuman.com/) | [Integration Guide](https://docs.agenthuman.com/documentation/livekit)
 - **[LemonSlice](./lemonslice/)** - [Platform](https://www.lemonslice.com/) | [Integration Guide](https://lemonslice.com/docs/self-managed/livekit-agent-integration)
-- **[Hedra](./hedra/)** - [Platform](https://www.hedra.com/)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
 
 ### 💻 Local Processing

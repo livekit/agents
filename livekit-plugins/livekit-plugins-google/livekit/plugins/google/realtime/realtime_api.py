@@ -58,7 +58,6 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
         "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
-        "gemini-2.5-flash-native-audio-preview-09-2025",
     }
 )
 
@@ -275,7 +274,19 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
+        if not is_given(model):
+            model = (
+                "gemini-live-2.5-flash-native-audio"
+                if use_vertexai
+                else "gemini-2.5-flash-native-audio-preview-12-2025"
+            )
 
+        mutable = "3.1" not in model
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -284,17 +295,12 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
-                mutable_instructions=True,
+                mutable_chat_context=mutable,
+                mutable_instructions=mutable,
                 mutable_tools=False,
                 per_response_tool_choice=False,
             )
         )
-
-        if not is_given(model):
-            if vertexai:
-                model = "gemini-live-2.5-flash-native-audio"
-            else:
-                model = "gemini-2.5-flash-native-audio-preview-12-2025"
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -302,11 +308,6 @@ class RealtimeModel(llm.RealtimeModel):
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
-        use_vertexai = (
-            vertexai
-            if is_given(vertexai)
-            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
 
         if use_vertexai:
@@ -334,6 +335,12 @@ class RealtimeModel(llm.RealtimeModel):
 
         # Validate model/API compatibility for known models
         _validate_model_api_match(model, use_vertexai)
+
+        if "3.1" in model:
+            logger.warning(
+                f"'{model}' has limited mid-session update support. instructions, chat "
+                "context, and tool updates will not be applied until the next session."
+            )
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -549,12 +556,6 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str) -> None:
-        if self._opts.model == "gemini-3.1-flash-live-preview":
-            logger.warning(
-                "update_instructions is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
-            )
-            self._opts.instructions = instructions
-            return
         if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
             self._opts.instructions = instructions
 
@@ -563,6 +564,9 @@ class RealtimeSession(llm.RealtimeSession):
                     # No active session yet — restart will pick up new instructions via _build_connect_config
                     self._mark_restart_needed()
                     return
+
+            if not self._realtime_model.capabilities.mutable_instructions:
+                return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
@@ -581,17 +585,6 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        if self._opts.model == "gemini-3.1-flash-live-preview":
-            logger.warning(
-                "update_chat_ctx is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
-            )
-            self._chat_ctx = chat_ctx.copy(
-                exclude_handoff=True,
-                exclude_instructions=True,
-                exclude_empty_message=True,
-                exclude_config_update=True,
-            )
-            return
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
             1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
@@ -627,18 +620,20 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                format="google", inject_dummy_user_message=False
-            )
-            # we are not generating, and do not need to inject
-            turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            if turns:
-                self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=False))
+            if self._realtime_model.capabilities.mutable_chat_context:
+                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                    format="google", inject_dummy_user_message=False
+                )
+                turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                if turns:
+                    self._send_client_event(
+                        types.LiveClientContent(turns=turns, turn_complete=False)
+                    )
             if tool_results:
                 self._send_client_event(tool_results)
 
@@ -709,15 +704,13 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if self._opts.model == "gemini-3.1-flash-live-preview":
+        if not self._realtime_model.capabilities.mutable_chat_context:
             logger.warning(
-                "generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."
+                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
             )
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(
-                    "generate_reply is not compatible with 'gemini-3.1-flash-live-preview'"
-                )
+                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -857,12 +850,13 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_empty_message=True,
                             exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        if turns_dict:
-                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        if turns:
                             await session.send_client_content(
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -1064,6 +1058,9 @@ class RealtimeSession(llm.RealtimeSession):
         tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
+            history_config=types.HistoryConfig(initial_history_in_client_content=True)
+            if not self._realtime_model.capabilities.mutable_chat_context
+            else None,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,

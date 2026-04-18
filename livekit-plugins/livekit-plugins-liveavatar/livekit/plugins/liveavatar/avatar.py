@@ -77,6 +77,8 @@ class AvatarSession:
         self._avatar_speaking = False
         self._avatar_interrupted = False
         self._playback_position = 0.0
+        self._session_connected = asyncio.Event()
+        self._chunk_interrupted = asyncio.Event()
 
     async def start(
         self,
@@ -170,6 +172,7 @@ class AvatarSession:
                     self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
                 self._playback_position = 0.0
 
+        self._chunk_interrupted.set()
         clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
         self._tasks.add(clear_buffer_task)
         clear_buffer_task.add_done_callback(self._tasks.discard)
@@ -204,29 +207,62 @@ class AvatarSession:
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
 
         async def _forward_audio() -> None:
+            await self._session_connected.wait()
+            chunk_buf: list[bytes] = []
+            chunk_duration = 0.0
+            is_first_chunk = True
+            first_chunk_threshold = 0.6  # 600ms
+            subsequent_chunk_threshold = 1.0  # 1s
+
+            def _flush_chunk() -> None:
+                nonlocal chunk_buf, chunk_duration, is_first_chunk
+                if not chunk_buf:
+                    return
+                combined = b"".join(chunk_buf)
+                encoded_audio = base64.b64encode(combined).decode("utf-8")
+                msg = {
+                    "type": "agent.speak",
+                    "event_id": str(uuid.uuid4()),
+                    "audio": encoded_audio,
+                }
+                self.send_event(msg)
+                self._playback_position += chunk_duration
+                chunk_buf = []
+                chunk_duration = 0.0
+                is_first_chunk = False
+
+            def _discard_chunk() -> None:
+                nonlocal chunk_buf, chunk_duration, is_first_chunk
+                chunk_buf = []
+                chunk_duration = 0.0
+                is_first_chunk = True
+
             async for audio_frame in self._audio_buffer:
+                if self._chunk_interrupted.is_set():
+                    self._chunk_interrupted.clear()
+                    _discard_chunk()
+
                 if isinstance(audio_frame, rtc.AudioFrame):
                     if not self._audio_playing:
                         self._audio_playing = True
                     for resampled_frame in self._resample_audio(audio_frame):
-                        data = resampled_frame.data.tobytes()
-                        encoded_audio = base64.b64encode(data).decode("utf-8")
-
-                        msg = {
-                            "type": "agent.speak",
-                            "event_id": str(uuid.uuid4()),
-                            "audio": encoded_audio,
-                        }
-
-                        self.send_event(msg)
-                        self._playback_position += resampled_frame.duration
+                        chunk_buf.append(resampled_frame.data.tobytes())
+                        chunk_duration += resampled_frame.duration
+                        threshold = (
+                            first_chunk_threshold if is_first_chunk else subsequent_chunk_threshold
+                        )
+                        if chunk_duration >= threshold:
+                            _flush_chunk()
                 elif isinstance(audio_frame, AudioSegmentEnd):
+                    _flush_chunk()
                     self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
                     self.send_event(
                         {"type": "agent.start_listening", "event_id": str(uuid.uuid4())}
                     )
+                    is_first_chunk = True
 
         async def _keep_alive_task() -> None:
+            await self._session_connected.wait()
             try:
                 while True:
                     await ping_interval.tick()
@@ -274,12 +310,20 @@ class AvatarSession:
                             message="LiveAvatar connection closed unexpectedly."
                         )
                 event = json.loads(msg.data)
-                if event["type"] == "agent.speak_interrupted":
+                event_type = event.get("type")
+                if event_type == "session.state_updated":
+                    state = event.get("state")
+                    logger.debug(f"LiveAvatar session state: {state}")
+                    if state == "connected":
+                        self._session_connected.set()
+                elif event_type == "agent.speak_interrupted":
                     self._handle_agent_speak_interrupted(event)
-                if event["type"] == "agent.speak_ended":
+                elif event_type == "agent.speak_ended":
                     self._handle_agent_speak_ended(event)
-                if event["type"] == "agent.speak_started":
+                elif event_type == "agent.speak_started":
                     self._handle_agent_speak_started(event)
+                else:
+                    logger.debug(f"Unhandled LiveAvatar event: {event_type}")
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
