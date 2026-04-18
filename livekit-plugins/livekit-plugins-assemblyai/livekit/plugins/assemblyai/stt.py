@@ -362,6 +362,10 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run a single websocket connection to AssemblyAI."""
+        # Reset on each (re)connection — the server's stream-relative timestamps
+        # restart at 0 with every new WebSocket, so the wall-clock anchor must
+        # also be re-captured from this connection's first frame.
+        self._stream_wall_start = None
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -533,9 +537,9 @@ class SpeechStream(stt.SpeechStream):
             # relative ms. Convert to wall-clock by adding _stream_wall_start
             # (recorded when the first audio frame was sent) so the framework
             # records an accurate _speech_start_time instead of message arrival.
-            timestamp_ms = data.get("timestamp", 0)
+            timestamp_ms = data.get("timestamp")
             speech_start_time: float | None = None
-            if timestamp_ms and self._stream_wall_start is not None:
+            if timestamp_ms is not None and self._stream_wall_start is not None:
                 speech_start_time = self._stream_wall_start + timestamp_ms / 1000
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
