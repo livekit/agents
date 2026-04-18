@@ -63,9 +63,7 @@ class _PreemptiveGenerationInfo:
 
 class RecognitionHooks(Protocol):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
-    def on_start_of_speech(
-        self, ev: vad.VADEvent | None, speech_start_time: float | None = None
-    ) -> None: ...
+    def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
@@ -880,7 +878,7 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
-                self._hooks.on_start_of_speech(ev)
+                self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
 

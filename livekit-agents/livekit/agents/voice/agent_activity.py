@@ -1645,15 +1645,8 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(
         self,
         ev: vad.VADEvent | None,
-        speech_start_time: float | None = None,
+        speech_start_time: float,
     ) -> None:
-        # Prefer a caller-provided onset time (e.g. STT's back-dated
-        # server timestamp). Fall back to VAD-event back-dating or the
-        # current wall clock.
-        if speech_start_time is None:
-            speech_start_time = time.time()
-            if ev:
-                speech_start_time = speech_start_time - ev.speech_duration - ev.inference_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
