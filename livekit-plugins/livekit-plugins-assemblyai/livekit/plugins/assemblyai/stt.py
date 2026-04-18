@@ -531,8 +531,7 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            # The server gates SpeechStarted behind the first partial with text
-            # (PR #15524), so it arrives ~750ms after actual speech onset. The
+            # SpeechStarted can arrive well after actual speech onset. The
             # `timestamp` field carries the server VAD's onset time in stream-
             # relative ms. Convert to wall-clock by adding _stream_wall_start
             # (recorded when the first audio frame was sent) so the framework
