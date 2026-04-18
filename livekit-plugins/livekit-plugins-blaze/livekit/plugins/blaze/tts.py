@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 import time
+from contextlib import asynccontextmanager
 
 import httpx
 import websockets
@@ -44,6 +45,43 @@ from .log import logger
 # Do not split on comma to avoid over-fragmented synthesis and long pauses
 # between short clauses under higher-latency environments.
 _SENTENCE_END_RE = re.compile(r"(?:\n\n+|\n|[.!?;:。！？；：](?:\s|$))")
+
+
+@asynccontextmanager
+async def _asyncio_timeout(timeout_s: float):
+    """Compatibility timeout context for Python 3.10+.
+
+    Uses ``asyncio.timeout`` when available (3.11+). On older versions,
+    emulates timeout by cancelling the current task and remapping only the
+    internally-triggered cancellation to ``TimeoutError``.
+    """
+    timeout_cm = getattr(asyncio, "timeout", None)
+    if timeout_cm is not None:
+        async with timeout_cm(timeout_s):
+            yield
+        return
+
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("timeout context requires a running asyncio task")
+
+    timed_out = False
+
+    def _cancel_task() -> None:
+        nonlocal timed_out
+        timed_out = True
+        task.cancel()
+
+    cancel_handle = loop.call_later(timeout_s, _cancel_task)
+    try:
+        yield
+    except asyncio.CancelledError as e:
+        if timed_out:
+            raise TimeoutError() from e
+        raise
+    finally:
+        cancel_handle.cancel()
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -396,8 +434,6 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type=mime_type,
             stream=False,
         )
-        segment_id = shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
 
         logger.info(
             "[%s] TTS chunked request: %d chars, speaker=%s",
@@ -584,7 +620,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         seg_count = 0
 
         try:
-            async with asyncio.timeout(tts_cfg._timeout):
+            async with _asyncio_timeout(tts_cfg._timeout):
                 async with websockets.connect(tts_cfg._ws_url) as ws:
                     await self._ws_connect_and_auth(ws, request_id)
 
