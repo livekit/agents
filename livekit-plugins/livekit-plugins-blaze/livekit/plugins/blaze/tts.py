@@ -740,6 +740,8 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             normalized,
                         )
                         await ws.send(json.dumps({"query": normalized}))
+                        if batch_count == 1:
+                            self._mark_started()
 
                     text_buf = ""
                     input_done = False
