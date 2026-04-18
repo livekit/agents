@@ -210,17 +210,23 @@ class LLMStream(llm.LLMStream):
         """
         messages: list[dict[str, str]] = []
 
-        for msg in self._chat_ctx.messages():
-            text = msg.text_content
+        for item in self._chat_ctx.items:
+            if isinstance(item, llm.FunctionCallOutput):
+                if item.output:
+                    messages.append({"role": "user", "content": item.output})
+                continue
+
+            if not isinstance(item, llm.ChatMessage):
+                continue
+
+            text = item.text_content
             if not text:
                 continue
-            if msg.role in ("system", "developer"):
+            if item.role in ("system", "developer"):
                 continue
-            elif msg.role == "user":
+            if item.role == "user":
                 messages.append({"role": "user", "content": text})
-            elif msg.role == "tool":
-                messages.append({"role": "user", "content": text})
-            elif msg.role == "assistant":
+            elif item.role == "assistant":
                 clean = re.sub(r"<img>[^<]*</img>", "", text, flags=re.IGNORECASE).strip()
                 if clean:
                     messages.append({"role": "assistant", "content": clean})
