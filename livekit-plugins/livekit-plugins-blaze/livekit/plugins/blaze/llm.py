@@ -218,6 +218,8 @@ class LLMStream(llm.LLMStream):
                 continue
             elif msg.role == "user":
                 messages.append({"role": "user", "content": text})
+            elif msg.role == "tool":
+                messages.append({"role": "user", "content": text})
             elif msg.role == "assistant":
                 clean = re.sub(r"<img>[^<]*</img>", "", text, flags=re.IGNORECASE).strip()
                 if clean:
