@@ -39,6 +39,7 @@ class AvatarSession:
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        avatar_participant_attributes: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
@@ -63,6 +64,14 @@ class AvatarSession:
             if utils.is_given(avatar_participant_name)
             else _AVATAR_AGENT_NAME
         )
+
+        job_ctx = get_job_context()
+        local_participant_identity = job_ctx.local_participant_identity
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity}
+        if utils.is_given(avatar_participant_attributes):
+            attributes.update(avatar_participant_attributes)
+
+        self._avatar_participant_attributes = attributes
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -94,15 +103,13 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
         livekit_token = (
             api.AccessToken(api_key=_livekit_api_key, api_secret=_livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_attributes(self._avatar_participant_attributes)
             .to_jwt()
         )
 

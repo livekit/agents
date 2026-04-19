@@ -42,6 +42,7 @@ class AvatarSession:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_attributes: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._avatar_id = (
@@ -64,6 +65,16 @@ class AvatarSession:
             self._avatar_participant_name = str(avatar_participant_name)
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+
+        job_ctx = get_job_context()
+        local_participant_identity = job_ctx.local_participant_identity
+        attributes = {
+            ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity  # allow the avatar agent to publish audio and video on behalf of your local agent
+        }
+        if utils.is_given(avatar_participant_attributes):
+            attributes.update(avatar_participant_attributes)
+
+        self._avatar_participant_attributes = attributes
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -100,8 +111,6 @@ class AvatarSession:
                 "either pass them as arguments here or set environment variables."
             )
 
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
@@ -109,7 +118,7 @@ class AvatarSession:
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_attributes(self._avatar_participant_attributes)
             .to_jwt()
         )
 
