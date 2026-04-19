@@ -131,6 +131,11 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
+        if language_hint and model != "flux-general-multi":
+            logger.warning(
+                "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
+                model,
+            )
 
         self._opts = STTOptions(
             model=model,
@@ -238,6 +243,11 @@ class STTv2(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
             self._opts.language_hint = language_hint
+            if language_hint and self._opts.model != "flux-general-multi":
+                logger.warning(
+                    "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
+                    self._opts.model,
+                )
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
