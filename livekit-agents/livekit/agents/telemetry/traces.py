@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -11,11 +12,12 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace as trace_api
+from opentelemetry import context as otel_context, metrics as metrics_api, trace as trace_api
 from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
@@ -25,6 +27,16 @@ from opentelemetry.sdk._logs import (
     ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.metrics import (
+    Counter as SdkCounter,
+    Histogram as SdkHistogram,
+    MeterProvider as SdkMeterProvider,
+    ObservableCounter as SdkObservableCounter,
+    ObservableGauge as SdkObservableGauge,
+    ObservableUpDownCounter as SdkObservableUpDownCounter,
+    UpDownCounter as SdkUpDownCounter,
+)
+from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -246,10 +258,35 @@ def _setup_cloud_tracer(
         root = logging.getLogger()
         root.addHandler(handler)
 
+    # Set up the MeterProvider for OTEL metrics export
+    current_meter_provider = metrics_api.get_meter_provider()
+    if not isinstance(current_meter_provider, SdkMeterProvider):
+        metric_exporter = OTLPMetricExporter(
+            endpoint=f"{observability_url}/observability/metrics/otlp/v0",
+            compression=otlp_compression,
+            session=session,
+            preferred_temporality={
+                SdkCounter: AggregationTemporality.DELTA,
+                SdkUpDownCounter: AggregationTemporality.DELTA,
+                SdkHistogram: AggregationTemporality.DELTA,
+                SdkObservableCounter: AggregationTemporality.DELTA,
+                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+                SdkObservableGauge: AggregationTemporality.DELTA,
+            },
+        )
+        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+        meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
+        metrics_api.set_meter_provider(meter_provider)
+
 
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
     role_to_event = {
         "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        # OpenAI's `developer` role is the successor to `system` on the
+        # Chat Completions API and carries equivalent instructional content,
+        # so surface it as the system-message span event rather than dropping
+        # it on the floor.
+        "developer": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
         "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
         "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
     }
@@ -411,6 +448,7 @@ async def _upload_session_report(
             attributes={
                 "session.options": vars(report.options),
                 "session.report_timestamp": report.timestamp,
+                "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
                 "sdk_version": report.sdk_version,
                 "usage": [
@@ -460,12 +498,28 @@ async def _upload_session_report(
                 severity_text=severity_text,
             )
 
-    if tagger.outcome_reason:
+    for tag, entry in tagger._tags.items():
+        if entry.metadata:
+            _log(
+                eval_logger,
+                body="tag",
+                timestamp=int(entry.timestamp * 1e9),
+                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+            )
+
+    if tagger.outcome:
+        is_fail = tagger.outcome == "fail"
+        outcome_data: dict[str, Any] = {"outcome": tagger.outcome}
+        if tagger.outcome_reason:
+            outcome_data["reason"] = tagger.outcome_reason
+
         _log(
             eval_logger,
             body="outcome",
             timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": {"reason": tagger.outcome_reason}},
+            attributes={"outcome": outcome_data},
+            severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
+            severity_text="error" if is_fail else "unspecified",
         )
 
     has_audio = (
@@ -530,19 +584,72 @@ async def _upload_session_report(
     logger.debug("finished uploading")
 
 
-def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
-        logger.debug("shutting down telemetry tracer provider")
-        tracer_provider.force_flush()
-        tracer_provider.shutdown()
+_TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
 
-    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
-        # remove the OTLP LoggingHandler before flushing to avoid deadlock —
-        # force_flush triggers log export which emits new logs back through the handler
-        root = logging.getLogger()
-        for h in root.handlers[:]:
-            if isinstance(h, LoggingHandler):
-                root.removeHandler(h)
 
-        logger_provider.force_flush()
-        logger_provider.shutdown()  # type: ignore
+def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+    """Shut down OTel providers with a hard wall-clock bound.
+
+    ``provider.shutdown()`` internally joins its exporter worker with a 30s
+    default timeout per provider (and ``force_flush`` ignores its timeout arg
+    in the current SDK — see #4623). Across tracer/logger/meter that's up to
+    ~90s, enough to stall the caller's event loop past the supervisor's 60s
+    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
+
+    Each provider is shut down in its *own* daemon thread, run in parallel.
+    That matters for two reasons:
+      1) Main-thread wait is bounded by ``max`` of the three, not the ``sum``.
+      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
+         action; running in parallel guarantees that flag gets set on every
+         provider within milliseconds, even if one hangs in ``worker_thread.join``.
+         Any later atexit re-entry (OTel registers one, and Python's
+         ``logging.shutdown()`` may spawn a *non-daemon* thread via
+         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
+         PR #4636) then short-circuits instead of hanging process exit.
+
+    Any unfinished work stays on existing daemon threads and is discarded at
+    process exit.
+
+    Upstream context:
+    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
+      (TracerProvider.shutdown() has no configurable timeout — still open)
+    """
+    # Detach the OTLP LoggingHandler from the root logger — belt to the
+    # suspenders of the parallel shutdown below.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if isinstance(h, LoggingHandler):
+            root.removeHandler(h)
+
+    providers: list[Any] = []
+    if isinstance(lp := get_logger_provider(), LoggerProvider):
+        providers.append(lp)
+    if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
+        providers.append(tp)
+    if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
+        providers.append(mp)
+
+    def _shutdown_one(provider: Any) -> None:
+        try:
+            provider.shutdown()
+        except Exception:
+            logger.exception("failed to shut down telemetry provider")
+
+    threads = [
+        threading.Thread(
+            target=_shutdown_one,
+            args=(p,),
+            name=f"livekit-telemetry-shutdown-{type(p).__name__}",
+            daemon=True,
+        )
+        for p in providers
+    ]
+    for t in threads:
+        t.start()
+
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+    if any(t.is_alive() for t in threads):
+        logger.warning("telemetry shutdown exceeded %.1fs; continuing", timeout)

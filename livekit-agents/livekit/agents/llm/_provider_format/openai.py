@@ -7,6 +7,12 @@ from livekit.agents import llm
 
 from .utils import group_tool_calls
 
+_EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
+
+
+def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    return {k: extra[k] for k in _EXTRA_CONTENT_KEYS if extra.get(k)}
+
 
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
@@ -26,9 +32,9 @@ def to_chat_ctx(
                 "type": "function",
                 "function": {"name": tool_call.name, "arguments": tool_call.arguments},
             }
-            # Include provider-specific extra content (e.g., Google thought signatures)
-            if tool_call.extra.get("google"):
-                tc["extra_content"] = {"google": tool_call.extra["google"]}
+            extra_content = _filter_extra(tool_call.extra) if tool_call.extra else {}
+            if extra_content:
+                tc["extra_content"] = extra_content
             tool_calls.append(tc)
         if tool_calls:
             msg["tool_calls"] = tool_calls
@@ -62,9 +68,9 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append({"type": "text", "text": text_content})
             result = {"role": msg.role, "content": list_content}
 
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            result["extra_content"] = {"google": msg.extra["google"]}
+        extra_content = _filter_extra(msg.extra)
+        if extra_content:
+            result["extra_content"] = extra_content
         return result
 
     elif msg.type == "function_call":
@@ -76,9 +82,9 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 "arguments": msg.arguments,
             },
         }
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            tc["extra_content"] = {"google": msg.extra["google"]}
+        extra_content = _filter_extra(msg.extra)
+        if extra_content:
+            tc["extra_content"] = extra_content
         return {
             "role": "assistant",
             "tool_calls": [tc],

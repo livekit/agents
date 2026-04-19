@@ -16,7 +16,6 @@ from livekit import rtc
 from .. import stt, utils
 from .._exceptions import (
     APIConnectionError,
-    APIError,
     APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
@@ -31,7 +30,7 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -52,6 +51,7 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
+XaiModels = Literal["xai/stt-1",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -71,7 +71,7 @@ class DeepgramOptions(TypedDict, total=False):
     numerals: bool
     mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
-    diarize: bool
+    diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
@@ -106,6 +106,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     language_detection: bool
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    speaker_labels: bool  # when True, enables speaker diarization (default off)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -116,6 +117,30 @@ class ElevenlabsOptions(TypedDict, total=False):
     min_speech_duration_ms: int
     min_silence_duration_ms: int
     language_code: str
+
+
+class XaiOptions(TypedDict, total=False):
+    diarize: bool  # when True, enables speaker diarization (default off)
+    endpointing: int  # silence duration in ms before utterance-final (0-5000)
+    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
+    interim_results: bool  # default True; set False to opt out of interim transcripts
+
+
+# Diarization is requested via different extra_kwargs keys across
+# providers. Keep this list in one place so adding a new provider is a
+# single-line change and there's no divergence between __init__ and
+# update_options capability inference.
+_DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
+    "diarize",  # Deepgram, xAI
+    "speaker_labels",  # AssemblyAI
+)
+
+
+def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
+    """Return True if any known provider diarization flag is truthy."""
+    if not extra_kwargs:
+        return False
+    return any(bool(extra_kwargs.get(key)) for key in _DIARIZATION_EXTRA_KEYS)
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -169,6 +194,7 @@ STTModels = (
     | CartesiaModels
     | AssemblyAIModels
     | ElevenlabsModels
+    | XaiModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -281,6 +307,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: XaiModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -313,6 +356,7 @@ class STT(stt.STT):
             | DeepgramFluxOptions
             | AssemblyaiOptions
             | ElevenlabsOptions
+            | XaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -333,10 +377,18 @@ class STT(stt.STT):
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
+        # Infer diarization capability from provider-specific extra_kwargs
+        # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
+        # Deepgram); AssemblyAI uses "speaker_labels".
+        diarization_enabled = _diarization_enabled(
+            dict(extra_kwargs) if is_given(extra_kwargs) else None
+        )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
@@ -453,6 +505,10 @@ class STT(stt.STT):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._capabilities = replace(
+                self._capabilities,
+                diarization=_diarization_enabled(self._opts.extra_kwargs),
+            )
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
@@ -592,6 +648,8 @@ class SpeechStream(stt.SpeechStream):
                     pass
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
+                elif msg_type == "preflight_transcript":
+                    self._process_preflight_transcript(data)
                 elif msg_type == "final_transcript":
                     self._process_transcript(data, is_final=True)
                 elif msg_type == "session.finalized":
@@ -599,7 +657,11 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.closed":
                     pass
                 elif msg_type == "error":
-                    raise APIError(f"LiveKit Inference STT returned error: {msg.data}")
+                    raise APIStatusError(
+                        f"LiveKit Inference STT returned error: {data.get('message')}",
+                        status_code=data.get("code", -1),
+                        body=data,
+                    )
                 else:
                     logger.warning(
                         "received unexpected message from LiveKit Inference STT: %s", data
@@ -655,7 +717,8 @@ class SpeechStream(stt.SpeechStream):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
             ws = await asyncio.wait_for(
@@ -674,11 +737,46 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("failed to connect to LiveKit Inference STT") from e
         return ws
 
+    def _build_speech_data(self, data: dict) -> stt.SpeechData:
+        language = LanguageCode(data.get("language", self._opts.language or "en"))
+        words = data.get("words", []) or []
+        return stt.SpeechData(
+            language=language,
+            start_time=self.start_time_offset + data.get("start", 0),
+            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
+            confidence=data.get("confidence", 1.0),
+            text=data.get("transcript", ""),
+            speaker_id=data.get("speaker_id"),
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=word.get("confidence", 0.0),
+                    speaker_id=word.get("speaker_id"),
+                )
+                for word in words
+            ],
+        )
+
+    def _process_preflight_transcript(self, data: dict) -> None:
+        text = data.get("transcript", "")
+        if not text or not self._speaking:
+            return
+
+        speech_data = self._build_speech_data(data)
+        request_id = data.get("request_id", self._request_id)
+        event = stt.SpeechEvent(
+            type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            request_id=request_id,
+            alternatives=[speech_data],
+        )
+        self._event_ch.send_nowait(event)
+
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
-        language = LanguageCode(data.get("language", self._opts.language or "en"))
-        words = data.get("words", []) or []
 
         if not text and not is_final:
             return
@@ -688,23 +786,7 @@ class SpeechStream(stt.SpeechStream):
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_ch.send_nowait(start_event)
 
-        speech_data = stt.SpeechData(
-            language=language,
-            start_time=self.start_time_offset + data.get("start", 0),
-            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
-            confidence=data.get("confidence", 1.0),
-            text=text,
-            words=[
-                TimedString(
-                    text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
-                    confidence=word.get("confidence", 0.0),
-                )
-                for word in words
-            ],
-        )
+        speech_data = self._build_speech_data(data)
 
         if is_final:
             if self._speech_duration > 0:

@@ -124,6 +124,7 @@ class DriveThruAgent(Agent):
             Regular items like a single cheeseburger cannot be made into a meal unless such a combo explicitly exists.
 
             Only call this function once the user has clearly specified both a drink and a sauce — always ask for them if they're missing.
+            Never infer or assume the drink — if the user has not explicitly named a drink, ask for it before calling this tool.
 
             A meal can only be Medium or Large; Small is not an available option.
             Drink and fries sizes can differ (e.g., “large fries but a medium Coke”).
@@ -293,6 +294,7 @@ class DriveThruAgent(Agent):
             Call this when the user orders **a single item on its own**, not as part of a Combo Meal or Happy Meal.
 
             The customer must provide clear and specific input. For example, item variants such as flavor must **always** be explicitly stated.
+            Never call this tool when size information is still needed — if the item has multiple sizes and the user has not specified one, ask for the size before calling.
 
             The user might say—for example:
             - “Just the cheeseburger, no meal”

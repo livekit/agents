@@ -93,7 +93,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ## Code Style
 - Line length: 100 characters
-- Python 3.9+ compatibility required
+- Python 3.10+ compatibility required
 - Google-style docstrings
 - Strict mypy type checking enabled
 - Use `make check` and `make fix` before committing

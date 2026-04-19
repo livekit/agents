@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -106,28 +107,21 @@ class TTS(tts.TTS):
         return "xAI"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        params = {
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "codec": "pcm",
+            "sample_rate": SAMPLE_RATE,
+        }
+        url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
             ws = await asyncio.wait_for(
                 self._ensure_session().ws_connect(
-                    XAI_WEBSOCKET_URL,
+                    url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                 ),
                 timeout,
             )
-            config_msg = {
-                "type": "config",
-                "data": {
-                    "voice_id": self._opts.voice,
-                    "language": self._opts.language,
-                    "output_format": {"Raw": {"encoding": "Linear16"}},
-                    "sample_rate_hertz": "Hz24000",
-                },
-            }
-            try:
-                await ws.send_str(json.dumps(config_msg))
-            except Exception:
-                await ws.close()
-                raise
         except (
             aiohttp.ClientConnectorError,
             aiohttp.ClientConnectionResetError,
@@ -193,7 +187,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -205,23 +198,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
+        segments_ch = utils.aio.Chan[tokenize.WordStream]()
+
         async def _tokenize_input() -> None:
             input_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
                     if input_stream is None:
                         input_stream = self._opts.tokenizer.stream()
-                        self._segments_ch.send_nowait(input_stream)
+                        segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for input_stream in self._segments_ch:
+            async for input_stream in segments_ch:
                 await self._run_ws(input_stream, output_emitter)
 
         tasks = [
@@ -255,14 +250,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal input_ended
 
             async for word in input_stream:
-                text_chunk_msg = {
-                    "type": "text_chunk",
-                    "data": {"text": f"{word.token}", "is_last": False},
-                }
                 self._mark_started()
-                await ws.send_str(json.dumps(text_chunk_msg))
-            last_msg = {"type": "text_chunk", "data": {"text": "", "is_last": True}}
-            await ws.send_str(json.dumps(last_msg))
+                await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
+            await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -283,18 +273,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected xAI message type %s", msg.type)
                     continue
 
-                msg = json.loads(msg.data)
-                if msg["data"].get("type") == "audio":
-                    if msg["data"]["data"].get("audio", None):
-                        b64data = base64.b64decode(msg["data"]["data"]["audio"])
-                        output_emitter.push(b64data)
-
-                    if msg["data"]["data"].get("is_last") and input_ended:
+                data = json.loads(msg.data)
+                msg_type = data.get("type")
+                if msg_type == "audio.delta":
+                    output_emitter.push(base64.b64decode(data["delta"]))
+                elif msg_type == "audio.done":
+                    if input_ended:
                         output_emitter.end_segment()
                         break
-
+                elif msg_type == "error":
+                    raise APIStatusError(
+                        data.get("message", "unknown xAI error"),
+                        status_code=-1,
+                        body=str(data),
+                    )
                 else:
-                    logger.error("Unexpected xAI message %s", msg)
+                    logger.warning("Unexpected xAI message %s", data)
 
         ws = await self._tts._connect_ws(self._conn_options.timeout)
         tasks = [

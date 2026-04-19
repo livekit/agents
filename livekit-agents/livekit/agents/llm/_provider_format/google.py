@@ -8,7 +8,7 @@ from typing import Any, Literal
 from livekit.agents import llm
 from livekit.agents.log import logger
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -22,6 +22,8 @@ def to_chat_ctx(
     inject_dummy_user_message: bool = True,
     thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], GoogleFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     turns: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None

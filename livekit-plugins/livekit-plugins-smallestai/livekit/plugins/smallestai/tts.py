@@ -76,7 +76,7 @@ class TTS(tts.TTS):
         Create a new instance of smallest.ai Waves TTS.
         Args:
             api_key: Your Smallest AI API key.
-            model: The TTS model to use (e.g., "lightning", "lightning-large", "lightning-v2").
+            model: The TTS model to use (e.g., "lightning", "lightning-large", "lightning-v2", "lightning-v3.1").
             voice_id: The voice ID to use for synthesis.
             sample_rate: Sample rate for the audio output.
             speed: Speed of the speech synthesis.
@@ -104,7 +104,7 @@ class TTS(tts.TTS):
 
         if (consistency or similarity or enhancement) and model == "lightning":
             logger.warning(
-                "consistency, similarity, and enhancement are only supported for model 'lightning-large' and 'lightning-v2'. "
+                "consistency, similarity, and enhancement are only supported for model 'lightning-large', 'lightning-v2', and 'lightning-v3.1'. "
             )
 
         self._opts = _TTSOptions(
@@ -196,9 +196,13 @@ class ChunkedStream(tts.ChunkedStream):
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
 
-            url = f"{SMALLEST_BASE_URL}/{self._opts.model}/get_speech_long_text"
-            if self._opts.model == "lightning-v2":
-                url = f"{SMALLEST_BASE_URL}/{self._opts.model}/get_speech"
+            # lightning and lightning-large use /get_speech_long_text
+            # lightning-v2 and lightning-v3.1 use /get_speech
+            base = self._opts.base_url
+            if self._opts.model in ("lightning-v2", "lightning-v3.1"):
+                url = f"{base}/{self._opts.model}/get_speech"
+            else:
+                url = f"{base}/{self._opts.model}/get_speech_long_text"
 
             headers = {
                 "Authorization": f"Bearer {self._opts.api_key}",
