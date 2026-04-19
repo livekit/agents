@@ -58,6 +58,7 @@ class STTOptions:
     eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
+    language_hint: NotGivenOr[list[str]] = NOT_GIVEN
 
 
 class STTv2(stt.STT):
@@ -71,6 +72,7 @@ class STTv2(stt.STT):
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
@@ -88,6 +90,7 @@ class STTv2(stt.STT):
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
+            language_hint: List of str of language hints to bias the model for improved accuracy. Only usable with `flux-general-multi`. Defaults to NOT_GIVEN.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
@@ -135,6 +138,7 @@ class STTv2(stt.STT):
             keyterm=keyterm if is_given(keyterm) else [],
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            language_hint=language_hint if is_given(language_hint) else [],
             eager_eot_threshold=eager_eot_threshold,
             eot_threshold=eot_threshold,
             eot_timeout_ms=eot_timeout_ms,
@@ -196,6 +200,7 @@ class STTv2(stt.STT):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -231,6 +236,8 @@ class STTv2(stt.STT):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -246,6 +253,7 @@ class STTv2(stt.STT):
                 mip_opt_out=mip_opt_out,
                 endpoint_url=endpoint_url,
                 tags=tags,
+                language_hint=language_hint,
                 eager_eot_threshold=eager_eot_threshold,
             )
 
@@ -289,6 +297,7 @@ class SpeechStreamv2(stt.SpeechStream):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
@@ -313,6 +322,8 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -456,6 +467,9 @@ class SpeechStreamv2(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
+        if self._opts.language_hint:
+            live_config["language_hint"] = self._opts.language_hint
+
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -560,12 +574,18 @@ def _parse_transcription(
         return []
     confidence = sum(word["confidence"] for word in words) / len(words) if words else 0
 
+    detected_languages = data.get("languages") or []
+    primary_language = (
+        LanguageCode(detected_languages[0]) if detected_languages else LanguageCode(language)
+    )
+
     sd = stt.SpeechData(
-        language=LanguageCode(language),
+        language=primary_language,
         start_time=data.get("audio_window_start", 0) + start_time_offset,
         end_time=data.get("audio_window_end", 0) + start_time_offset,
         confidence=confidence,
         text=transcript or "",
+        source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
         words=[
             TimedString(
                 text=word.get("word", ""),
