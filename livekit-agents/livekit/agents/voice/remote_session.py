@@ -69,20 +69,11 @@ class SessionTransport(ABC):
 
 
 class RoomSessionTransport(SessionTransport):
-    def __init__(self, room: rtc.Room, remote_identity: str | None = None) -> None:
+    def __init__(self, room: rtc.Room) -> None:
         self._room = room
-        self._remote_identity = remote_identity
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
         self._tasks: set[asyncio.Task[None]] = set()
-
-    @property
-    def remote_identity(self) -> str | None:
-        return self._remote_identity
-
-    @remote_identity.setter
-    def remote_identity(self, value: str | None) -> None:
-        self._remote_identity = value
 
     async def start(self) -> None:
         if self._handler_registered:
@@ -90,8 +81,26 @@ class RoomSessionTransport(SessionTransport):
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
 
+    def _can_manage(self, identity: str) -> bool:
+        participant = self._room.remote_participants.get(identity)
+        if participant is None:
+            return False
+        permissions = participant.permissions
+        return bool(permissions and permissions.can_manage_agent_session)
+
+    def _authorized_identities(self) -> list[str]:
+        return [
+            identity
+            for identity, participant in self._room.remote_participants.items()
+            if participant.permissions and participant.permissions.can_manage_agent_session
+        ]
+
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
-        if self._remote_identity and participant_identity != self._remote_identity:
+        if not self._can_manage(participant_identity):
+            logger.debug(
+                "ignoring session message from participant without can_manage_agent_session grant",
+                extra={"participant": participant_identity},
+            )
             return
         task = asyncio.create_task(self._read_stream(reader))
         self._tasks.add(task)
@@ -114,9 +123,11 @@ class RoomSessionTransport(SessionTransport):
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._recv_ch.closed or not self._room.isconnected():
             return
+        dest = self._authorized_identities()
+        if not dest:
+            return
         try:
             data = msg.SerializeToString()
-            dest = [self._remote_identity] if self._remote_identity else None
             writer = await self._room.local_participant.stream_bytes(
                 name=utils.shortuuid("AS_"),
                 topic=TOPIC_SESSION_MESSAGES,

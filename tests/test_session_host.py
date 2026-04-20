@@ -23,7 +23,6 @@ from livekit.agents.voice.events import (
     UserStateChangedEvent,
 )
 from livekit.agents.voice.remote_session import (
-    RoomSessionTransport,
     SessionHost,
     SessionTransport,
     _chat_item_to_proto,
@@ -234,26 +233,6 @@ class TestSessionUsageToProto:
         )
         pb = _session_usage_to_proto(usage)
         assert len(pb.model_usage) == 3
-
-
-# ---------------------------------------------------------------------------
-# RoomSessionTransport
-# ---------------------------------------------------------------------------
-
-
-class TestRoomSessionTransport:
-    def test_remote_identity_property(self) -> None:
-        room = MagicMock()
-        transport = RoomSessionTransport(room, remote_identity="user-1")
-        assert transport.remote_identity == "user-1"
-
-        transport.remote_identity = "user-2"
-        assert transport.remote_identity == "user-2"
-
-    def test_remote_identity_none(self) -> None:
-        room = MagicMock()
-        transport = RoomSessionTransport(room)
-        assert transport.remote_identity is None
 
 
 # ---------------------------------------------------------------------------
