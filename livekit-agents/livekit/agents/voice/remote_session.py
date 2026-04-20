@@ -125,9 +125,7 @@ class RoomSessionTransport(SessionTransport):
             data = b"".join(chunks)
             msg = agent_pb.AgentSessionMessage()
             msg.ParseFromString(data)
-            self._recv_ch.send_nowait(
-                IncomingMessage(message=msg, sender_identity=sender_identity)
-            )
+            self._recv_ch.send_nowait(IncomingMessage(message=msg, sender_identity=sender_identity))
         except utils.aio.ChanClosed:
             pass
         except Exception as e:

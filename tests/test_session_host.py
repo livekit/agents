@@ -63,8 +63,8 @@ class InMemoryTransport(SessionTransport):
     async def close(self) -> None:
         self._closed = True
 
-    def inject(self, msg: agent_pb.AgentSessionMessage, sender: str | None = None) -> None:
-        self._inbound.put_nowait(IncomingMessage(message=msg, sender=sender))
+    def inject(self, msg: agent_pb.AgentSessionMessage, sender_identity: str | None = None) -> None:
+        self._inbound.put_nowait(IncomingMessage(message=msg, sender_identity=sender_identity))
 
     def __aiter__(self) -> AsyncIterator[IncomingMessage]:
         return self
@@ -453,7 +453,9 @@ class TestSessionHostRequests:
             request_id="req-1",
             ping=agent_pb.SessionRequest.Ping(),
         )
-        await host._handle_request(IncomingMessage(message=agent_pb.AgentSessionMessage(request=req)))
+        await host._handle_request(
+            IncomingMessage(message=agent_pb.AgentSessionMessage(request=req))
+        )
 
         assert len(transport.sent) == 1
         resp = transport.sent[0].response
@@ -473,7 +475,9 @@ class TestSessionHostRequests:
             request_id="req-2",
             get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
         )
-        await host._handle_request(IncomingMessage(message=agent_pb.AgentSessionMessage(request=req)))
+        await host._handle_request(
+            IncomingMessage(message=agent_pb.AgentSessionMessage(request=req))
+        )
 
         assert len(transport.sent) == 1
         resp = transport.sent[0].response
@@ -494,7 +498,9 @@ class TestSessionHostRequests:
             request_id="req-3",
             get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
         )
-        await host._handle_request(IncomingMessage(message=agent_pb.AgentSessionMessage(request=req)))
+        await host._handle_request(
+            IncomingMessage(message=agent_pb.AgentSessionMessage(request=req))
+        )
 
         assert len(transport.sent) == 1
         resp = transport.sent[0].response
@@ -516,7 +522,9 @@ class TestSessionHostRequests:
             request_id="req-4",
             get_session_state=agent_pb.SessionRequest.GetSessionState(),
         )
-        await host._handle_request(IncomingMessage(message=agent_pb.AgentSessionMessage(request=req)))
+        await host._handle_request(
+            IncomingMessage(message=agent_pb.AgentSessionMessage(request=req))
+        )
 
         assert len(transport.sent) == 1
         resp = transport.sent[0].response
@@ -539,7 +547,9 @@ class TestSessionHostRequests:
             request_id="req-5",
             get_session_usage=agent_pb.SessionRequest.GetSessionUsage(),
         )
-        await host._handle_request(IncomingMessage(message=agent_pb.AgentSessionMessage(request=req)))
+        await host._handle_request(
+            IncomingMessage(message=agent_pb.AgentSessionMessage(request=req))
+        )
 
         assert len(transport.sent) == 1
         resp = transport.sent[0].response
