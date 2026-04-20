@@ -28,7 +28,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -45,12 +45,23 @@ _REASONING_UNSUPPORTED_PARAMS: set[str] = {
     "n",
 }
 
+# xAI reasoning models only restrict presence_penalty, frequency_penalty, stop.
+# They still support temperature and top_p.
+_XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "presence_penalty",
+    "frequency_penalty",
+    "stop",
+}
+
 # Model prefix -> set of param names that should be dropped
 _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "o1": _REASONING_UNSUPPORTED_PARAMS,
     "o3": _REASONING_UNSUPPORTED_PARAMS,
     "o4": _REASONING_UNSUPPORTED_PARAMS,
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+    "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
 # models that don't support reasoning_effort when function tools are present
@@ -110,7 +121,15 @@ DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
+XAIModels = Literal[
+    "xai/grok-4-1-fast-non-reasoning",
+    "xai/grok-4-1-fast-reasoning",
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-4.20-0309-reasoning",
+    "xai/grok-4.20-multi-agent-0309",
+]
+
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -126,6 +145,7 @@ class ChatCompletionOptions(TypedDict, total=False):
     prediction: ChatCompletionPredictionContentParam | None
     presence_penalty: float | None
     prompt_cache_key: str
+    prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
     safety_identifier: str
     seed: int | None
@@ -341,9 +361,10 @@ class LLMStream(llm.LLMStream):
                 # remove tool_choice from extra_kwargs if no tools are provided
                 self._extra_kwargs.pop("tool_choice", None)
 
+            extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
+            extra_headers.update(get_inference_headers())
             if self._provider:
-                headers = self._extra_kwargs.setdefault("extra_headers", {})
-                headers["X-LiveKit-Inference-Provider"] = self._provider
+                extra_headers["X-LiveKit-Inference-Provider"] = self._provider
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
@@ -375,6 +396,7 @@ class LLMStream(llm.LLMStream):
                                 prompt_tokens=chunk.usage.prompt_tokens,
                                 prompt_cached_tokens=cached_tokens or 0,
                                 total_tokens=chunk.usage.total_tokens,
+                                service_tier=getattr(chunk, "service_tier", None),
                             ),
                         )
                         self._event_ch.send_nowait(usage_chunk)
@@ -441,11 +463,13 @@ class LLMStream(llm.LLMStream):
                     return call_chunk
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
+            finish_extra = getattr(delta, "extra_content", None)
             call_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     content=delta.content,
+                    extra=finish_extra,
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=self._fnc_raw_arguments or "",

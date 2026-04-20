@@ -76,8 +76,56 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
+
+
+class _STTPipeline:
+    """Transferable STT pipeline that survives agent handoff.
+
+    The pump task iterates the STT generator and forwards events into event_ch.
+    It is never cancelled during handoff — only the consumer is swapped.
+    """
+
+    def __init__(self, stt_node: io.STTNode) -> None:
+        self._stt_node = stt_node
+        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        self._event_ch = aio.Chan[stt.SpeechEvent]()
+        self._pump_task = asyncio.create_task(self._stt_pump())
+        self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
+        return self._audio_ch
+
+    @property
+    def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
+        return self._event_ch
+
+    @utils.log_exceptions(logger=logger)
+    async def _stt_pump(self) -> None:
+        """Iterate the STT generator and forward events into *event_ch*.
+
+        This task owns the generator lifecycle and is never cancelled during
+        handoff — only the consumer is swapped.
+        """
+        from .agent import ModelSettings
+
+        node = self._stt_node(self._audio_ch, ModelSettings())
+        if asyncio.iscoroutine(node):
+            node = await node
+
+        if node is None:
+            return
+
+        if isinstance(node, AsyncIterable):
+            async for ev in node:
+                assert isinstance(ev, stt.SpeechEvent), (
+                    f"STT node must yield SpeechEvent, got: {type(ev)}"
+                )
+                self._event_ch.send_nowait(ev)
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._pump_task)
 
 
 class AudioRecognition:
@@ -98,7 +146,7 @@ class AudioRecognition:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
-        self._stt_atask: asyncio.Task[None] | None = None
+        self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._endpointing: BaseEndpointing = endpointing
@@ -127,7 +175,7 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
 
-        self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
 
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -188,8 +236,8 @@ class AudioRecognition:
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
 
-    def start(self) -> None:
-        self.update_stt(self._stt)
+    def start(self, *, stt_pipeline: _STTPipeline | None = None) -> None:
+        self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
         if isinstance(self._turn_detector, MultiModalTurnDetector) or self._turn_detector is None:
@@ -418,11 +466,14 @@ class AudioRecognition:
             self._input_started_at = time.time() - frame.duration
 
         self._sample_rate = frame.sample_rate
-        if not skip_stt and self._stt_ch is not None:
-            self._stt_ch.send_nowait(frame)
+        if not skip_stt and self._stt_pipeline is not None:
+            self._stt_pipeline.audio_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
+
+        if self._session.amd is not None and not self._session.amd.started:
+            self._session.amd._on_first_audio()
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
@@ -436,10 +487,14 @@ class AudioRecognition:
         if self._commit_user_turn_atask is not None:
             await self._commit_user_turn_atask
 
+        if self._stt_pipeline is not None:
+            await self._stt_pipeline.aclose()
+            self._stt_pipeline = None
+
         await aio.cancel_and_wait(*self._tasks)
 
-        if self._stt_atask is not None:
-            await aio.cancel_and_wait(self._stt_atask)
+        if self._stt_consumer_atask is not None:
+            await aio.cancel_and_wait(self._stt_consumer_atask)
 
         if self._vad_atask is not None:
             await aio.cancel_and_wait(self._vad_atask)
@@ -453,23 +508,36 @@ class AudioRecognition:
         if self._turn_detection_atask is not None:
             await aio.cancel_and_wait(self._turn_detection_atask)
 
-    def update_stt(self, stt: io.STTNode | None) -> None:
+    def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
-        if stt:
-            self._stt_ch = aio.Chan[rtc.AudioFrame]()
-            self._stt_atask = asyncio.create_task(
-                self._stt_task(stt, self._stt_ch, self._stt_atask)
+        if pipeline is None and stt is not None:
+            pipeline = _STTPipeline(stt)
+
+        if pipeline is not None:
+            self._stt_consumer_atask = asyncio.create_task(
+                self._stt_consumer(
+                    event_ch=pipeline.event_ch,
+                    old_pipeline=self._stt_pipeline,
+                    old_consumer=self._stt_consumer_atask,
+                )
             )
+            self._stt_pipeline = pipeline
             # reset interruption handling related state
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
             self._input_started_at = None
-        elif self._stt_atask is not None:
-            task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
-            task.add_done_callback(lambda _: self._tasks.discard(task))
-            self._tasks.add(task)
-            self._stt_atask = None
-            self._stt_ch = None
+        else:
+            if self._stt_consumer_atask is not None:
+                task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_consumer_atask = None
+
+            if self._stt_pipeline is not None:
+                task = asyncio.create_task(self._stt_pipeline.aclose())
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_pipeline = None
 
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
@@ -488,6 +556,23 @@ class AudioRecognition:
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
         )
+
+    async def detach_stt(self) -> _STTPipeline | None:
+        """Detach the STT pipeline for handoff to another AudioRecognition.
+
+        Returns the pipeline (pump task + channels) without stopping it.
+        The caller is responsible for passing it to the new AudioRecognition
+        via start(..., stt_pipeline=pipeline).
+        """
+        pipeline = self._stt_pipeline
+        self._stt_pipeline = None
+
+        # stop the consumer — the new AudioRecognition will start its own
+        if self._stt_consumer_atask is not None:
+            await aio.cancel_and_wait(self._stt_consumer_atask)
+            self._stt_consumer_atask = None
+
+        return pipeline
 
     def update_interruption_detection(
         self, interruption_detection: inference.AdaptiveInterruptionDetector | None
@@ -691,6 +776,7 @@ class AudioRecognition:
             ):
                 self._last_language = language
 
+            self._final_transcript_received.set()
             if not transcript:
                 return
 
@@ -700,6 +786,9 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
+            if self._session.amd is not None:
+                self._session.amd._on_transcript(transcript)
+
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
@@ -712,7 +801,6 @@ class AudioRecognition:
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
-            self._final_transcript_received.set()
 
             if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
@@ -798,6 +886,18 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
+            # STT EOT changes user state from speaking to listening without updating VAD internal states
+            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
+            # and user state won't be updated until a new VAD SOS is received
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
+            if self._vad:
+                if self._speaking:
+                    logger.warning(
+                        "stt end of speech received while user is speaking, resetting vad"
+                    )
+                self.update_vad(self._vad)
+
             self._speaking = False
             self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
@@ -837,6 +937,9 @@ class AudioRecognition:
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
+
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
@@ -895,6 +998,9 @@ class AudioRecognition:
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
+
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
@@ -1142,30 +1248,22 @@ class AudioRecognition:
         )
 
     @utils.log_exceptions(logger=logger)
-    async def _stt_task(
+    async def _stt_consumer(
         self,
-        stt_node: io.STTNode,
-        audio_input: AsyncIterable[rtc.AudioFrame],
-        task: asyncio.Task[None] | None,
+        event_ch: aio.Chan[stt.SpeechEvent],
+        old_pipeline: _STTPipeline | None,
+        old_consumer: asyncio.Task[None] | None,
     ) -> None:
-        from .agent import ModelSettings
+        """Consume STT events from the pump. Swapped on handoff."""
 
-        if task is not None:
-            await aio.cancel_and_wait(task)
+        if old_pipeline is not None:
+            await old_pipeline.aclose()
 
-        node = stt_node(audio_input, ModelSettings())
-        if asyncio.iscoroutine(node):
-            node = await node
+        if old_consumer is not None:
+            await aio.cancel_and_wait(old_consumer)
 
-        if node is None:
-            return
-
-        if isinstance(node, AsyncIterable):
-            async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    f"STT node must yield SpeechEvent, got: {type(ev)}"
-                )
-                await self._on_stt_event(ev)
+        async for ev in event_ch:
+            await self._on_stt_event(ev)
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
@@ -1192,6 +1290,13 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+
+            # reset the speaking state to prevent stuck user speaking state during handoff
+            if self._speaking:
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
+                self._speaking = False
+                self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _turn_detection_task(

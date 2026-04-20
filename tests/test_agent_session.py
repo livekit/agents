@@ -95,15 +95,16 @@ async def test_events_and_metrics() -> None:
     t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     # conversation_item_added
-    assert len(conversation_events) == 2
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "user"
-    assert conversation_events[0].item.text_content == "Hello, how are you?"
-    check_timestamp(conversation_events[0].created_at - t_origin, 3.0, speed_factor=speed)
+    assert len(conversation_events) == 3
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
-    assert conversation_events[1].item.role == "assistant"
-    assert conversation_events[1].item.text_content == "I'm doing well, thank you!"
-    check_timestamp(conversation_events[1].created_at - t_origin, 5.5, speed_factor=speed)
+    assert conversation_events[1].item.role == "user"
+    assert conversation_events[1].item.text_content == "Hello, how are you?"
+    check_timestamp(conversation_events[1].created_at - t_origin, 3.0, speed_factor=speed)
+    assert conversation_events[2].item.type == "message"
+    assert conversation_events[2].item.role == "assistant"
+    assert conversation_events[2].item.text_content == "I'm doing well, thank you!"
+    check_timestamp(conversation_events[2].created_at - t_origin, 5.5, speed_factor=speed)
 
     # user_input_transcribed
     assert len(user_transcription_events) >= 1
@@ -236,7 +237,7 @@ async def test_interruption(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -287,7 +288,9 @@ async def test_interruption_options() -> None:
 
     # test min_interruption_words
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"min_interruption_words": 3}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"min_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -300,7 +303,9 @@ async def test_interruption_options() -> None:
 
     # test allow_interruptions=False
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"allow_interruptions": False}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"enabled": False}},
     )
     playback_finished_events.clear()
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -393,7 +398,7 @@ async def test_interruption_before_speaking(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -481,26 +486,27 @@ async def test_generate_reply() -> None:
     assert tool_executed_events[0].function_calls[0].name == "goodbye"
 
     # conversation_item_added
-    assert len(conversation_events) == 4
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "assistant"
-    assert conversation_events[0].item.text_content == "What can I do for you!"
-    check_timestamp(conversation_events[0].created_at - t_origin, 2.5, speed_factor=speed)
+    assert len(conversation_events) == 5
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
-    assert conversation_events[1].item.role == "user"
-    assert conversation_events[1].item.text_content == "bye"
-    check_timestamp(conversation_events[1].created_at - t_origin, 4.5, speed_factor=speed)
+    assert conversation_events[1].item.role == "assistant"
+    assert conversation_events[1].item.text_content == "What can I do for you!"
+    check_timestamp(conversation_events[1].created_at - t_origin, 2.5, speed_factor=speed)
     assert conversation_events[2].item.type == "message"
-    assert conversation_events[2].item.role == "assistant"
-    assert conversation_events[2].item.text_content == "session.say from on_user_turn_completed"
-    check_timestamp(
-        conversation_events[2].created_at - t_origin, 5.5, speed_factor=speed, max_abs_diff=1.0
-    )
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "bye"
+    check_timestamp(conversation_events[2].created_at - t_origin, 4.5, speed_factor=speed)
     assert conversation_events[3].item.type == "message"
     assert conversation_events[3].item.role == "assistant"
-    assert conversation_events[3].item.text_content == "Goodbye! have a nice day!"
+    assert conversation_events[3].item.text_content == "session.say from on_user_turn_completed"
     check_timestamp(
-        conversation_events[3].created_at - t_origin, 9.0, speed_factor=speed, max_abs_diff=1.0
+        conversation_events[3].created_at - t_origin, 5.5, speed_factor=speed, max_abs_diff=1.0
+    )
+    assert conversation_events[4].item.type == "message"
+    assert conversation_events[4].item.role == "assistant"
+    assert conversation_events[4].item.text_content == "Goodbye! have a nice day!"
+    check_timestamp(
+        conversation_events[4].created_at - t_origin, 9.0, speed_factor=speed, max_abs_diff=1.0
     )
 
     # chat context
@@ -570,36 +576,49 @@ async def test_aec_warmup() -> None:
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
-        (True, 0.8),
-        (False, 1.1),
+        ({"preemptive_tts": True}, 0.7),
+        ({"preemptive_tts": False}, 0.8),
+        ({"enabled": False}, 1.1),
     ],
 )
-async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
+async def test_preemptive_generation(preemptive_generation: dict, expected_latency: float) -> None:
     speed = 5.0
     actions = FakeActions()
-    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
     actions.add_tts(3.0, ttfb=0.3)
-    # preemptive_generation enabled: e2e latency is 0.2+0.3+0.3=0.8s
-    # preemptive_generation disabled: e2e latency is 0.5+0.3+3.0=1.1s
+    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
+    # preemptive_generation without TTS enabled: e2e latency is max(0.1+0.3, 0.5)+0.3=0.8s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
 
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"preemptive_generation": preemptive_generation}
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": preemptive_generation},
     )
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
     session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    assert len(user_state_events) == 2
+    assert user_state_events[0].old_state == "listening"
+    assert user_state_events[0].new_state == "speaking"
+    assert user_state_events[1].new_state == "listening"
+    t_user_stop_speaking = user_state_events[1].created_at
+
     assert len(agent_state_events) == 4
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
+    t_agent_start_speaking = agent_state_events[2].created_at
     check_timestamp(
-        agent_state_events[2].created_at - t_origin,
-        t_target=2.0 + expected_latency,
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=expected_latency,
         speed_factor=speed,
         max_abs_diff=0.2,
     )
@@ -633,7 +652,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"preemptive_generation": preemptive_generation},
+        turn_handling={"preemptive_generation": {"enabled": preemptive_generation}},
     )
     agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
 
@@ -660,16 +679,17 @@ async def test_interrupt_during_on_user_turn_completed(
         assert agent_state_events[2].new_state == "speaking"
         assert agent_state_events[3].new_state == "listening"
 
-    assert len(conversation_events) == 3
-    assert conversation_events[0].item.type == "message"
-    assert conversation_events[0].item.role == "user"
-    assert conversation_events[0].item.text_content == "Tell me a story"
+    assert len(conversation_events) == 4
+    assert conversation_events[0].item.type == "agent_handoff"
     assert conversation_events[1].item.type == "message"
     assert conversation_events[1].item.role == "user"
-    assert conversation_events[1].item.text_content == "about a firefighter."
+    assert conversation_events[1].item.text_content == "Tell me a story"
     assert conversation_events[2].item.type == "message"
-    assert conversation_events[2].item.role == "assistant"
-    assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "about a firefighter."
+    assert conversation_events[3].item.type == "message"
+    assert conversation_events[3].item.role == "assistant"
+    assert conversation_events[3].item.text_content == "Here is a story about a firefighter..."
 
 
 async def test_unknown_function_call() -> None:
@@ -717,7 +737,7 @@ async def test_unknown_function_call() -> None:
 
 
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.5
+    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.

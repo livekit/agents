@@ -464,6 +464,20 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
+                if response.usage_metadata is not None:
+                    usage = response.usage_metadata
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            id=request_id,
+                            usage=llm.CompletionUsage(
+                                completion_tokens=usage.candidates_token_count or 0,
+                                prompt_tokens=usage.prompt_token_count or 0,
+                                prompt_cached_tokens=usage.cached_content_token_count or 0,
+                                total_tokens=usage.total_token_count or 0,
+                            ),
+                        )
+                    )
+
                 if not response.candidates:
                     continue
 
@@ -492,20 +506,6 @@ class LLMStream(llm.LLMStream):
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
-
-                if response.usage_metadata is not None:
-                    usage = response.usage_metadata
-                    self._event_ch.send_nowait(
-                        llm.ChatChunk(
-                            id=request_id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count or 0,
-                                prompt_tokens=usage.prompt_token_count or 0,
-                                prompt_cached_tokens=usage.cached_content_token_count or 0,
-                                total_tokens=usage.total_token_count or 0,
-                            ),
-                        )
-                    )
 
             if not response_generated:
                 raise APIStatusError(

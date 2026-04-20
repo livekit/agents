@@ -1,6 +1,6 @@
 import enum
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import pytest
 from pydantic import BaseModel, Field
@@ -240,18 +240,24 @@ class TestToolContext:
         assert ctx == ctx_copy
         assert toolset in ctx_copy.toolsets
 
+    def test_toolset_same_instance_dedup(self):
+        # same instance appearing in multiple places is allowed (deduplication)
+        toolset = MockToolset1()  # contains mock_tool_1, mock_tool_2
+        ToolContext([toolset, mock_tool_1])  # same mock_tool_1 instance, no conflict
+        ToolContext([mock_tool_1, toolset])
+        ToolContext([MockToolset1(), MockToolset2()])  # same mock_tool_2 instance
+
     def test_toolset_duplicate_name_conflict(self):
         toolset = MockToolset1()  # contains mock_tool_1, mock_tool_2
 
-        # conflict: toolset before tool, tool before toolset, multiple toolsets
+        # different instances with the same name should raise
+        @function_tool
+        async def mock_tool_1() -> str:
+            """Duplicate name, different instance"""
+            return ""
+
         with pytest.raises(ValueError, match="duplicate function name"):
             ToolContext([toolset, mock_tool_1])
-
-        with pytest.raises(ValueError, match="duplicate function name"):
-            ToolContext([mock_tool_1, toolset])
-
-        with pytest.raises(ValueError, match="duplicate function name"):
-            ToolContext([MockToolset1(), MockToolset2()])  # both have mock_tool_2
 
     def test_toolset_equality(self):
         toolset = MockToolset1()
@@ -450,6 +456,76 @@ class TestStrictJsonSchema:
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
 
 
+class _CarModel(BaseModel):
+    vehicle: Literal["Car"]
+    brand: str
+    color: str
+
+
+class _BikeModel(BaseModel):
+    vehicle: Literal["Bike"]
+    brand: str
+    color: str
+
+
+class _DiscriminatedUnionModel(BaseModel):
+    item: Annotated[_CarModel | _BikeModel, Field(discriminator="vehicle")]
+
+
+class _NestedDiscriminatedUnionModel(BaseModel):
+    items: list[Annotated[_CarModel | _BikeModel, Field(discriminator="vehicle")]]
+
+
+def _has_one_of(schema: object) -> bool:
+    """Recursively check if any dict in the schema tree contains 'oneOf'."""
+    if isinstance(schema, dict):
+        if "oneOf" in schema:
+            return True
+        return any(_has_one_of(v) for v in schema.values())
+    if isinstance(schema, list):
+        return any(_has_one_of(v) for v in schema)
+    return False
+
+
+class TestDiscriminatedUnionSchema:
+    """Test that discriminated unions use anyOf instead of oneOf in strict schema."""
+
+    def test_discriminated_union_uses_anyof_not_oneof(self):
+        """Pydantic emits oneOf for discriminated unions, but OpenAI strict mode
+        rejects oneOf. Ensure to_strict_json_schema converts oneOf to anyOf."""
+        schema = to_strict_json_schema(_DiscriminatedUnionModel)
+        assert not _has_one_of(schema), (
+            f"schema should not contain oneOf: {json.dumps(schema, indent=2)}"
+        )
+        item = schema["properties"]["item"]
+        assert "anyOf" in item, f"item should have anyOf: {json.dumps(item, indent=2)}"
+        assert len(item["anyOf"]) == 2, f"item should have 2 variants: {json.dumps(item, indent=2)}"
+
+    def test_nested_discriminated_union_uses_anyof_not_oneof(self):
+        """Nested discriminated unions should also convert oneOf to anyOf."""
+        schema = to_strict_json_schema(_NestedDiscriminatedUnionModel)
+        assert not _has_one_of(schema), (
+            f"nested schema should not contain oneOf: {json.dumps(schema, indent=2)}"
+        )
+
+    def test_discriminated_union_build_strict_openai_schema(self):
+        """End-to-end: build_strict_openai_schema should not produce oneOf for
+        a function tool with a discriminated union parameter."""
+
+        @function_tool
+        async def lookup_vehicle(
+            item: Annotated[_CarModel | _BikeModel, Field(discriminator="vehicle")],
+        ) -> str:
+            """Look up a vehicle."""
+            return str(item)
+
+        schema = build_strict_openai_schema(lookup_vehicle)
+        schema_str = json.dumps(schema)
+        assert '"oneOf"' not in schema_str, (
+            f"strict openai schema should not contain oneOf: {json.dumps(schema, indent=2)}"
+        )
+
+
 class _OpenEnumModel(BaseModel):
     """Simulates a codegen'd "open enum" pattern (e.g. Fern Python SDK).
     Union[Literal["a", "b"], Any] produces an anyOf with a bare {} entry."""
@@ -497,3 +573,122 @@ class TestEmptySchemaStripping:
             assert len(any_of) != 1, (
                 f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
             )
+
+
+class TestExecuteFunctionCallValidationErrors:
+    """Test that argument validation errors are surfaced to the LLM."""
+
+    @pytest.mark.asyncio
+    async def test_missing_required_arg_surfaces_error(self):
+        """When the LLM omits a required argument, the error details should be
+        returned as a ToolError (is_error=True) instead of 'An internal error occurred'."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{}",  # missing required 'arg1'
+            call_id="test-call-1",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # The error message should contain details about what went wrong,
+        # NOT the generic "An internal error occurred"
+        assert "An internal error occurred" not in result.fnc_call_out.output
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_wrong_type_arg_surfaces_error(self):
+        """When the LLM provides an argument with the wrong type, the validation
+        error details should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_2])
+        tool_call = FunctionToolCall(
+            name="mock_tool_2",
+            arguments='{"arg1": 12345}',  # should be a MockOption string, not int
+            call_id="test-call-2",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        assert "An internal error occurred" not in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_valid_args_still_work(self):
+        """Verify that valid arguments still execute successfully."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments='{"arg1": "hello"}',
+            call_id="test-call-3",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+        assert "arg1" in result.fnc_call_out.output
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_surfaces_error(self):
+        """When the LLM provides invalid JSON, the error should be surfaced."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        tool_call = FunctionToolCall(
+            name="mock_tool_1",
+            arguments="{not valid json}",
+            call_id="test-call-4",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+        # Should contain error details, not generic message
+        assert "An internal error occurred" not in result.fnc_call_out.output
+
+
+class TestAsyncToolsetDedup:
+    """Test that multiple AsyncToolsets can coexist without duplicate tool name conflicts."""
+
+    def test_two_async_toolsets_no_conflict(self):
+        """Two AsyncToolsets share the same get_running_tasks/cancel_task singleton tools."""
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts1 = AsyncToolset(id="booking", tools=[mock_tool_1])
+        ts2 = AsyncToolset(id="search", tools=[mock_tool_2])
+
+        # should not raise — the management tools are the same module-level instances
+        ctx = ToolContext([ts1, ts2])
+
+        # only one copy of each management tool in the flattened list
+        names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
+        assert names.count("get_running_tasks") == 1
+        assert names.count("cancel_task") == 1
+
+    def test_async_toolset_same_id_no_conflict(self):
+        """Two AsyncToolsets with the same id should not conflict."""
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts1 = AsyncToolset(id="same_id", tools=[mock_tool_1])
+        ts2 = AsyncToolset(id="same_id", tools=[mock_tool_2])
+
+        # should not raise
+        ctx = ToolContext([ts1, ts2])
+
+        names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
+        assert names.count("get_running_tasks") == 1
+        assert names.count("cancel_task") == 1

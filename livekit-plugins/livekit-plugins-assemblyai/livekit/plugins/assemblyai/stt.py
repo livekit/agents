@@ -62,6 +62,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
+    domain: NotGivenOr[str] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -87,6 +88,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
+        domain: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -161,6 +163,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
+            domain=domain,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -379,16 +382,28 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_bytes(frame.data.tobytes())
 
             closing_ws = True
+            logger.debug("AssemblyAI sending close message session=%s", self._session_id)
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            consecutive_timeouts = 0
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
+                    consecutive_timeouts += 1
+                    # First warning at 15s, then every 15s while silence continues.
+                    # `session=None` here means WS connected but AAI never sent `Begin`.
+                    if consecutive_timeouts % 3 == 0:
+                        logger.warning(
+                            "AssemblyAI no messages received for %ds session=%s",
+                            consecutive_timeouts * 5,
+                            self._session_id,
+                        )
                     continue
 
                 if msg.type in (
@@ -399,6 +414,14 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
+                    logger.warning(
+                        "AssemblyAI WebSocket closed unexpectedly "
+                        "session=%s code=%s data=%s extra=%s",
+                        self._session_id,
+                        ws.close_code,
+                        msg.data,
+                        msg.extra,
+                    )
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                         status_code=ws.close_code or -1,
@@ -406,13 +429,20 @@ class SpeechStream(stt.SpeechStream):
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("unexpected AssemblyAI message type %s", msg.type)
+                    logger.error(
+                        "unexpected AssemblyAI message type=%s session=%s",
+                        msg.type,
+                        self._session_id,
+                    )
                     continue
 
                 try:
                     self._process_stream_event(json.loads(msg.data))
                 except Exception:
-                    logger.exception("failed to process AssemblyAI message")
+                    logger.exception(
+                        "failed to process AssemblyAI message session=%s",
+                        self._session_id,
+                    )
 
         async def send_config_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             """Send config updates and control messages immediately, independent of audio."""
@@ -483,6 +513,7 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.speaker_labels)
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
+            "domain": self._opts.domain if is_given(self._opts.domain) else None,
         }
 
         headers = {
@@ -497,7 +528,16 @@ class SpeechStream(stt.SpeechStream):
             if v is not None
         }
         url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
+        logger.debug(
+            "connecting to AssemblyAI model=%s base_url=%s",
+            self._opts.speech_model,
+            self._base_url,
+        )
         ws = await self._session.ws_connect(url, headers=headers)
+        logger.debug(
+            "AssemblyAI WebSocket connected status=%s",
+            ws._response.status if ws._response is not None else None,
+        )
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
@@ -521,13 +561,19 @@ class SpeechStream(stt.SpeechStream):
             audio_duration = data.get("audio_duration_seconds")
             session_duration = data.get("session_duration_seconds")
             logger.debug(
-                "AssemblyAI session terminated audio_duration=%ss session_duration=%ss",
+                "AssemblyAI session terminated session=%s audio_duration=%ss session_duration=%ss",
+                self._session_id,
                 audio_duration,
                 session_duration,
             )
             return
 
         if message_type != "Turn":
+            logger.debug(
+                "AssemblyAI unhandled message type=%s session=%s",
+                message_type,
+                self._session_id,
+            )
             return
         words = data.get("words", [])
         end_of_turn = data.get("end_of_turn", False)
@@ -581,7 +627,11 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(interim_event)
-            logger.debug("interim transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "interim transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
 
         if utterance:
             if self._last_preflight_start_time == 0.0:
@@ -613,7 +663,11 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(final_event)
-            logger.debug("preflight transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "preflight transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
             self._last_preflight_start_time = end_time
 
         if end_of_turn and (
@@ -634,14 +688,19 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(final_event)
-            logger.debug("final transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "final transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
 
             if words:
                 first_word_start = words[0].get("start", 0)
                 last_word_end = words[-1].get("end", 0)
                 logger.debug(
-                    "turn speech_duration=%.3fs (from word timestamps)",
+                    "turn speech_duration=%.3fs session=%s (from word timestamps)",
                     (last_word_end - first_word_start) / 1000,
+                    self._session_id,
                 )
 
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
