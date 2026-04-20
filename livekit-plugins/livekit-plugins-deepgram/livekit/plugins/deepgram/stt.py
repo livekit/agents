@@ -72,6 +72,7 @@ class STTOptions:
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
+    final_on_endpoint: bool = False
 
 
 class STT(stt.STT):
@@ -100,6 +101,7 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        final_on_endpoint: bool = False,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -130,6 +132,16 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
+            final_on_endpoint: When True, only emit ``FINAL_TRANSCRIPT`` events when Deepgram
+                       reports ``speech_final=True`` (i.e. endpoint detected). Intermediate
+                       ``is_final=True`` events (which fire multiple times per utterance as
+                       Deepgram stabilizes word batches — sometimes with overlapping text when
+                       the model revises earlier words) are surfaced as ``INTERIM_TRANSCRIPT``
+                       instead. This makes ``endpointing_ms`` the authoritative control over
+                       transcript-segment boundaries, which matches the model most consumers
+                       expect for UI/analytics. Trade-off: ``FINAL_TRANSCRIPT`` latency grows
+                       by up to ``endpointing_ms``. Defaults to False to preserve existing
+                       behavior.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -185,6 +197,7 @@ class STT(stt.STT):
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
             endpoint_url=base_url,
+            final_on_endpoint=final_on_endpoint,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -298,6 +311,7 @@ class STT(stt.STT):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        final_on_endpoint: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -342,6 +356,8 @@ class STT(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(final_on_endpoint):
+            self._opts.final_on_endpoint = final_on_endpoint
 
         for stream in self._streams:
             stream.update_options(
@@ -361,6 +377,7 @@ class STT(stt.STT):
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
                 endpoint_url=endpoint_url,
+                final_on_endpoint=final_on_endpoint,
             )
 
     def _sanitize_options(
@@ -432,6 +449,7 @@ class SpeechStream(stt.SpeechStream):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        final_on_endpoint: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -476,6 +494,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(final_on_endpoint):
+            self._opts.final_on_endpoint = final_on_endpoint
 
         self._reconnect_event.set()
 
@@ -694,7 +714,13 @@ class SpeechStream(stt.SpeechStream):
                     start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
 
-                if is_final_transcript:
+                # Deepgram's is_final=True fires multiple times per utterance as it
+                # stabilizes word batches, and those batches can overlap when the
+                # model revises earlier text. When final_on_endpoint is True, treat
+                # only speech_final=True as a true FINAL_TRANSCRIPT boundary so one
+                # spoken utterance maps to one final event downstream.
+                emit_final = is_endpoint if self._opts.final_on_endpoint else is_final_transcript
+                if emit_final:
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=request_id,
