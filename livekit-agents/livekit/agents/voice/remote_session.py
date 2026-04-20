@@ -83,16 +83,13 @@ class RoomSessionTransport(SessionTransport):
 
     def _can_manage(self, identity: str) -> bool:
         participant = self._room.remote_participants.get(identity)
-        if participant is None:
-            return False
-        permissions = participant.permissions
-        return bool(permissions and permissions.can_manage_agent_session)
+        return participant is not None and participant.permissions.can_manage_agent_session
 
     def _authorized_identities(self) -> list[str]:
         return [
             identity
             for identity, participant in self._room.remote_participants.items()
-            if participant.permissions and participant.permissions.can_manage_agent_session
+            if participant.permissions.can_manage_agent_session
         ]
 
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
