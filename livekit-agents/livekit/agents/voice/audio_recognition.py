@@ -852,11 +852,8 @@ class AudioRecognition:
             self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
-            # Fallback onset for the edge case where the STT server detected
-            # speech but the local VAD did not. If local VAD fired first,
-            # _speech_start_time already holds its back-dated value and we
-            # preserve it. Otherwise we fill from the STT's server timestamp
-            # (or arrival time, if the plugin doesn't provide one).
+            # If the plugin provided a server onset timestamp, use it;
+            # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
