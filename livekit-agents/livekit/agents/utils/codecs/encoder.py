@@ -52,6 +52,39 @@ def _resolve_codec(codec: str) -> tuple[str, str]:
     return _CODEC_TABLE[codec]
 
 
+class _CompactableBuffer(io.RawIOBase):
+    _COMPACT_THRESHOLD = 1 * 1024 * 1024  # reclaim consumed prefix once it exceeds 1MB
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._buf = bytearray()
+        self._read_pos = 0
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        """disable back-patching container headers"""
+        return False
+
+    def write(self, b) -> int:  # type: ignore[no-untyped-def]
+        self._buf.extend(b)
+        return len(b)
+
+    def drain(self) -> bytes:
+        if self._read_pos >= len(self._buf):
+            return b""
+        data = bytes(self._buf[self._read_pos :])
+        self._read_pos = len(self._buf)
+        if self._read_pos >= self._COMPACT_THRESHOLD:
+            self._buf.clear()
+            self._read_pos = 0
+        return data
+
+
 class AudioStreamEncoder:
     """Encode PCM AudioFrames into a compressed audio byte stream."""
 
@@ -77,13 +110,13 @@ class AudioStreamEncoder:
 
         av_codec, container_format = _resolve_codec(codec)
 
-        self._output_buf = io.BytesIO()
+        self._output_buf = _CompactableBuffer()
         self._container: av.container.OutputContainer = av.open(
             self._output_buf,
             mode="w",
             format=container_format,
         )
-        self._stream: av.audio.AudioStream = self._container.add_stream(
+        self._stream: av.audio.AudioStream = self._container.add_stream(  # type: ignore[assignment]
             av_codec,
             rate=sample_rate,
             layout=self._layout,
@@ -91,7 +124,6 @@ class AudioStreamEncoder:
         )
         self._stream.bit_rate = bit_rate
 
-        self._last_read_pos = 0
         self._closed = False
 
     def push(self, frame: rtc.AudioFrame) -> EncodedAudioData:
@@ -118,19 +150,7 @@ class AudioStreamEncoder:
                 num_samples += packet.duration
             self._container.mux(packet)
 
-        return EncodedAudioData(data=self._drain(), num_samples=num_samples)
-
-    def flush(self) -> EncodedAudioData:
-        """Flush the codec's internal buffers without closing the container."""
-        if self._closed:
-            return EncodedAudioData(data=b"", num_samples=0)
-
-        num_samples = 0
-        for packet in self._stream.encode(None):
-            if packet.duration is not None:
-                num_samples += packet.duration
-            self._container.mux(packet)
-        return EncodedAudioData(data=self._drain(), num_samples=num_samples)
+        return EncodedAudioData(data=self._output_buf.drain(), num_samples=num_samples)
 
     def close(self) -> EncodedAudioData:
         """Finalize the container and return any remaining bytes (e.g. OGG EOS).
@@ -140,22 +160,11 @@ class AudioStreamEncoder:
         if self._closed:
             return EncodedAudioData(data=b"", num_samples=0)
 
-        encoded_data = self.flush()
         self._closed = True
+        num_samples = 0
+        for packet in self._stream.encode(None):
+            if packet.duration is not None:
+                num_samples += packet.duration
+            self._container.mux(packet)
         self._container.close()
-        final = self._drain()
-        return EncodedAudioData(
-            data=encoded_data.data + final, num_samples=encoded_data.num_samples
-        )
-
-    def _drain(self) -> bytes:
-        """Read all new bytes written to the output buffer since the last drain."""
-        current_pos = self._output_buf.tell()
-        if current_pos <= self._last_read_pos:
-            return b""
-
-        self._output_buf.seek(self._last_read_pos)
-        new_bytes = self._output_buf.read(current_pos - self._last_read_pos)
-        self._last_read_pos = current_pos
-        self._output_buf.seek(current_pos)
-        return new_bytes
+        return EncodedAudioData(data=self._output_buf.drain(), num_samples=num_samples)

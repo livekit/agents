@@ -3,7 +3,6 @@ from __future__ import annotations
 import array
 import io
 import math
-import os
 from collections.abc import Iterable
 from typing import get_args
 
@@ -17,6 +16,7 @@ from livekit.agents.utils.codecs.encoder import (
     _SUPPORTED_CODECS,
     AudioStreamEncoder,
     EncodedAudioData,
+    _CompactableBuffer,
 )
 
 _CODECS: list[str] = get_args(_SUPPORTED_CODECS)
@@ -199,16 +199,6 @@ class TestAudioStreamEncoder:
         second = enc.close()
         assert second.data == b""
         assert second.num_samples == 0
-
-    def test_flush_after_close_returns_empty(self) -> None:
-        enc = _make_encoder("opus")
-        for f in _sine_frames(duration_s=0.1):
-            enc.push(f)
-        enc.close()
-
-        flushed = enc.flush()
-        assert flushed.data == b""
-        assert flushed.num_samples == 0
 
     def test_first_non_empty_push_contains_opus_container_headers(self) -> None:
         """The first non-empty emission must carry the OGG page magic and the OpusHead
@@ -405,3 +395,115 @@ class TestAudioStreamEncoder:
         ref_a, dec_a = _align(ref, dec)
         snr = _snr_db(ref_a, dec_a)
         assert snr >= min_snr_db, f"{codec}: post-align SNR {snr:.1f} dB, expected ≥{min_snr_db} dB"
+
+
+class TestCompactableBuffer:
+    def test_reports_write_only_non_seekable(self) -> None:
+        """libav picks streaming muxer paths (no header back-patching) based on these flags."""
+        buf = _CompactableBuffer()
+        assert buf.writable()
+        assert not buf.readable()
+        assert not buf.seekable()
+
+    def test_write_returns_byte_count(self) -> None:
+        buf = _CompactableBuffer()
+        assert buf.write(b"hello") == 5
+        assert buf.write(b"") == 0
+
+    def test_drain_returns_all_bytes_written_since_last_drain(self) -> None:
+        buf = _CompactableBuffer()
+        buf.write(b"abc")
+        buf.write(b"def")
+        assert buf.drain() == b"abcdef"
+
+        buf.write(b"xyz")
+        assert buf.drain() == b"xyz"
+
+    def test_drain_returns_empty_when_no_new_bytes(self) -> None:
+        buf = _CompactableBuffer()
+        assert buf.drain() == b""
+
+        buf.write(b"data")
+        buf.drain()
+        assert buf.drain() == b""
+
+    def test_concatenated_drains_equal_all_writes(self) -> None:
+        """The core invariant: every byte written is returned exactly once, in order."""
+        buf = _CompactableBuffer()
+        chunks = [b"a" * 100, b"b" * 200, b"c" * 300, b"d" * 50]
+
+        collected = bytearray()
+        for chunk in chunks:
+            buf.write(chunk)
+            collected.extend(buf.drain())
+
+        assert bytes(collected) == b"".join(chunks)
+
+    def test_compaction_reclaims_memory_past_threshold(self) -> None:
+        buf = _CompactableBuffer()
+        chunk = b"x" * (buf._COMPACT_THRESHOLD + 1)
+        buf.write(chunk)
+
+        drained = buf.drain()
+        assert drained == chunk
+        assert len(buf._buf) == 0, "backing storage should be reclaimed after compaction"
+        assert buf._read_pos == 0
+
+    def test_no_compaction_below_threshold(self) -> None:
+        buf = _CompactableBuffer()
+        chunk = b"x" * 1024
+        buf.write(chunk)
+        buf.drain()
+
+        assert len(buf._buf) == 1024
+        assert buf._read_pos == 1024
+
+    def test_drain_after_compaction_returns_only_new_bytes(self) -> None:
+        """After compaction, subsequent writes must not re-emit or drop any byte."""
+        buf = _CompactableBuffer()
+        big = b"a" * (buf._COMPACT_THRESHOLD + 1)
+        buf.write(big)
+        assert buf.drain() == big
+        assert len(buf._buf) == 0
+
+        buf.write(b"tail")
+        assert buf.drain() == b"tail"
+
+    def test_repeated_compaction_bounds_memory(self) -> None:
+        """Peak backing-storage size stays near the threshold across many write/drain cycles."""
+        buf = _CompactableBuffer()
+        threshold = buf._COMPACT_THRESHOLD
+        chunk = b"x" * (threshold // 4)
+
+        peak = 0
+        for _ in range(20):
+            buf.write(chunk)
+            buf.drain()
+            peak = max(peak, len(buf._buf))
+
+        # Each drain sets _read_pos == len(_buf). When that crosses threshold, compaction
+        # clears _buf. So peak is bounded by (threshold - 1) + one chunk's worth.
+        assert peak < threshold + len(chunk)
+
+    def test_plugs_into_av_open(self) -> None:
+        """The buffer must satisfy libav's file-like contract for streaming muxers."""
+        buf = _CompactableBuffer()
+        try:
+            container = av.open(buf, mode="w", format="ogg")
+        except (av.FFmpegError, ValueError) as e:
+            pytest.skip(f"libopus not available: {e}")
+
+        stream = container.add_stream("libopus", rate=48000, layout="mono")
+        frame = av.AudioFrame(format="s16", layout="mono", samples=480)
+        frame.rate = 48000
+        frame.planes[0].update(bytes(960))
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+        container.close()
+
+        data = buf.drain()
+        assert data.startswith(b"OggS"), f"expected OGG magic, got {data[:8]!r}"
+        with av.open(io.BytesIO(data), mode="r") as c:
+            assert len(c.streams.audio) == 1
