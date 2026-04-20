@@ -47,6 +47,7 @@ class AvatarSession:
         is_sandbox: NotGivenOr[bool] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_attributes: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._avatar_id = avatar_id if is_given(avatar_id) else os.getenv("LIVEAVATAR_AVATAR_ID")
@@ -79,6 +80,7 @@ class AvatarSession:
         self._playback_position = 0.0
         self._session_connected = asyncio.Event()
         self._chunk_interrupted = asyncio.Event()
+        self._avatar_participant_attributes = avatar_participant_attributes
 
     async def start(
         self,
@@ -107,6 +109,10 @@ class AvatarSession:
                 raise LiveAvatarException("failed to get local participant identity") from e
             self._local_participant_identity = room.local_participant.identity
 
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity}
+        if is_given(self._avatar_participant_attributes):
+            attributes.update(self._avatar_participant_attributes)
+
         livekit_token = (
             api.AccessToken(
                 api_key=livekit_api_key,
@@ -116,7 +122,7 @@ class AvatarSession:
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity})
+            .with_attributes(attributes)
             .to_jwt()
         )
 

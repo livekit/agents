@@ -110,6 +110,7 @@ class AvatarSession:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_attributes: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
         """
         Initialize a BitHuman avatar session.
@@ -168,6 +169,7 @@ class AvatarSession:
         self._avatar_id = avatar_id
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        self._avatar_participant_attributes = avatar_participant_attributes
 
         # set default mode based on model_path, avatar_image or avatar_id presence
         self._mode = (
@@ -314,6 +316,9 @@ class AvatarSession:
         attributes: dict[str, str] = {
             ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
         }
+
+        if utils.is_given(self._avatar_participant_attributes):
+            attributes.update(self._avatar_participant_attributes)
 
         # Only add api_secret if it's not None
         if self._api_secret is not None:

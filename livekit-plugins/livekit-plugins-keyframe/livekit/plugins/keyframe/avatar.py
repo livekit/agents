@@ -38,6 +38,7 @@ class AvatarSession:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_attributes: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._room: rtc.Room | None = None
@@ -80,6 +81,14 @@ class AvatarSession:
         self._api_url = api_url_val
         self._api_key = api_key_val
 
+        job_ctx = get_job_context()
+        self._local_participant_identity = job_ctx.local_participant_identity
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity}
+        if utils.is_given(avatar_participant_attributes):
+            attributes.update(avatar_participant_attributes)
+
+        self._avatar_participant_attributes = attributes
+
     async def start(
         self,
         agent_session: AgentSession,
@@ -98,9 +107,6 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-
         # Mint a LiveKit token for the avatar worker with publish_on_behalf
         livekit_token = (
             api.AccessToken(
@@ -118,7 +124,7 @@ class AvatarSession:
                     can_subscribe=True,
                 )
             )
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_attributes(self._avatar_participant_attributes)
             .to_jwt()
         )
 
@@ -134,7 +140,7 @@ class AvatarSession:
                 room_name=room.name,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
-                source_participant_identity=local_participant_identity,
+                source_participant_identity=self._local_participant_identity,
             )
             logger.debug(
                 "Keyframe plugin session created: reservation_id=%s",
