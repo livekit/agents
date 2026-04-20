@@ -1,4 +1,4 @@
-# Copyright 2024 LiveKit, Inc.
+# Copyright 2026 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ class AudioStreamEncoder:
 
     This is the encoding counterpart of :class:`AudioStreamDecoder`.  While the
     decoder needs a background thread (``container.decode()`` blocks on reads),
-    encoding is non-blocking so this class uses a synchronous ``push() -> bytes``
+    encoding is non-blocking so this class uses a synchronous ``push() -> bytes, int``
     API instead.
 
     Encoders are stateful and must not be reused across multiple streams.
@@ -77,7 +77,7 @@ class AudioStreamEncoder:
         self._last_read_pos = 0
         self._closed = False
 
-    def push(self, frame: rtc.AudioFrame) -> bytes:
+    def push(self, frame: rtc.AudioFrame) -> tuple[bytes, int]:
         """Encode a PCM audio frame.
 
         Returns any new encoded bytes produced by the muxer (may be empty when
@@ -95,33 +95,39 @@ class AudioStreamEncoder:
         av_frame.rate = self._sample_rate
         av_frame.planes[0].update(bytes(frame.data))
 
+        num_samples = 0
         for packet in self._stream.encode(av_frame):
+            if packet.duration is not None:
+                num_samples += packet.duration
             self._container.mux(packet)
 
-        return self._drain()
+        return self._drain(), num_samples
 
-    def flush(self) -> bytes:
+    def flush(self) -> tuple[bytes, int]:
         """Flush the codec's internal buffers without closing the container."""
         if self._closed:
-            return b""
+            return b"", 0
 
+        num_samples = 0
         for packet in self._stream.encode(None):
+            if packet.duration is not None:
+                num_samples += packet.duration
             self._container.mux(packet)
-        return self._drain()
+        return self._drain(), num_samples
 
-    def close(self) -> bytes:
+    def close(self) -> tuple[bytes, int]:
         """Finalize the container and return any remaining bytes (e.g. OGG EOS).
 
         The encoder must not be used after calling this method.
         """
         if self._closed:
-            return b""
+            return b"", 0
         self._closed = True
 
-        remaining = self.flush()
+        remaining, num_samples = self.flush()
         self._container.close()
         final = self._drain()
-        return remaining + final
+        return remaining + final, num_samples
 
     def _drain(self) -> bytes:
         """Read all new bytes written to the output buffer since the last drain."""
