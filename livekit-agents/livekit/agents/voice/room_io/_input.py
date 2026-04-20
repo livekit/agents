@@ -53,6 +53,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._room.on("token_refreshed", self._on_token_refreshed)
 
         self._processor = processor
+        self._processor_owned = False
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -168,6 +169,16 @@ class _ParticipantInputStream(Generic[T], ABC):
         self, track: rtc.RemoteTrack, participant: rtc.Participant
     ) -> rtc.VideoStream | rtc.AudioStream: ...
 
+    def _update_processor(self, processor: rtc.FrameProcessor[T] | None) -> None:
+        if processor is None and not self._processor_owned:
+            return
+
+        old = self._processor
+        if old is not None and old is not processor and self._processor_owned:
+            old._close()
+        self._processor = processor
+        self._processor_owned = processor is not None
+
     def _close_stream(self) -> None:
         if self._stream is not None:
             task = asyncio.create_task(self._stream.aclose())
@@ -175,9 +186,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._tasks.add(task)
             self._stream = None
             self._publication = None
-        if self._processor:
-            self._processor._close()
-            self._processor = None
+        self._update_processor(None)
 
     def _on_track_available(
         self,
@@ -255,15 +264,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
-        audio_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
-        if isinstance(noise_cancellation, rtc.FrameProcessor):
-            audio_processor = noise_cancellation
-
         _ParticipantInputStream.__init__(
             self,
             room=room,
             track_source=rtc.TrackSource.SOURCE_MICROPHONE,
-            processor=audio_processor,
+            processor=(
+                noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
+            ),
         )
         AudioInput.__init__(self, label="RoomIO")
         if frame_size_ms <= 0:
@@ -285,16 +292,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
-        noise_cancellation = (
-            self._noise_cancellation(NoiseCancellationParams(participant, track))
-            if callable(self._noise_cancellation)
-            else self._noise_cancellation
-        )
-
-        if isinstance(noise_cancellation, rtc.FrameProcessor):
-            self._processor = noise_cancellation
-        elif callable(self._noise_cancellation):
-            self._processor = None
+        noise_cancellation = self._noise_cancellation
+        if callable(noise_cancellation):
+            noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
+            if isinstance(noise_cancellation, rtc.FrameProcessor):
+                self._update_processor(noise_cancellation)
+            else:
+                self._update_processor(None)
 
         return rtc.AudioStream.from_track(
             track=track,
