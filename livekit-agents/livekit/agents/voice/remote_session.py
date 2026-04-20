@@ -5,6 +5,7 @@ import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -55,23 +56,33 @@ if TYPE_CHECKING:
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
 
+@dataclass(frozen=True, slots=True)
+class IncomingMessage:
+    message: agent_pb.AgentSessionMessage
+    sender_identity: str | None = None
+
+
 class SessionTransport(ABC):
     @abstractmethod
     async def start(self) -> None: ...
     @abstractmethod
-    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None: ...
+    async def send_message(
+        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+    ) -> None:
+        """Send a message. When ``to`` is None, it is broadcast to every authorized peer."""
+
     @abstractmethod
     async def close(self) -> None: ...
     @abstractmethod
-    def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]: ...
+    def __aiter__(self) -> AsyncIterator[IncomingMessage]: ...
     @abstractmethod
-    async def __anext__(self) -> agent_pb.AgentSessionMessage: ...
+    async def __anext__(self) -> IncomingMessage: ...
 
 
 class RoomSessionTransport(SessionTransport):
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
-        self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
+        self._recv_ch: utils.aio.Chan[IncomingMessage] = utils.aio.Chan()
         self._handler_registered = False
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -99,11 +110,11 @@ class RoomSessionTransport(SessionTransport):
                 extra={"participant": participant_identity},
             )
             return
-        task = asyncio.create_task(self._read_stream(reader))
+        task = asyncio.create_task(self._read_stream(reader, participant_identity))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
+    async def _read_stream(self, reader: rtc.ByteStreamReader, sender_identity: str) -> None:
         try:
             chunks: list[bytes] = []
             async for chunk in reader:
@@ -111,18 +122,27 @@ class RoomSessionTransport(SessionTransport):
             data = b"".join(chunks)
             msg = agent_pb.AgentSessionMessage()
             msg.ParseFromString(data)
-            self._recv_ch.send_nowait(msg)
+            self._recv_ch.send_nowait(
+                IncomingMessage(message=msg, sender_identity=sender_identity)
+            )
         except utils.aio.ChanClosed:
             pass
         except Exception as e:
             logger.warning("failed to read binary stream message", exc_info=e)
 
-    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+    async def send_message(
+        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+    ) -> None:
         if self._recv_ch.closed or not self._room.isconnected():
             return
-        dest = self._authorized_identities()
-        if not dest:
-            return
+        if to is not None:
+            if not self._can_manage(to):
+                return
+            dest = [to]
+        else:
+            dest = self._authorized_identities()
+            if not dest:
+                return
         try:
             data = msg.SerializeToString()
             writer = await self._room.local_participant.stream_bytes(
@@ -148,10 +168,10 @@ class RoomSessionTransport(SessionTransport):
                 pass
             self._handler_registered = False
 
-    def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]:
+    def __aiter__(self) -> AsyncIterator[IncomingMessage]:
         return self._recv_ch.__aiter__()
 
-    async def __anext__(self) -> agent_pb.AgentSessionMessage:
+    async def __anext__(self) -> IncomingMessage:
         return await self._recv_ch.__anext__()
 
 
@@ -179,7 +199,9 @@ class TcpSessionTransport(SessionTransport):
         self._writer = writer
         self._loop = asyncio.get_running_loop()
 
-    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+    async def send_message(
+        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+    ) -> None:
         if self._closed or self._writer is None:
             return
         data = msg.SerializeToString()
@@ -206,10 +228,10 @@ class TcpSessionTransport(SessionTransport):
             except (ConnectionError, OSError):
                 pass
 
-    def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]:
+    def __aiter__(self) -> AsyncIterator[IncomingMessage]:
         return self
 
-    async def __anext__(self) -> agent_pb.AgentSessionMessage:
+    async def __anext__(self) -> IncomingMessage:
         if self._closed or self._reader is None:
             raise StopAsyncIteration
 
@@ -230,7 +252,7 @@ class TcpSessionTransport(SessionTransport):
 
         msg = agent_pb.AgentSessionMessage()
         msg.ParseFromString(data)
-        return msg
+        return IncomingMessage(message=msg)
 
 
 _AGENT_STATE_MAP: dict[AgentState, agent_pb.AgentState] = {
@@ -407,10 +429,11 @@ class SessionHost:
 
     async def _recv_loop(self) -> None:
         try:
-            async for msg in self._transport:
+            async for incoming in self._transport:
+                msg = incoming.message
                 if msg.HasField("request"):
                     if self._session is not None:
-                        self._tasks.create_task(self._handle_request_safe(msg.request))
+                        self._tasks.create_task(self._handle_request_safe(incoming))
                 else:
                     msg_type = msg.WhichOneof("message")
                     if msg_type:
@@ -550,9 +573,18 @@ class SessionHost:
             )
         )
 
-    async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
+    async def _send_response(self, incoming: IncomingMessage, **fields: Any) -> None:
+        msg = agent_pb.AgentSessionMessage(
+            response=agent_pb.SessionResponse(
+                request_id=incoming.message.request.request_id, **fields
+            )
+        )
+        await self._transport.send_message(msg, to=incoming.sender_identity)
+
+    async def _handle_request_safe(self, incoming: IncomingMessage) -> None:
+        req = incoming.message.request
         try:
-            await self._handle_request(req)
+            await self._handle_request(incoming)
         except Exception:
             logger.warning(
                 "error handling session request",
@@ -560,55 +592,36 @@ class SessionHost:
                 extra={"request_id": req.request_id},
             )
             try:
-                resp = agent_pb.AgentSessionMessage(
-                    response=agent_pb.SessionResponse(
-                        request_id=req.request_id,
-                        error="internal error",
-                    )
-                )
-                await self._transport.send_message(resp)
+                await self._send_response(incoming, error="internal error")
             except Exception:
                 pass
 
-    async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
+    async def _handle_request(self, incoming: IncomingMessage) -> None:
         assert self._session is not None
+        req = incoming.message.request
 
         if req.HasField("ping"):
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    pong=agent_pb.SessionResponse.Pong(),
-                )
-            )
-            await self._transport.send_message(resp)
+            await self._send_response(incoming, pong=agent_pb.SessionResponse.Pong())
 
         elif req.HasField("get_chat_history"):
             items = [_chat_item_to_proto(item) for item in self._session.history.items]
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_chat_history=agent_pb.SessionResponse.GetChatHistoryResponse(
-                        items=items,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                get_chat_history=agent_pb.SessionResponse.GetChatHistoryResponse(items=items),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
             items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
-                        id=agent.id,
-                        instructions=agent.instructions,
-                        tools=_tool_names(agent.tools),
-                        chat_ctx=items,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
+                    id=agent.id,
+                    instructions=agent.instructions,
+                    tools=_tool_names(agent.tools),
+                    chat_ctx=items,
+                ),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("run_input"):
             items_list: list[agent_pb.ChatContext.ChatItem] = []
@@ -637,16 +650,11 @@ class SessionHost:
                     except Exception as e:
                         error = str(e)
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    error=error,
-                    run_input=agent_pb.SessionResponse.RunInputResponse(
-                        items=items_list,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                error=error,
+                run_input=agent_pb.SessionResponse.RunInputResponse(items=items_list),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("get_session_state"):
             agent = self._session.current_agent
@@ -654,25 +662,20 @@ class SessionHost:
             started_at = self._session._started_at or time.time()
             created_at.FromNanoseconds(int(started_at * 1e9))
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
-                        agent_state=_AGENT_STATE_MAP.get(
-                            self._session.agent_state,
-                            agent_pb.AS_IDLE,
-                        ),
-                        user_state=_USER_STATE_MAP.get(
-                            self._session.user_state,
-                            agent_pb.US_LISTENING,
-                        ),
-                        agent_id=agent.id,
-                        options=_serialize_options(self._session.options),
-                        created_at=created_at,
+            await self._send_response(
+                incoming,
+                get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
+                    agent_state=_AGENT_STATE_MAP.get(
+                        self._session.agent_state, agent_pb.AS_IDLE
                     ),
-                )
+                    user_state=_USER_STATE_MAP.get(
+                        self._session.user_state, agent_pb.US_LISTENING
+                    ),
+                    agent_id=agent.id,
+                    options=_serialize_options(self._session.options),
+                    created_at=created_at,
+                ),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("get_rtc_stats"):
             from google.protobuf.struct_pb2 import Struct
@@ -698,43 +701,34 @@ class SessionHost:
                     st.update(d)
                     subscriber_stats.append(st)
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_rtc_stats=agent_pb.SessionResponse.GetRTCStatsResponse(
-                        publisher_stats=publisher_stats,
-                        subscriber_stats=subscriber_stats,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                get_rtc_stats=agent_pb.SessionResponse.GetRTCStatsResponse(
+                    publisher_stats=publisher_stats,
+                    subscriber_stats=subscriber_stats,
+                ),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("get_session_usage"):
             created_at = Timestamp()
             created_at.FromNanoseconds(int(time.time() * 1e9))
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
-                        usage=_session_usage_to_proto(self._session.usage),
-                        created_at=created_at,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
+                    usage=_session_usage_to_proto(self._session.usage),
+                    created_at=created_at,
+                ),
             )
-            await self._transport.send_message(resp)
 
         elif req.HasField("get_framework_info"):
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    get_framework_info=agent_pb.SessionResponse.GetFrameworkInfoResponse(
-                        sdk="python",
-                        sdk_version=__version__,
-                    ),
-                )
+            await self._send_response(
+                incoming,
+                get_framework_info=agent_pb.SessionResponse.GetFrameworkInfoResponse(
+                    sdk="python",
+                    sdk_version=__version__,
+                ),
             )
-            await self._transport.send_message(resp)
 
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
