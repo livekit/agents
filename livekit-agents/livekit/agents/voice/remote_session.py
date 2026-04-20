@@ -67,9 +67,12 @@ class SessionTransport(ABC):
     async def start(self) -> None: ...
     @abstractmethod
     async def send_message(
-        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+        self,
+        msg: agent_pb.AgentSessionMessage,
+        *,
+        destination_identity: str | None = None,
     ) -> None:
-        """Send a message. When ``to`` is None, it is broadcast to every authorized peer."""
+        """Send a message. When ``destination_identity`` is None, broadcast to every authorized peer."""
 
     @abstractmethod
     async def close(self) -> None: ...
@@ -131,14 +134,17 @@ class RoomSessionTransport(SessionTransport):
             logger.warning("failed to read binary stream message", exc_info=e)
 
     async def send_message(
-        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+        self,
+        msg: agent_pb.AgentSessionMessage,
+        *,
+        destination_identity: str | None = None,
     ) -> None:
         if self._recv_ch.closed or not self._room.isconnected():
             return
-        if to is not None:
-            if not self._can_manage(to):
+        if destination_identity is not None:
+            if not self._can_manage(destination_identity):
                 return
-            dest = [to]
+            dest = [destination_identity]
         else:
             dest = self._authorized_identities()
             if not dest:
@@ -200,7 +206,10 @@ class TcpSessionTransport(SessionTransport):
         self._loop = asyncio.get_running_loop()
 
     async def send_message(
-        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+        self,
+        msg: agent_pb.AgentSessionMessage,
+        *,
+        destination_identity: str | None = None,
     ) -> None:
         if self._closed or self._writer is None:
             return
@@ -578,7 +587,8 @@ class SessionHost:
     ) -> None:
         response.request_id = incoming.message.request.request_id
         await self._transport.send_message(
-            agent_pb.AgentSessionMessage(response=response), to=incoming.sender_identity
+            agent_pb.AgentSessionMessage(response=response),
+            destination_identity=incoming.sender_identity,
         )
 
     async def _handle_request_safe(self, incoming: IncomingMessage) -> None:

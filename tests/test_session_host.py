@@ -50,12 +50,15 @@ class InMemoryTransport(SessionTransport):
         pass
 
     async def send_message(
-        self, msg: agent_pb.AgentSessionMessage, *, to: str | None = None
+        self,
+        msg: agent_pb.AgentSessionMessage,
+        *,
+        destination_identity: str | None = None,
     ) -> None:
         if self._closed:
             return
         self.sent.append(msg)
-        self.destinations.append(to)
+        self.destinations.append(destination_identity)
 
     async def close(self) -> None:
         self._closed = True
