@@ -67,7 +67,6 @@ from .turn import (
     PreemptiveGenerationOptions,
     TurnDetectionMode,
     TurnHandlingOptions,
-    UserTurnLimitOptions,
     _migrate_turn_handling,
     _resolve_endpointing,
     _resolve_interruption,
@@ -157,10 +156,6 @@ class AgentSessionOptions:
     @property
     def preemptive_generation(self) -> PreemptiveGenerationOptions:
         return self.turn_handling["preemptive_generation"]
-
-    @property
-    def user_turn_limit(self) -> UserTurnLimitOptions:
-        return self.turn_handling["user_turn_limit"]
 
 
 Userdata_T = TypeVar("Userdata_T")

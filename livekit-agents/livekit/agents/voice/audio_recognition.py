@@ -589,56 +589,6 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
-    def _check_user_turn_limit(self) -> bool:
-        """Check if the user turn exceeds configured limits.
-        Called after each final transcript is accumulated."""
-        opts = self._session.options.user_turn_limit
-        max_words = opts.get("max_words")
-        max_duration = opts.get("max_duration")
-
-        if max_words is None and max_duration is None:
-            return False
-
-        now = time.time()
-        if self._turn_tracker.started_at is None:
-            self._turn_tracker.started_at = self._speech_start_time or now
-
-        duration = now - self._turn_tracker.started_at
-        time_exceeded = max_duration is not None and duration >= max_duration
-
-        current_words = self._word_tokenizer.tokenize(self.current_transcript)
-        total_words = self._turn_tracker.words + len(current_words)
-        words_exceeded = max_words is not None and total_words >= max_words
-
-        if not time_exceeded and not words_exceeded:
-            return False
-
-        accumulated_transcript = (
-            f"{self._turn_tracker.transcript} {self.current_transcript}".strip()
-        )
-        ev = UserTurnExceededEvent(
-            transcript=self.current_transcript,
-            accumulated_transcript=accumulated_transcript,
-            accumulated_word_count=total_words,
-            duration=duration,
-        )
-        self._hooks.on_user_turn_exceeded(ev)
-        return True
-
-    def _carry_over_user_turn(self, transcript: str) -> None:
-        """Called when a user turn is committed — carry its transcript into
-        the turn tracker so it persists across turns until the agent speaks."""
-        opts = self._session.options.user_turn_limit
-        if opts.get("max_words") is None and opts.get("max_duration") is None:
-            return
-
-        if self._turn_tracker.started_at is None:
-            self._turn_tracker.started_at = self._speech_start_time or time.time()
-
-        words = self._word_tokenizer.tokenize(transcript)
-        self._turn_tracker.words += len(words)
-        self._turn_tracker.transcript = f"{self._turn_tracker.transcript} {transcript}".strip()
-
     def commit_user_turn(
         self,
         *,
@@ -822,7 +772,7 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
             # check user turn limit after accumulating transcript
-            self._check_user_turn_limit()
+            self._check_user_turn_limit(transcript)
 
             if self._vad_base_turn_detection or self._user_turn_committed:
                 if transcript_changed:
@@ -1098,9 +1048,6 @@ class AudioRecognition:
                 )
             )
             if committed:
-                # carry the committed turn into the tracker so it persists across turns
-                self._carry_over_user_turn(self._audio_transcript)
-
                 user_turn_span.set_attributes(
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
@@ -1137,6 +1084,39 @@ class AudioRecognition:
                 self._speech_start_time,
             )
         )
+
+    def _check_user_turn_limit(self, transcript: str) -> None:
+        """Check if the user turn exceeds configured limits.
+        Called when a final transcript event is received."""
+        opts = self._session.options.turn_handling["user_turn_limit"]
+        max_words = opts.get("max_words")
+        max_duration = opts.get("max_duration")
+
+        if max_words is None and max_duration is None:
+            return
+
+        now = time.time()
+        if self._turn_tracker.started_at is None:
+            self._turn_tracker.started_at = self._speech_start_time or now
+
+        words = self._word_tokenizer.tokenize(transcript)
+        self._turn_tracker.words += len(words)
+        self._turn_tracker.transcript = f"{self._turn_tracker.transcript} {transcript}".strip()
+
+        duration = now - self._turn_tracker.started_at
+        time_exceeded = max_duration is not None and duration >= max_duration
+        words_exceeded = max_words is not None and self._turn_tracker.words >= max_words
+
+        if not time_exceeded and not words_exceeded:
+            return
+
+        ev = UserTurnExceededEvent(
+            transcript=self.current_transcript,
+            accumulated_transcript=self._turn_tracker.transcript,
+            accumulated_word_count=self._turn_tracker.words,
+            duration=duration,
+        )
+        self._hooks.on_user_turn_exceeded(ev)
 
     @utils.log_exceptions(logger=logger)
     async def _stt_consumer(

@@ -1400,7 +1400,6 @@ class AgentActivity(RecognitionHooks):
                     and (eou_task := self._audio_recognition._end_of_turn_task)
                     and not eou_task.done()
                 ):
-                    user_active = True
                     await eou_task
 
                 if self._current_speech is None and not self._speech_q:
@@ -2114,7 +2113,7 @@ class AgentActivity(RecognitionHooks):
         else:
             self._session.on("agent_state_changed", _on_agent_state_changed)
 
-        # wait phase (cancellable) — wait for the EOU-triggered agent response
+        # wait for the EOU-triggered agent response (cancellable by the new user turn exceeded event)
         wait_inactive = asyncio.ensure_future(
             self._wait_for_inactive(wait_for_agent=True, wait_for_user=False)
         )
@@ -2130,7 +2129,11 @@ class AgentActivity(RecognitionHooks):
             if not wait_inactive.done():
                 wait_inactive.cancel()
 
-        # callback phase (locked) — don't cancel user's callback
+        # custom callback, locked - don't cancel user's callback
+        logger.debug(
+            "user turn limit exceeded",
+            extra={"num_words": ev.accumulated_word_count, "duration": ev.duration},
+        )
         self._user_turn_exceeded_locked = True
         try:
             await self._agent.on_user_turn_exceeded(ev)

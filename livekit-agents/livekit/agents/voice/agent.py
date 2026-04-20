@@ -265,11 +265,14 @@ class Agent:
         Override to customize (e.g., use session.say() with a canned message,
         or skip the interruption entirely).
         """
-        self.session.generate_reply(
+        await self.session.generate_reply(
             user_input=ev.transcript,
-            instructions="The user has exceeded the configured speech limit. "
-            "Please respond with a message indicating that interrupts the user.",
+            instructions=(
+                "The user has been speaking too long without giving a chance to reply. "
+                "Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+            ),
             allow_interruptions=False,
+            tool_choice="none",
         )
 
     def stt_node(

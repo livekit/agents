@@ -225,12 +225,11 @@ class UserTurnExceededEvent(BaseModel):
     """Transcript from the current (uncommitted) user turn only.
     Previous turns in the accumulation window are already in the chat context."""
     accumulated_transcript: str
-    """Full transcript across all user turns in the accumulation window,
-    including already-committed ones. Useful for inspection/logging."""
+    """Full transcript since the start of user speaking."""
     accumulated_word_count: int
-    """Total word count across all turns in the accumulation window."""
+    """Total word count since the start of user speaking."""
     duration: float
-    """Wall-clock time (seconds) since the start of the accumulation window."""
+    """Duration of the user turn in seconds."""
     created_at: float = Field(default_factory=time.time)
 
 
