@@ -38,6 +38,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -132,16 +133,20 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
-            final_on_endpoint: When True, only emit ``FINAL_TRANSCRIPT`` events when Deepgram
-                       reports ``speech_final=True`` (i.e. endpoint detected). Intermediate
-                       ``is_final=True`` events (which fire multiple times per utterance as
-                       Deepgram stabilizes word batches — sometimes with overlapping text when
-                       the model revises earlier words) are surfaced as ``INTERIM_TRANSCRIPT``
-                       instead. This makes ``endpointing_ms`` the authoritative control over
-                       transcript-segment boundaries, which matches the model most consumers
-                       expect for UI/analytics. Trade-off: ``FINAL_TRANSCRIPT`` latency grows
-                       by up to ``endpointing_ms``. Defaults to False to preserve existing
-                       behavior.
+            final_on_endpoint: When True, emit ``FINAL_TRANSCRIPT`` only once per utterance,
+                       on ``speech_final=True`` (endpoint detected). Deepgram fires
+                       ``is_final=True`` multiple times per utterance as it stabilizes word
+                       batches; those intermediate batches are accumulated internally and
+                       surfaced as ``INTERIM_TRANSCRIPT`` events carrying the cumulative
+                       text, then emitted as a single ``FINAL_TRANSCRIPT`` with the full
+                       utterance when the endpoint fires. Cumulative text from the Deepgram
+                       API (where a new batch's transcript re-includes prior words after the
+                       model revises earlier hypotheses) is detected via a prefix check and
+                       replaces rather than appends, to avoid doubling up overlap. This
+                       makes ``endpointing_ms`` the authoritative control over transcript-
+                       segment boundaries, matching the mental model most consumers expect
+                       for UI/analytics. Trade-off: ``FINAL_TRANSCRIPT`` latency grows by up
+                       to ``endpointing_ms``. Defaults to False to preserve existing behavior.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -427,6 +432,10 @@ class SpeechStream(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # Accumulator for final_on_endpoint mode: collects text from intermediate
+        # is_final=True batches so that one utterance produces one FINAL_TRANSCRIPT
+        # carrying the complete transcript. Reset on each FINAL_TRANSCRIPT emission.
+        self._pending_final_alt: SpeechData | None = None
 
     def update_options(
         self,
@@ -606,6 +615,9 @@ class SpeechStream(stt.SpeechStream):
                         break
 
                     self._reconnect_event.clear()
+                    # Reconnecting: drop any partial accumulator so we don't
+                    # splice fragments across a stream boundary.
+                    self._pending_final_alt = None
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
@@ -716,11 +728,47 @@ class SpeechStream(stt.SpeechStream):
 
                 # Deepgram's is_final=True fires multiple times per utterance as it
                 # stabilizes word batches, and those batches can overlap when the
-                # model revises earlier text. When final_on_endpoint is True, treat
-                # only speech_final=True as a true FINAL_TRANSCRIPT boundary so one
-                # spoken utterance maps to one final event downstream.
-                emit_final = is_endpoint if self._opts.final_on_endpoint else is_final_transcript
-                if emit_final:
+                # model revises earlier text. When final_on_endpoint is True, we
+                # accumulate the text of intermediate is_final batches and only
+                # emit FINAL_TRANSCRIPT on speech_final=True so that one spoken
+                # utterance maps to one final event carrying the full transcript.
+                if self._opts.final_on_endpoint:
+                    if is_final_transcript:
+                        # Accumulate into a single combined SpeechData.
+                        combined = _merge_speech_data(self._pending_final_alt, alts[0])
+                        combined_alts = [combined] + list(alts[1:])
+                        if is_endpoint:
+                            final_event = stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                request_id=request_id,
+                                alternatives=combined_alts,
+                            )
+                            self._event_ch.send_nowait(final_event)
+                            self._pending_final_alt = None
+                        else:
+                            # Emit INTERIM with the cumulative text so downstream
+                            # consumers that overwrite (rather than accumulate) their
+                            # interim buffer still see the full in-progress transcript.
+                            interim_event = stt.SpeechEvent(
+                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                request_id=request_id,
+                                alternatives=combined_alts,
+                            )
+                            self._event_ch.send_nowait(interim_event)
+                            self._pending_final_alt = combined
+                    else:
+                        # is_final=False — tentative interim. Prepend any accumulated
+                        # finalized text so the downstream interim buffer shows the
+                        # full utterance-so-far while Deepgram is still refining.
+                        display_alt = _overlay_pending_interim(self._pending_final_alt, alts[0])
+                        display_alts = [display_alt] + list(alts[1:])
+                        interim_event = stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            request_id=request_id,
+                            alternatives=display_alts,
+                        )
+                        self._event_ch.send_nowait(interim_event)
+                elif is_final_transcript:
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=request_id,
@@ -740,12 +788,86 @@ class SpeechStream(stt.SpeechStream):
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
+                # Safety: clear any partial accumulator after speech ends — the
+                # FINAL branch above normally resets it, but this guards against
+                # speech_final arriving with no is_final batches accumulated.
+                self._pending_final_alt = None
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:
             logger.warning("received unexpected message from deepgram %s", data)
+
+
+def _merge_speech_data(pending: stt.SpeechData | None, incoming: stt.SpeechData) -> stt.SpeechData:
+    """Combine a prior finalized ``SpeechData`` with a new finalized batch.
+
+    Deepgram sometimes emits cumulative text (the new batch's ``transcript``
+    already includes the prior batch's words, e.g. after revising an earlier
+    hypothesis) and sometimes emits purely new words. We detect the cumulative
+    case via a prefix check and replace instead of concatenating, to avoid
+    doubling up the overlapping text.
+    """
+    if pending is None:
+        return incoming
+
+    pending_text = pending.text.strip()
+    incoming_text = incoming.text.strip()
+    if not pending_text:
+        return incoming
+    if not incoming_text:
+        return pending
+
+    if incoming_text.startswith(pending_text):
+        combined_text = incoming_text
+        combined_words = list(incoming.words) if incoming.words else []
+    else:
+        combined_text = f"{pending_text} {incoming_text}".strip()
+        combined_words = (list(pending.words) if pending.words else []) + (
+            list(incoming.words) if incoming.words else []
+        )
+
+    start_time = pending.start_time if pending.start_time else incoming.start_time
+    if incoming.start_time:
+        start_time = min(start_time, incoming.start_time) if start_time else incoming.start_time
+    confidence = (
+        (pending.confidence + incoming.confidence) / 2
+        if pending.confidence and incoming.confidence
+        else (incoming.confidence or pending.confidence)
+    )
+    return dataclasses.replace(
+        incoming,
+        text=combined_text,
+        words=combined_words,
+        start_time=start_time,
+        end_time=max(pending.end_time, incoming.end_time),
+        confidence=confidence,
+    )
+
+
+def _overlay_pending_interim(
+    pending: stt.SpeechData | None, incoming: stt.SpeechData
+) -> stt.SpeechData:
+    """Return an interim ``SpeechData`` whose text is the accumulated finalized
+    prefix plus the current tentative interim. Used in ``final_on_endpoint``
+    mode so downstream consumers that overwrite their interim buffer still see
+    the full utterance-so-far between finalized batches.
+    """
+    if pending is None or not pending.text.strip():
+        return incoming
+
+    pending_text = pending.text.strip()
+    incoming_text = incoming.text.strip()
+    if not incoming_text:
+        return dataclasses.replace(incoming, text=pending_text)
+
+    display_text = (
+        incoming_text
+        if incoming_text.startswith(pending_text)
+        else f"{pending_text} {incoming_text}".strip()
+    )
+    return dataclasses.replace(incoming, text=display_text)
 
 
 def live_transcription_to_speech_data(
