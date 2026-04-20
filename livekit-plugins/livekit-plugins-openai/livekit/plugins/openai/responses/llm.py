@@ -467,8 +467,16 @@ class LLMStream(llm.LLMStream):
         # Strip prompt_cache_retention from any response object before validation:
         # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
         # vs "in-memory"). We don't use this field so dropping it is safe.
-        if isinstance(event.get("response"), dict) and "prompt_cache_retention" in event["response"]:
-            event = {**event, "response": {k: v for k, v in event["response"].items() if k != "prompt_cache_retention"}}
+        if (
+            isinstance(event.get("response"), dict)
+            and "prompt_cache_retention" in event["response"]
+        ):
+            event = {
+                **event,
+                "response": {
+                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
+                },
+            }
 
         event_type = event.get("type", "")
         if event_type == "error":
