@@ -79,7 +79,7 @@ class STT(stt.STT):
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             enable_diarization: Whether to enable speaker diarization. Words will include a speaker field. Defaults to False.
             language: BCP-47 language code for transcription (e.g. "en", "fr", "de"). Defaults to "en".
-            endpointing: Silence duration in milliseconds before an utterance-final event is fired. Range: 0-5000. 0 = fire on any VAD silence boundary. Defaults to 100.
+            endpointing: Silence duration in milliseconds before an utterance-final event is fired. xAI's default is 10ms, but we default to 100ms for better compatibility with LK EOT models.
             api_key: Your xAI API key. If not provided, will look for XAI_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
 
