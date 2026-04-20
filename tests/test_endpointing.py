@@ -1,7 +1,7 @@
 import pytest
 
 from livekit.agents.utils.exp_filter import ExpFilter
-from livekit.agents.voice.endpointing import DynamicEndpointing
+from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
 
 
 class TestExponentialMovingAverage:
@@ -269,6 +269,23 @@ class TestDynamicEndpointing:
 
         assert ep._utterance_pause._alpha == pytest.approx(0.5, rel=1e-5)
         assert ep._turn_pause._alpha == pytest.approx(0.5, rel=1e-5)
+
+    def test_update_options_updates_alpha_in_place(self) -> None:
+        """update_options(alpha=...) should update both EMA filters without resetting learned state."""
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
+
+        # Record some history so the filter has a non-initial value.
+        ep.on_end_of_speech(ended_at=100.0)
+        ep.on_start_of_speech(started_at=100.2)
+        ep.on_end_of_speech(ended_at=101.0)
+        learned_min = ep.min_delay
+
+        ep.update_options(alpha=0.2)
+
+        assert ep._utterance_pause._alpha == pytest.approx(0.2, rel=1e-5)
+        assert ep._turn_pause._alpha == pytest.approx(0.2, rel=1e-5)
+        # Learned value should be preserved — only the coefficient changed.
+        assert ep.min_delay == pytest.approx(learned_min, rel=1e-5)
 
     def test_update_options_updates_filter_clamp_bounds(self) -> None:
         """Changing delays should propagate into exp-filter min/max clamp limits."""
@@ -543,3 +560,22 @@ class TestDynamicEndpointing:
         # so between_utterance_delay = 0 → no update
         assert ep._speaking is False
         assert ep._agent_speech_started_at is None
+
+
+class TestCreateEndpointing:
+    def test_dynamic_mode_wires_alpha(self) -> None:
+        """create_endpointing should pass alpha through to both EMA filters."""
+        ep = create_endpointing(
+            {"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.0, "alpha": 0.7}
+        )
+
+        assert isinstance(ep, DynamicEndpointing)
+        assert ep._utterance_pause._alpha == pytest.approx(0.7, rel=1e-5)
+        assert ep._turn_pause._alpha == pytest.approx(0.7, rel=1e-5)
+
+    def test_fixed_mode_returns_base_endpointing(self) -> None:
+        ep = create_endpointing({"mode": "fixed", "min_delay": 0.5, "max_delay": 3.0, "alpha": 0.9})
+
+        assert not isinstance(ep, DynamicEndpointing)
+        assert ep.min_delay == 0.5
+        assert ep.max_delay == 3.0

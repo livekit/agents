@@ -326,6 +326,7 @@ class AgentActivity(RecognitionHooks):
             mode=agent_endpointing.get("mode", session_endpointing["mode"]),
             min_delay=agent_endpointing.get("min_delay", session_endpointing["min_delay"]),
             max_delay=agent_endpointing.get("max_delay", session_endpointing["max_delay"]),
+            alpha=agent_endpointing.get("alpha", session_endpointing["alpha"]),
         )
 
     @property
@@ -450,6 +451,7 @@ class AgentActivity(RecognitionHooks):
                 max_delay=max_endpointing_delay
                 if is_given(max_endpointing_delay)
                 else self.endpointing_opts["max_delay"],
+                alpha=self.endpointing_opts["alpha"],
             )
 
         if utils.is_given(tool_choice):
