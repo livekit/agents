@@ -8,11 +8,12 @@ from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
+
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
-    DEFAULT_API_CONNECT_OPTIONS,
     stt,
 )
 from livekit.agents.utils import AudioBuffer

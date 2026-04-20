@@ -7,11 +7,12 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
-    DEFAULT_API_CONNECT_OPTIONS,
     llm,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
