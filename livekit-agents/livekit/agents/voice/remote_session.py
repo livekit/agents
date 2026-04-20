@@ -573,13 +573,13 @@ class SessionHost:
             )
         )
 
-    async def _send_response(self, incoming: IncomingMessage, **fields: Any) -> None:
-        msg = agent_pb.AgentSessionMessage(
-            response=agent_pb.SessionResponse(
-                request_id=incoming.message.request.request_id, **fields
-            )
+    async def _send_response(
+        self, incoming: IncomingMessage, response: agent_pb.SessionResponse
+    ) -> None:
+        response.request_id = incoming.message.request.request_id
+        await self._transport.send_message(
+            agent_pb.AgentSessionMessage(response=response), to=incoming.sender_identity
         )
-        await self._transport.send_message(msg, to=incoming.sender_identity)
 
     async def _handle_request_safe(self, incoming: IncomingMessage) -> None:
         req = incoming.message.request
@@ -592,7 +592,9 @@ class SessionHost:
                 extra={"request_id": req.request_id},
             )
             try:
-                await self._send_response(incoming, error="internal error")
+                await self._send_response(
+                    incoming, agent_pb.SessionResponse(error="internal error")
+                )
             except Exception:
                 pass
 
@@ -601,13 +603,17 @@ class SessionHost:
         req = incoming.message.request
 
         if req.HasField("ping"):
-            await self._send_response(incoming, pong=agent_pb.SessionResponse.Pong())
+            await self._send_response(
+                incoming, agent_pb.SessionResponse(pong=agent_pb.SessionResponse.Pong())
+            )
 
         elif req.HasField("get_chat_history"):
             items = [_chat_item_to_proto(item) for item in self._session.history.items]
             await self._send_response(
                 incoming,
-                get_chat_history=agent_pb.SessionResponse.GetChatHistoryResponse(items=items),
+                agent_pb.SessionResponse(
+                    get_chat_history=agent_pb.SessionResponse.GetChatHistoryResponse(items=items),
+                ),
             )
 
         elif req.HasField("get_agent_info"):
@@ -615,11 +621,13 @@ class SessionHost:
             items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
             await self._send_response(
                 incoming,
-                get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
-                    id=agent.id,
-                    instructions=agent.instructions,
-                    tools=_tool_names(agent.tools),
-                    chat_ctx=items,
+                agent_pb.SessionResponse(
+                    get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
+                        id=agent.id,
+                        instructions=agent.instructions,
+                        tools=_tool_names(agent.tools),
+                        chat_ctx=items,
+                    ),
                 ),
             )
 
@@ -652,8 +660,10 @@ class SessionHost:
 
             await self._send_response(
                 incoming,
-                error=error,
-                run_input=agent_pb.SessionResponse.RunInputResponse(items=items_list),
+                agent_pb.SessionResponse(
+                    error=error,
+                    run_input=agent_pb.SessionResponse.RunInputResponse(items=items_list),
+                ),
             )
 
         elif req.HasField("get_session_state"):
@@ -664,16 +674,18 @@ class SessionHost:
 
             await self._send_response(
                 incoming,
-                get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
-                    agent_state=_AGENT_STATE_MAP.get(
-                        self._session.agent_state, agent_pb.AS_IDLE
+                agent_pb.SessionResponse(
+                    get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
+                        agent_state=_AGENT_STATE_MAP.get(
+                            self._session.agent_state, agent_pb.AS_IDLE
+                        ),
+                        user_state=_USER_STATE_MAP.get(
+                            self._session.user_state, agent_pb.US_LISTENING
+                        ),
+                        agent_id=agent.id,
+                        options=_serialize_options(self._session.options),
+                        created_at=created_at,
                     ),
-                    user_state=_USER_STATE_MAP.get(
-                        self._session.user_state, agent_pb.US_LISTENING
-                    ),
-                    agent_id=agent.id,
-                    options=_serialize_options(self._session.options),
-                    created_at=created_at,
                 ),
             )
 
@@ -703,9 +715,11 @@ class SessionHost:
 
             await self._send_response(
                 incoming,
-                get_rtc_stats=agent_pb.SessionResponse.GetRTCStatsResponse(
-                    publisher_stats=publisher_stats,
-                    subscriber_stats=subscriber_stats,
+                agent_pb.SessionResponse(
+                    get_rtc_stats=agent_pb.SessionResponse.GetRTCStatsResponse(
+                        publisher_stats=publisher_stats,
+                        subscriber_stats=subscriber_stats,
+                    ),
                 ),
             )
 
@@ -715,18 +729,22 @@ class SessionHost:
 
             await self._send_response(
                 incoming,
-                get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
-                    usage=_session_usage_to_proto(self._session.usage),
-                    created_at=created_at,
+                agent_pb.SessionResponse(
+                    get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
+                        usage=_session_usage_to_proto(self._session.usage),
+                        created_at=created_at,
+                    ),
                 ),
             )
 
         elif req.HasField("get_framework_info"):
             await self._send_response(
                 incoming,
-                get_framework_info=agent_pb.SessionResponse.GetFrameworkInfoResponse(
-                    sdk="python",
-                    sdk_version=__version__,
+                agent_pb.SessionResponse(
+                    get_framework_info=agent_pb.SessionResponse.GetFrameworkInfoResponse(
+                        sdk="python",
+                        sdk_version=__version__,
+                    ),
                 ),
             )
 
