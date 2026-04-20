@@ -88,6 +88,7 @@ unit-tests:
 		tests/test_agent_session.py \
 		tests/test_aio.py \
 		tests/test_audio_decoder.py \
+		tests/test_audio_encoder.py \
 		tests/test_chat_ctx.py \
 		tests/test_config.py \
 		tests/test_connection_pool.py \
