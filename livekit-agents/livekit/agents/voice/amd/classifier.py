@@ -96,11 +96,18 @@ def _state_guard(method: Callable[..., Any]) -> Callable[..., Any]:
 
 
 class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
-    def __init__(self, llm: LLM):
+    def __init__(
+        self,
+        llm: LLM,
+        *,
+        human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
+        human_silence_threshold: float = HUMAN_SILENCE_THRESHOLD,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
+    ):
         super().__init__()
-        self._human_speech_threshold = HUMAN_SPEECH_THRESHOLD
-        self._human_silence_threshold = HUMAN_SILENCE_THRESHOLD
-        self._machine_silence_threshold = MACHINE_SILENCE_THRESHOLD
+        self._human_speech_threshold = human_speech_threshold
+        self._human_silence_threshold = human_silence_threshold
+        self._machine_silence_threshold = machine_silence_threshold
 
         self._input_ch: aio.Chan[str] = aio.Chan()
         self._classify_task: asyncio.Task[None] | None = None
@@ -164,15 +171,23 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
-            self._silence_timer = asyncio.get_running_loop().call_later(
-                max(0, self._human_silence_threshold - silence_duration),
-                functools.partial(
-                    self._silence_timer_callback,
-                    category=AMDCategory.HUMAN,
-                    reason="short_greeting",
-                    speech_duration=speech_duration,
-                ),
-            )
+            if self._classify_task is not None:
+                # Transcript text was already received — delegate to the LLM instead
+                # of blindly classifying as HUMAN based on duration alone
+                self._silence_timer = asyncio.get_running_loop().call_later(
+                    max(0, self._machine_silence_threshold - silence_duration),
+                    functools.partial(self._silence_timer_callback, speech_duration=speech_duration),
+                )
+            else:
+                self._silence_timer = asyncio.get_running_loop().call_later(
+                    max(0, self._human_silence_threshold - silence_duration),
+                    functools.partial(
+                        self._silence_timer_callback,
+                        category=AMDCategory.HUMAN,
+                        reason="short_greeting",
+                        speech_duration=speech_duration,
+                    ),
+                )
             return
 
         if self._classify_task is None:
