@@ -542,8 +542,6 @@ class TurnDetectionStream:
                 samples_per_channel=self._opts.sample_rate // 50,  # 20ms chunks
             )
 
-            pending_samples = 0
-
             async def _send_encoded(ogg_bytes: bytes, num_samples: int) -> None:
                 await self._send_message_async(
                     TdClientMessage(
@@ -554,35 +552,28 @@ class TurnDetectionStream:
             async for frame in self._audio_ch:
                 if isinstance(frame, TurnDetectionStream._FlushSentinel):
                     for chunk in audio_bstream.flush():
-                        ogg_bytes = encoder.push(chunk)
-                        pending_samples += chunk.samples_per_channel
+                        ogg_bytes, num_samples = encoder.push(chunk)
                         if ogg_bytes:
-                            await _send_encoded(ogg_bytes, pending_samples)
-                            pending_samples = 0
-                    flush_bytes = encoder.flush()
+                            await _send_encoded(ogg_bytes, num_samples)
+                    flush_bytes, num_samples = encoder.flush()
                     if flush_bytes:
-                        await _send_encoded(flush_bytes, pending_samples)
-                        pending_samples = 0
+                        await _send_encoded(flush_bytes, num_samples)
                     await self._send_message_async(TdClientMessage(session_flush=TdSessionFlush()))
                     continue
 
                 for chunk in audio_bstream.push(frame.data):
-                    ogg_bytes = encoder.push(chunk)
-                    pending_samples += chunk.samples_per_channel
+                    ogg_bytes, num_samples = encoder.push(chunk)
                     if ogg_bytes:
-                        await _send_encoded(ogg_bytes, pending_samples)
-                        pending_samples = 0
+                        await _send_encoded(ogg_bytes, num_samples)
 
             for chunk in audio_bstream.flush():
-                ogg_bytes = encoder.push(chunk)
-                pending_samples += chunk.samples_per_channel
+                ogg_bytes, num_samples = encoder.push(chunk)
                 if ogg_bytes:
-                    await _send_encoded(ogg_bytes, pending_samples)
-                    pending_samples = 0
+                    await _send_encoded(ogg_bytes, num_samples)
 
-            final_bytes = encoder.close()
+            final_bytes, num_samples = encoder.close()
             if final_bytes:
-                await _send_encoded(final_bytes, pending_samples)
+                await _send_encoded(final_bytes, num_samples)
 
             closing_ws = True
             await self._send_message_async(TdClientMessage(session_close=TdSessionClose()))
