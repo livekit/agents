@@ -2,7 +2,7 @@
 
 Support for voice synthesis and speech-to-text with [Inworld TTS](https://docs.inworld.ai/tts/tts) and [Inworld STT](https://docs.inworld.ai/stt/overview).
 
-See [Inworld TTS](https://docs.livekit.io/agents/integrations/tts/inworld/) and [Inworld STT](https://docs.livekit.io/agents/integrations/stt/inworld/) for more information.
+See [Inworld TTS](https://docs.livekit.io/agents/integrations/tts/inworld/) and [Inworld STT](https://docs.livekit.io/agents/models/stt/inworld/) for more information.
 
 ## Installation
 
@@ -109,13 +109,11 @@ A full voice agent using Inworld for both STT and TTS:
 """Inworld STT + TTS voice agent example.
 
 Demonstrates using Inworld for both speech-to-text and text-to-speech
-in a LiveKit voice agent.
+in a LiveKit voice agent. Save this as ``inworld_agent.py`` and run:
 
-Run in console mode:
-    uv run examples/voice_agents/inworld_agent.py console
-
-Run with LiveKit Cloud (set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in .env):
-    uv run examples/voice_agents/inworld_agent.py dev
+    uv run inworld_agent.py console   # local console mode
+    uv run inworld_agent.py dev       # LiveKit Cloud (requires LIVEKIT_URL,
+                                      # LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 
 Then connect via https://agents-playground.livekit.io
 """
