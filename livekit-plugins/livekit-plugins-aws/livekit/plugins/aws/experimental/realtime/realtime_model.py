@@ -213,10 +213,16 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
         Raises:
             ValueError: If no credentials could be found by boto3.
         """
-        # Return cached credentials if available
-        # Session recycling will close the connection and get fresh credentials before these expire
-        if self._cached_identity:
+        # Return cached credentials if available and not expired
+        current_time = time.time()
+        if self._cached_identity and (
+            self._cached_expiry is None or current_time < self._cached_expiry
+        ):
             return self._cached_identity
+
+        # Credentials expired or not cached - reset so fresh ones are fetched below
+        self._cached_identity = None
+        self._cached_expiry = None
 
         try:
             logger.debug("[CREDS] Attempting to load AWS credentials")

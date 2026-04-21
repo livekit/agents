@@ -23,7 +23,11 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarSession as BaseAvatarSession,
+    QueueAudioOutput,
+)
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -35,7 +39,7 @@ _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A LiveAvatar avatar session"""
 
     def __init__(
@@ -69,7 +73,7 @@ class AvatarSession:
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._tasks: set[asyncio.Task[Any]] = set()
-        self._main_atask: asyncio.Task | None
+        self._main_atask: asyncio.Task | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
         self._msg_ch = utils.aio.Chan[dict]()
@@ -89,6 +93,7 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
         self._agent_session = agent_session
         self._room = room
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)

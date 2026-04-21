@@ -431,6 +431,10 @@ class TranscriptSynchronizer:
         # track pause state at the synchronizer level to apply to new impls after rotation
         self._paused = False
 
+        # warn once per enabled cycle when only one of audio/text is detached; reset when
+        # the synchronizer transitions back to enabled
+        self._warned_asymmetric_detach = False
+
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask: asyncio.Task[None] | None = None
@@ -457,6 +461,8 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
+        if enabled:
+            self._warned_asymmetric_detach = False
         if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
@@ -541,6 +547,17 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
+            if (
+                self._synchronizer._audio_attached
+                and not self._synchronizer._text_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer text output was detached while audio output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.transcription was replaced after AgentSession.start()."
+                )
             return
 
         if self._synchronizer._impl.audio_input_ended:
@@ -634,6 +651,17 @@ class _SyncedTextOutput(io.TextOutput):
         await self._synchronizer.barrier()
 
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
+            if (
+                self._synchronizer._text_attached
+                and not self._synchronizer._audio_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer audio output was detached while text output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.audio was replaced after AgentSession.start()."
+                )
             if self._next_in_chain:
                 await self._next_in_chain.capture_text(text)
             return
