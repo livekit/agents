@@ -592,7 +592,7 @@ class TurnDetectionStream:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
+                    if closing_ws or ws.closed:
                         return
                     raise APIStatusError(
                         message="turn detector connection closed unexpectedly",
