@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from .stream import TurnDetectionStream
 
 
-INFERENCE_TIMEOUT = 0.5
 DEFAULT_SAMPLE_RATE: int = 16000
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
@@ -40,7 +39,6 @@ class TurnDetectorOptions:
     api_key: str
     api_secret: str
     conn_options: APIConnectOptions
-    inference_timeout: float = INFERENCE_TIMEOUT
 
 
 class MultimodalTurnDetector:
@@ -51,7 +49,6 @@ class MultimodalTurnDetector:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
-        inference_timeout: float = INFERENCE_TIMEOUT,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
@@ -79,7 +76,6 @@ class MultimodalTurnDetector:
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             conn_options=conn_options,
-            inference_timeout=inference_timeout,
         )
 
         self._session = http_session
@@ -123,7 +119,4 @@ class MultimodalTurnDetector:
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-
-        if self._session:
-            await self._session.close()
         self._session = None

@@ -199,7 +199,14 @@ class AudioRecognition:
         # multimodal streaming turn detection
         self._turn_detector_stream: TurnDetectionStream | None = None
         self._turn_detection_ch: (
-            aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool] | None
+            aio.Chan[
+                rtc.AudioFrame
+                | llm.ChatContext
+                | VADEvent
+                | bool
+                | TurnDetectionStream._FlushSentinel
+            ]
+            | None
         ) = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
         # make sure the turn detection is cancelled when the user starts to speak again
@@ -274,8 +281,10 @@ class AudioRecognition:
             self._endpointing.on_end_of_agent_speech(ended_at=time.time())
 
             # start a new turn for turn detection with the new assistant message
-            if self._turn_detector_stream is not None:
-                self._turn_detector_stream.flush(reason="end of agent speech")
+            if self._turn_detector_stream is not None and self._turn_detection_ch is not None:
+                self._turn_detection_ch.send_nowait(
+                    TurnDetectionStream._FlushSentinel(reason="end of agent speech")
+                )
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._turn_detector_stream.update_chat_ctx(chat_ctx)
 
@@ -604,7 +613,13 @@ class AudioRecognition:
         self._turn_detector = detector
         self._turn_detector_stream = detector.stream() if detector is not None else None
         if self._turn_detector_stream is not None:
-            self._turn_detection_ch = aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool]()
+            self._turn_detection_ch = aio.Chan[
+                rtc.AudioFrame
+                | llm.ChatContext
+                | VADEvent
+                | bool
+                | TurnDetectionStream._FlushSentinel
+            ]()
             self._turn_detection_atask = asyncio.create_task(
                 self._turn_detection_task(
                     self._turn_detector_stream, self._turn_detection_ch, self._turn_detection_atask
@@ -1011,9 +1026,9 @@ class AudioRecognition:
         self,
         chat_ctx: llm.ChatContext,
         skip_reply: bool = False,
-        latest_eou_prediction: NotGivenOr[TurnDetectionEvent] = NOT_GIVEN,
+        latest_eou_prediction: TurnDetectionEvent | None = None,
         trigger: Literal[
-            "vad", "vad preemptive", "turn_detector", "stt", "manual", "unknown"
+            "vad", "vad_preemptive", "turn_detector", "stt", "manual", "unknown"
         ] = "unknown",
     ) -> None:
         """
@@ -1069,7 +1084,7 @@ class AudioRecognition:
                                         timeout=endpointing_delay,
                                     )
                                 )
-                                if not is_given(latest_eou_prediction)
+                                if latest_eou_prediction is None
                                 else latest_eou_prediction.end_of_turn_probability
                             )
                             unlikely_threshold = await turn_detector.unlikely_threshold(
@@ -1194,7 +1209,7 @@ class AudioRecognition:
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
         ) -> None:
-            if self._speaking and trigger != "vad preemptive":
+            if self._speaking and trigger != "vad_preemptive":
                 logger.debug(
                     "user is still speaking, skipping end of turn task",
                     extra={
@@ -1303,7 +1318,9 @@ class AudioRecognition:
     async def _turn_detection_task(
         self,
         stream: TurnDetectionStream,
-        ch: aio.Chan[rtc.AudioFrame | llm.ChatContext | VADEvent | bool],
+        ch: aio.Chan[
+            rtc.AudioFrame | llm.ChatContext | VADEvent | bool | TurnDetectionStream._FlushSentinel
+        ],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
@@ -1323,6 +1340,8 @@ class AudioRecognition:
                         stream.set_active(True, trigger="vad eos")
                 elif isinstance(msg, bool):
                     stream.set_active(msg, trigger="manual")
+                elif isinstance(msg, TurnDetectionStream._FlushSentinel):
+                    stream.flush(msg.reason)
 
         forward_task = asyncio.create_task(_forward())
 

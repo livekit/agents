@@ -72,7 +72,6 @@ livekit-plugins-did = { workspace = true }
 members = [
     "livekit-plugins/*",
     "livekit-agents",
-    "turn-detector",
 ]
 exclude = [
     "livekit-plugins/community",

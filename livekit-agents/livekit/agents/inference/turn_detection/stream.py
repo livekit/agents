@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -60,7 +62,7 @@ def _extract_messages(chat_ctx: ChatContext) -> list[PbChatMessage]:
     messages: list[PbChatMessage] = []
     for msg in reversed(chat_ctx.messages()):
         text = " ".join([part for part in msg.content if isinstance(part, str)]).strip()
-        if text:
+        if text and msg.role in ("assistant", "user"):
             messages.append(
                 PbChatMessage(
                     role=CHAT_ROLE_ASSISTANT if msg.role == "assistant" else CHAT_ROLE_USER,
@@ -72,9 +74,17 @@ def _extract_messages(chat_ctx: ChatContext) -> list[PbChatMessage]:
     return messages[::-1]
 
 
+class _InferenceStatus(str, Enum):
+    DEACTIVATED = "deactivated"
+    WARMING_UP = "warming_up"
+    ACTIVE = "active"
+    FLUSHED = "flushed"
+
+
 class TurnDetectionStream:
+    @dataclass
     class _FlushSentinel:
-        pass
+        reason: str | None = None
 
     def __init__(
         self,
@@ -107,7 +117,7 @@ class TurnDetectionStream:
         #
         # | state        | inference state | results admitted | audio streaming |
         # |--------------|-----------------|------------------|-------------------|
-        # | warming up   | running         | no               | yes               | <- VAD silence detected (>200ms)
+        # | warming up   | running         | delayed          | yes               | <- VAD silence detected (>200ms)
         # | active       | running         | yes              | yes               | <- user not speaking (VAD EOS)
         # | not active   | stopped         | no               | yes               | <- user speaking (VAD SOS)
         # | flushed      | stopped         | no               | cleared           | <- agent speaking started/ended
@@ -122,9 +132,7 @@ class TurnDetectionStream:
         #     active --> flushed
         #     flushed --> warming_up
 
-        self._warming_up = False
-        self._active = False
-        self._flushed = False
+        self._status: _InferenceStatus = _InferenceStatus.DEACTIVATED
         self._active_request_id: str | None = None
         self._active_request_fut: asyncio.Future[float] | None = None
         self._active_window_min_client_created_at_ms: int | None = None
@@ -139,11 +147,11 @@ class TurnDetectionStream:
 
     @property
     def is_active(self) -> bool:
-        return self._active
+        return self._status == _InferenceStatus.ACTIVE
 
     @property
     def is_inference_running(self) -> bool:
-        return self._warming_up or self._active
+        return self._status in (_InferenceStatus.WARMING_UP, _InferenceStatus.ACTIVE)
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float:
         return await self._detector.unlikely_threshold(language)
@@ -162,7 +170,8 @@ class TurnDetectionStream:
         - time to first prediction
         - time to next prediction since last prediction
         """
-        timeout = timeout if timeout is not None else self._opts.inference_timeout
+        timeout = timeout if timeout is not None else 0.5
+        fut: asyncio.Future[float] | None = None
         try:
             self.update_chat_ctx(chat_ctx)
             fut = self.warmup()
@@ -173,9 +182,15 @@ class TurnDetectionStream:
             return done.pop().result()
         except asyncio.TimeoutError:
             logger.warning(
-                "eot prediction timed out",
-                extra={"timeout": timeout, "request_id": self._active_request_id},
+                "eot prediction timed out, returning a default value",
+                extra={"timeout": timeout, "request_id": self._active_request_id, "default": 1.0},
             )
+            if fut is not None:
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    fut.set_result(1.0)
+            self._active_request_fut = None
+            self._active_request_id = None
+            self._active_window_min_client_created_at_ms = None
             # default to a positive prediction so min_endpointing_delay is used
             return 1.0
 
@@ -405,16 +420,15 @@ class TurnDetectionStream:
             self._send_message_sync(
                 ClientMessage(eot_input_chat_context=EotInputChatContext(messages=self._messages))
             )
-        assert self._active_request_fut is not None, "eot detection warmup failed"
+        if self._active_request_fut is None:
+            raise RuntimeError("eot detection warmup failed, no request future")
         return self._active_request_fut
 
     def stop_warmup(self) -> None:
         """Stop warmup inference."""
         if not self.is_inference_running:
             return
-        self._warming_up = False
-        self._active = False
-        self._flushed = False
+        self._status = _InferenceStatus.DEACTIVATED
         self._active_request_id = None
         self._active_window_min_client_created_at_ms = None
         if self._active_request_fut is not None:
@@ -423,12 +437,9 @@ class TurnDetectionStream:
             self._active_request_fut = None
 
     def _warmup(self) -> None:
-        if self._warming_up:
+        if self._status == _InferenceStatus.WARMING_UP:
             return
-        self._warming_up = True
-        self._active = False
-        self._flushed = False
-
+        self._status = _InferenceStatus.WARMING_UP
         request_id = utils.shortuuid("turn_request_")
         self._active_request_id = request_id
         self._active_request_fut = asyncio.Future[float]()
@@ -443,15 +454,13 @@ class TurnDetectionStream:
         self._active_window_min_client_created_at_ms = msg.created_at.ToMilliseconds()
 
     def _activate(self) -> None:
-        if self._active:
+        if self._status == _InferenceStatus.ACTIVE:
             return
 
-        self._warming_up = False
-        self._active = True
-        self._flushed = False
+        self._status = _InferenceStatus.ACTIVE
 
     def _deactivate(self) -> None:
-        if not self._active:
+        if self._status == _InferenceStatus.DEACTIVATED:
             return
         self._active_request_id = None
         self._active_window_min_client_created_at_ms = None
@@ -459,22 +468,20 @@ class TurnDetectionStream:
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._active_request_fut.set_result(0.0)
             self._active_request_fut = None
-        self._active = False
-        self._flushed = False
-        self._warming_up = False
+        self._status = _InferenceStatus.DEACTIVATED
 
     def flush(self, reason: str | None = None) -> None:
         if self._audio_ch.closed:
             return
-        if self._flushed:
+        if self._status == _InferenceStatus.FLUSHED:
             return
 
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
         self._audio_ch.send_nowait(TurnDetectionStream._FlushSentinel())
         logger.trace("turn detection audio flushed", extra={"reason": reason})
-        self._flushed = True
         self._deactivate()
+        self._status = _InferenceStatus.FLUSHED
         created_at = Timestamp()
         created_at.GetCurrentTime()
         msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
@@ -488,7 +495,7 @@ class TurnDetectionStream:
 
         if active:
             if not self.is_active:
-                if not self._warming_up:
+                if self._status != _InferenceStatus.WARMING_UP:
                     logger.warning("eot detector not warmed up before activation")
                     self.warmup()
 
@@ -497,6 +504,9 @@ class TurnDetectionStream:
                     extra={"trigger": trigger},
                 )
                 self._activate()
+            return
+
+        if not self.is_active:
             return
 
         logger.trace("turn detection deactivated", extra={"trigger": trigger})
@@ -592,7 +602,7 @@ class TurnDetectionStream:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or ws.closed:
+                    if closing_ws or self._session.closed:
                         return
                     raise APIStatusError(
                         message="turn detector connection closed unexpectedly",
@@ -628,13 +638,12 @@ class TurnDetectionStream:
     async def aclose(self) -> None:
         self.end_input()
         await aio.cancel_and_wait(self._task)
+        await aio.cancel_and_wait(*self._tasks)
         if self._active_request_fut is not None:
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._active_request_fut.set_result(0.0)
         self._active_request_fut = None
         self._active_request_id = None
         self._active_window_min_client_created_at_ms = None
-        self._active = False
-        self._flushed = False
-        self._warming_up = False
+        self._status = _InferenceStatus.DEACTIVATED
         self._messages = []

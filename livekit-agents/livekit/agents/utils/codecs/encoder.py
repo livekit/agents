@@ -56,7 +56,7 @@ def _resolve_codec(codec: str) -> tuple[str, str]:
 
 
 class _CompactableBuffer(io.RawIOBase):
-    _COMPACT_THRESHOLD = 1 * 1024 * 1024  # reclaim consumed prefix once it exceeds 1MB
+    _COMPACT_THRESHOLD = 5 * 1024 * 1024  # reclaim consumed prefix once it exceeds 5MB
 
     def __init__(self) -> None:
         super().__init__()
