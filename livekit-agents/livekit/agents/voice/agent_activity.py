@@ -162,6 +162,7 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        self._preemptive_generation_count: int = 0
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
@@ -1028,10 +1029,14 @@ class AgentActivity(RecognitionHooks):
         if (
             not is_given(audio)
             and not self.tts
+            and not (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
             and self._session.output.audio
             and self._session.output.audio_enabled
         ):
-            raise RuntimeError("trying to generate speech from text without a TTS model")
+            raise RuntimeError(
+                "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
+                "add a TTS model to AgentSession to enable say()"
+            )
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -1054,18 +1059,40 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        task = self._create_speech_task(
-            self._tts_task(
+        if (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        ):
+            if not add_to_chat_ctx:
+                logger.warning(
+                    "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
+                    "the message will still be added to the chat context"
+                )
+            self._create_speech_task(
+                self._realtime_reply_task(
+                    speech_handle=handle,
+                    text=text,
+                    model_settings=ModelSettings(),
+                ),
                 speech_handle=handle,
-                text=text,
-                audio=audio or None,
-                add_to_chat_ctx=add_to_chat_ctx,
-                model_settings=ModelSettings(),
-            ),
-            speech_handle=handle,
-            name="AgentActivity.tts_say",
-        )
-        task.add_done_callback(self._on_pipeline_reply_done)
+                name="AgentActivity.realtime_say",
+            )
+        else:
+            task = self._create_speech_task(
+                self._tts_task(
+                    speech_handle=handle,
+                    text=text,
+                    audio=audio or None,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=ModelSettings(),
+                ),
+                speech_handle=handle,
+                name="AgentActivity.tts_say",
+            )
+            task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -1769,8 +1796,9 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
+        preemptive_opts = self._session.options.preemptive_generation
         if (
-            not self._session.options.preemptive_generation
+            not preemptive_opts["enabled"]
             or self._scheduling_paused
             or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
@@ -1779,6 +1807,17 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._cancel_preemptive_generation()
+
+        if (
+            info.started_speaking_at is not None
+            and time.time() - info.started_speaking_at > preemptive_opts["max_speech_duration"]
+        ):
+            return
+
+        if self._preemptive_generation_count >= preemptive_opts["max_retries"]:
+            return
+
+        self._preemptive_generation_count += 1
 
         user_message = llm.ChatMessage(
             role="user",
@@ -1860,6 +1899,8 @@ class AgentActivity(RecognitionHooks):
             # In practice this is OK because most speeches will be interrupted if a new turn
             # is detected. So the previous execution should complete quickly.
             await old_task
+
+        self._preemptive_generation_count = 0
 
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
@@ -2368,8 +2409,8 @@ class AgentActivity(RecognitionHooks):
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
-        read_transcript_from_tts = False
-        if audio_output is not None:
+
+        async def _start_tts_inference() -> tuple[asyncio.Task[bool], _TTSGenerationData]:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
                 node=self._agent.tts_node,
@@ -2379,15 +2420,17 @@ class AgentActivity(RecognitionHooks):
                 model=self.tts.model if self.tts else None,
                 provider=self.tts.provider if self.tts else None,
             )
+            return tts_task, tts_gen_data
+
+        # start preemptive tts inference if enabled
+        preemptive_opts = self._session.options.preemptive_generation
+        if (
+            audio_output is not None
+            and preemptive_opts["enabled"]
+            and preemptive_opts["preemptive_tts"]
+        ):
+            tts_task, tts_gen_data = await _start_tts_inference()
             tasks.append(tts_task)
-            if (
-                self.use_tts_aligned_transcript
-                and (tts := self.tts)
-                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-                and (timed_texts := await tts_gen_data.timed_texts_fut)
-            ):
-                tr_input = timed_texts
-                read_transcript_from_tts = True
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
@@ -2405,6 +2448,22 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
             await text_tee.aclose()
             return
+
+        # start tts inference if not already started and audio output is enabled
+        if audio_output is not None and tts_task is None:
+            tts_task, tts_gen_data = await _start_tts_inference()
+            tasks.append(tts_task)
+
+        read_transcript_from_tts = False
+        if (
+            tts_gen_data is not None
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+            and (timed_texts := await tts_gen_data.timed_texts_fut)
+        ):
+            tr_input = timed_texts
+            read_transcript_from_tts = True
 
         self._session._update_agent_state("thinking")
 
@@ -2587,6 +2646,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
+            extra_kwargs: dict = {}
+            if llm_gen_data.generated_extra:
+                extra_kwargs["extra"] = llm_gen_data.generated_extra
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -2594,6 +2656,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
+                **extra_kwargs,
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
@@ -2732,9 +2795,9 @@ class AgentActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
+        text: str | AsyncIterable[str] | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
-
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
@@ -2745,6 +2808,20 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
+
+        if text is not None:
+            try:
+                generation_ev = await self._rt_session.say(text)
+            except llm.RealtimeError as e:
+                logger.error("failed to say text: %s", str(e))
+                return
+
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+            return
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()

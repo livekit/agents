@@ -237,7 +237,7 @@ async def test_interruption(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -288,7 +288,9 @@ async def test_interruption_options() -> None:
 
     # test min_interruption_words
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"min_interruption_words": 3}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"min_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -301,7 +303,9 @@ async def test_interruption_options() -> None:
 
     # test allow_interruptions=False
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"allow_interruptions": False}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"enabled": False}},
     )
     playback_finished_events.clear()
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -394,7 +398,7 @@ async def test_interruption_before_speaking(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -572,36 +576,49 @@ async def test_aec_warmup() -> None:
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
-        (True, 0.8),
-        (False, 1.1),
+        ({"preemptive_tts": True}, 0.7),
+        ({"preemptive_tts": False}, 0.8),
+        ({"enabled": False}, 1.1),
     ],
 )
-async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
+async def test_preemptive_generation(preemptive_generation: dict, expected_latency: float) -> None:
     speed = 5.0
     actions = FakeActions()
-    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
     actions.add_tts(3.0, ttfb=0.3)
-    # preemptive_generation enabled: e2e latency is 0.2+0.3+0.3=0.8s
-    # preemptive_generation disabled: e2e latency is 0.5+0.3+3.0=1.1s
+    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
+    # preemptive_generation without TTS enabled: e2e latency is max(0.1+0.3, 0.5)+0.3=0.8s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
 
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"preemptive_generation": preemptive_generation}
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": preemptive_generation},
     )
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
     session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    assert len(user_state_events) == 2
+    assert user_state_events[0].old_state == "listening"
+    assert user_state_events[0].new_state == "speaking"
+    assert user_state_events[1].new_state == "listening"
+    t_user_stop_speaking = user_state_events[1].created_at
+
     assert len(agent_state_events) == 4
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
+    t_agent_start_speaking = agent_state_events[2].created_at
     check_timestamp(
-        agent_state_events[2].created_at - t_origin,
-        t_target=2.0 + expected_latency,
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=expected_latency,
         speed_factor=speed,
         max_abs_diff=0.2,
     )
@@ -635,7 +652,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"preemptive_generation": preemptive_generation},
+        turn_handling={"preemptive_generation": {"enabled": preemptive_generation}},
     )
     agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
 
