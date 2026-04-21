@@ -158,7 +158,7 @@ class AvatarSession(BaseAvatarSession):
         def on_agent_session_close(ev: Any) -> None:
             self._msg_ch.close()
 
-        self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE)
+        self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE, wait_playback_start=True)
         await self._audio_buffer.start()
         self._audio_buffer.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
 
@@ -372,3 +372,4 @@ class AvatarSession(BaseAvatarSession):
     def _handle_agent_speak_started(self, event: dict) -> None:
         self._avatar_speaking = True
         self._avatar_interrupted = False
+        self._audio_buffer.notify_playback_started()
