@@ -109,6 +109,7 @@ unit-tests:
 		tests/test_aio_itertools.py \
 		tests/test_room.py \
 		tests/test_room_io.py \
+		tests/test_audio_turn_detection.py \
 		tests/test_audio_recognition_handoff.py \
 		tests/test_utils/test_audio_array_buffer.py \
 		tests/test_utils/test_bounded_dict.py \

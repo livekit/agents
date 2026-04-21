@@ -7,7 +7,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, cast
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
@@ -30,7 +30,12 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .turn import TurnDetectionMode as TurnDetectionMode
+from .turn import (
+    AudioTurnContext,
+    AudioTurnDetector,
+    TurnDetectionMode as TurnDetectionMode,
+    _TurnDetector,
+)
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -38,6 +43,19 @@ if TYPE_CHECKING:
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
+
+
+def _copy_audio_frame(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=bytes(frame.data),
+        sample_rate=frame.sample_rate,
+        num_channels=frame.num_channels,
+        samples_per_channel=frame.samples_per_channel,
+    )
+
+
+def _is_audio_turn_detector(detector: object) -> TypeGuard[AudioTurnDetector]:
+    return hasattr(detector, "predict_end_of_turn_audio")
 
 
 @dataclass
@@ -145,6 +163,7 @@ class AudioRecognition:
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._endpointing: BaseEndpointing = endpointing
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
+        self._audio_turn_detector_enabled = _is_audio_turn_detector(self._turn_detector)
         self._stt = stt
         self._vad = vad
         self._stt_model = stt_model
@@ -167,6 +186,7 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
+        self._turn_audio_frames: list[rtc.AudioFrame] = []
         self._last_language: LanguageCode | None = None
 
         self._stt_pipeline: _STTPipeline | None = None
@@ -203,6 +223,7 @@ class AudioRecognition:
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
+            self._audio_turn_detector_enabled = _is_audio_turn_detector(self._turn_detector)
 
             mode = turn_detection if isinstance(turn_detection, str) else None
             if self._turn_detection_mode != mode:
@@ -434,6 +455,8 @@ class AudioRecognition:
             self._input_started_at = time.time() - frame.duration
 
         self._sample_rate = frame.sample_rate
+        if self._audio_turn_detector_enabled:
+            self._turn_audio_frames.append(_copy_audio_frame(frame))
         if not skip_stt and self._stt_pipeline is not None:
             self._stt_pipeline.audio_ch.send_nowait(frame)
 
@@ -566,6 +589,7 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
+        self._turn_audio_frames = []
         self._user_turn_committed = False
 
         # reset stt to clear the buffer from previous user turn
@@ -945,9 +969,27 @@ class AudioRecognition:
                         end_of_turn_probability = 0.0
                         unlikely_threshold: float | None = None
                         try:
-                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                chat_ctx
-                            )
+                            if _is_audio_turn_detector(turn_detector):
+                                if not self._turn_audio_frames:
+                                    logger.debug(
+                                        "audio turn detector skipped because no turn audio was buffered"
+                                    )
+                                else:
+                                    end_of_turn_probability = (
+                                        await turn_detector.predict_end_of_turn_audio(
+                                            AudioTurnContext(
+                                                audio=list(self._turn_audio_frames),
+                                                transcript=self._audio_transcript,
+                                                chat_ctx=chat_ctx.copy(),
+                                                language=self._last_language,
+                                            )
+                                        )
+                                    )
+                            else:
+                                text_turn_detector = cast(_TurnDetector, turn_detector)
+                                end_of_turn_probability = (
+                                    await text_turn_detector.predict_end_of_turn(chat_ctx)
+                                )
                             unlikely_threshold = await turn_detector.unlikely_threshold(
                                 self._last_language
                             )
@@ -1043,6 +1085,7 @@ class AudioRecognition:
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
+                self._turn_audio_frames = []
                 self._last_final_transcript_time = None
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech

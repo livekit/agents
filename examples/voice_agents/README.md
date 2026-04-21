@@ -23,6 +23,7 @@ session = AgentSession(
 ### 🚀 Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent using LiveKit Inference with metrics collection
+- [`audio_turn_detector.py`](./audio_turn_detector.py) - Using a custom audio-native turn detector with buffered current-turn PCM
 
 ### 🛠️ Tool Integration & Function Calling
 

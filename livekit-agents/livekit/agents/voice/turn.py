@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from typing_extensions import TypedDict
+
+from livekit import rtc
 
 from ..language import LanguageCode
 from ..llm import ChatContext
@@ -28,7 +31,45 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+@dataclass(slots=True)
+class AudioTurnContext:
+    """Current-turn audio and conversation context for audio-native detectors.
+
+    Attributes:
+        audio: Buffered audio frames for the current user turn.
+        transcript: The current turn transcript accumulated from STT.
+        chat_ctx: Conversation context with the current user transcript appended.
+        language: The most recent detected language, if available from STT.
+    """
+
+    audio: list[rtc.AudioFrame]
+    transcript: str
+    chat_ctx: ChatContext
+    language: LanguageCode | None = None
+
+
+class AudioTurnDetector(Protocol):
+    """Protocol for custom audio-native turn detectors."""
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "unknown"
+
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
+    async def supports_language(self, language: LanguageCode | None) -> bool: ...
+
+    async def predict_end_of_turn_audio(
+        self, turn_ctx: AudioTurnContext, *, timeout: float | None = None
+    ) -> float: ...
+
+
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | AudioTurnDetector
+)
 """
 The mode of turn detection to use.
 
@@ -36,7 +77,8 @@ The mode of turn detection to use.
 - "vad": use VAD to detect the start and end of the user's turn
 - "realtime_llm": use server-side turn detection provided by the realtime LLM
 - "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
+- _TurnDetector: use a text/chat-context turn detector
+- AudioTurnDetector: use an audio-native turn detector
 
 (default) If not provided, automatically choose the best mode based on
     available models (realtime_llm -> vad -> stt -> manual)
