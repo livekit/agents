@@ -291,6 +291,12 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    audio_forwarding_latency: float
+    """Time taken for the audio forwarding to start
+
+    Assistant `ChatMessage` only
+    """
+
     e2e_latency: float
     """Time from when the user finished speaking to when the agent began responding
 

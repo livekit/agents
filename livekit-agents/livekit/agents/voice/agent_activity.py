@@ -2504,6 +2504,7 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        audio_forwarding_started_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2511,9 +2512,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, audio_forwarding_started_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                audio_forwarding_started_at = (
+                    audio_out.forwarding_started_at
+                    if audio_out and audio_out.forwarding_started_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2524,6 +2530,9 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            early_metrics["audio_forwarding_latency"] = (
+                started_speaking_at - audio_forwarding_started_at
+            )
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2607,6 +2616,11 @@ class AgentActivity(RecognitionHooks):
         if stopped_speaking_at and started_speaking_at:
             assistant_metrics["started_speaking_at"] = started_speaking_at
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+            if audio_forwarding_started_at is not None:
+                assistant_metrics["audio_forwarding_latency"] = (
+                    started_speaking_at - audio_forwarding_started_at
+                )
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]

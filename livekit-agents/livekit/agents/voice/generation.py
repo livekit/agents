@@ -377,6 +377,8 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    forwarding_started_at: float | None = None
+
     def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
         if not self.first_frame_fut.done():
             self.first_frame_fut.set_result(ev.created_at)
@@ -410,6 +412,8 @@ async def _audio_forwarding_task(
 
         async for frame in tts_output:
             out.audio.append(frame)
+            if out.forwarding_started_at is None:
+                out.forwarding_started_at = time.time()
 
             if (
                 not out.first_frame_fut.done()
