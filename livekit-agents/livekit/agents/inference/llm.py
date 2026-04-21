@@ -28,7 +28,13 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_INFERENCE_PRIORITY,
+    HEADER_INFERENCE_PROVIDER,
+    create_access_token,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -131,6 +137,8 @@ XAIModels = Literal[
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
 
+InferenceClass = Literal["priority", "standard"]
+
 
 class ChatCompletionOptions(TypedDict, total=False):
     frequency_penalty: float | None
@@ -172,6 +180,7 @@ class _LLMOptions:
     base_url: str
     api_key: str
     api_secret: str
+    inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
 
 
@@ -184,6 +193,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
+        inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
@@ -216,6 +226,7 @@ class LLM(llm.LLM):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
+            inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
         )
         self._client = openai.AsyncClient(
@@ -258,6 +269,7 @@ class LLM(llm.LLM):
         response_format: NotGivenOr[
             completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
+        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -291,11 +303,16 @@ class LLM(llm.LLM):
 
         extra.update(self._opts.extra_kwargs)
 
+        effective_inference_class = (
+            inference_class if is_given(inference_class) else self._opts.inference_class
+        )
+
         self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         return LLMStream(
             self,
             model=self._opts.model,
             provider=self._opts.provider,
+            inference_class=effective_inference_class,
             strict_tool_schema=True,
             client=self._client,
             chat_ctx=chat_ctx,
@@ -312,6 +329,7 @@ class LLMStream(llm.LLMStream):
         *,
         model: LLMModels | str,
         provider: str | None = None,
+        inference_class: InferenceClass | None = None,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
@@ -323,6 +341,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
+        self._inference_class = inference_class
         self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
@@ -364,7 +383,9 @@ class LLMStream(llm.LLMStream):
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
             extra_headers.update(get_inference_headers())
             if self._provider:
-                extra_headers["X-LiveKit-Inference-Provider"] = self._provider
+                extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
+            if self._inference_class:
+                extra_headers[HEADER_INFERENCE_PRIORITY] = self._inference_class
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
