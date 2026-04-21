@@ -113,6 +113,8 @@ from .voice.run_result import (
     mock_tools,
 )
 from .voice.turn import (
+    AudioTurnContext,
+    AudioTurnDetector,
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
@@ -236,6 +238,8 @@ __all__ = [
     "AMDCategory",
     "AMDPredictionEvent",
     "TurnHandlingOptions",
+    "AudioTurnContext",
+    "AudioTurnDetector",
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
