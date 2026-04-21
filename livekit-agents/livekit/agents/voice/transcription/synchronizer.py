@@ -171,16 +171,24 @@ class _SegmentSynchronizerImpl:
     def text_input_ended(self) -> bool:
         return self._text_data.done
 
+    def on_playback_started(self, start_time: float) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.on_playback_started called after close")
+            return
+
+        if self._start_fut.is_set():
+            logger.warning(
+                "_SegmentSynchronizerImpl.on_playback_started called after start_fut is set"
+            )
+            return
+
+        self._start_wall_time = start_time
+        self._start_fut.set()
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.push_audio called after close")
             return
-
-        # the first audio frame we receive marks the start of the sync
-        # see `TranscriptSynchronizer` docstring
-        if self._start_wall_time is None and frame.duration > 0:
-            self._start_wall_time = time.time()
-            self._start_fut.set()
 
         self._audio_data.sr_stream.push_frame(frame)
         self._audio_data.pushed_duration += frame.duration
@@ -397,7 +405,7 @@ class TranscriptSynchronizer:
     Synchronizes text with audio playback timing.
 
     This class is responsible for synchronizing text with audio playback timing.
-    It currently assumes that the first push_audio is starting the audio playback of a segment.
+    It starts sending transcription when AudioOutput.on_playback_started is called.
     """
 
     def __init__(
@@ -588,6 +596,11 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._next_in_chain.clear_buffer()
 
     # this is going to be automatically called by the next_in_chain
+    def on_playback_started(self, *, created_at: float) -> None:
+        super().on_playback_started(created_at=created_at)
+        if self._synchronizer.enabled:
+            self._synchronizer._impl.on_playback_started(start_time=created_at)
+
     def on_playback_finished(
         self,
         *,
