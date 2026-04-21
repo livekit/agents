@@ -14,7 +14,7 @@
 
 """Inworld plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/models/tts/inworld/ and
+See https://docs.livekit.io/agents/integrations/tts/inworld/ and
 https://docs.livekit.io/agents/models/stt/inworld/ for more information.
 """
 

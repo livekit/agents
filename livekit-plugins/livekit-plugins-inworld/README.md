@@ -2,7 +2,7 @@
 
 Support for voice synthesis and speech-to-text with [Inworld TTS](https://docs.inworld.ai/tts/tts) and [Inworld STT](https://docs.inworld.ai/stt/overview).
 
-See [Inworld TTS](https://docs.livekit.io/agents/models/tts/inworld/) and [Inworld STT](https://docs.livekit.io/agents/models/stt/inworld/) for more information.
+See [Inworld TTS](https://docs.livekit.io/agents/integrations/tts/inworld/) and [Inworld STT](https://docs.livekit.io/agents/models/stt/inworld/) for more information.
 
 ## Installation
 
