@@ -406,32 +406,36 @@ class SpeechStream(stt.SpeechStream):
         is_final = t.get("isFinal", False)
         voice_profile = t.get("voiceProfile")
 
-        if not text:
+        # An empty-text final (VAD false positive, unrecognizable noise) must still
+        # reach the END_OF_SPEECH emission below — otherwise _speaking stays True
+        # and subsequent speechStarted events are ignored, wedging the stream.
+        if not text and not is_final:
             return
 
-        event_type = (
-            SpeechEventType.FINAL_TRANSCRIPT if is_final else SpeechEventType.INTERIM_TRANSCRIPT
-        )
-
-        metadata = None
-        if voice_profile:
-            metadata = {"voice_profile": voice_profile}
-            if is_final:
-                logger.info(f"Inworld voice profile: {voice_profile}")
-
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(
-                type=event_type,
-                request_id=self._request_id,
-                alternatives=[
-                    stt.SpeechData(
-                        text=text,
-                        language=LanguageCode(self._language),
-                        metadata=metadata,
-                    )
-                ],
+        if text:
+            event_type = (
+                SpeechEventType.FINAL_TRANSCRIPT if is_final else SpeechEventType.INTERIM_TRANSCRIPT
             )
-        )
+
+            metadata = None
+            if voice_profile:
+                metadata = {"voice_profile": voice_profile}
+                if is_final:
+                    logger.info(f"Inworld voice profile: {voice_profile}")
+
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=event_type,
+                    request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            text=text,
+                            language=LanguageCode(self._language),
+                            metadata=metadata,
+                        )
+                    ],
+                )
+            )
 
         if is_final and self._speaking:
             self._speaking = False
