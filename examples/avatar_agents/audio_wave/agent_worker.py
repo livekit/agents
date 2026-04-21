@@ -1,8 +1,8 @@
 import logging
+import os
 from dataclasses import asdict, dataclass
 
 import httpx
-from bithuman.runtime import os
 from dotenv import load_dotenv
 
 from livekit import api, rtc
