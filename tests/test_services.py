@@ -190,7 +190,7 @@ async def test_stt() -> bool:
                         break
                 if got_error:
                     if attempt < MAX_RETRIES:
-                        print(f"  Retrying in 2s ...")
+                        print("  Retrying in 2s ...")
                         await asyncio.sleep(2)
                         continue
                     else:
@@ -236,7 +236,7 @@ async def test_stt() -> bool:
                         print(f"  Transcription ({'final' if is_final else 'partial'}): {text}")
 
                     if msg_type == "session_stopped":
-                        print(f"  Session stopped.")
+                        print("  Session stopped.")
                         break
 
                     if msg_type == "error":
@@ -250,7 +250,7 @@ async def test_stt() -> bool:
         except Exception as exc:
             print(f"  ERROR: {exc}")
             if attempt < MAX_RETRIES:
-                print(f"  Retrying in 2s ...")
+                print("  Retrying in 2s ...")
                 await asyncio.sleep(2)
             else:
                 _banner("STT", False)
@@ -272,7 +272,7 @@ async def test_llm() -> bool:
         return False
 
     try:
-        with open(TEST_JSON, "r", encoding="utf-8") as f:
+        with open(TEST_JSON, encoding="utf-8") as f:
             context_data = json.load(f)
 
         system_content = (

@@ -47,7 +47,13 @@ def test_pip_metadata():
 def test_imports():
     """All __all__ exports are importable."""
     try:
-        from livekit.plugins._60db import _60dbClient, LLM, STT, TTS, __version__
+        from livekit.plugins import _60db
+
+        expected = ["_60dbClient", "LLM", "STT", "TTS", "__version__"]
+        for name in expected:
+            if not hasattr(_60db, name):
+                print(f"[FAIL] test_imports: {name} not found in livekit.plugins._60db")
+                return False
 
         print("[PASS] test_imports: _60dbClient, LLM, STT, TTS, __version__ all imported")
         return True
@@ -83,7 +89,7 @@ def test_plugin_registration():
             print(f"[FAIL] test_plugin_registration: 'livekit.plugins._60db' not in registered plugins {titles}")
             return False
 
-        print(f"[PASS] test_plugin_registration: 'livekit.plugins._60db' found in registered plugins")
+        print("[PASS] test_plugin_registration: 'livekit.plugins._60db' found in registered plugins")
         return True
     except Exception as e:
         print(f"[FAIL] test_plugin_registration: {e}")
@@ -93,7 +99,7 @@ def test_plugin_registration():
 def test_instantiation():
     """TTS(), STT(), LLM() can be created with an API key (no network calls)."""
     try:
-        from livekit.plugins._60db import TTS, STT, LLM
+        from livekit.plugins._60db import LLM, STT, TTS
 
         tts = TTS(api_key="test-key")
         stt = STT(api_key="test-key")
@@ -109,10 +115,8 @@ def test_instantiation():
 def test_class_hierarchy():
     """TTS/STT/LLM inherit from the correct LiveKit base classes."""
     try:
-        from livekit.plugins._60db import TTS, STT, LLM
-        from livekit.agents import tts as lk_tts
-        from livekit.agents import stt as lk_stt
-        from livekit.agents import llm as lk_llm
+        from livekit.agents import llm as lk_llm, stt as lk_stt, tts as lk_tts
+        from livekit.plugins._60db import LLM, STT, TTS
 
         errors = []
         if not issubclass(TTS, lk_tts.TTS):
