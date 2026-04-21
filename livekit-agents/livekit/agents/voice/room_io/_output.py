@@ -4,7 +4,10 @@ import asyncio
 import json
 import time
 
+from google.protobuf.json_format import MessageToDict
+
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
@@ -445,13 +448,17 @@ class _ParticipantStreamTranscriptionOutput:
             self._capturing = True
 
         if self._json_format:
-            text_dict = {"text": str(text)}
+            ts_pb = agent_pb.TimedString(text=str(text))
             if isinstance(text, TimedString):
                 if utils.is_given(text.start_time):
-                    text_dict["start_time"] = text.start_time
+                    ts_pb.start_time = text.start_time
                 if utils.is_given(text.end_time):
-                    text_dict["end_time"] = text.end_time
-            text = json.dumps(text_dict) + "\n"
+                    ts_pb.end_time = text.end_time
+                if utils.is_given(text.confidence):
+                    ts_pb.confidence = text.confidence
+                if utils.is_given(text.start_time_offset):
+                    ts_pb.start_time_offset = text.start_time_offset
+            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
         self._latest_text = text
 

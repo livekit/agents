@@ -56,7 +56,7 @@ async def entrypoint(ctx: JobContext):
             text_output=room_io.TextOutputOptions(
                 # Optional: get the timed transcript from the `lk.transcription` datastream topic as JSON dict
                 json_format=True,
-                sync_transcription=False,
+                sync_transcription=True,
             )
         ),
     )
