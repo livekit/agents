@@ -58,15 +58,15 @@ WS_ENDPOINT = "stt/v1/transcribe:streamBidirectional"
 
 @dataclass
 class _STTOptions:
-    model: str = DEFAULT_MODEL
-    language: str = DEFAULT_LANGUAGE
-    sample_rate: int = DEFAULT_SAMPLE_RATE
-    num_channels: int = DEFAULT_NUM_CHANNELS
-    enable_voice_profile: bool = True
-    voice_profile_top_n: int = 1
-    vad_threshold: NotGivenOr[float] = NOT_GIVEN
-    min_end_of_turn_silence_when_confident: int = 200
-    end_of_turn_confidence_threshold: float = 0.3
+    model: str
+    language: str
+    sample_rate: int
+    num_channels: int
+    enable_voice_profile: bool
+    voice_profile_top_n: int
+    vad_threshold: NotGivenOr[float]
+    min_end_of_turn_silence_when_confident: int
+    end_of_turn_confidence_threshold: float
 
 
 class STT(stt.STT):
@@ -365,69 +365,10 @@ class SpeechStream(stt.SpeechStream):
             async for msg in self._ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        content = json.loads(msg.data)
+                        data = json.loads(msg.data)
                     except json.JSONDecodeError:
                         continue
-
-                    result = content.get("result", {})
-
-                    # Handle speechStarted events
-                    if "speechStarted" in result and not self._speaking:
-                        self._speaking = True
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=SpeechEventType.START_OF_SPEECH,
-                                request_id=self._request_id,
-                            )
-                        )
-                        continue
-
-                    t = result.get("transcription", {})
-                    if not t:
-                        continue
-
-                    text = t.get("transcript", "")
-                    is_final = t.get("isFinal", False)
-                    voice_profile = t.get("voiceProfile")
-
-                    if not text:
-                        continue
-
-                    event_type = (
-                        SpeechEventType.FINAL_TRANSCRIPT
-                        if is_final
-                        else SpeechEventType.INTERIM_TRANSCRIPT
-                    )
-
-                    metadata = None
-                    if voice_profile:
-                        metadata = {"voice_profile": voice_profile}
-                        if is_final:
-                            logger.info(f"Inworld voice profile: {voice_profile}")
-
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=event_type,
-                            request_id=self._request_id,
-                            alternatives=[
-                                stt.SpeechData(
-                                    text=text,
-                                    language=LanguageCode(self._language),
-                                    metadata=metadata,
-                                )
-                            ],
-                        )
-                    )
-
-                    if is_final and self._speaking:
-                        self._speaking = False
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=SpeechEventType.END_OF_SPEECH,
-                                request_id=self._request_id,
-                            )
-                        )
-
+                    self._process_stream_event(data)
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -443,3 +384,60 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             logger.error(f"Unexpected error receiving messages: {e}")
             raise
+
+    def _process_stream_event(self, data: dict) -> None:
+        result = data.get("result", {})
+
+        if "speechStarted" in result and not self._speaking:
+            self._speaking = True
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.START_OF_SPEECH,
+                    request_id=self._request_id,
+                )
+            )
+            return
+
+        t = result.get("transcription", {})
+        if not t:
+            return
+
+        text = t.get("transcript", "")
+        is_final = t.get("isFinal", False)
+        voice_profile = t.get("voiceProfile")
+
+        if not text:
+            return
+
+        event_type = (
+            SpeechEventType.FINAL_TRANSCRIPT if is_final else SpeechEventType.INTERIM_TRANSCRIPT
+        )
+
+        metadata = None
+        if voice_profile:
+            metadata = {"voice_profile": voice_profile}
+            if is_final:
+                logger.info(f"Inworld voice profile: {voice_profile}")
+
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=event_type,
+                request_id=self._request_id,
+                alternatives=[
+                    stt.SpeechData(
+                        text=text,
+                        language=LanguageCode(self._language),
+                        metadata=metadata,
+                    )
+                ],
+            )
+        )
+
+        if is_final and self._speaking:
+            self._speaking = False
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.END_OF_SPEECH,
+                    request_id=self._request_id,
+                )
+            )
