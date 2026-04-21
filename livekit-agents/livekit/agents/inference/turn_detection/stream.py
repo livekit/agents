@@ -10,6 +10,25 @@ import aiohttp
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
+from livekit.protocol.agent_pb.agent_inference import (
+    AUDIO_ENCODING_OPUS,
+    ClientMessage,
+    EotInputChatContext,
+    EotPrediction,
+    InferenceStart,
+    InferenceStop,
+    InputAudio,
+    ServerMessage,
+    SessionClose,
+    SessionCreate,
+    SessionFlush,
+    SessionSettings,
+)
+from livekit.protocol.agent_pb.agent_session import (
+    ASSISTANT as CHAT_ROLE_ASSISTANT,
+    USER as CHAT_ROLE_USER,
+    ChatMessage as PbChatMessage,
+)
 
 from ... import utils
 from ..._exceptions import (
@@ -25,41 +44,15 @@ from ...log import logger
 from ...types import APIConnectOptions
 from ...utils import aio
 from ...utils.codecs import AudioStreamEncoder
-from .._utils import create_access_token
-from .detector import INFERENCE_TIMEOUT, TurnDetectionEvent, TurnDetectorOptions
-
-# TODO: update the import to use a released livekit-protocol package
-from .proto.livekit_agent_session_pb2 import (
-    ASSISTANT as CHAT_ROLE_ASSISTANT,
-    USER as CHAT_ROLE_USER,
-    ChatMessage as PbChatMessage,
-)
-from .proto.livekit_agent_turn_detector_pb2 import (
-    TD_AUDIO_ENCODING_OPUS,
-    TdClientMessage,
-    TdEouPrediction,
-    TdInferenceStart,
-    TdInferenceStop,
-    TdInputAudio,
-    TdInputChatContext,
-    TdServerMessage,
-    TdSessionClose,
-    TdSessionCreate,
-    TdSessionFlush,
-    TdSessionSettings,
-)
+from .._utils import create_access_token, get_inference_headers
+from .detector import TurnDetectionEvent, TurnDetectorOptions
 
 MAX_HISTORY_TURNS = 6
-
-# Drop eou_prediction only when latest_client_created_at is older than this window's
-# InferenceStart by more than this gap. Smaller deltas are normal (audio/context often
-# precedes InferenceStart by a few ms on the same websocket).
-_STALE_EOU_CLIENT_CREATED_GAP_MS = 100
-
+MIN_SILENCE_DURATION_MS = 200
 _ENCODER_BIT_RATE = 24000
 
 if TYPE_CHECKING:
-    from .detector import MultiModalTurnDetector
+    from .detector import MultimodalTurnDetector
 
 
 def _extract_messages(chat_ctx: ChatContext) -> list[PbChatMessage]:
@@ -76,19 +69,17 @@ def _extract_messages(chat_ctx: ChatContext) -> list[PbChatMessage]:
             )
         if len(messages) == MAX_HISTORY_TURNS:
             break
-    return messages
+    return messages[::-1]
 
 
 class TurnDetectionStream:
-    """WebSocket-based stream that sends audio frame-by-frame."""
-
     class _FlushSentinel:
         pass
 
     def __init__(
         self,
         *,
-        detector: MultiModalTurnDetector,
+        detector: MultimodalTurnDetector,
         opts: TurnDetectorOptions,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -96,14 +87,16 @@ class TurnDetectionStream:
         self._opts = opts
         self._conn_options = conn_options
         self._session = detector._ensure_session()
+
         self._audio_input_sample_rate: int | None = None
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
-
         self._audio_ch = aio.Chan[rtc.AudioFrame | TurnDetectionStream._FlushSentinel]()
+
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._event_ch = aio.Chan[TurnDetectionEvent]()
         self._num_retries = 0
+
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._tasks: set[asyncio.Task[None]] = set()
@@ -114,7 +107,7 @@ class TurnDetectionStream:
         #
         # | state        | inference state | results admitted | audio streaming |
         # |--------------|-----------------|------------------|-------------------|
-        # | warming up   | running         | no               | yes               | <- VAD silence detected
+        # | warming up   | running         | no               | yes               | <- VAD silence detected (>200ms)
         # | active       | running         | yes              | yes               | <- user not speaking (VAD EOS)
         # | not active   | stopped         | no               | yes               | <- user speaking (VAD SOS)
         # | flushed      | stopped         | no               | cleared           | <- agent speaking started/ended
@@ -162,13 +155,14 @@ class TurnDetectionStream:
         self,
         chat_ctx: ChatContext,
         *,
-        timeout: float | None = INFERENCE_TIMEOUT,
+        timeout: float | None = None,
     ) -> float:
         """
         This is purely for timeout mechanism for each active inference window:
         - time to first prediction
         - time to next prediction since last prediction
         """
+        timeout = timeout if timeout is not None else self._opts.inference_timeout
         try:
             self.update_chat_ctx(chat_ctx)
             fut = self.warmup()
@@ -179,10 +173,11 @@ class TurnDetectionStream:
             return done.pop().result()
         except asyncio.TimeoutError:
             logger.warning(
-                "EOU prediction timed out",
+                "eot prediction timed out",
                 extra={"timeout": timeout, "request_id": self._active_request_id},
             )
-            return 0.0
+            # default to a positive prediction so min_endpointing_delay is used
+            return 1.0
 
     async def __anext__(self) -> TurnDetectionEvent:
         try:
@@ -224,9 +219,8 @@ class TurnDetectionStream:
     # region: utility functions
     def _build_auth_headers(self) -> dict[str, str]:
         return {
-            "Authorization": (
-                f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
-            )
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
 
     def _resample_audio_frame(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
@@ -269,23 +263,18 @@ class TurnDetectionStream:
         self._audio_input_sample_rate = None
         self._audio_input_num_channels = None
 
-    def _send_message_sync(self, msg: TdClientMessage) -> None:
-        if self._ws is None or self._ws.closed:
-            return
-        created_at = Timestamp()
-        created_at.GetCurrentTime()
-        msg.created_at.CopyFrom(created_at)
-        task = asyncio.create_task(self._ws.send_bytes(msg.SerializeToString()))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _send_message_async(self, msg: TdClientMessage) -> None:
+    async def _send_message_async(self, msg: ClientMessage) -> None:
         if self._ws is None or self._ws.closed:
             return
         created_at = Timestamp()
         created_at.GetCurrentTime()
         msg.created_at.CopyFrom(created_at)
         return await self._ws.send_bytes(msg.SerializeToString())
+
+    def _send_message_sync(self, msg: ClientMessage) -> None:
+        task = asyncio.create_task(self._send_message_async(msg))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         base_url = self._opts.base_url
@@ -301,11 +290,11 @@ class TurnDetectionStream:
                 self._conn_options.timeout,
             )
             await self._send_message_async(
-                TdClientMessage(
-                    session_create=TdSessionCreate(
-                        settings=TdSessionSettings(
+                ClientMessage(
+                    session_create=SessionCreate(
+                        settings=SessionSettings(
                             sample_rate=self._opts.sample_rate,
-                            encoding=TD_AUDIO_ENCODING_OPUS,
+                            encoding=AUDIO_ENCODING_OPUS,
                         ),
                     )
                 )
@@ -318,32 +307,41 @@ class TurnDetectionStream:
             raise APIConnectionError("failed to connect to turn detector") from e
         return ws
 
-    def _process_message(self, msg: TdServerMessage) -> None:
+    def _process_message(self, msg: ServerMessage) -> None:
         match msg.WhichOneof("message"):
-            case "eou_prediction":
-                request_id = msg.request_id
-                if request_id != self._active_request_id:
+            case "prediction":
+                if msg.prediction.WhichOneof("prediction") != "eot_prediction":
                     return
 
-                prediction: TdEouPrediction = msg.eou_prediction
+                request_id = msg.request_id
+                if request_id != self._active_request_id:
+                    logger.trace("stale request id received: %s", request_id)
+                    return
+
+                prediction: EotPrediction = msg.prediction.eot_prediction
                 probability = prediction.probability
                 stats = prediction.processing_stats
-                window_min_ms = self._active_window_min_client_created_at_ms
-                if window_min_ms is not None:
-                    latest_ms = stats.latest_client_created_at.ToMilliseconds()
-                    if latest_ms > 0:
-                        gap_ms = window_min_ms - latest_ms
-                        if gap_ms > _STALE_EOU_CLIENT_CREATED_GAP_MS:
-                            logger.trace(
-                                "ignoring stale eou prediction (older active window)",
-                                extra={
-                                    "request_id": request_id,
-                                    "latest_client_created_at_ms": latest_ms,
-                                    "active_window_min_client_created_at_ms": window_min_ms,
-                                    "gap_ms": gap_ms,
-                                },
-                            )
-                            return
+                inference_stats = stats.inference_stats
+                window_started_at_ms = self._active_window_min_client_created_at_ms
+                request_sent_at_ms = stats.latest_client_created_at.ToMilliseconds()
+
+                if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
+                    logger.trace(
+                        "ignoring stale eot prediction",
+                        extra={
+                            "request_id": request_id,
+                            "request_sent_at_ms": request_sent_at_ms,
+                            "window_started_at_ms": window_started_at_ms,
+                            "probability": probability,
+                            "stats": {
+                                "e2e_latency_ms": stats.e2e_latency.ToMilliseconds(),
+                                "inference_e2e_latency_ms": inference_stats.e2e_latency.ToMilliseconds(),
+                                "preprocessing_duration_ms": inference_stats.preprocessing_duration.ToMilliseconds(),
+                                "inference_duration_ms": inference_stats.inference_duration.ToMilliseconds(),
+                            },
+                        },
+                    )
+                    return
 
                 fut = self._active_request_fut
                 if fut is not None:
@@ -352,16 +350,10 @@ class TurnDetectionStream:
 
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
-                detection_delay_ms = (
-                    current_time.ToMilliseconds() - stats.latest_client_created_at.ToMilliseconds()
-                )
-                inference_stats = stats.inference_stats
-                inference_duration_ms = (
-                    inference_stats.preprocessing_duration.ToMilliseconds()
-                    + inference_stats.inference_duration.ToMilliseconds()
-                )
+                detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
+                inference_duration_ms = inference_stats.e2e_latency.ToMilliseconds()
 
-                logger.trace(
+                logger.debug(
                     "turn detection result received",
                     extra={
                         "probability": probability,
@@ -374,13 +366,12 @@ class TurnDetectionStream:
 
                 self._event_ch.send_nowait(
                     TurnDetectionEvent(
-                        type="eou_prediction",
+                        type="eot_prediction",
                         last_speaking_time=time.time(),
                         end_of_turn_probability=probability,
                     )
                 )
-                if fut is not None and probability < 0.3:
-                    self._active_request_fut = asyncio.Future[float]()
+                self._active_request_fut = asyncio.Future[float]()
             case "session_created" | "session_closed" | "inference_started" | "inference_stopped":
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
@@ -406,17 +397,19 @@ class TurnDetectionStream:
 
     # region: state management
     def warmup(self) -> asyncio.Future[float]:
+        """Start running warmup inference."""
         if not self.is_inference_running:
             self._warmup()
 
         if self._active_request_id is not None:
             self._send_message_sync(
-                TdClientMessage(input_chat_context=TdInputChatContext(messages=self._messages))
+                ClientMessage(eot_input_chat_context=EotInputChatContext(messages=self._messages))
             )
-        assert self._active_request_fut is not None
+        assert self._active_request_fut is not None, "eot detection warmup failed"
         return self._active_request_fut
 
     def stop_warmup(self) -> None:
+        """Stop warmup inference."""
         if not self.is_inference_running:
             return
         self._warming_up = False
@@ -435,14 +428,16 @@ class TurnDetectionStream:
         self._warming_up = True
         self._active = False
         self._flushed = False
+
         request_id = utils.shortuuid("turn_request_")
         self._active_request_id = request_id
         self._active_request_fut = asyncio.Future[float]()
+
         request_id = self._active_request_id
         created_at = Timestamp()
         created_at.GetCurrentTime()
-        msg = TdClientMessage(
-            inference_start=TdInferenceStart(request_id=request_id), created_at=created_at
+        msg = ClientMessage(
+            inference_start=InferenceStart(request_id=request_id), created_at=created_at
         )
         self._send_message_sync(msg)
         self._active_window_min_client_created_at_ms = msg.created_at.ToMilliseconds()
@@ -450,6 +445,7 @@ class TurnDetectionStream:
     def _activate(self) -> None:
         if self._active:
             return
+
         self._warming_up = False
         self._active = True
         self._flushed = False
@@ -481,7 +477,7 @@ class TurnDetectionStream:
         self._deactivate()
         created_at = Timestamp()
         created_at.GetCurrentTime()
-        msg = TdClientMessage(inference_stop=TdInferenceStop(), created_at=created_at)
+        msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message_sync(msg)
 
     def set_active(self, active: bool, trigger: str | None = None) -> None:
@@ -492,7 +488,14 @@ class TurnDetectionStream:
 
         if active:
             if not self.is_active:
-                logger.trace("turn detection activated", extra={"trigger": trigger})
+                if not self._warming_up:
+                    logger.warning("eot detector not warmed up before activation")
+                    self.warmup()
+
+                logger.trace(
+                    "turn detection activated",
+                    extra={"trigger": trigger},
+                )
                 self._activate()
             return
 
@@ -500,7 +503,7 @@ class TurnDetectionStream:
         self._deactivate()
         created_at = Timestamp()
         created_at.GetCurrentTime()
-        msg = TdClientMessage(inference_stop=TdInferenceStop(), created_at=created_at)
+        msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message_sync(msg)
 
     # endregion
@@ -515,7 +518,7 @@ class TurnDetectionStream:
         """Update the assistant messages for the active request."""
         self._messages = _extract_messages(chat_ctx)
         self._send_message_sync(
-            TdClientMessage(input_chat_context=TdInputChatContext(messages=self._messages))
+            ClientMessage(eot_input_chat_context=EotInputChatContext(messages=self._messages))
         )
 
     def end_input(self) -> None:
@@ -534,49 +537,50 @@ class TurnDetectionStream:
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 bit_rate=_ENCODER_BIT_RATE,
+                codec_options={
+                    "application": "lowdelay",
+                    "frame_duration": "60",
+                    "compression_level": "0",
+                    "vbr": "on",
+                },
             )
 
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                samples_per_channel=self._opts.sample_rate // 50,  # 20ms chunks
+                samples_per_channel=self._opts.sample_rate // 50 * 3,  # 60ms chunks
             )
 
             async def _send_encoded(ogg_bytes: bytes, num_samples: int) -> None:
                 await self._send_message_async(
-                    TdClientMessage(
-                        input_audio=TdInputAudio(audio=ogg_bytes, num_samples=num_samples)
-                    )
+                    ClientMessage(input_audio=InputAudio(audio=ogg_bytes, num_samples=num_samples))
                 )
 
             async for frame in self._audio_ch:
                 if isinstance(frame, TurnDetectionStream._FlushSentinel):
                     for chunk in audio_bstream.flush():
-                        ogg_bytes, num_samples = encoder.push(chunk)
+                        ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
                         if ogg_bytes:
                             await _send_encoded(ogg_bytes, num_samples)
-                    flush_bytes, num_samples = encoder.flush()
-                    if flush_bytes:
-                        await _send_encoded(flush_bytes, num_samples)
-                    await self._send_message_async(TdClientMessage(session_flush=TdSessionFlush()))
+                    await self._send_message_async(ClientMessage(session_flush=SessionFlush()))
                     continue
 
                 for chunk in audio_bstream.push(frame.data):
-                    ogg_bytes, num_samples = encoder.push(chunk)
+                    ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
                     if ogg_bytes:
                         await _send_encoded(ogg_bytes, num_samples)
 
             for chunk in audio_bstream.flush():
-                ogg_bytes, num_samples = encoder.push(chunk)
+                ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
                 if ogg_bytes:
                     await _send_encoded(ogg_bytes, num_samples)
 
-            final_bytes, num_samples = encoder.close()
+            final_bytes, num_samples = encoder.close().as_tuple()
             if final_bytes:
                 await _send_encoded(final_bytes, num_samples)
 
             closing_ws = True
-            await self._send_message_async(TdClientMessage(session_close=TdSessionClose()))
+            await self._send_message_async(ClientMessage(session_close=SessionClose()))
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -600,7 +604,7 @@ class TurnDetectionStream:
                     logger.warning("unexpected turn detector message type %s", ws_msg.type)
                     continue
 
-                server_msg = TdServerMessage()
+                server_msg = ServerMessage()
                 server_msg.ParseFromString(ws_msg.data)
                 self._process_message(server_msg)
 

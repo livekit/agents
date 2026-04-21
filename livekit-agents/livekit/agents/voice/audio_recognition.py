@@ -21,8 +21,9 @@ from ..inference.interruption import (
     _OverlapSpeechEndedSentinel,
     _OverlapSpeechStartedSentinel,
 )
-from ..inference.turn_detector import (
-    MultiModalTurnDetector,
+from ..inference.turn_detection import (
+    MIN_SILENCE_DURATION_MS,
+    MultimodalTurnDetector,
     TurnDetectionEvent,
     TurnDetectionStream,
 )
@@ -218,7 +219,7 @@ class AudioRecognition:
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
-            if isinstance(self._turn_detector, MultiModalTurnDetector):
+            if isinstance(self._turn_detector, MultimodalTurnDetector):
                 self.update_turn_detector(self._turn_detector)
             else:
                 self.update_turn_detector(None)
@@ -240,7 +241,7 @@ class AudioRecognition:
         self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
-        if isinstance(self._turn_detector, MultiModalTurnDetector) or self._turn_detector is None:
+        if isinstance(self._turn_detector, MultimodalTurnDetector) or self._turn_detector is None:
             self.update_turn_detector(self._turn_detector)
 
     def stop(self) -> None:
@@ -274,7 +275,7 @@ class AudioRecognition:
 
             # start a new turn for turn detection with the new assistant message
             if self._turn_detector_stream is not None:
-                self._turn_detector_stream.flush("end of agent speech")
+                self._turn_detector_stream.flush(reason="end of agent speech")
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._turn_detector_stream.update_chat_ctx(chat_ctx)
 
@@ -599,7 +600,7 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
-    def update_turn_detector(self, detector: MultiModalTurnDetector | None) -> None:
+    def update_turn_detector(self, detector: MultimodalTurnDetector | None) -> None:
         self._turn_detector = detector
         self._turn_detector_stream = detector.stream() if detector is not None else None
         if self._turn_detector_stream is not None:
@@ -952,7 +953,7 @@ class AudioRecognition:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
                 self._silence_guard_event.set()
 
-            if ev.raw_accumulated_silence > 0.1 and self._speaking:
+            if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
                 if (
                     self._turn_detector_stream is not None
                     and not self._turn_detector_stream.is_inference_running
@@ -1035,7 +1036,7 @@ class AudioRecognition:
         turn_detector = (
             (
                 self._turn_detector
-                if not isinstance(self._turn_detector, MultiModalTurnDetector)
+                if not isinstance(self._turn_detector, MultimodalTurnDetector)
                 else self._turn_detector_stream
             )
             if self._audio_transcript and self._turn_detection_mode != "manual"
@@ -1235,7 +1236,7 @@ class AudioRecognition:
         task_func = (
             _bounce_eou_task_with_silence_guard
             if self._turn_detector is not None
-            and isinstance(self._turn_detector, MultiModalTurnDetector)
+            and isinstance(self._turn_detector, MultimodalTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)
@@ -1327,7 +1328,12 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                if not stream.is_active:
+                # results are only permitted when inference is running (warming up or active)
+                # non-active results will be cancelled by _bounce_eou_task_with_silence_guard
+                if not stream.is_inference_running:
+                    logger.debug(
+                        "received stale turn detection event, skipping", extra={"event": ev}
+                    )
                     continue
                 self._run_eou_detection(
                     self._hooks.retrieve_chat_ctx().copy(),

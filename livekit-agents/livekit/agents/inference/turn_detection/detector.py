@@ -14,21 +14,20 @@ from ...types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from ...utils import resolve_env_var
 from .languages import LANGUAGES
 
 if TYPE_CHECKING:
     from .stream import TurnDetectionStream
 
-INFERENCE_TIMEOUT = 0.5
 
+INFERENCE_TIMEOUT = 0.5
 DEFAULT_SAMPLE_RATE: int = 16000
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
 class TurnDetectionEvent:
-    type: Literal["eou_prediction"]
+    type: Literal["eot_prediction"]
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None
@@ -41,9 +40,10 @@ class TurnDetectorOptions:
     api_key: str
     api_secret: str
     conn_options: APIConnectOptions
+    inference_timeout: float = INFERENCE_TIMEOUT
 
 
-class MultiModalTurnDetector:
+class MultimodalTurnDetector:
     def __init__(
         self,
         *,
@@ -51,14 +51,17 @@ class MultiModalTurnDetector:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
+        inference_timeout: float = INFERENCE_TIMEOUT,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        lk_base_url = resolve_env_var(base_url, "LIVEKIT_INFERENCE_URL", default=DEFAULT_BASE_URL)
-        lk_api_key = resolve_env_var(
+        lk_base_url = utils.resolve_env_var(
+            base_url, "LIVEKIT_INFERENCE_URL", default=DEFAULT_BASE_URL
+        )
+        lk_api_key = utils.resolve_env_var(
             api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY", default=""
         )
-        lk_api_secret = resolve_env_var(
+        lk_api_secret = utils.resolve_env_var(
             api_secret, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET", default=""
         )
         if not lk_api_secret:
@@ -76,6 +79,7 @@ class MultiModalTurnDetector:
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             conn_options=conn_options,
+            inference_timeout=inference_timeout,
         )
 
         self._session = http_session
@@ -83,7 +87,7 @@ class MultiModalTurnDetector:
 
     @property
     def model(self) -> str:
-        return "eou-multimodal-multilingual"
+        return "eot-multimodal"
 
     @property
     def provider(self) -> str:
@@ -118,7 +122,8 @@ class MultiModalTurnDetector:
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+        self._streams.clear()
+
         if self._session:
             await self._session.close()
         self._session = None
-        self._streams = weakref.WeakSet()

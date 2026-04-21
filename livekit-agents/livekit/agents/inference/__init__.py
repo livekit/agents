@@ -7,8 +7,9 @@ from .interruption import (
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
-from .turn_detector import (
-    MultiModalTurnDetector,
+from .turn_detection import (
+    MIN_SILENCE_DURATION_MS,
+    MultimodalTurnDetector,
     TurnDetectionEvent,
     TurnDetectionStream,
 )
@@ -21,11 +22,12 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
-    "MultiModalTurnDetector",
+    "MultimodalTurnDetector",
     "TurnDetectionStream",
     "TurnDetectionEvent",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
     "OverlappingSpeechEvent",
     "InterruptionDataFrameType",
+    "MIN_SILENCE_DURATION_MS",
 ]
