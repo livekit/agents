@@ -150,7 +150,10 @@ class SpeechStream(stt.SpeechStream):
                 # Step 2: Wait for connection_established
                 msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
-                if not data.get("connection_established") and data.get("type") != "connection_established":
+                if (
+                    not data.get("connection_established")
+                    and data.get("type") != "connection_established"
+                ):
                     logger.error("60db STT: expected connection_established, got: %s", data)
                     raise APIConnectionError("60db STT: failed to establish connection")
                 logger.info("60db STT: connection established")
@@ -267,7 +270,11 @@ class SpeechStream(stt.SpeechStream):
 
         language = data.get("language", self._languages[0] if self._languages else "en")
 
-        event_type = stt.SpeechEventType.FINAL_TRANSCRIPT if is_final else stt.SpeechEventType.INTERIM_TRANSCRIPT
+        event_type = (
+            stt.SpeechEventType.FINAL_TRANSCRIPT
+            if is_final
+            else stt.SpeechEventType.INTERIM_TRANSCRIPT
+        )
 
         self._event_ch.send_nowait(
             stt.SpeechEvent(
@@ -293,7 +300,9 @@ class SpeechStream(stt.SpeechStream):
         # Resample to target rate if needed
         if self._input_sample_rate and self._input_sample_rate != self._target_sample_rate:
             pcm, self._resample_state = audioop.ratecv(
-                pcm, 2, 1,
+                pcm,
+                2,
+                1,
                 self._input_sample_rate,
                 self._target_sample_rate,
                 self._resample_state,

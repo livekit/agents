@@ -170,7 +170,7 @@ class LLMStream(llm.LLMStream):
                     if not line.startswith("data: "):
                         continue
 
-                    data_str = line[len("data: "):]
+                    data_str = line[len("data: ") :]
 
                     if data_str == "[DONE]":
                         # Flush any pending tool call

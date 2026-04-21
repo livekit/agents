@@ -8,7 +8,8 @@ def test_pip_metadata():
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "show", "livekit-plugins-60db"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             print("[FAIL] test_pip_metadata: 'pip show livekit-plugins-60db' returned non-zero")
@@ -69,7 +70,9 @@ def test_version():
         from livekit.plugins._60db.version import __version__ as file_version
 
         if __version__ != file_version:
-            print(f"[FAIL] test_version: __init__.__version__={__version__} != version.py={file_version}")
+            print(
+                f"[FAIL] test_version: __init__.__version__={__version__} != version.py={file_version}"
+            )
             return False
 
         print(f"[PASS] test_version: __version__={__version__}")
@@ -86,10 +89,14 @@ def test_plugin_registration():
 
         titles = [p.title for p in Plugin.registered_plugins]
         if "livekit.plugins._60db" not in titles:
-            print(f"[FAIL] test_plugin_registration: 'livekit.plugins._60db' not in registered plugins {titles}")
+            print(
+                f"[FAIL] test_plugin_registration: 'livekit.plugins._60db' not in registered plugins {titles}"
+            )
             return False
 
-        print("[PASS] test_plugin_registration: 'livekit.plugins._60db' found in registered plugins")
+        print(
+            "[PASS] test_plugin_registration: 'livekit.plugins._60db' found in registered plugins"
+        )
         return True
     except Exception as e:
         print(f"[FAIL] test_plugin_registration: {e}")
@@ -105,7 +112,9 @@ def test_instantiation():
         stt = STT(api_key="test-key")
         llm = LLM(api_key="test-key")
 
-        print(f"[PASS] test_instantiation: TTS={type(tts).__name__}, STT={type(stt).__name__}, LLM={type(llm).__name__}")
+        print(
+            f"[PASS] test_instantiation: TTS={type(tts).__name__}, STT={type(stt).__name__}, LLM={type(llm).__name__}"
+        )
         return True
     except Exception as e:
         print(f"[FAIL] test_instantiation: {e}")

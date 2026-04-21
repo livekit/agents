@@ -20,8 +20,12 @@ from pathlib import Path
 
 # Fix Windows console encoding for emoji/unicode in LLM output
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
 
 import httpx
 import websockets
@@ -74,27 +78,27 @@ async def test_tts() -> bool:
             print("  Connected.")
 
             # 2) create_context
-            await ws.send(json.dumps({
-                "create_context": {
-                    "context_id": context_id,
-                    "voice_id": "fbb75ed2-975a-40c7-9e06-38e30524a9a1",
-                    "audio_config": {
-                        "audio_encoding": "LINEAR16",
-                        "sample_rate_hertz": 16000,
-                    },
-                }
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "create_context": {
+                            "context_id": context_id,
+                            "voice_id": "fbb75ed2-975a-40c7-9e06-38e30524a9a1",
+                            "audio_config": {
+                                "audio_encoding": "LINEAR16",
+                                "sample_rate_hertz": 16000,
+                            },
+                        }
+                    }
+                )
+            )
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
             assert msg.get("context_created"), f"Expected context_created, got {msg}"
             print("  Context created.")
 
             # 3) send text + flush
-            await ws.send(json.dumps({
-                "send_text": {"context_id": context_id, "text": text}
-            }))
-            await ws.send(json.dumps({
-                "flush_context": {"context_id": context_id}
-            }))
+            await ws.send(json.dumps({"send_text": {"context_id": context_id, "text": text}}))
+            await ws.send(json.dumps({"flush_context": {"context_id": context_id}}))
 
             # 4) collect audio chunks
             audio_data = bytearray()
@@ -108,9 +112,7 @@ async def test_tts() -> bool:
                     break
 
             # 5) close context
-            await ws.send(json.dumps({
-                "close_context": {"context_id": context_id}
-            }))
+            await ws.send(json.dumps({"close_context": {"context_id": context_id}}))
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
             if msg.get("context_closed"):
                 print("  Context closed.")
@@ -119,7 +121,7 @@ async def test_tts() -> bool:
         REF_DIR.mkdir(parents=True, exist_ok=True)
         with wave.open(str(TTS_OUTPUT), "wb") as wf:
             wf.setnchannels(1)
-            wf.setsampwidth(2)          # 16-bit
+            wf.setsampwidth(2)  # 16-bit
             wf.setframerate(16000)
             wf.writeframes(bytes(audio_data))
 
@@ -181,7 +183,10 @@ async def test_stt() -> bool:
                 got_error = False
                 while True:
                     msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-                    if msg.get("connection_established") or msg.get("type") == "connection_established":
+                    if (
+                        msg.get("connection_established")
+                        or msg.get("type") == "connection_established"
+                    ):
                         break
                     print(f"  Server: {msg}")
                     if msg.get("type") == "error":
@@ -199,15 +204,19 @@ async def test_stt() -> bool:
                 print("  Connected.")
 
                 # Send start
-                await ws.send(json.dumps({
-                    "type": "start",
-                    "languages": ["en"],
-                    "config": {
-                        "encoding": "mulaw",
-                        "sample_rate": 8000,
-                        "continuous_mode": True,
-                    },
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "start",
+                            "languages": ["en"],
+                            "config": {
+                                "encoding": "mulaw",
+                                "sample_rate": 8000,
+                                "continuous_mode": True,
+                            },
+                        }
+                    )
+                )
 
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
                 assert msg.get("type") == "connected", f"Expected connected, got {msg}"
@@ -308,7 +317,7 @@ async def test_llm() -> bool:
                     line = line.strip()
                     if not line or not line.startswith("data: "):
                         continue
-                    data_str = line[len("data: "):]
+                    data_str = line[len("data: ") :]
                     if data_str == "[DONE]":
                         break
                     chunk = json.loads(data_str)

@@ -91,9 +91,7 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Single-text TTS synthesis using the 60db WebSocket protocol."""
 
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
 
@@ -111,14 +109,10 @@ class ChunkedStream(tts.ChunkedStream):
                 max_size=10 * 1024 * 1024,
             ) as ws:
                 # Wait for connection_established
-                msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.timeout
-                )
+                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
                 if not data.get("connection_established"):
-                    raise APIConnectionError(
-                        "60db TTS: expected connection_established"
-                    )
+                    raise APIConnectionError("60db TTS: expected connection_established")
                 logger.info("60db TTS ChunkedStream: connection established")
 
                 # Create context
@@ -134,14 +128,10 @@ class ChunkedStream(tts.ChunkedStream):
                 }
                 await ws.send(json.dumps(create_msg))
 
-                msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.timeout
-                )
+                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
                 if not data.get("context_created"):
-                    raise APIConnectionError(
-                        "60db TTS: expected context_created"
-                    )
+                    raise APIConnectionError("60db TTS: expected context_created")
                 logger.info("60db TTS ChunkedStream: context created")
 
                 # Initialize output emitter
@@ -165,15 +155,11 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 # Flush to trigger audio generation
-                await ws.send(
-                    json.dumps({"flush_context": {"context_id": context_id}})
-                )
+                await ws.send(json.dumps({"flush_context": {"context_id": context_id}}))
 
                 # Receive audio chunks
                 while True:
-                    msg = await asyncio.wait_for(
-                        ws.recv(), timeout=self._conn_options.timeout
-                    )
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                     data = json.loads(msg)
 
                     if "audio_chunk" in data:
@@ -187,12 +173,8 @@ class ChunkedStream(tts.ChunkedStream):
                         break
 
                 # Close context
-                await ws.send(
-                    json.dumps({"close_context": {"context_id": context_id}})
-                )
-                msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.timeout
-                )
+                await ws.send(json.dumps({"close_context": {"context_id": context_id}}))
+                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
                 if data.get("context_closed"):
                     logger.info("60db TTS ChunkedStream: context closed")
@@ -204,9 +186,7 @@ class ChunkedStream(tts.ChunkedStream):
         except websockets.exceptions.ConnectionClosed as e:
             logger.info("60db TTS ChunkedStream: WebSocket closed: %s", e)
         except Exception as e:
-            raise APIConnectionError(
-                f"60db TTS ChunkedStream: connection error: {e}"
-            ) from e
+            raise APIConnectionError(f"60db TTS ChunkedStream: connection error: {e}") from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -231,14 +211,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 max_size=10 * 1024 * 1024,
             ) as ws:
                 # Wait for connection_established
-                msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.timeout
-                )
+                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
                 if not data.get("connection_established"):
-                    raise APIConnectionError(
-                        "60db TTS: expected connection_established"
-                    )
+                    raise APIConnectionError("60db TTS: expected connection_established")
 
                 # Create context
                 await ws.send(
@@ -256,14 +232,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                 )
 
-                msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.timeout
-                )
+                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                 data = json.loads(msg)
                 if not data.get("context_created"):
-                    raise APIConnectionError(
-                        "60db TTS: expected context_created"
-                    )
+                    raise APIConnectionError("60db TTS: expected context_created")
                 logger.info("60db TTS SynthesizeStream: context created")
 
                 # Initialize output emitter in streaming mode
@@ -293,32 +265,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 )
                             )
                         elif isinstance(input, self._FlushSentinel):
-                            await ws.send(
-                                json.dumps(
-                                    {
-                                        "flush_context": {
-                                            "context_id": context_id
-                                        }
-                                    }
-                                )
-                            )
+                            await ws.send(json.dumps({"flush_context": {"context_id": context_id}}))
 
                     # Input ended — close the context
-                    await ws.send(
-                        json.dumps({"close_context": {"context_id": context_id}})
-                    )
+                    await ws.send(json.dumps({"close_context": {"context_id": context_id}}))
 
                 async def recv_task() -> None:
                     while True:
-                        msg = await asyncio.wait_for(
-                            ws.recv(), timeout=self._conn_options.timeout
-                        )
+                        msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                         data = json.loads(msg)
 
                         if "audio_chunk" in data:
-                            audio_b64 = data["audio_chunk"].get(
-                                "audioContent", ""
-                            )
+                            audio_b64 = data["audio_chunk"].get("audioContent", "")
                             if audio_b64:
                                 audio_bytes = base64.b64decode(audio_b64)
                                 output_emitter.push(audio_bytes)
@@ -327,9 +285,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             output_emitter.end_segment()
 
                         if data.get("context_closed"):
-                            logger.info(
-                                "60db TTS SynthesizeStream: context closed"
-                            )
+                            logger.info("60db TTS SynthesizeStream: context closed")
                             break
 
                 tasks = [
@@ -351,6 +307,4 @@ class SynthesizeStream(tts.SynthesizeStream):
         except websockets.exceptions.ConnectionClosed as e:
             logger.info("60db TTS SynthesizeStream: WebSocket closed: %s", e)
         except Exception as e:
-            raise APIConnectionError(
-                f"60db TTS SynthesizeStream: connection error: {e}"
-            ) from e
+            raise APIConnectionError(f"60db TTS SynthesizeStream: connection error: {e}") from e
