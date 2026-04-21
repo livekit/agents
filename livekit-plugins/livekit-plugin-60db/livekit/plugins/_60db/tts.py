@@ -325,11 +325,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                         if data.get("flush_completed"):
                             output_emitter.end_segment()
-                            # Start a new segment for the next batch
-                            segment_id = utils.shortuuid()
-                            output_emitter.start_segment(
-                                segment_id=segment_id
-                            )
 
                         if data.get("context_closed"):
                             logger.info(

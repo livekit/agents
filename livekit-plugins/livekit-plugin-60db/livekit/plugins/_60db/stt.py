@@ -183,6 +183,8 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     # Step 6-8: Read audio from input channel, convert, send
                     async for frame in self._input_ch:
+                        if isinstance(frame, self._FlushSentinel):
+                            continue
                         if hasattr(frame, "sample_rate"):
                             self._input_sample_rate = frame.sample_rate
                         if hasattr(frame, "num_channels"):
