@@ -41,6 +41,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 
+from ._utils import PeriodicCollector
 from .log import logger
 
 DEFAULT_MODEL = "inworld/inworld-stt-1"
@@ -229,6 +230,10 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._request_id = ""
+        self._audio_duration_collector: PeriodicCollector[float] = PeriodicCollector(
+            callback=self._on_audio_duration_report,
+            duration=5.0,
+        )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._stt._http_session:
@@ -336,12 +341,14 @@ class SpeechStream(stt.SpeechStream):
 
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
+                self._audio_duration_collector.flush()
                 try:
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
                 except Exception as e:
                     logger.error(f"Error sending endTurn: {e}")
                     break
             elif isinstance(data, rtc.AudioFrame):
+                self._audio_duration_collector.push(data.duration)
                 pcm_bytes = data.data.tobytes()
                 audio_b64 = base64.b64encode(pcm_bytes).decode()
                 try:
@@ -350,12 +357,23 @@ class SpeechStream(stt.SpeechStream):
                     logger.error(f"Error sending audio chunk: {e}")
                     break
 
+        self._audio_duration_collector.flush()
         # Input channel closed — tell the server to close the stream
         if self._ws:
             try:
                 await self._ws.send_str(json.dumps({"closeStream": {}}))
             except Exception:
                 pass
+
+    def _on_audio_duration_report(self, duration: float) -> None:
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=SpeechEventType.RECOGNITION_USAGE,
+                request_id=self._request_id,
+                alternatives=[],
+                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+            )
+        )
 
     async def _recv_messages_task(self) -> None:
         if not self._ws:
