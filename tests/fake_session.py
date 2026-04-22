@@ -32,6 +32,7 @@ def create_session(
     actions: FakeActions,
     *,
     speed_factor: float = 1.0,
+    turn_handling: TurnHandlingOptions | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
@@ -39,24 +40,27 @@ def create_session(
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
     extra = dict(extra_kwargs or {})
-
-    interruption_dict: dict[str, Any] = {
-        "min_duration": 0.5 / speed_factor,
-        "false_interruption_timeout": 2.0 / speed_factor,
-    }
-    if "min_interruption_words" in extra:
-        interruption_dict["min_words"] = extra.pop("min_interruption_words")
-    if "allow_interruptions" in extra:
-        if extra.pop("allow_interruptions") is False:
-            interruption_dict["enabled"] = False
-    if "resume_false_interruption" in extra:
-        interruption_dict["resume_false_interruption"] = extra.pop("resume_false_interruption")
+    default_endpointing = EndpointingOptions(
+        min_delay=0.5 / speed_factor,
+        max_delay=6.0 / speed_factor,
+    )
+    default_interruption = InterruptionOptions(
+        min_duration=0.5 / speed_factor,
+        false_interruption_timeout=2.0 / speed_factor,
+    )
+    # allowing overriding default endpointing and interruption options
+    turn_handling = turn_handling or {}
+    turn_handling["endpointing"] = EndpointingOptions(
+        **{**default_endpointing, **turn_handling.get("endpointing", {})}
+    )
+    turn_handling["interruption"] = InterruptionOptions(
+        **{**default_interruption, **turn_handling.get("interruption", {})}
+    )
 
     stt = FakeSTT(fake_user_speeches=user_speeches)
 
-    extra_kwargs = extra_kwargs or {}
-    if "aec_warmup_duration" not in extra_kwargs:
-        extra_kwargs["aec_warmup_duration"] = None  # disable aec warmup by default
+    if "aec_warmup_duration" not in extra:
+        extra["aec_warmup_duration"] = None  # disable aec warmup by default
 
     session = AgentSession[None](
         vad=FakeVAD(
@@ -67,14 +71,8 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        turn_handling=TurnHandlingOptions(
-            endpointing=EndpointingOptions(
-                min_delay=0.5 / speed_factor,
-                max_delay=6.0 / speed_factor,
-            ),
-            interruption=InterruptionOptions(**interruption_dict),
-        ),
-        **extra_kwargs,
+        turn_handling=turn_handling,
+        **extra,
     )
 
     # setup io with transcription sync

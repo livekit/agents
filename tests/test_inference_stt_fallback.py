@@ -257,3 +257,56 @@ class TestSTTConstructorFallbackAndConnectOptions:
         assert stt._opts.conn_options.timeout == 60.0
         assert stt._opts.conn_options.max_retry == 10
         assert stt._opts.conn_options.retry_interval == 2.0
+
+
+class TestSTTDiarizationCapabilities:
+    """Tests for STT diarization capability detection from extra_kwargs."""
+
+    def test_no_diarization_by_default(self):
+        """Without diarization params, capabilities.diarization is False."""
+        stt = _make_stt()
+        assert stt.capabilities.diarization is False
+
+    def test_diarization_enabled_with_deepgram_diarize(self):
+        """Deepgram's 'diarize' param enables diarization capability."""
+        stt = _make_stt(extra_kwargs={"diarize": True})
+        assert stt.capabilities.diarization is True
+
+    def test_diarization_disabled_with_diarize_false(self):
+        """Deepgram's 'diarize: False' keeps diarization capability False."""
+        stt = _make_stt(extra_kwargs={"diarize": False})
+        assert stt.capabilities.diarization is False
+
+    def test_diarization_enabled_with_assemblyai_speaker_labels(self):
+        """AssemblyAI's 'speaker_labels' param enables diarization capability."""
+        stt = _make_stt(
+            model="assemblyai/universal-streaming", extra_kwargs={"speaker_labels": True}
+        )
+        assert stt.capabilities.diarization is True
+
+    def test_update_options_toggles_diarization(self):
+        """update_options can enable and disable diarization capability."""
+        stt = _make_stt()
+        assert stt.capabilities.diarization is False
+        stt.update_options(extra={"diarize": True})
+        assert stt.capabilities.diarization is True
+        stt.update_options(extra={"diarize": False})
+        assert stt.capabilities.diarization is False
+
+    def test_diarization_enabled_with_xai_diarize(self):
+        """xAI shares the 'diarize' key with Deepgram; capability flips True."""
+        stt = _make_stt(model="xai/stt-1", extra_kwargs={"diarize": True})
+        assert stt.capabilities.diarization is True
+
+    def test_update_options_extra_preserves_unrelated_flags(self):
+        """Partial extra updates merge into existing extra_kwargs instead of
+        replacing them — so a prior diarize=True is retained when the new
+        extra only mentions an unrelated key.
+        """
+        stt = _make_stt(extra_kwargs={"diarize": True})
+        assert stt.capabilities.diarization is True
+        stt.update_options(extra={"endpointing": 500})
+        # diarize should still be active after the partial update.
+        assert stt._opts.extra_kwargs.get("diarize") is True
+        assert stt._opts.extra_kwargs.get("endpointing") == 500
+        assert stt.capabilities.diarization is True

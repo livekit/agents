@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
 from .. import utils
+from ..job import JobContext, get_job_context
 from ..llm.chat_context import ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
@@ -22,6 +23,31 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
+
+# Module-level registry of running async tasks, keyed by (JobContext | None, call_id).
+# Registered when a task starts in _wrap_tool, auto-removed via done callback.
+_RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
+
+
+@function_tool
+async def get_running_tasks() -> list[dict]:
+    """Get the list of running async tool calls across all async toolsets."""
+    job_ctx = get_job_context(required=False)
+    return [
+        task.ctx.function_call.model_dump()
+        for (ctx, _), task in list(_RunningTasks.items())
+        if ctx is job_ctx
+    ]
+
+
+@function_tool
+async def cancel_task(call_id: str) -> str:
+    """Cancel a running async tool call by call_id."""
+    job_ctx = get_job_context(required=False)
+    task = _RunningTasks.get((job_ctx, call_id))
+    if task and await task.ctx._toolset.cancel(call_id):
+        return f"Task {call_id} cancelled successfully."
+    return f"Task {call_id} not found or already completed."
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
@@ -158,26 +184,13 @@ class AsyncToolset(Toolset):
             self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
             for t in self._tools
         ]
+        self._tools.extend([get_running_tasks, cancel_task])
 
         self._running_tasks: dict[str, _RunningTask] = {}
 
         # speech delivery — shared across all tools in this toolset
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
-
-    @function_tool
-    async def get_running_tasks(self) -> list[dict]:
-        """Get the list of running async tool calls."""
-        return [task.ctx.function_call.model_dump() for task in self._running_tasks.values()]
-
-    @function_tool
-    async def cancel_task(self, call_id: str) -> str:
-        """Cancel a running async tool call by call_id."""
-        success = await self.cancel(call_id)
-        if success:
-            return f"Task {call_id} cancelled successfully."
-        else:
-            return f"Task {call_id} not found or already completed."
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -274,8 +287,18 @@ class AsyncToolset(Toolset):
             exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
             _pass_through_activity_task_info(exe_task)
 
-            self._running_tasks[call_id] = _RunningTask(ctx=async_ctx, exe_task=exe_task)
-            exe_task.add_done_callback(lambda _: self._running_tasks.pop(call_id, None))
+            running_task = _RunningTask(ctx=async_ctx, exe_task=exe_task)
+            self._running_tasks[call_id] = running_task
+
+            # register in the module-level registry
+            task_key = (get_job_context(required=False), call_id)
+            _RunningTasks[task_key] = running_task
+
+            def _on_done(_: asyncio.Task[Any]) -> None:
+                self._running_tasks.pop(call_id, None)
+                _RunningTasks.pop(task_key, None)
+
+            exe_task.add_done_callback(_on_done)
 
             return await async_ctx._pending_fut
 

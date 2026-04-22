@@ -247,6 +247,8 @@ async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_update_chat_ctx(rt_session: llm.RealtimeSession):
     chat_ctx = llm.ChatContext()
+    # TODO(long): fix assistant message for openai azure
+    # chat_ctx.add_message(role="assistant", content="What is your favorite number?")
     chat_ctx.add_message(role="user", content="My favorite number is seven")
     await asyncio.wait_for(rt_session.update_chat_ctx(chat_ctx), timeout=10)
 
@@ -371,6 +373,80 @@ async def test_function_tool_reply(rt_session: llm.RealtimeSession):
     gen_ev2 = await asyncio.wait_for(rt_session.generate_reply(), timeout=15)
     text = await asyncio.wait_for(_collect_text(gen_ev2), timeout=15)
     assert "paris" in text.lower()
+
+
+# -- Session reuse across handoffs --
+
+
+@pytest.mark.parametrize(
+    "model_factory",
+    [
+        pytest.param(_openai_model, id="openai"),
+    ],
+)
+async def test_reuse_session_across_handoff(model_factory: Callable[[], llm.RealtimeModel]):
+    """Populate a session with long history, simulate agent handoffs in four modes,
+    validate correctness, and print handoff + first reply timing."""
+    model = model_factory()
+    loop = asyncio.get_event_loop()
+
+    # build a long chat context
+    long_ctx = llm.ChatContext()
+    for i in range(10):
+        long_ctx.add_message(role="user", content=f"Tell me fact #{i + 1}")
+        long_ctx.add_message(role="assistant", content=f"Fact #{i + 1}: {i * 7} is interesting.")
+
+    new_instructions = "You are a math tutor. Answer in one sentence."
+    question = "What is 2 + 2?"
+
+    timings: list[tuple[str, float, float]] = []  # (label, handoff_time, reply_time)
+
+    async def _run_trial(label: str, *, reuse: bool, chat_ctx: llm.ChatContext) -> None:
+        if reuse:
+            session = model.session()
+            await asyncio.wait_for(session.update_chat_ctx(long_ctx), timeout=15)
+        else:
+            session = model.session()
+
+        try:
+            t0 = loop.time()
+
+            # measure handoff
+            await asyncio.wait_for(
+                session._update_session(instructions=new_instructions, chat_ctx=chat_ctx),
+                timeout=15,
+            )
+            handoff_time = loop.time() - t0
+
+            # measure first reply after handoff
+            ctx = session.chat_ctx.copy()
+            ctx.add_message(role="user", content=question)
+            await asyncio.wait_for(session.update_chat_ctx(ctx), timeout=15)
+
+            # t1 = loop.time()
+            gen = await asyncio.wait_for(session.generate_reply(), timeout=15)
+            reply_time = loop.time() - t0
+            text = await asyncio.wait_for(_collect_text(gen), timeout=15)
+
+            assert "4" in text
+            print(f"{label} handoff time: {handoff_time:.3f}s, reply time: {reply_time:.3f}s")
+            timings.append((label, handoff_time, reply_time))
+        finally:
+            await session.aclose()
+            await asyncio.sleep(0.5)
+
+    await _run_trial("reuse (copy ctx)", reuse=True, chat_ctx=long_ctx.copy())
+    await _run_trial("reuse (empty ctx)", reuse=True, chat_ctx=llm.ChatContext())
+    await _run_trial("fresh (copy ctx)", reuse=False, chat_ctx=long_ctx.copy())
+    await _run_trial("fresh (empty ctx)", reuse=False, chat_ctx=llm.ChatContext())
+
+    # print timing table
+    print("\n┌──────────────────────┬──────────────┬──────────────┐")
+    print("│ Mode                 │ Handoff (s)  │ Reply (s)    │")
+    print("├──────────────────────┼──────────────┼──────────────┤")
+    for label, ht, rt in timings:
+        print(f"│ {label:<20} │ {ht:>12.3f} │ {rt:>12.3f} │")
+    print("└──────────────────────┴──────────────┴──────────────┘")
 
 
 # -- Remote item tracking --

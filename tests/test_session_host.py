@@ -444,7 +444,7 @@ class TestSessionHostRequests:
         options.interruption = MagicMock(__iter__=lambda s: iter([]))
         options.max_tool_steps = 5
         options.user_away_timeout = 30
-        options.preemptive_generation = False
+        options.preemptive_generation = {"enabled": False}
         options.min_consecutive_speech_delay = 0.5
         options.use_tts_aligned_transcript = True
         options.ivr_detection = False
