@@ -253,6 +253,9 @@ class LLMStream(llm.LLMStream):
         self._received_conversation_id: str | None = None
 
     async def _run(self) -> None:
+        self._emitted_tool_calls = set()
+        self._provider_tool_args = {}
+        self._received_conversation_id = None
         retryable = True
 
         try:
@@ -262,13 +265,17 @@ class LLMStream(llm.LLMStream):
                 if isinstance(tool, MistralTool):
                     tools_list.append(tool.to_dict())
 
+            start_kwargs: dict[str, Any] = {}
+            if tools_list:
+                start_kwargs["tools"] = tools_list
+
             if self._conversation_id is None:
                 async_response = await self._client.beta.conversations.start_stream_async(
                     inputs=entries,
                     model=self._model,
                     instructions=extra_data.instructions,
-                    tools=tools_list or None,
                     timeout_ms=int(self._conn_options.timeout * 1000),
+                    **start_kwargs,
                     **self._extra_kwargs,
                 )
             else:
