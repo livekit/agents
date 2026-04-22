@@ -35,7 +35,9 @@ class MultilingualModel(EOUModelBase):
     def _inference_method(self) -> str:
         return _EUORunnerMultilingual.INFERENCE_METHOD
 
-    async def unlikely_threshold(self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "text") -> float | None:
+    async def unlikely_threshold(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "text"
+    ) -> float | None:
         if not language:
             return None
 

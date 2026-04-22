@@ -320,7 +320,6 @@ class TurnDetectionStream:
             created_at.GetCurrentTime()
             session_create_msg.created_at.CopyFrom(created_at)
             await ws.send_bytes(session_create_msg.SerializeToString())
-            msg = await ws.receive()
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:

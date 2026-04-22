@@ -21,8 +21,12 @@ class _TurnDetector(Protocol):
         return "unknown"
 
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal") -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal") -> bool: ...
+    async def unlikely_threshold(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> float | None: ...
+    async def supports_language(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> bool: ...
 
     async def predict_end_of_turn(
         self, chat_ctx: ChatContext, *, timeout: float | None = None
