@@ -124,7 +124,9 @@ class MultimodalTurnDetector:
     async def supports_language(
         self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
     ) -> bool:
-        return language is not None and language.language in LANGUAGES
+        # default to english if no language is provided
+        lang = language.language if language is not None else "en"
+        return lang in LANGUAGES
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
