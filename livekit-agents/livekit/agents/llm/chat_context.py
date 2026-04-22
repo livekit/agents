@@ -291,8 +291,9 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
-    audio_forwarding_latency: float
-    """Time taken for the audio forwarding to start
+    playback_start_latency: float
+    """Latency between the first audio frame being forwarded and playback starting on the client.
+    Typically very small; can be significant when a remote avatar worker is in the chain.
 
     Assistant `ChatMessage` only
     """

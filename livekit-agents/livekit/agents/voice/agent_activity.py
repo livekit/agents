@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
@@ -2173,6 +2174,7 @@ class AgentActivity(RecognitionHooks):
         forward_text_task: asyncio.Task[Any] | None = None
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2180,9 +2182,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2294,6 +2301,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_start_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
@@ -2504,7 +2516,7 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
-        audio_forwarding_started_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2512,12 +2524,12 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at, audio_forwarding_started_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
-                audio_forwarding_started_at = (
-                    audio_out.forwarding_started_at
-                    if audio_out and audio_out.forwarding_started_at is not None
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
                     else started_speaking_at
                 )
             except BaseException:
@@ -2530,9 +2542,7 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
-            early_metrics["audio_forwarding_latency"] = (
-                started_speaking_at - audio_forwarding_started_at
-            )
+            early_metrics["playback_start_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2617,9 +2627,9 @@ class AgentActivity(RecognitionHooks):
             assistant_metrics["started_speaking_at"] = started_speaking_at
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
-            if audio_forwarding_started_at is not None:
-                assistant_metrics["audio_forwarding_latency"] = (
-                    started_speaking_at - audio_forwarding_started_at
+            if started_forwarding_at is not None:
+                assistant_metrics["playback_start_latency"] = (
+                    started_speaking_at - started_forwarding_at
                 )
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
@@ -2981,16 +2991,24 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+        def _on_first_frame(
+            fut: asyncio.Future[float] | asyncio.Future[None], audio_out: _AudioOutput | None = None
+        ) -> None:
             """
             Callback to update the agent state when the first frame is captured:
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -3093,7 +3111,9 @@ class AgentActivity(RecognitionHooks):
                                 tts_output=realtime_audio_result,
                             )
                             forward_tasks.append(forward_task)
-                            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                            audio_out.first_frame_fut.add_done_callback(
+                                partial(_on_first_frame, audio_out=audio_out)
+                            )
 
                     # text output
                     tr_node = self._agent.transcription_node(tr_text_input, model_settings)
@@ -3194,6 +3214,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_start_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = llm.ChatMessage(
                 role="assistant",
