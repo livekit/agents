@@ -1049,10 +1049,14 @@ class AudioRecognition:
         if self._audio_transcript:
             chat_ctx.add_message(role="user", content=self._audio_transcript)
 
-        is_multimodal = isinstance(self._turn_detector, MultimodalTurnDetector)
         turn_detector = (
-            (self._turn_detector_stream if is_multimodal else self._turn_detector)
-            if self._turn_detection_mode != "manual" and (self._audio_transcript or is_multimodal)
+            (
+                self._turn_detector_stream
+                if isinstance(self._turn_detector, MultimodalTurnDetector)
+                else self._turn_detector
+            )
+            if self._turn_detection_mode != "manual"
+            and (self._audio_transcript or isinstance(self._turn_detector, MultimodalTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
 
