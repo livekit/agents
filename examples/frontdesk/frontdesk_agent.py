@@ -4,7 +4,7 @@ import datetime
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -23,7 +23,19 @@ from livekit.agents import (
     beta,
     cli,
     function_tool,
+    get_job_context,
     inference,
+)
+from livekit.agents.evals import (
+    JudgeGroup,
+    accuracy_judge,
+    coherence_judge,
+    conciseness_judge,
+    handoff_judge,
+    relevancy_judge,
+    safety_judge,
+    task_completion_judge,
+    tool_use_judge,
 )
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -34,7 +46,8 @@ load_dotenv()
 @dataclass
 class Userdata:
     cal: Calendar
-    appointment_booked: bool = False
+    booked_times: list[str] = field(default_factory=list)
+    slot_unavailable_count: int = 0
 
 
 logger = logging.getLogger("front-desk")
@@ -93,13 +106,21 @@ class FrontDeskAgent(Agent):
                 start_time=slot.start_time, attendee_email=email_result.email_address
             )
         except SlotUnavailableError:
+            ctx.userdata.slot_unavailable_count += 1
+            get_job_context().tagger.add(
+                "slot:unavailable",
+                metadata={"count": ctx.userdata.slot_unavailable_count},
+            )
             # exceptions other than ToolError are treated as "An internal error occurred" for the LLM.
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
-        ctx.userdata.appointment_booked = True
-
         local = slot.start_time.astimezone(self.tz)
+        ctx.userdata.booked_times.append(local.isoformat())
+        get_job_context().tagger.add(
+            "appointment:booked",
+            metadata={"time": ctx.userdata.booked_times},
+        )
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
     @function_tool
@@ -163,7 +184,36 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    ctx.make_session_report()
+    report = ctx.make_session_report()
+
+    # Skip evaluation for very short conversations
+    chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
+    if len(chat.items) < 3:
+        return
+
+    judges = JudgeGroup(
+        llm="openai/gpt-4o-mini",
+        judges=[
+            task_completion_judge(),
+            accuracy_judge(),
+            tool_use_judge(),
+            handoff_judge(),
+            safety_judge(),
+            relevancy_judge(),
+            coherence_judge(),
+            conciseness_judge(),
+        ],
+    )
+
+    await judges.evaluate(report.chat_history)
+
+    userdata = ctx.primary_session.userdata
+    if userdata.booked_times:
+        ctx.tagger.success()
+    else:
+        ctx.tagger.fail(reason="Appointment was not booked")
+
+    logger.info("session tags: %s", ctx.tagger.tags)
 
 
 @server.rtc_session(on_session_end=on_session_end)

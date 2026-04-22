@@ -7,7 +7,7 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -21,6 +21,8 @@ def to_chat_ctx(
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], AnthropicFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
     current_role: str | None = None
@@ -125,18 +127,30 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
     }
 
 
-def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
+def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
         if isinstance(tool, llm.FunctionTool):
-            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            schemas.append(
-                {
-                    "name": fnc["name"],
-                    "description": fnc["description"] or "",
-                    "input_schema": fnc["parameters"],
-                }
-            )
+            if strict:
+                fnc = llm.utils.build_strict_openai_schema(tool)
+                function_data = fnc["function"]
+                schemas.append(
+                    {
+                        "name": function_data["name"],
+                        "description": function_data.get("description") or "",
+                        "input_schema": function_data["parameters"],
+                        "strict": True,
+                    }
+                )
+            else:
+                fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+                schemas.append(
+                    {
+                        "name": fnc["name"],
+                        "description": fnc["description"] or "",
+                        "input_schema": fnc["parameters"],
+                    }
+                )
         elif isinstance(tool, llm.RawFunctionTool):
             info = tool.info
             schemas.append(

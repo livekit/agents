@@ -31,6 +31,7 @@ from ..metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from ..version import __version__
 from .events import (
     AgentState,
     AgentStateChangedEvent,
@@ -710,6 +711,18 @@ class SessionHost:
                     get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
                         usage=_session_usage_to_proto(self._session.usage),
                         created_at=created_at,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("get_framework_info"):
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    get_framework_info=agent_pb.SessionResponse.GetFrameworkInfoResponse(
+                        sdk="python",
+                        sdk_version=__version__,
                     ),
                 )
             )

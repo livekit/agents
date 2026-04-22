@@ -855,6 +855,9 @@ class SpeechStream(stt.SpeechStream):
             audio_pushed = False
             try:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as client:
+                    self._report_connection_acquired(
+                        self._pool.last_acquire_time, self._pool.last_connection_reused
+                    )
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

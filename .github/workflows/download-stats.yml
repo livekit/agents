@@ -1,0 +1,83 @@
+name: Weekly Python Download Stats
+
+on:
+  schedule:
+    - cron: "0 14 * * 1" # every Monday at 2pm UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate report
+        run: python .github/download_stats.py > stats.txt
+
+      - name: Post to Slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ vars.DOWNLOAD_STATS_SLACK_CHANNEL }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, urllib.request
+          from datetime import datetime
+
+          token = os.environ["SLACK_BOT_TOKEN"]
+          channel = os.environ["CHANNEL"]
+          today = datetime.now().strftime("%Y-%m-%d")
+
+          def slack_api(method, payload):
+              req = urllib.request.Request(
+                  f"https://slack.com/api/{method}",
+                  data=json.dumps(payload).encode() if isinstance(payload, dict) else payload,
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+                  if isinstance(payload, dict) else {"Authorization": f"Bearer {token}"},
+              )
+              return json.loads(urllib.request.urlopen(req).read())
+
+          # 1. Post summary message
+          resp = slack_api("chat.postMessage", {
+              "channel": channel,
+              "text": f":python: *Weekly Python PyPI Download Stats* — {today}",
+          })
+          assert resp["ok"], f"chat.postMessage failed: {resp.get('error')}"
+          thread_ts = resp["ts"]
+
+          # 2. Get upload URL
+          file_size = os.path.getsize("stats.txt")
+          form_data = f"filename=pypi-stats-{today}.txt&length={file_size}".encode()
+          req = urllib.request.Request(
+              "https://slack.com/api/files.getUploadURLExternal",
+              data=form_data,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/x-www-form-urlencoded",
+              },
+          )
+          resp = json.loads(urllib.request.urlopen(req).read())
+          assert resp["ok"], f"getUploadURLExternal failed: {resp.get('error')}"
+          upload_url = resp["upload_url"]
+          file_id = resp["file_id"]
+
+          # 3. Upload file content
+          import subprocess
+          subprocess.run(["curl", "-s", "-X", "POST", upload_url, "-F", "file=@stats.txt"], check=True)
+
+          # 4. Complete upload in thread
+          resp = slack_api("files.completeUploadExternal", {
+              "files": [{"id": file_id, "title": f"pypi-stats-{today}.txt"}],
+              "channel_id": channel,
+              "thread_ts": thread_ts,
+              "initial_comment": "Full report",
+          })
+          assert resp["ok"], f"completeUploadExternal failed: {resp.get('error')}"
+          print("Posted to Slack successfully")
+          PYEOF
