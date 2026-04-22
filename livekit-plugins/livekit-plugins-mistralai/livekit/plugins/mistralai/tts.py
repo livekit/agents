@@ -37,7 +37,7 @@ SAMPLE_RATE: int = 24000
 NUM_CHANNELS: int = 1
 
 RESPONSE_FORMAT = Literal["mp3", "wav", "pcm", "opus", "flac"]
-DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMAT = "pcm"
+DEFAULT_RESPONSE_FORMAT: RESPONSE_FORMAT = "mp3"
 
 
 @dataclass
@@ -67,7 +67,7 @@ class TTS(tts.TTS):
             model: The Mistral AI model to use for text-to-speech, default is "voxtral-mini-tts-latest".
             voice: The voice ID to use for synthesis. Mutually exclusive with ``ref_audio``. Defaults to ``en_paul_neutral`` when neither is given.
             ref_audio: Base64-encoded audio sample (3–25 s) for zero-shot voice cloning. Mutually exclusive with ``voice``.
-            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``pcm``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``mp3``.
         """
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
@@ -114,7 +114,7 @@ class TTS(tts.TTS):
             model: The model to use for text-to-speech. Clears ``ref_audio``.
             voice: The voice ID to use for synthesis.
             ref_audio: Base64-encoded audio sample for zero-shot voice cloning. Clears ``voice``.
-            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``pcm``.
+            response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``mp3``.
         """
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
