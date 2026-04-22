@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable
+from typing import Literal
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     Agent,
+    AgentSession,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
@@ -13,10 +17,25 @@ from livekit.agents import (
     UserStateChangedEvent,
     function_tool,
 )
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import (
+    FunctionToolCall,
+    Tool,
+    ToolChoice,
+    ToolContext,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.realtime import (
+    GenerationCreatedEvent,
+    RealtimeCapabilities,
+    RealtimeModel,
+    RealtimeSession as BaseRealtimeSession,
+)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.voice.agent import ModelSettings
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -731,6 +750,152 @@ async def test_unknown_function_call() -> None:
     ]
     assert len(error_outputs) == 1
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
+
+
+class _FakeRealtimeSession(BaseRealtimeSession[Literal["test"]]):
+    def __init__(self, realtime_model: RealtimeModel) -> None:
+        super().__init__(realtime_model)
+        self._chat_ctx = ChatContext.empty()
+        self._tools = ToolContext.empty()
+        self.generate_reply_calls = 0
+        self.say_calls = 0
+        self.update_chat_ctx_calls = 0
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -> ToolContext:
+        return self._tools
+
+    async def update_instructions(self, instructions: str) -> None:
+        pass
+
+    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self.update_chat_ctx_calls += 1
+        self._chat_ctx = chat_ctx
+
+    async def update_tools(self, tools: list[Tool]) -> None:
+        self._tools = ToolContext(tools)
+
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
+        pass
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        pass
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        pass
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        self.generate_reply_calls += 1
+        raise AssertionError("generate_reply() should not be called for an interrupted speech handle")
+
+    def commit_audio(self) -> None:
+        pass
+
+    def clear_audio(self) -> None:
+        pass
+
+    def interrupt(self) -> None:
+        pass
+
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
+        self.say_calls += 1
+        pytest.fail("say() should not be called for an interrupted speech handle")
+
+
+class _FakeRealtimeModel(RealtimeModel):
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=RealtimeCapabilities(
+                message_truncation=False,
+                turn_detection=False,
+                user_transcription=False,
+                auto_tool_reply_generation=False,
+                audio_output=False,
+                manual_function_calls=True,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
+                per_response_tool_choice=True,
+                supports_say=True,
+            )
+        )
+        self._session = _FakeRealtimeSession(self)
+
+    def session(self) -> _FakeRealtimeSession:
+        return self._session
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _create_realtime_activity() -> tuple[AgentActivity, _FakeRealtimeSession]:
+    model = _FakeRealtimeModel()
+    session: AgentSession[None] = AgentSession(llm=model, aec_warmup_duration=None)
+    agent = Agent(instructions="You are a helpful assistant.")
+    activity = AgentActivity(agent, session)
+    activity._rt_session = model.session()
+    return activity, model.session()
+
+
+async def test_realtime_reply_task_skips_generate_reply_when_interrupted_before_authorization() -> None:
+    activity, rt_session = _create_realtime_activity()
+    speech_handle = SpeechHandle.create()
+    speech_handle.interrupt(force=True)
+
+    await asyncio.wait_for(
+        activity._realtime_reply_task(
+            speech_handle=speech_handle,
+            model_settings=ModelSettings(),
+            user_input="hello",
+        ),
+        timeout=1,
+    )
+
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.say_calls == 0
+    assert rt_session.update_chat_ctx_calls == 0
+
+
+async def test_realtime_reply_task_skips_say_when_interrupted_before_authorization() -> None:
+    activity, rt_session = _create_realtime_activity()
+    speech_handle = SpeechHandle.create()
+    speech_handle.interrupt(force=True)
+
+    await asyncio.wait_for(
+        activity._realtime_reply_task(
+            speech_handle=speech_handle,
+            model_settings=ModelSettings(),
+            text="hello",
+        ),
+        timeout=1,
+    )
+
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.say_calls == 0
+    assert rt_session.update_chat_ctx_calls == 0
 
 
 # helpers
