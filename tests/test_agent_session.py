@@ -796,7 +796,9 @@ class _FakeRealtimeSession(BaseRealtimeSession[Literal["test"]]):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
         self.generate_reply_calls += 1
-        raise AssertionError("generate_reply() should not be called for an interrupted speech handle")
+        raise AssertionError(
+            "generate_reply() should not be called for an interrupted speech handle"
+        )
 
     def commit_audio(self) -> None:
         pass
@@ -860,7 +862,9 @@ def _create_realtime_activity() -> tuple[AgentActivity, _FakeRealtimeSession]:
     return activity, model.session()
 
 
-async def test_realtime_reply_task_skips_generate_reply_when_interrupted_before_authorization() -> None:
+async def test_realtime_reply_task_skips_generate_reply_when_interrupted_before_authorization() -> (
+    None
+):
     activity, rt_session = _create_realtime_activity()
     speech_handle = SpeechHandle.create()
     speech_handle.interrupt(force=True)
