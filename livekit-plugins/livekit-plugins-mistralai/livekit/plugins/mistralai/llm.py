@@ -85,8 +85,7 @@ class LLM(llm.LLM):
 
         Args:
             client: Optional pre-configured MistralAI client instance.
-            api_key: Your Mistral AI API key.
-                If not provided, will use the MISTRAL_API_KEY environment variable.
+            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             model: The Mistral AI model to use, default is "ministral-8b-latest".
             temperature: The temperature to use the LLM with.
             top_p: Nucleus sampling parameter.
@@ -247,7 +246,8 @@ class LLMStream(llm.LLMStream):
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
-        self._provider_tool_args: dict[str, str] = {}  # id -> accumulated arguments
+        self._provider_tool_args: dict[str, str] = {}
+        self._received_conversation_id: str | None = None
 
     async def _run(self) -> None:
         retryable = True
@@ -269,8 +269,6 @@ class LLMStream(llm.LLMStream):
                     **self._extra_kwargs,
                 )
             else:
-                # the server already has its own outputs (message.output, function.call),
-                # so we only send function results and new user messages.
                 async_response = await self._client.beta.conversations.append_stream_async(
                     conversation_id=self._conversation_id,
                     inputs=[
@@ -288,7 +286,10 @@ class LLMStream(llm.LLMStream):
                     retryable = False
                     self._event_ch.send_nowait(chat_chunk)
 
-            # store current state for next call's diff
+            for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
+                self._event_ch.send_nowait(chat_chunk)
+
+            self._mistral_llm._conversation_id = self._received_conversation_id
             self._mistral_llm._prev_chat_ctx = self._full_chat_ctx
             self._mistral_llm._pending_tool_calls = self._emitted_tool_calls
 
@@ -331,7 +332,7 @@ class LLMStream(llm.LLMStream):
         chunks: list[ChatChunk] = []
 
         if isinstance(data, ResponseStartedEvent):
-            self._mistral_llm._conversation_id = data.conversation_id
+            self._received_conversation_id = data.conversation_id
             return chunks
 
         if isinstance(data, FunctionCallEvent):
@@ -394,6 +395,8 @@ class LLMStream(llm.LLMStream):
             self._provider_tool_args[data.id] = data.arguments
 
         elif isinstance(data, ToolExecutionDeltaEvent):
+            if data.id not in self._provider_tool_args:
+                self._provider_tool_args[data.id] = ""
             self._provider_tool_args[data.id] += data.arguments
 
         elif isinstance(data, ToolExecutionDoneEvent):
