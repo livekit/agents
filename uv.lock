@@ -2917,7 +2917,6 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-telnyx"
-version = "0.1.0"
 source = { editable = "livekit-plugins/livekit-plugins-telnyx" }
 dependencies = [
     { name = "aiohttp" },

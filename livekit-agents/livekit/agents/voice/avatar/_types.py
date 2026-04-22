@@ -28,6 +28,10 @@ class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
         """Notify the sender that playback has finished"""
 
     @abstractmethod
+    def notify_playback_started(self) -> None | Coroutine[None, None, None]:
+        """Notify the sender that playback has started"""
+
+    @abstractmethod
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out audio frames or AudioSegmentEnd when the stream ends"""
 
