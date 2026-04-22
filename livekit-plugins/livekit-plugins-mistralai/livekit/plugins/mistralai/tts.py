@@ -72,24 +72,18 @@ class TTS(tts.TTS):
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
 
-        resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_voice = (
-            voice if is_given(voice) else (None if is_given(ref_audio) else DEFAULT_VOICE)
-        )
-        resolved_ref_audio = ref_audio if is_given(ref_audio) else None
-        resolved_response_format = (
-            response_format if is_given(response_format) else DEFAULT_RESPONSE_FORMAT
-        )
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
         self._opts = _TTSOptions(
-            model=resolved_model,
-            voice=resolved_voice,
-            ref_audio=resolved_ref_audio,
-            response_format=resolved_response_format,
+            model=model if is_given(model) else DEFAULT_MODEL,
+            voice=voice if is_given(voice) else (None if is_given(ref_audio) else DEFAULT_VOICE),
+            ref_audio=ref_audio if is_given(ref_audio) else None,
+            response_format=response_format
+            if is_given(response_format)
+            else DEFAULT_RESPONSE_FORMAT,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")

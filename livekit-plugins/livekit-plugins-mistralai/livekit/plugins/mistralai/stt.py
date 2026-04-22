@@ -83,11 +83,6 @@ class STT(stt.STT):
                 When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_language = LanguageCode(language) if is_given(language) else None
-        resolved_context_bias = context_bias if is_given(context_bias) else None
-        resolved_target_streaming_delay_ms = (
-            target_streaming_delay_ms if is_given(target_streaming_delay_ms) else None
-        )
         is_realtime = _is_realtime(resolved_model)
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -99,9 +94,11 @@ class STT(stt.STT):
         )
         self._opts = _STTOptions(
             model=resolved_model,
-            language=resolved_language,
-            context_bias=resolved_context_bias,
-            target_streaming_delay_ms=resolved_target_streaming_delay_ms,
+            language=LanguageCode(language) if is_given(language) else None,
+            context_bias=context_bias if is_given(context_bias) else None,
+            target_streaming_delay_ms=target_streaming_delay_ms
+            if is_given(target_streaming_delay_ms)
+            else None,
         )
 
         if is_realtime and vad is None:

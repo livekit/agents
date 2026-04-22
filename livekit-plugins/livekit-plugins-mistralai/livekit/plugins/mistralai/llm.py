@@ -10,7 +10,6 @@ from livekit.agents.llm import (
     ChatContext,
     ChatItem,
     ToolChoice,
-    utils as llm_utils,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -46,6 +45,11 @@ class _LLMOptions:
     model: ChatModels | str
     max_completion_tokens: int | None
     temperature: float | None
+    top_p: float | None
+    presence_penalty: float | None
+    frequency_penalty: float | None
+    random_seed: int | None
+    tool_choice: ToolChoice | None
 
 
 @dataclass
@@ -61,11 +65,17 @@ class _PendingFunctionCall:
 class LLM(llm.LLM):
     def __init__(
         self,
+        *,
         client: Mistral | None = None,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+        random_seed: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of MistralAI LLM.
@@ -78,19 +88,26 @@ class LLM(llm.LLM):
             api_key: Your Mistral AI API key.
                 If not provided, will use the MISTRAL_API_KEY environment variable.
             model: The Mistral AI model to use, default is "ministral-8b-latest".
-            max_completion_tokens: The max. number of tokens the LLM can output.
             temperature: The temperature to use the LLM with.
+            top_p: Nucleus sampling parameter.
+            presence_penalty: Penalize new tokens based on their presence in the text so far.
+            frequency_penalty: Penalize new tokens based on their frequency in the text so far.
+            random_seed: Random seed for reproducibility.
+            tool_choice: Default tool choice strategy ("auto", "required", "none").
+            max_completion_tokens: The max. number of tokens the LLM can output.
         """
-        resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_max_completion_tokens = (
-            max_completion_tokens if is_given(max_completion_tokens) else None
-        )
-        resolved_temperature = temperature if is_given(temperature) else None
         super().__init__()
         self._opts = _LLMOptions(
-            model=resolved_model,
-            max_completion_tokens=resolved_max_completion_tokens,
-            temperature=resolved_temperature,
+            model=model if is_given(model) else DEFAULT_MODEL,
+            temperature=temperature if is_given(temperature) else None,
+            top_p=top_p if is_given(top_p) else None,
+            presence_penalty=presence_penalty if is_given(presence_penalty) else None,
+            frequency_penalty=frequency_penalty if is_given(frequency_penalty) else None,
+            random_seed=random_seed if is_given(random_seed) else None,
+            tool_choice=tool_choice if is_given(tool_choice) else None,
+            max_completion_tokens=max_completion_tokens
+            if is_given(max_completion_tokens)
+            else None,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
@@ -115,21 +132,28 @@ class LLM(llm.LLM):
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+        random_seed: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> None:
-        """
-        Update the LLM options.
-
-        Args:
-            model: The model to use for completions
-            max_completion_tokens: The max. number of tokens the LLM can output.
-            temperature: The temperature to use the LLM with.
-        """
         if is_given(model):
             self._opts.model = model
         if is_given(max_completion_tokens):
             self._opts.max_completion_tokens = max_completion_tokens
         if is_given(temperature):
             self._opts.temperature = temperature
+        if is_given(top_p):
+            self._opts.top_p = top_p
+        if is_given(presence_penalty):
+            self._opts.presence_penalty = presence_penalty
+        if is_given(frequency_penalty):
+            self._opts.frequency_penalty = frequency_penalty
+        if is_given(random_seed):
+            self._opts.random_seed = random_seed
+        if is_given(tool_choice):
+            self._opts.tool_choice = tool_choice
 
     def chat(
         self,
@@ -139,7 +163,6 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[type[llm_utils.ResponseFormatT]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra: dict[str, Any] = {}
@@ -147,16 +170,26 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         completion_args: dict[str, Any] = {}
-        if is_given(parallel_tool_calls):
-            completion_args["parallel_tool_calls"] = parallel_tool_calls
-        if is_given(tool_choice):
-            completion_args["tool_choice"] = tool_choice
-        if is_given(response_format):
-            completion_args["response_format"] = response_format
         if self._opts.max_completion_tokens is not None:
             completion_args["max_tokens"] = self._opts.max_completion_tokens
         if self._opts.temperature is not None:
             completion_args["temperature"] = self._opts.temperature
+        if self._opts.top_p is not None:
+            completion_args["top_p"] = self._opts.top_p
+        if self._opts.presence_penalty is not None:
+            completion_args["presence_penalty"] = self._opts.presence_penalty
+        if self._opts.frequency_penalty is not None:
+            completion_args["frequency_penalty"] = self._opts.frequency_penalty
+        if self._opts.random_seed is not None:
+            completion_args["random_seed"] = self._opts.random_seed
+
+        resolved_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+        if resolved_tool_choice is not None:
+            has_provider_tools = any(isinstance(t, MistralTool) for t in (tools or []))
+            if isinstance(resolved_tool_choice, dict) or resolved_tool_choice == "required":
+                completion_args["tool_choice"] = "auto" if has_provider_tools else "required"
+            elif resolved_tool_choice in ("auto", "none"):
+                completion_args["tool_choice"] = resolved_tool_choice
         if completion_args:
             extra["completion_args"] = CompletionArgs(**completion_args)
 
