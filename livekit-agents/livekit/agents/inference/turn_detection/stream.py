@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import aiohttp
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -153,11 +153,15 @@ class TurnDetectionStream:
     def is_inference_running(self) -> bool:
         return self._status in (_InferenceStatus.WARMING_UP, _InferenceStatus.ACTIVE)
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float:
-        return await self._detector.unlikely_threshold(language)
+    async def unlikely_threshold(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> float:
+        return await self._detector.unlikely_threshold(language, modality)
 
-    async def supports_language(self, language: LanguageCode | None) -> bool:
-        return await self._detector.supports_language(language)
+    async def supports_language(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> bool:
+        return await self._detector.supports_language(language, modality)
 
     async def predict_end_of_turn(
         self,
@@ -299,41 +303,47 @@ class TurnDetectionStream:
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
-                    f"{base_url}/turn-detector",
+                    f"{base_url}/eot",
                     headers=self._build_auth_headers(),
                 ),
                 self._conn_options.timeout,
             )
-            await self._send_message_async(
-                ClientMessage(
-                    session_create=SessionCreate(
-                        settings=SessionSettings(
-                            sample_rate=self._opts.sample_rate,
-                            encoding=AUDIO_ENCODING_OPUS,
-                        ),
-                    )
+            session_create_msg = ClientMessage(
+                session_create=SessionCreate(
+                    settings=SessionSettings(
+                        sample_rate=self._opts.sample_rate,
+                        encoding=AUDIO_ENCODING_OPUS,
+                    ),
                 )
             )
+            created_at = Timestamp()
+            created_at.GetCurrentTime()
+            session_create_msg.created_at.CopyFrom(created_at)
+            await ws.send_bytes(session_create_msg.SerializeToString())
+            msg = await ws.receive()
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("turn detector connection timed out") from e
         except aiohttp.ClientConnectorError as e:
             raise APIConnectionError("failed to connect to turn detector") from e
+        except Exception as e:
+            raise APIConnectionError("failed to connect to turn detector") from e
         return ws
 
     def _process_message(self, msg: ServerMessage) -> None:
         match msg.WhichOneof("message"):
-            case "prediction":
-                if msg.prediction.WhichOneof("prediction") != "eot_prediction":
-                    return
-
+            case "eot_prediction":
+                prediction: EotPrediction = msg.eot_prediction
+                backend: Literal["multimodal", "text"] = {
+                    EotPrediction.EotBackend.EOT_BACKEND_MULTIMODAL: "multimodal",
+                    EotPrediction.EotBackend.EOT_BACKEND_TEXT: "text",
+                }.get(prediction.backend, "multimodal")
                 request_id = msg.request_id
                 if request_id != self._active_request_id:
                     logger.trace("stale request id received: %s", request_id)
                     return
 
-                prediction: EotPrediction = msg.prediction.eot_prediction
                 probability = prediction.probability
                 stats = prediction.processing_stats
                 inference_stats = stats.inference_stats
@@ -348,6 +358,7 @@ class TurnDetectionStream:
                             "request_sent_at_ms": request_sent_at_ms,
                             "window_started_at_ms": window_started_at_ms,
                             "probability": probability,
+                            "backend": backend,
                             "stats": {
                                 "e2e_latency_ms": stats.e2e_latency.ToMilliseconds(),
                                 "inference_e2e_latency_ms": inference_stats.e2e_latency.ToMilliseconds(),
@@ -371,6 +382,7 @@ class TurnDetectionStream:
                 logger.debug(
                     "turn detection result received",
                     extra={
+                        "backend": backend,
                         "probability": probability,
                         "detection_delay_ms": detection_delay_ms or 0.0,
                         "inference_duration_ms": inference_duration_ms or 0.0,
@@ -384,6 +396,7 @@ class TurnDetectionStream:
                         type="eot_prediction",
                         last_speaking_time=time.time(),
                         end_of_turn_probability=probability,
+                        backend=backend,
                     )
                 )
                 self._active_request_fut = asyncio.Future[float]()
@@ -401,7 +414,7 @@ class TurnDetectionStream:
 
             case "error":
                 raise APIStatusError(
-                    f"turn detector returned error: {msg.error.message}",
+                    f"{msg.error.message}",
                     status_code=msg.error.code,
                     request_id=msg.request_id,
                 )
@@ -562,8 +575,16 @@ class TurnDetectionStream:
             )
 
             async def _send_encoded(ogg_bytes: bytes, num_samples: int) -> None:
+                audio_created_at = Timestamp()
+                audio_created_at.GetCurrentTime()
                 await self._send_message_async(
-                    ClientMessage(input_audio=InputAudio(audio=ogg_bytes, num_samples=num_samples))
+                    ClientMessage(
+                        input_audio=InputAudio(
+                            audio=ogg_bytes,
+                            num_samples=num_samples,
+                            created_at=audio_created_at,
+                        )
+                    )
                 )
 
             async for frame in self._audio_ch:

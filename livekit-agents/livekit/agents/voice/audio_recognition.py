@@ -1066,6 +1066,9 @@ class AudioRecognition:
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             user_turn_span = self._ensure_user_turn_span()
+            default_modality: Literal["multimodal", "text"] = (
+                "multimodal" if isinstance(self._turn_detector, MultimodalTurnDetector) else "text"
+            )
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
@@ -1088,7 +1091,10 @@ class AudioRecognition:
                                 else latest_eou_prediction.end_of_turn_probability
                             )
                             unlikely_threshold = await turn_detector.unlikely_threshold(
-                                self._last_language
+                                self._last_language,
+                                modality=latest_eou_prediction.backend
+                                if latest_eou_prediction is not None
+                                else default_modality,
                             )
                             if (
                                 unlikely_threshold is not None

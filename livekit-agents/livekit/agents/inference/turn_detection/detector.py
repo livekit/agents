@@ -30,6 +30,7 @@ class TurnDetectionEvent:
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None
+    backend: Literal["multimodal", "text"] = "multimodal"
 
 
 @dataclass
@@ -73,8 +74,8 @@ class MultimodalTurnDetector:
         self._opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url=lk_base_url,
-            api_key=lk_api_key,
-            api_secret=lk_api_secret,
+            api_key="devkey",
+            api_secret="devsecret",
             conn_options=conn_options,
         )
 
@@ -109,10 +110,20 @@ class MultimodalTurnDetector:
         self._streams.add(stream)
         return stream
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float:
-        return LANGUAGES.get(language.language if language is not None else "en", 0.35)
+    async def unlikely_threshold(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> float:
+        thresholds = LANGUAGES.get(
+            language.language if language is not None else "en", (0.35, 0.011)
+        )
+        if modality == "multimodal":
+            return thresholds[0]
+        else:
+            return thresholds[1]
 
-    async def supports_language(self, language: LanguageCode | None) -> bool:
+    async def supports_language(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> bool:
         return language is not None and language.language in LANGUAGES
 
     async def aclose(self) -> None:

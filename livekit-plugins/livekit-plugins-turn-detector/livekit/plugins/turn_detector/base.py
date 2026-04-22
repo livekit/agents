@@ -8,7 +8,7 @@ import re
 import time
 import unicodedata
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from huggingface_hub import errors
 
@@ -233,7 +233,7 @@ class EOUModelBase(ABC):
     @abstractmethod
     def _inference_method(self) -> str: ...
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+    async def unlikely_threshold(self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "text") -> float | None:
         if language is None:
             return None
 
@@ -253,8 +253,8 @@ class EOUModelBase(ABC):
         else:
             return lang_data["threshold"]  # type: ignore
 
-    async def supports_language(self, language: LanguageCode | None) -> bool:
-        return await self.unlikely_threshold(language) is not None
+    async def supports_language(self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "text") -> bool:
+        return await self.unlikely_threshold(language, modality) is not None
 
     # our EOU model inference should be fast, 3 seconds is more than enough
     async def predict_end_of_turn(

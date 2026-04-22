@@ -98,11 +98,11 @@ async def entrypoint(ctx: JobContext) -> None:
             # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
             # See more at https://docs.livekit.io/agents/build/turns
             # turn_detection=MultilingualModel(),
-            turn_detection=inference.MultiModalTurnDetector(
-                base_url="",
-                sample_rate=16000,
+            turn_detection=inference.MultimodalTurnDetector(
+                base_url="http://0.0.0.0:8080/v1",
             ),
             endpointing={
+                "min_delay": 1.5,
                 "max_delay": 3.0,
             },
             interruption={
