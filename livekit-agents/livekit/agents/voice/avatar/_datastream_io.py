@@ -492,8 +492,6 @@ class DataStreamAudioReceiver(AudioReceiver):
             while self._stream_readers:
                 self._current_reader = self._stream_readers.pop(0)
 
-                await asyncio.sleep(2)  # simulate a delay in video generation
-
                 if (
                     not (attrs := self._current_reader.info.attributes)
                     or "sample_rate" not in attrs

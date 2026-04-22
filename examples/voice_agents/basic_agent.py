@@ -139,15 +139,6 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    @session.on("conversation_item_added")
-    def on_conversation_item_added(ev) -> None:
-        if ev.item.type == "message" and ev.item.role == "assistant":
-            logger.info(
-                "agent response metrics",
-                extra={"metrics": ev.item.metrics},
-            )
-
-
 
 if __name__ == "__main__":
     cli.run_app(server)
