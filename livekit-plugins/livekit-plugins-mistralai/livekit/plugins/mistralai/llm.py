@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
+    ChatItem,
     ToolChoice,
     utils as llm_utils,
 )
@@ -21,12 +21,22 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given, shortuuid
 from mistralai.client import Mistral
 from mistralai.client.models import (
-    ChatCompletionStreamRequestMessageTypedDict,
-    CompletionResponseStreamChoice,
-    ToolTypedDict,
+    CompletionArgs,
+    ConversationEvents,
+    FunctionCallEvent,
+    MessageOutputEvent,
+    ResponseDoneEvent,
+    ResponseErrorEvent,
+    ResponseStartedEvent,
+    TextChunk,
+    ToolExecutionDeltaEvent,
+    ToolExecutionDoneEvent,
+    ToolExecutionStartedEvent,
 )
 
+from .log import logger
 from .models import ChatModels
+from .tools import MistralTool
 
 DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
 
@@ -36,6 +46,16 @@ class _LLMOptions:
     model: ChatModels | str
     max_completion_tokens: int | None
     temperature: float | None
+
+
+@dataclass
+class _PendingFunctionCall:
+    """Accumulates streamed function call deltas."""
+
+    id: str
+    name: str
+    tool_call_id: str
+    arguments: str = ""
 
 
 class LLM(llm.LLM):
@@ -50,14 +70,17 @@ class LLM(llm.LLM):
         """
         Create a new instance of MistralAI LLM.
 
+        Uses the Mistral Conversations API, which supports both function tools
+        and provider tools (web search, document library, code interpreter).
+
         Args:
             client: Optional pre-configured MistralAI client instance.
-            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
-            model: The Mistral AI model to use for completions, default is "ministral-8b-latest".
+            api_key: Your Mistral AI API key.
+                If not provided, will use the MISTRAL_API_KEY environment variable.
+            model: The Mistral AI model to use, default is "ministral-8b-latest".
             max_completion_tokens: The max. number of tokens the LLM can output.
             temperature: The temperature to use the LLM with.
         """
-
         resolved_model = model if is_given(model) else DEFAULT_MODEL
         resolved_max_completion_tokens = (
             max_completion_tokens if is_given(max_completion_tokens) else None
@@ -74,6 +97,9 @@ class LLM(llm.LLM):
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
+        self._conversation_id: str | None = None
+        self._prev_chat_ctx: ChatContext | None = None
+        self._pending_tool_calls: set[str] = set()
 
     @property
     def model(self) -> str:
@@ -117,29 +143,52 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra: dict[str, Any] = {}
-
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
+
+        completion_args: dict[str, Any] = {}
         if is_given(parallel_tool_calls):
-            extra["parallel_tool_calls"] = parallel_tool_calls
+            completion_args["parallel_tool_calls"] = parallel_tool_calls
         if is_given(tool_choice):
-            extra["tool_choice"] = tool_choice
+            completion_args["tool_choice"] = tool_choice
         if is_given(response_format):
-            extra["response_format"] = response_format
+            completion_args["response_format"] = response_format
         if self._opts.max_completion_tokens is not None:
-            extra["max_tokens"] = self._opts.max_completion_tokens
+            completion_args["max_tokens"] = self._opts.max_completion_tokens
         if self._opts.temperature is not None:
-            extra["temperature"] = self._opts.temperature
+            completion_args["temperature"] = self._opts.temperature
+        if completion_args:
+            extra["completion_args"] = CompletionArgs(**completion_args)
+
+        input_chat_ctx = chat_ctx
+        conversation_id: str | None = None
+        if self._prev_chat_ctx is not None and self._conversation_id:
+            n = len(self._prev_chat_ctx.items)
+            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
+                self._prev_chat_ctx
+            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
+                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
+                conversation_id = self._conversation_id
 
         return LLMStream(
             self,
             model=self._opts.model,
             client=self._client,
-            chat_ctx=chat_ctx,
+            chat_ctx=input_chat_ctx,
+            full_chat_ctx=chat_ctx,
+            conversation_id=conversation_id,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
+
+    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
+        """Check that all pending function calls from the previous response have results."""
+        if not self._pending_tool_calls:
+            return True
+
+        completed = {item.call_id for item in items if isinstance(item, llm.FunctionCallOutput)}
+        return all(call_id in completed for call_id in self._pending_tool_calls)
 
 
 class LLMStream(llm.LLMStream):
@@ -150,6 +199,8 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         client: Mistral,
         chat_ctx: ChatContext,
+        full_chat_ctx: ChatContext,
+        conversation_id: str | None,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
@@ -157,34 +208,56 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._client = client
-        self._llm = llm_v
+        self._mistral_llm = llm_v
+        self._full_chat_ctx = full_chat_ctx.copy()
+        self._conversation_id = conversation_id
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
+        self._emitted_tool_calls: set[str] = set()
+        self._provider_tool_args: dict[str, str] = {}  # id -> accumulated arguments
 
     async def _run(self) -> None:
-        # current function call that we're waiting for full completion (args are streamed)
-        # (defined inside the _run method to make sure the state is reset for each run/attempt)
         retryable = True
 
         try:
-            messages, _ = self._chat_ctx.to_provider_format(format="mistralai")
-            tools = self._tool_ctx.parse_function_tools("openai", strict=True)
+            entries, extra_data = self._chat_ctx.to_provider_format(format="mistralai")
+            tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
+            for tool in self._tool_ctx.provider_tools:
+                if isinstance(tool, MistralTool):
+                    tools_list.append(tool.to_dict())
 
-            async_response = await self._client.chat.stream_async(
-                messages=cast(list[ChatCompletionStreamRequestMessageTypedDict], messages),
-                tools=cast(list[ToolTypedDict], tools),
-                model=self._model,
-                timeout_ms=int(self._conn_options.timeout * 1000),
-                **self._extra_kwargs,
-            )
+            if self._conversation_id is None:
+                async_response = await self._client.beta.conversations.start_stream_async(
+                    inputs=entries,
+                    model=self._model,
+                    instructions=extra_data.instructions,
+                    tools=tools_list or None,
+                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    **self._extra_kwargs,
+                )
+            else:
+                # the server already has its own outputs (message.output, function.call),
+                # so we only send function results and new user messages.
+                async_response = await self._client.beta.conversations.append_stream_async(
+                    conversation_id=self._conversation_id,
+                    inputs=[
+                        e for e in entries if e.get("type") in ("function.result", "message.input")
+                    ],
+                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    **self._extra_kwargs,
+                )
+
+            pending_fnc_calls: dict[str, _PendingFunctionCall] = {}
+
             async for ev in async_response:
-                if not ev.data.choices:
-                    continue
-                choice = ev.data.choices[0]
-                chat_chunk = self._parse_choice(ev.data.id, choice)
-                if chat_chunk is not None:
+                chunks = self._parse_event(ev, pending_fnc_calls)
+                for chat_chunk in chunks:
                     retryable = False
                     self._event_ch.send_nowait(chat_chunk)
+
+            # store current state for next call's diff
+            self._mistral_llm._prev_chat_ctx = self._full_chat_ctx
+            self._mistral_llm._pending_tool_calls = self._emitted_tool_calls
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
@@ -199,25 +272,102 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_choice(self, id: str, choice: CompletionResponseStreamChoice) -> ChatChunk | None:
-        chunk = llm.ChatChunk(id=id)
-        if choice.delta.content and isinstance(choice.delta.content, str):
-            # TODO: support thinking chunks
-            chunk.delta = llm.ChoiceDelta(content=choice.delta.content, role="assistant")
+    def _flush_pending_fnc_calls(self, pending: dict[str, _PendingFunctionCall]) -> list[ChatChunk]:
+        """Emit completed FunctionToolCalls from the pending buffer."""
+        chunks: list[ChatChunk] = []
+        for fnc in pending.values():
+            delta = llm.ChoiceDelta(role="assistant")
+            delta.tool_calls.append(
+                llm.FunctionToolCall(
+                    name=fnc.name,
+                    arguments=fnc.arguments,
+                    call_id=fnc.tool_call_id,
+                )
+            )
+            chunks.append(ChatChunk(id=fnc.id, delta=delta))
+            self._emitted_tool_calls.add(fnc.tool_call_id)
+        pending.clear()
+        return chunks
 
-        if choice.delta.tool_calls:
-            if not chunk.delta:
-                chunk.delta = llm.ChoiceDelta(role="assistant")
+    def _parse_event(
+        self,
+        ev: ConversationEvents,
+        pending_fnc_calls: dict[str, _PendingFunctionCall],
+    ) -> list[ChatChunk]:
+        data = ev.data
+        chunks: list[ChatChunk] = []
 
-            for tool in choice.delta.tool_calls:
-                arguments = tool.function.arguments
-                if not isinstance(arguments, str):
-                    arguments = json.dumps(arguments)
-                call_id = tool.id or shortuuid("tool_call_")
+        if isinstance(data, ResponseStartedEvent):
+            self._mistral_llm._conversation_id = data.conversation_id
+            return chunks
 
-                chunk.delta.tool_calls.append(
-                    llm.FunctionToolCall(
-                        name=tool.function.name, arguments=arguments, call_id=call_id
+        if isinstance(data, FunctionCallEvent):
+            # accumulate arguments across delta events
+            call_id = data.tool_call_id or shortuuid("tool_call_")
+            if call_id not in pending_fnc_calls:
+                pending_fnc_calls[call_id] = _PendingFunctionCall(
+                    id=data.id,
+                    name=data.name,
+                    tool_call_id=call_id,
+                )
+            pending_fnc_calls[call_id].arguments += data.arguments
+            return chunks
+
+        # any non-FunctionCallEvent flushes pending function calls
+        chunks.extend(self._flush_pending_fnc_calls(pending_fnc_calls))
+
+        if isinstance(data, MessageOutputEvent):
+            content = data.content
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, TextChunk):
+                text = content.text
+            else:
+                return chunks
+
+            if text:
+                chunks.append(
+                    ChatChunk(
+                        id=data.id,
+                        delta=llm.ChoiceDelta(content=text, role="assistant"),
                     )
                 )
-        return chunk if chunk.delta else None
+            return chunks
+
+        if isinstance(data, ResponseDoneEvent):
+            usage = data.usage
+            chunks.append(
+                ChatChunk(
+                    id=shortuuid("done_"),
+                    usage=llm.CompletionUsage(
+                        completion_tokens=usage.completion_tokens or 0,
+                        prompt_tokens=usage.prompt_tokens or 0,
+                        total_tokens=usage.total_tokens or 0,
+                    ),
+                )
+            )
+            return chunks
+
+        if isinstance(data, ResponseErrorEvent):
+            raise APIStatusError(
+                data.message,
+                status_code=data.code,
+                request_id=None,
+                body=None,
+                retryable=False,
+            )
+
+        if isinstance(data, ToolExecutionStartedEvent):
+            self._provider_tool_args[data.id] = data.arguments
+
+        elif isinstance(data, ToolExecutionDeltaEvent):
+            self._provider_tool_args[data.id] += data.arguments
+
+        elif isinstance(data, ToolExecutionDoneEvent):
+            args = self._provider_tool_args.pop(data.id, "")
+            logger.debug(
+                "executed provider tool",
+                extra={"function": data.name, "arguments": args, "info": data.info},
+            )
+
+        return chunks
