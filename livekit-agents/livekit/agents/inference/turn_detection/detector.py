@@ -112,7 +112,7 @@ class MultimodalTurnDetector:
 
     async def unlikely_threshold(
         self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
-    ) -> float:
+    ) -> float | None:
         thresholds = LANGUAGES.get(
             language.language if language is not None else "en", (0.35, 0.011)
         )

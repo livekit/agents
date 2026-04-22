@@ -155,7 +155,7 @@ class TurnDetectionStream:
 
     async def unlikely_threshold(
         self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
-    ) -> float:
+    ) -> float | None:
         return await self._detector.unlikely_threshold(language, modality)
 
     async def supports_language(
@@ -334,7 +334,7 @@ class TurnDetectionStream:
         match msg.WhichOneof("message"):
             case "eot_prediction":
                 prediction: EotPrediction = msg.eot_prediction
-                backend: Literal["multimodal", "text"] = {
+                backend: Literal["multimodal", "text"] = {  # type: ignore[assignment]
                     EotPrediction.EotBackend.EOT_BACKEND_MULTIMODAL: "multimodal",
                     EotPrediction.EotBackend.EOT_BACKEND_TEXT: "text",
                 }.get(prediction.backend, "multimodal")

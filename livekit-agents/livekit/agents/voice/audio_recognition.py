@@ -1365,9 +1365,8 @@ class AudioRecognition:
                     latest_eou_prediction=ev,
                     trigger="turn_detector",
                 )
-                if ev.end_of_turn_probability >= await stream.unlikely_threshold(
-                    self._last_language
-                ):
+                threshold = await stream.unlikely_threshold(self._last_language)
+                if threshold is not None and ev.end_of_turn_probability >= threshold:
                     stream.flush("positive eou prediction")
         finally:
             await aio.cancel_and_wait(forward_task)
