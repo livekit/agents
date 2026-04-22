@@ -42,7 +42,6 @@ session = AgentSession(
 - [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic real-time model with function calls
 - [`realtime_load_chat_history.py`](./realtime_load_chat_history.py) - Loading previous chat history into real-time models
 - [`realtime_turn_detector.py`](./realtime_turn_detector.py) - Using LiveKit's turn detection with real-time models
-- [`realtime_with_tts.py`](./realtime_with_tts.py) - Combining external TTS providers with real-time models
 
 ### 🎯 Pipeline Nodes & Hooks
 
@@ -59,7 +58,6 @@ session = AgentSession(
 
 - [`restaurant_agent.py`](./restaurant_agent.py) - Multi-agent system for restaurant ordering and reservation management
 - [`multi_agent.py`](./multi_agent.py) - Collaborative storytelling with multiple specialized agents
-- [`email_example.py`](./email_example.py) - Using AgentTask to collect and validate email addresses
 
 ### 🔗 MCP & External Integrations
 
@@ -79,7 +77,6 @@ session = AgentSession(
 
 ### 🎵 Specialized Use Cases
 
-- [`background_audio.py`](./background_audio.py) - Playing background audio or ambient sounds during conversations
 - [`push_to_talk.py`](./push_to_talk.py) - Push-to-talk interaction
 - [`tts_text_pacing.py`](./tts_text_pacing.py) - Pacing control for TTS requests
 - [`speaker_id_multi_speaker.py`](./speaker_id_multi_speaker.py) - Multi-speaker identification
