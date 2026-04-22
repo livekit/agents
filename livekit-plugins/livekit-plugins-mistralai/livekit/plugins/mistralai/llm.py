@@ -139,6 +139,9 @@ class LLM(llm.LLM):
     ) -> None:
         if is_given(model):
             self._opts.model = model
+            self._conversation_id = None
+            self._prev_chat_ctx = None
+            self._pending_tool_calls = set()
         if is_given(max_completion_tokens):
             self._opts.max_completion_tokens = max_completion_tokens
         if is_given(temperature):
