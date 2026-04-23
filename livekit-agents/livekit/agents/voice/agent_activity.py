@@ -2808,6 +2808,7 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
+            return
 
         if text is not None:
             try:
