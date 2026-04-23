@@ -435,20 +435,12 @@ class SpeechStream(stt.SpeechStream):
 
         detected_lang = resp.language_code or self._opts.language or "en-US"
 
-        # Populate source_languages when language identification is active
-        source_languages = None
-        if (
-            self._opts.identify_language or self._opts.identify_multiple_languages
-        ) and resp.language_code:
-            source_languages = [LanguageCode(resp.language_code)]
-
         return stt.SpeechData(
             language=LanguageCode(detected_lang),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
-            source_languages=source_languages,
             words=[
                 TimedString(
                     text=item.content,
