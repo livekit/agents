@@ -64,7 +64,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-4-6",
+        model: str | ChatModels = "claude-sonnet-4-6",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -83,7 +83,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model (str | ChatModels): The model to use. Defaults to "claude-4-6".
+        model (str | ChatModels): The model to use. Defaults to "claude-sonnet-4-6".
         api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
