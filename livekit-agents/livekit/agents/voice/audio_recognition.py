@@ -974,14 +974,15 @@ class AudioRecognition:
                     and not self._turn_detector_stream.is_inference_running
                     and not self._agent_speaking
                 ):
+                    self._turn_detector_stream.warmup()
                     logger.debug(
                         "turn detection warmup started",
                         extra={
                             "raw_accumulated_silence": ev.raw_accumulated_silence,
                             "speech_duration": ev.speech_duration,
+                            "request_id": self._turn_detector_stream._active_request_id,
                         },
                     )
-                    self._turn_detector_stream.warmup()
 
             if ev.raw_accumulated_silence == 0 and self._speaking:
                 if (
@@ -993,6 +994,7 @@ class AudioRecognition:
                         extra={
                             "raw_accumulated_silence": ev.raw_accumulated_silence,
                             "speech_duration": ev.speech_duration,
+                            "request_id": self._turn_detector_stream._active_request_id,
                         },
                     )
                     self._turn_detector_stream.stop_warmup()
