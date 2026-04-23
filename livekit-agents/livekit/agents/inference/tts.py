@@ -97,6 +97,17 @@ class FallbackModel(TypedDict):
 FallbackModelType = FallbackModel | str
 
 
+def _has_aligned_transcript(model: str, extra_kwargs: dict[str, Any]) -> bool:
+    provider = model.split("/")[0]
+    if provider == "cartesia":
+        return bool(extra_kwargs.get("add_timestamps"))
+    if provider == "elevenlabs":
+        return bool(extra_kwargs.get("sync_alignment"))
+    if provider == "inworld":
+        return extra_kwargs.get("timestamp_type") in ("WORD", "CHARACTER")
+    return False
+
+
 def _normalize_fallback(
     fallback: list[FallbackModelType] | FallbackModelType,
 ) -> list[FallbackModel]:
@@ -340,11 +351,6 @@ class TTS(tts.TTS):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
-        super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
-            sample_rate=sample_rate,
-            num_channels=1,
-        )
 
         # Parse voice from model string if provided: "provider/model:voice"
         if isinstance(model, str):
@@ -352,6 +358,16 @@ class TTS(tts.TTS):
             model = parsed_model
             if parsed_voice is not None and not is_given(voice):
                 voice = parsed_voice
+
+        resolved_extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=_has_aligned_transcript(model, resolved_extra_kwargs),
+            ),
+            sample_rate=sample_rate,
+            num_channels=1,
+        )
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
@@ -388,7 +404,7 @@ class TTS(tts.TTS):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            extra_kwargs=resolved_extra_kwargs,
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
@@ -628,6 +644,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
+                elif data.get("type") == "output_timestamps":
+                    from ..voice.io import TimedString
+
+                    if words := data.get("words"):
+                        for word_info in words:
+                            output_emitter.push_timed_transcript(
+                                TimedString(
+                                    word_info["word"],
+                                    start_time=word_info.get("start"),
+                                    end_time=word_info.get("end"),
+                                )
+                            )
+                    elif chars := data.get("chars"):
+                        for char_info in chars:
+                            output_emitter.push_timed_transcript(
+                                TimedString(
+                                    char_info["char"],
+                                    start_time=char_info.get("start"),
+                                    end_time=char_info.get("end"),
+                                )
+                            )
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
