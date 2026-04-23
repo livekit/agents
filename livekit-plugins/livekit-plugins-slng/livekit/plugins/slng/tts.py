@@ -335,16 +335,26 @@ class ChunkedStream(tts.ChunkedStream):
                     continue
                 if mtype == "Flushed":
                     mtype = "audio_end"
-                elif mtype in ("Audio", "chunk"):
+                elif mtype in ("Audio", "chunk", "audio"):
                     mtype = "audio_chunk"
                 elif mtype == "Error":
                     mtype = "error"
 
                 if mtype == "audio_chunk":
-                    audio_b64 = resp.get("data")
-                    if not audio_b64 and isinstance(resp.get("audio"), str):
-                        audio_b64 = resp.get("audio")
-                    if isinstance(audio_b64, str) and audio_b64:
+                    # Providers send audio base64 in one of three shapes:
+                    #   resp["data"] = "<b64>"
+                    #   resp["data"] = {"audio": "<b64>"}  (Sarvam Bulbul)
+                    #   resp["audio"] = "<b64>"
+                    data_field = resp.get("data")
+                    if isinstance(data_field, str):
+                        audio_b64 = data_field
+                    elif isinstance(data_field, dict) and isinstance(data_field.get("audio"), str):
+                        audio_b64 = data_field["audio"]
+                    elif isinstance(resp.get("audio"), str):
+                        audio_b64 = resp["audio"]
+                    else:
+                        audio_b64 = None
+                    if audio_b64:
                         try:
                             output_emitter.push(base64.b64decode(audio_b64))
                         except Exception:
@@ -540,17 +550,29 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
                     if mtype == "Flushed":
                         mtype = "audio_end"
-                    elif mtype in ("Audio", "chunk"):
+                    elif mtype in ("Audio", "chunk", "audio"):
                         mtype = "audio_chunk"
                     elif mtype == "Error":
                         mtype = "error"
 
-                    # SLNG: Handle audio_chunk with base64 data
+                    # SLNG: Handle audio_chunk with base64 data. Providers send
+                    # audio in one of three shapes:
+                    #   resp["data"] = "<b64>"
+                    #   resp["data"] = {"audio": "<b64>"}  (Sarvam Bulbul)
+                    #   resp["audio"] = "<b64>"
                     if mtype == "audio_chunk":
-                        audio_b64 = resp.get("data")
-                        if not audio_b64 and isinstance(resp.get("audio"), str):
-                            audio_b64 = resp.get("audio")
-                        if isinstance(audio_b64, str) and audio_b64:
+                        data_field = resp.get("data")
+                        if isinstance(data_field, str):
+                            audio_b64 = data_field
+                        elif isinstance(data_field, dict) and isinstance(
+                            data_field.get("audio"), str
+                        ):
+                            audio_b64 = data_field["audio"]
+                        elif isinstance(resp.get("audio"), str):
+                            audio_b64 = resp["audio"]
+                        else:
+                            audio_b64 = None
+                        if audio_b64:
                             try:
                                 audio_data = base64.b64decode(audio_b64)
                             except Exception:

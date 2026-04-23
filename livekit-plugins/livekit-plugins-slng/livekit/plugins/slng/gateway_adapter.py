@@ -257,6 +257,31 @@ AURA_DEFAULT_VOICE_BY_VARIANT: dict[str, str] = {
     "2-es": "aura-2-celeste-es",
 }
 
+SARVAM_BCP47_LANGUAGE_BY_CODE: dict[str, str] = {
+    "bn": "bn-IN",
+    "bn-in": "bn-IN",
+    "en": "en-IN",
+    "en-in": "en-IN",
+    "gu": "gu-IN",
+    "gu-in": "gu-IN",
+    "hi": "hi-IN",
+    "hi-in": "hi-IN",
+    "kn": "kn-IN",
+    "kn-in": "kn-IN",
+    "ml": "ml-IN",
+    "ml-in": "ml-IN",
+    "mr": "mr-IN",
+    "mr-in": "mr-IN",
+    "od": "od-IN",
+    "od-in": "od-IN",
+    "pa": "pa-IN",
+    "pa-in": "pa-IN",
+    "ta": "ta-IN",
+    "ta-in": "ta-IN",
+    "te": "te-IN",
+    "te-in": "te-IN",
+}
+
 
 def normalize_region_override(
     region_override: str | list[str] | None,
@@ -355,6 +380,38 @@ def is_deepgram_aura_model(model: str) -> bool:
 def is_rime_arcana_model(model: str) -> bool:
     ref = parse_model_ref(model)
     return ref.route_provider == "rime" and ref.route_model == "arcana"
+
+
+def is_sarvam_bulbul_model(model: str) -> bool:
+    ref = parse_model_ref(model)
+    return ref.route_provider == "sarvam" and ref.route_model == "bulbul"
+
+
+def is_sarvam_model(model: str) -> bool:
+    ref = parse_model_ref(model)
+    return ref.route_provider == "sarvam"
+
+
+def normalize_language_for_model(
+    model: str | None,
+    language: str,
+    *,
+    model_options: Mapping[str, Any] | None = None,
+) -> str:
+    override = None
+    if model_options:
+        candidate = model_options.get("target_language_code")
+        if isinstance(candidate, str):
+            override = candidate.strip() or None
+
+    cleaned = (override or language or "").strip()
+    if not cleaned or model is None:
+        return cleaned
+
+    if is_sarvam_model(model):
+        return SARVAM_BCP47_LANGUAGE_BY_CODE.get(cleaned.lower(), cleaned)
+
+    return cleaned
 
 
 def normalize_tts_voice(model: str, voice: str) -> str:
@@ -466,8 +523,13 @@ def build_tts_init_payload(
     model_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     options = dict(model_options or {})
+    normalized_language = normalize_language_for_model(
+        model,
+        language,
+        model_options=options,
+    )
     config: dict[str, Any] = {
-        "language": language,
+        "language": normalized_language,
         "encoding": encoding,
         "sample_rate": sample_rate,
         "speed": speed,
@@ -476,7 +538,7 @@ def build_tts_init_payload(
         "type": "init",
         "model": model,
         "voice": voice,
-        "language": language,
+        "language": normalized_language,
         "config": config,
     }
 
@@ -496,6 +558,18 @@ def build_tts_init_payload(
             if key in options:
                 config[key] = options[key]
         payload["speaker"] = voice
+
+    if is_sarvam_bulbul_model(model):
+        config["speech_sample_rate"] = str(sample_rate)
+        config["pace"] = options.get("pace", speed)
+        for key in (
+            "temperature",
+            "output_audio_bitrate",
+            "min_buffer_size",
+            "max_chunk_length",
+        ):
+            if key in options:
+                config[key] = options[key]
 
     return payload
 
@@ -518,8 +592,13 @@ def build_stt_init_payload(
     if model is not None:
         parse_model_ref(model)
 
+    normalized_language = normalize_language_for_model(
+        model,
+        language,
+        model_options=model_options,
+    )
     config: dict[str, Any] = {
-        "language": language,
+        "language": normalized_language,
         "sample_rate": sample_rate,
         "encoding": "linear16" if encoding == "pcm_s16le" else encoding,
         "vad_threshold": vad_threshold,
