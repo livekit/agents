@@ -283,11 +283,6 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
-        # Wall-clock time (time.time()) when the first audio frame was sent to
-        # the server. Used to convert the server's stream-relative timestamp
-        # (returned in SpeechStarted.timestamp) into a wall-clock time so the
-        # framework can back-date _speech_start_time on START_OF_SPEECH.
-        self._stream_wall_start: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -362,14 +357,11 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run a single websocket connection to AssemblyAI."""
-        # Reset on each (re)connection — the server's stream-relative timestamps
-        # restart at 0 with every new WebSocket, so the wall-clock anchor must
-        # also be re-captured from this connection's first frame.
-        self._stream_wall_start = None
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -388,9 +380,13 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    if self._stream_wall_start is None:
-                        # Anchor wall-clock time at first audio frame sent.
-                        self._stream_wall_start = time.time()
+                    if not anchored:
+                        # Anchor the stream's wall-clock to the moment just
+                        # before the first frame is sent — aligned with the
+                        # server's stream-relative zero used by
+                        # SpeechStarted.timestamp.
+                        self.start_time = time.time()
+                        anchored = True
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
@@ -533,13 +529,13 @@ class SpeechStream(stt.SpeechStream):
         if message_type == "SpeechStarted":
             # SpeechStarted can arrive well after actual speech onset. The
             # `timestamp` field carries the server VAD's onset time in stream-
-            # relative ms. Convert to wall-clock by adding _stream_wall_start
-            # (recorded when the first audio frame was sent) so the framework
-            # records an accurate _speech_start_time instead of message arrival.
+            # relative ms. Convert to wall-clock by adding self.start_time
+            # (the stream's wall-clock anchor) so the framework records an
+            # accurate _speech_start_time instead of message arrival.
             timestamp_ms = data.get("timestamp")
             speech_start_time: float | None = None
-            if timestamp_ms is not None and self._stream_wall_start is not None:
-                speech_start_time = self._stream_wall_start + timestamp_ms / 1000
+            if timestamp_ms is not None:
+                speech_start_time = self.start_time + timestamp_ms / 1000
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
