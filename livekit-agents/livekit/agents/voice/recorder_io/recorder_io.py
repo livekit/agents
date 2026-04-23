@@ -34,6 +34,7 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        bitrate: int = 128000,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._in_record: RecorderAudioInput | None = None
@@ -43,6 +44,7 @@ class RecorderIO:
         self._out_q: queue.Queue[list[rtc.AudioFrame] | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
+        self._bitrate = bitrate
         self._started = False
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
@@ -149,6 +151,7 @@ class RecorderIO:
         stream: av.AudioStream = container.add_stream(
             "opus", rate=self._sample_rate, layout="stereo"
         )  # type: ignore
+        stream.codec_context.bit_rate = self._bitrate
 
         in_resampler: rtc.AudioResampler | None = None
         out_resampler: rtc.AudioResampler | None = None
