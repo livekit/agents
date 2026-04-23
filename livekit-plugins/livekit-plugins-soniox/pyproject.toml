@@ -17,6 +17,9 @@ keywords = [
     "livekit",
     "soniox",
     "speech-to-text",
+    "text-to-speech",
+    "stt",
+    "tts",
 ]
 classifiers = [
     "Intended Audience :: Developers",
