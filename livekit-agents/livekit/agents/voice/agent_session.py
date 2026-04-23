@@ -555,6 +555,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
     ) -> RunResult[Run_T]:
+        """Run a single user turn and capture its testing result surface.
+
+        The returned `RunResult` is meant for tests and deterministic external
+        consumers. In most cases, `RunResult.events` should be treated as the primary
+        seam: it records typed events in chronological order and is usually sufficient
+        without depending on broader runtime or observability surfaces.
+
+        `RunResult.final_output` can be useful when an agent naturally produces one,
+        but it is optional and should be treated as a secondary convenience.
+        """
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
