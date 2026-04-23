@@ -15,7 +15,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import AvatarioAPI, AvatarioException
@@ -26,7 +26,7 @@ _AVATAR_AGENT_IDENTITY = "avatario-avatar-agent"
 _AVATAR_AGENT_NAME = "avatario-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """An Avatario avatar session"""
 
     @dataclass
@@ -107,6 +107,8 @@ class AvatarSession:
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Entrypoint to start the video avatar session"""
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)

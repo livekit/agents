@@ -63,6 +63,9 @@ class CollectedResponse(BaseModel):
     text: str = ""
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
     usage: CompletionUsage | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Provider-specific extra data accumulated across chunks
+    (e.g., xAI encrypted reasoning, Google thought signatures)."""
 
 
 class ChoiceDelta(BaseModel):
@@ -428,6 +431,7 @@ class LLMStream(ABC):
         text_parts: list[str] = []
         tool_calls: list[FunctionToolCall] = []
         usage: CompletionUsage | None = None
+        extra: dict[str, Any] = {}
 
         async with self:
             async for chunk in self:
@@ -436,6 +440,8 @@ class LLMStream(ABC):
                         text_parts.append(chunk.delta.content)
                     if chunk.delta.tool_calls:
                         tool_calls.extend(chunk.delta.tool_calls)
+                    if chunk.delta.extra:
+                        extra.update(chunk.delta.extra)
                 if chunk.usage is not None:
                     usage = chunk.usage
 
@@ -443,4 +449,5 @@ class LLMStream(ABC):
             text="".join(text_parts).strip(),
             tool_calls=tool_calls,
             usage=usage,
+            extra=extra,
         )

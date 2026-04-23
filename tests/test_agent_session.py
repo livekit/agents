@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable
+from typing import Literal
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     Agent,
+    AgentSession,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
@@ -13,10 +17,25 @@ from livekit.agents import (
     UserStateChangedEvent,
     function_tool,
 )
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import (
+    FunctionToolCall,
+    Tool,
+    ToolChoice,
+    ToolContext,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.realtime import (
+    GenerationCreatedEvent,
+    RealtimeCapabilities,
+    RealtimeModel,
+    RealtimeSession as BaseRealtimeSession,
+)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.voice.agent import ModelSettings
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -237,7 +256,7 @@ async def test_interruption(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -288,7 +307,9 @@ async def test_interruption_options() -> None:
 
     # test min_interruption_words
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"min_interruption_words": 3}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"min_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -301,7 +322,9 @@ async def test_interruption_options() -> None:
 
     # test allow_interruptions=False
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"allow_interruptions": False}
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"enabled": False}},
     )
     playback_finished_events.clear()
     session.output.audio.on("playback_finished", playback_finished_events.append)
@@ -394,7 +417,7 @@ async def test_interruption_before_speaking(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"resume_false_interruption": resume_false_interruption},
+        turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
 
@@ -572,36 +595,49 @@ async def test_aec_warmup() -> None:
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
-        (True, 0.8),
-        (False, 1.1),
+        ({"preemptive_tts": True}, 0.7),
+        ({"preemptive_tts": False}, 0.8),
+        ({"enabled": False}, 1.1),
     ],
 )
-async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
+async def test_preemptive_generation(preemptive_generation: dict, expected_latency: float) -> None:
     speed = 5.0
     actions = FakeActions()
-    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
     actions.add_tts(3.0, ttfb=0.3)
-    # preemptive_generation enabled: e2e latency is 0.2+0.3+0.3=0.8s
-    # preemptive_generation disabled: e2e latency is 0.5+0.3+3.0=1.1s
+    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
+    # preemptive_generation without TTS enabled: e2e latency is max(0.1+0.3, 0.5)+0.3=0.8s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
 
     session = create_session(
-        actions, speed_factor=speed, extra_kwargs={"preemptive_generation": preemptive_generation}
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": preemptive_generation},
     )
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
     session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    assert len(user_state_events) == 2
+    assert user_state_events[0].old_state == "listening"
+    assert user_state_events[0].new_state == "speaking"
+    assert user_state_events[1].new_state == "listening"
+    t_user_stop_speaking = user_state_events[1].created_at
+
     assert len(agent_state_events) == 4
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
+    t_agent_start_speaking = agent_state_events[2].created_at
     check_timestamp(
-        agent_state_events[2].created_at - t_origin,
-        t_target=2.0 + expected_latency,
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=expected_latency,
         speed_factor=speed,
         max_abs_diff=0.2,
     )
@@ -635,7 +671,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session = create_session(
         actions,
         speed_factor=speed,
-        extra_kwargs={"preemptive_generation": preemptive_generation},
+        turn_handling={"preemptive_generation": {"enabled": preemptive_generation}},
     )
     agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
 
@@ -714,6 +750,156 @@ async def test_unknown_function_call() -> None:
     ]
     assert len(error_outputs) == 1
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
+
+
+class _FakeRealtimeSession(BaseRealtimeSession[Literal["test"]]):
+    def __init__(self, realtime_model: RealtimeModel) -> None:
+        super().__init__(realtime_model)
+        self._chat_ctx = ChatContext.empty()
+        self._tools = ToolContext.empty()
+        self.generate_reply_calls = 0
+        self.say_calls = 0
+        self.update_chat_ctx_calls = 0
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -> ToolContext:
+        return self._tools
+
+    async def update_instructions(self, instructions: str) -> None:
+        pass
+
+    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self.update_chat_ctx_calls += 1
+        self._chat_ctx = chat_ctx
+
+    async def update_tools(self, tools: list[Tool]) -> None:
+        self._tools = ToolContext(tools)
+
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
+        pass
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        pass
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        pass
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        self.generate_reply_calls += 1
+        raise AssertionError(
+            "generate_reply() should not be called for an interrupted speech handle"
+        )
+
+    def commit_audio(self) -> None:
+        pass
+
+    def clear_audio(self) -> None:
+        pass
+
+    def interrupt(self) -> None:
+        pass
+
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
+        self.say_calls += 1
+        pytest.fail("say() should not be called for an interrupted speech handle")
+
+
+class _FakeRealtimeModel(RealtimeModel):
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=RealtimeCapabilities(
+                message_truncation=False,
+                turn_detection=False,
+                user_transcription=False,
+                auto_tool_reply_generation=False,
+                audio_output=False,
+                manual_function_calls=True,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
+                per_response_tool_choice=True,
+                supports_say=True,
+            )
+        )
+        self._session = _FakeRealtimeSession(self)
+
+    def session(self) -> _FakeRealtimeSession:
+        return self._session
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _create_realtime_activity() -> tuple[AgentActivity, _FakeRealtimeSession]:
+    model = _FakeRealtimeModel()
+    session: AgentSession[None] = AgentSession(llm=model, aec_warmup_duration=None)
+    agent = Agent(instructions="You are a helpful assistant.")
+    activity = AgentActivity(agent, session)
+    activity._rt_session = model.session()
+    return activity, model.session()
+
+
+async def test_realtime_reply_task_skips_generate_reply_when_interrupted_before_authorization() -> (
+    None
+):
+    activity, rt_session = _create_realtime_activity()
+    speech_handle = SpeechHandle.create()
+    speech_handle.interrupt(force=True)
+
+    await asyncio.wait_for(
+        activity._realtime_reply_task(
+            speech_handle=speech_handle,
+            model_settings=ModelSettings(),
+            user_input="hello",
+        ),
+        timeout=1,
+    )
+
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.say_calls == 0
+    assert rt_session.update_chat_ctx_calls == 0
+
+
+async def test_realtime_reply_task_skips_say_when_interrupted_before_authorization() -> None:
+    activity, rt_session = _create_realtime_activity()
+    speech_handle = SpeechHandle.create()
+    speech_handle.interrupt(force=True)
+
+    await asyncio.wait_for(
+        activity._realtime_reply_task(
+            speech_handle=speech_handle,
+            model_settings=ModelSettings(),
+            text="hello",
+        ),
+        timeout=1,
+    )
+
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.say_calls == 0
+    assert rt_session.update_chat_ctx_calls == 0
 
 
 # helpers
