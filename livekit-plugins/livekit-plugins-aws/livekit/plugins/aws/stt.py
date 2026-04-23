@@ -293,7 +293,7 @@ class SpeechStream(stt.SpeechStream):
                 if self._opts.language:
                     live_config["language_code"] = self._opts.language
 
-            filtered_config = {}
+            filtered_config: dict[str, Any] = {}
             for k, v in live_config.items():
                 if isinstance(v, bool):
                     filtered_config[k] = v
