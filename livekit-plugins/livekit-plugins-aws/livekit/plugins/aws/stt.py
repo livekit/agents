@@ -428,7 +428,7 @@ class SpeechStream(stt.SpeechStream):
             confidence = items[0].confidence or 0.0
 
         return stt.SpeechData(
-            language=LanguageCode(resp.language_code or self._opts.language),
+            language=LanguageCode(resp.language_code or self._opts.language or "en-US"),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
