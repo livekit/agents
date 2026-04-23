@@ -721,6 +721,7 @@ class AudioRecognition:
             ):
                 self._last_language = language
 
+            self._final_transcript_received.set()
             if not transcript:
                 return
 
@@ -745,7 +746,6 @@ class AudioRecognition:
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
-            self._final_transcript_received.set()
 
             if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp

@@ -3,9 +3,13 @@ from __future__ import annotations
 from types import TracebackType
 from typing import TYPE_CHECKING
 
+from opentelemetry import trace
+
 from ...inference import LLM as _InferenceLLM, LLMModels
+from ...job import get_job_context
 from ...llm import LLM as _LLM
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from .classifier import (
     AMDCategory,
     AMDResult,
@@ -65,6 +69,7 @@ class AMD:
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
+        self._span: trace.Span | None = None
 
     @property
     def enabled(self) -> bool:
@@ -120,6 +125,7 @@ class AMD:
             # authorization immediately (audio may already be flowing)
             if self._classifier is not None and not self._classifier.started:
                 self._classifier.start()
+                self._start_span()
                 if self._session._activity is not None:
                     self._session._activity._pause_authorization()
         return self
@@ -139,6 +145,7 @@ class AMD:
         if self._classifier is None or self._classifier.started:
             return
         self._classifier.start()
+        self._start_span()
         if self._session is not None and self._session._activity is not None:
             self._session._activity._pause_authorization()
 
@@ -162,6 +169,8 @@ class AMD:
             self._classifier.off("amd_result", self._on_amd_result)
             await self._classifier.close()
             self._classifier = None
+
+        self._end_span()
 
         if self._session is not None and self._session._activity is not None:
             self._session._activity._resume_authorization()
@@ -207,12 +216,55 @@ class AMD:
         if self._classifier is not None:
             self._classifier.end_input()
 
+        if self._span is not None:
+            self._span.set_attributes(
+                {
+                    trace_types.ATTR_AMD_CATEGORY: result.category.value,
+                    trace_types.ATTR_AMD_REASON: result.reason,
+                    trace_types.ATTR_AMD_SPEECH_DURATION: result.speech_duration,
+                    trace_types.ATTR_AMD_DELAY: result.delay,
+                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
+                }
+            )
+
+        self._end_span()
+
+        try:
+            ctx = get_job_context()
+            ctx.tagger.add(
+                f"lk.amd:{result.category.value}",
+                metadata={
+                    "category": result.category.value,
+                    "speech_duration": result.speech_duration,
+                    "reason": result.reason,
+                    "transcript": result.transcript,
+                    "delay": result.delay,
+                },
+            )
+        except RuntimeError:
+            pass
+
+    def _start_span(self) -> None:
+        if self._span is not None:
+            return
+        context = (
+            self._session._root_span_context
+            if self._session is not None and self._session._root_span_context is not None
+            else None
+        )
+        self._span = tracer.start_span("amd", context=context)
+
+    def _end_span(self) -> None:
+        if self._span is None:
+            return
+        self._span.end()
+        self._span = None
+
     @staticmethod
     def _resolve_classifier(
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
     ) -> _AMDClassifier | None:
-
         if isinstance(llm, str):
             return _AMDClassifier(_InferenceLLM(llm))
         if isinstance(llm, _LLM):

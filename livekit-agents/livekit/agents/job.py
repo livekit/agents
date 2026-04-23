@@ -27,7 +27,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urlparse
 
 import aiohttp
@@ -42,6 +42,7 @@ from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
+from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -64,9 +65,17 @@ if TYPE_CHECKING:
     from .voice.report import SessionReport
 
 
-def get_job_context() -> JobContext:
+@overload
+def get_job_context(*, required: Literal[True] = True) -> JobContext: ...
+
+
+@overload
+def get_job_context(*, required: Literal[False]) -> JobContext | None: ...
+
+
+def get_job_context(*, required: bool = True) -> JobContext | None:
     ctx = _JobContextVar.get(None)
-    if ctx is None:
+    if ctx is None and required:
         raise RuntimeError(
             "no job context found, are you running this code inside a job entrypoint?"
         )
@@ -486,17 +495,20 @@ class JobContext:
 
         return await wait_for_participant(self._room, identity=identity, kind=kind)
 
+    @deprecate_params({"e2ee": "Use `encryption` instead."})
     async def connect(
         self,
         *,
-        e2ee: rtc.E2EEOptions | None = None,
+        encryption: rtc.E2EEOptions | None = None,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
+        # deprecated
+        e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
         """Connect to the room. This method should be called only once.
 
         Args:
-            e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
+            encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
         """  # noqa: E501
@@ -504,8 +516,9 @@ class JobContext:
             if self._connected:
                 return
 
+            encryption = encryption or e2ee
             room_options = rtc.RoomOptions(
-                encryption=e2ee,
+                encryption=encryption,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
             )
