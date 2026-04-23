@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...types import NOT_GIVEN, NotGivenOr
+from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
 from ._speaking_rate import SpeakingRateDetector, SpeakingRateStream
@@ -148,7 +148,7 @@ class _SegmentSynchronizerImpl:
         self._speed_on_speaking_unit: float | None = None  # hyphens per speaking unit
         # a speaking unit is defined by the speaking rate estimation method, it's a relative unit
 
-        self._out_ch = utils.aio.Chan[str]()
+        self._out_ch = utils.aio.Chan[TimedString]()
         self._close_future = asyncio.Future[None]()
 
         self._main_atask = asyncio.create_task(self._main_task())
@@ -328,7 +328,9 @@ class _SegmentSynchronizerImpl:
                 return
 
             if self._playback_completed:
-                self._out_ch.send_nowait(word)
+                self._out_ch.send_nowait(
+                    TimedString(word, end_time=time.time() - self._start_wall_time)
+                )
                 continue
 
             word_hyphens = len(self._opts.hyphenate_word(word))
@@ -361,7 +363,9 @@ class _SegmentSynchronizerImpl:
                 delay = 0
 
             await self._sleep_if_not_closed(delay / 2.0)
-            self._out_ch.send_nowait(word)
+            self._out_ch.send_nowait(
+                TimedString(word, end_time=time.time() - self._start_wall_time)
+            )
             await self._sleep_if_not_closed(delay / 2.0)
 
             self._text_data.forwarded_hyphens += word_hyphens
