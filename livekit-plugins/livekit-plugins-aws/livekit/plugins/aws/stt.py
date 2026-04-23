@@ -438,8 +438,7 @@ class SpeechStream(stt.SpeechStream):
         # Populate source_languages when language identification is active
         source_languages: list[LanguageCode] | None = None
         if (
-            self._opts.identify_language
-            or self._opts.identify_multiple_languages
+            self._opts.identify_language or self._opts.identify_multiple_languages
         ) and resp.language_code:
             source_languages = [LanguageCode(resp.language_code)]
 
