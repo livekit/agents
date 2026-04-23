@@ -793,6 +793,8 @@ class RealtimeSession(
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
+        # per-session copy of opts so update_options can diff against session's own state
+        self._opts = copy.copy(realtime_model._opts)
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -1163,8 +1165,8 @@ class RealtimeSession(
     def _create_session_update_event(self) -> SessionUpdateEvent | dict[str, Any]:
         audio_format = realtime.realtime_audio_formats.AudioPCM(rate=SAMPLE_RATE, type="audio/pcm")
         # they do not support both text and audio modalities, it'll respond in audio + transcript
-        modality = "audio" if "audio" in self._realtime_model._opts.modalities else "text"
-        opts = self._realtime_model._opts
+        modality = "audio" if "audio" in self._opts.modalities else "text"
+        opts = self._opts
 
         session = RealtimeSessionCreateRequest(
             type="realtime",
@@ -1223,30 +1225,30 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
-            current_oai = to_oai_tool_choice(self._realtime_model._opts.tool_choice)
+            current_oai = to_oai_tool_choice(self._opts.tool_choice)
             next_oai = to_oai_tool_choice(tool_choice)
-            self._realtime_model._opts.tool_choice = tool_choice
+            self._opts.tool_choice = tool_choice
             if current_oai != next_oai:
                 session.tool_choice = next_oai
                 has_changes = True
 
         if is_given(max_response_output_tokens):
-            if self._realtime_model._opts.max_response_output_tokens != max_response_output_tokens:
+            if self._opts.max_response_output_tokens != max_response_output_tokens:
                 session.max_output_tokens = max_response_output_tokens
                 has_changes = True
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(tracing):
-            if self._realtime_model._opts.tracing != tracing:
+            if self._opts.tracing != tracing:
                 session.tracing = tracing  # type: ignore[assignment]
                 has_changes = True
-            self._realtime_model._opts.tracing = tracing
+            self._opts.tracing = tracing
 
         if is_given(truncation):
-            if self._realtime_model._opts.truncation != truncation:
+            if self._opts.truncation != truncation:
                 session.truncation = truncation
                 has_changes = True
-            self._realtime_model._opts.truncation = truncation
+            self._opts.truncation = truncation
 
         has_audio_config = False
         audio_output = RealtimeAudioConfigOutput()
@@ -1254,38 +1256,35 @@ class RealtimeSession(
         audio_config = RealtimeAudioConfig(output=audio_output, input=audio_input)
 
         if is_given(voice):
-            if self._realtime_model._opts.voice != voice:
+            if self._opts.voice != voice:
                 audio_output.voice = voice
                 has_audio_config = True
-            self._realtime_model._opts.voice = voice
+            self._opts.voice = voice
 
         if is_given(turn_detection):
-            if self._realtime_model._opts.turn_detection != turn_detection:
+            if self._opts.turn_detection != turn_detection:
                 audio_input.turn_detection = turn_detection
                 has_audio_config = True
-            self._realtime_model._opts.turn_detection = turn_detection
+            self._opts.turn_detection = turn_detection
 
         if is_given(input_audio_transcription):
-            if self._realtime_model._opts.input_audio_transcription != input_audio_transcription:
+            if self._opts.input_audio_transcription != input_audio_transcription:
                 audio_input.transcription = input_audio_transcription
                 has_audio_config = True
-            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
+            self._opts.input_audio_transcription = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
-            if (
-                self._realtime_model._opts.input_audio_noise_reduction
-                != input_audio_noise_reduction
-            ):
+            if self._opts.input_audio_noise_reduction != input_audio_noise_reduction:
                 audio_input.noise_reduction = input_audio_noise_reduction
                 has_audio_config = True
-            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
+            self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(speed):
-            if self._realtime_model._opts.speed != speed:
+            if self._opts.speed != speed:
                 audio_output.speed = speed
                 has_audio_config = True
-            self._realtime_model._opts.speed = speed
+            self._opts.speed = speed
 
         if has_audio_config:
             session.audio = audio_config
@@ -1645,9 +1644,7 @@ class RealtimeSession(
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent
     ) -> None:
-        user_transcription_enabled = (
-            self._realtime_model._opts.input_audio_transcription is not None
-        )
+        user_transcription_enabled = self._opts.input_audio_transcription is not None
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
