@@ -267,7 +267,7 @@ class STT(stt.STT):
         lang = language if is_given(language) else self._opts.language
 
         # Convert AudioBuffer to bytes
-        audio_data = buffer.data.tobytes()  # type: ignore
+        audio_data = rtc.combine_audio_frames(buffer).data.tobytes()
 
         # Encode as base64
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
