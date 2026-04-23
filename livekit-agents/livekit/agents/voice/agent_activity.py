@@ -1626,14 +1626,12 @@ class AgentActivity(RecognitionHooks):
                     started_at=time.time(),
                 )
 
-            if (
-                interruption_options["resume_false_interruption"]
-                and (timeout := interruption_options["false_interruption_timeout"]) is not None
-                and self._session.output.audio
-                and self._session.output.audio.can_pause
-            ):
-                self._set_paused_speech(self._current_speech, timeout)
-                self._session.output.audio.pause()
+            if self._pause_enabled():
+                assert (timeout := interruption_options["false_interruption_timeout"]) is not None
+                assert (audio_output := self._session.output.audio) is not None
+
+                self._update_paused_speech(self._current_speech, timeout)
+                audio_output.pause()
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition.on_end_of_agent_speech(
@@ -1669,26 +1667,20 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
-        interruption_options = self._session.options.interruption
         if (
             self._session.agent_state != "speaking"
-            and interruption_options["false_interruption_timeout"] is not None
-            and interruption_options["resume_false_interruption"]
+            and self._pause_enabled()
             and (current_speech := self._current_speech) is not None
             and not current_speech.interrupted
             and current_speech.allow_interruptions
-            and self._session.output.audio
-            and self._session.output.audio.can_pause
+            and (self._paused_speech is None or self._paused_speech.handle is not current_speech)
         ):
-            # pause the audio output if agent is not speaking (in thinking state)
-            self._set_paused_speech(
-                current_speech,
-                # resume immediately when user stops speaking,
-                # this value will be updated if the speech is paused by _interrupt_by_audio_activity
-                timeout=0,
-                update=False,
-            )
-            self._session.output.audio.pause()
+            # pause the audio output if agent is not speaking (in thinking state);
+            # resume immediately when user stops speaking, the timeout will be updated by _interrupt_by_audio_activity
+            assert (audio_output := self._session.output.audio) is not None
+
+            self._update_paused_speech(current_speech, timeout=0)
+            audio_output.pause()
 
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
@@ -3391,12 +3383,14 @@ class AgentActivity(RecognitionHooks):
                     f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
-    def _set_paused_speech(
-        self, speech_handle: SpeechHandle, timeout: float, *, update: bool = True
-    ) -> None:
+    def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
+        """Record that ``speech_handle`` is paused.
+
+        If already paused for this handle, only ``timeout`` is updated — the
+        ``agent_state`` captured at first pause is preserved, so the resume
+        path restores the correct state even across multiple calls.
+        """
         if self._paused_speech and self._paused_speech.handle is speech_handle:
-            if not update:
-                return
             self._paused_speech.timeout = timeout
         else:
             self._paused_speech = _PausedSpeechInfo(
@@ -3405,13 +3399,13 @@ class AgentActivity(RecognitionHooks):
                 timeout=timeout,
             )
 
-        logger.debug(
-            "paused speech info",
-            extra={
-                "handle": self._paused_speech.handle.id,
-                "agent_state": self._paused_speech.agent_state,
-                "timeout": self._paused_speech.timeout,
-            },
+    def _pause_enabled(self) -> bool:
+        interruption_options = self._session.options.interruption
+        return bool(
+            interruption_options["resume_false_interruption"]
+            and interruption_options["false_interruption_timeout"] is not None
+            and self._session.output.audio
+            and self._session.output.audio.can_pause
         )
 
     def _start_false_interruption_timer(self, timeout: float) -> None:
