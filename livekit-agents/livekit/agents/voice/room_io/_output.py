@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
+from google.protobuf.json_format import MessageToDict
+
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
@@ -13,6 +17,7 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
+    TimedString,
 )
 from .. import io
 from ..transcription import find_micro_track_id
@@ -365,6 +370,7 @@ class _ParticipantStreamTranscriptionOutput:
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
         attributes: dict[str, str] | None = None,
+        json_format: bool = False,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
@@ -372,6 +378,7 @@ class _ParticipantStreamTranscriptionOutput:
         self._additional_attributes = attributes or {}
 
         self._writer: rtc.TextStreamWriter | None = None
+        self._json_format = json_format
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
@@ -439,6 +446,19 @@ class _ParticipantStreamTranscriptionOutput:
         if not self._capturing:
             self._reset_state()
             self._capturing = True
+
+        if self._json_format:
+            ts_pb = agent_pb.TimedString(text=str(text))
+            if isinstance(text, TimedString):
+                if utils.is_given(text.start_time):
+                    ts_pb.start_time = text.start_time
+                if utils.is_given(text.end_time):
+                    ts_pb.end_time = text.end_time
+                if utils.is_given(text.confidence):
+                    ts_pb.confidence = text.confidence
+                if utils.is_given(text.start_time_offset):
+                    ts_pb.start_time_offset = text.start_time_offset
+            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
         self._latest_text = text
 
@@ -530,6 +550,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
         next_in_chain: io.TextOutput | None = None,
+        json_format: bool = False,
     ) -> None:
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
@@ -545,6 +566,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                json_format=json_format,
             ),
         ]
         self.__closed = False
