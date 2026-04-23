@@ -37,6 +37,22 @@ from .log import logger
 
 NUM_CHANNELS = 1
 
+# End-of-stream event names we accept on {"type":"event","data":{...}} messages.
+# Sarvam Bulbul emits these when synthesis completes (spec field: data.event_type;
+# some internal gateway paths also surface it as data.event, so we accept both).
+_END_EVENT_TYPES = frozenset({"complete", "completed", "done", "end", "final"})
+
+
+def _is_end_event(resp: dict[str, object]) -> bool:
+    """True if resp is an end-of-stream notification (e.g. Sarvam Bulbul)."""
+    if resp.get("type") != "event":
+        return False
+    data = resp.get("data")
+    if not isinstance(data, dict):
+        return False
+    raw = data.get("event_type") or data.get("event")
+    return isinstance(raw, str) and raw.lower() in _END_EVENT_TYPES
+
 
 def _default_tts_endpoint(*, slng_base_url: str, model: str) -> str:
     host = slng_base_url.split(":")[0]
@@ -331,9 +347,11 @@ class ChunkedStream(tts.ChunkedStream):
                     continue
 
                 mtype = resp.get("type")
-                if mtype in ("Metadata", "Open", "control_ack", "ready"):
+                if _is_end_event(resp):
+                    mtype = "audio_end"
+                elif mtype in ("Metadata", "Open", "control_ack", "ready"):
                     continue
-                if mtype == "Flushed":
+                elif mtype == "Flushed":
                     mtype = "audio_end"
                 elif mtype in ("Audio", "chunk", "audio"):
                     mtype = "audio_chunk"
@@ -546,9 +564,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
 
                     mtype = resp.get("type")
-                    if mtype in ("Metadata", "Open"):
+                    if _is_end_event(resp):
+                        mtype = "audio_end"
+                    elif mtype in ("Metadata", "Open"):
                         continue
-                    if mtype == "Flushed":
+                    elif mtype == "Flushed":
                         mtype = "audio_end"
                     elif mtype in ("Audio", "chunk", "audio"):
                         mtype = "audio_chunk"
