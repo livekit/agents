@@ -652,8 +652,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                             output_emitter.push_timed_transcript(
                                 TimedString(
                                     word_info["word"],
-                                    start_time=word_info.get("start"),
-                                    end_time=word_info.get("end"),
+                                    start_time=word_info["start"],
+                                    end_time=word_info["end"],
                                 )
                             )
                     elif chars := data.get("chars"):
@@ -661,8 +661,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                             output_emitter.push_timed_transcript(
                                 TimedString(
                                     char_info["char"],
-                                    start_time=char_info.get("start"),
-                                    end_time=char_info.get("end"),
+                                    start_time=char_info["start"],
+                                    end_time=char_info["end"],
                                 )
                             )
                 elif data.get("type") == "done":
