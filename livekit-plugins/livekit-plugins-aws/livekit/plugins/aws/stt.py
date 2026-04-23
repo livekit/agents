@@ -138,6 +138,12 @@ class STT(stt.STT):
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
 
+        if identify_language and identify_multiple_languages:
+            raise ValueError(
+                "identify_language and identify_multiple_languages are mutually exclusive. "
+                "Set only one to True."
+            )
+
         # When auto language detection is enabled, language_code must not be set
         lang: LanguageCode | None = None
         if not identify_language and not identify_multiple_languages:
@@ -427,12 +433,20 @@ class SpeechStream(stt.SpeechStream):
         if resp.alternatives and (items := resp.alternatives[0].items):
             confidence = items[0].confidence or 0.0
 
+        detected_lang = resp.language_code or self._opts.language or "en-US"
+
+        # Populate source_languages when language identification is active
+        source_languages = None
+        if (self._opts.identify_language or self._opts.identify_multiple_languages) and resp.language_code:
+            source_languages = [LanguageCode(resp.language_code)]
+
         return stt.SpeechData(
-            language=LanguageCode(resp.language_code or self._opts.language or "en-US"),
+            language=LanguageCode(detected_lang),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            source_languages=source_languages,
             words=[
                 TimedString(
                     text=item.content,
