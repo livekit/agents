@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import (
     Agent,
+    AgentSession,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
@@ -17,8 +18,10 @@ from livekit.agents.llm import (
     FunctionToolCall,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -824,6 +827,38 @@ async def test_unknown_function_call() -> None:
     ]
     assert len(error_outputs) == 1
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
+
+
+async def test_speech_handle_advance_step_resets_playout_state() -> None:
+    speech_handle = SpeechHandle.create()
+
+    speech_handle._mark_current_generation_playout_started()
+    assert speech_handle.current_generation_playout_active is True
+
+    speech_handle._advance_step()
+
+    assert speech_handle.current_generation_playout_active is False
+
+
+async def test_paused_speech_info_refreshes_after_handle_step_advances() -> None:
+    session: AgentSession[None] = AgentSession(aec_warmup_duration=None)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+    speech_handle = SpeechHandle.create()
+
+    session._agent_state = "thinking"
+    activity._update_paused_speech(speech_handle, timeout=0)
+    assert activity._paused_speech is not None
+    assert activity._paused_speech.generation_step == 1
+    assert activity._paused_speech.agent_state == "thinking"
+
+    speech_handle._mark_current_generation_playout_started()
+    speech_handle._advance_step()
+    session._agent_state = "speaking"
+
+    activity._update_paused_speech(speech_handle, timeout=1)
+    assert activity._paused_speech is not None
+    assert activity._paused_speech.generation_step == 2
+    assert activity._paused_speech.agent_state == "speaking"
 
 
 # helpers

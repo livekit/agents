@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
 
@@ -131,6 +131,7 @@ class _PreemptiveGeneration:
 @dataclass
 class _PausedSpeechInfo:
     handle: SpeechHandle
+    generation_step: int
     agent_state: AgentState
     timeout: float
 
@@ -1614,6 +1615,9 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
+            current_speech = self._current_speech
+            current_generation_playout_active = current_speech.current_generation_playout_active
+
             # reset the false interruption timer
             if self._false_interruption_timer:
                 self._false_interruption_timer.cancel()
@@ -1621,7 +1625,8 @@ class AgentActivity(RecognitionHooks):
 
             # only interrupt if not already interrupting
             if (
-                self._audio_recognition
+                current_generation_playout_active
+                and self._audio_recognition
                 and not self._audio_recognition._endpointing.overlapping
                 and self._session.agent_state == "speaking"
             ):
@@ -1633,7 +1638,7 @@ class AgentActivity(RecognitionHooks):
                 assert (timeout := interruption_options["false_interruption_timeout"]) is not None
                 assert (audio_output := self._session.output.audio) is not None
 
-                self._update_paused_speech(self._current_speech, timeout)
+                self._update_paused_speech(current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
@@ -1646,7 +1651,7 @@ class AgentActivity(RecognitionHooks):
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
 
-                self._current_speech.interrupt()
+                current_speech.interrupt()
 
     # region recognition hooks
 
@@ -2114,6 +2119,42 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
 
+    def _on_generation_playout_started(
+        self, *, speech_handle: SpeechHandle, started_at: float
+    ) -> None:
+        speech_handle._mark_current_generation_playout_started()
+        self._session._update_agent_state(
+            "speaking",
+            start_time=started_at,
+            otel_context=speech_handle._agent_turn_context,
+        )
+        if self._audio_recognition:
+            self._audio_recognition.on_start_of_agent_speech(started_at=started_at)
+        if self.interruption_enabled:
+            self._interruption_by_audio_activity_enabled = False
+
+    def _on_generation_playout_finished(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        next_state: Literal["thinking", "listening"],
+        ignore_user_transcript_until: float | None = None,
+        notify_audio_recognition: bool = True,
+        restore_interruption_by_audio_activity: bool = True,
+    ) -> None:
+        speech_handle._mark_current_generation_playout_finished()
+
+        if self._session.agent_state != "speaking":
+            return
+
+        self._session._update_agent_state(next_state)
+        if notify_audio_recognition and self._audio_recognition:
+            self._audio_recognition.on_end_of_agent_speech(
+                ignore_user_transcript_until=ignore_user_transcript_until or time.time()
+            )
+        if restore_interruption_by_audio_activity and self.interruption_enabled:
+            self._restore_interruption_by_audio_activity()
+
     @utils.log_exceptions(logger=logger)
     async def _tts_task(
         self,
@@ -2211,15 +2252,10 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
-            self._session._update_agent_state(
-                "speaking",
-                start_time=started_speaking_at,
-                otel_context=speech_handle._agent_turn_context,
+            self._on_generation_playout_started(
+                speech_handle=speech_handle,
+                started_at=started_speaking_at,
             )
-            if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
-            if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2334,14 +2370,11 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
 
-        if self._session.agent_state == "speaking":
-            self._session._update_agent_state("listening")
-            if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
-            if self.interruption_enabled:
-                self._restore_interruption_by_audio_activity()
+        self._on_generation_playout_finished(
+            speech_handle=speech_handle,
+            next_state="listening",
+            ignore_user_transcript_until=time.time(),
+        )
 
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
@@ -2566,17 +2599,10 @@ class AgentActivity(RecognitionHooks):
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
             self._session._early_assistant_metrics = early_metrics
-
-            self._session._update_agent_state(
-                "speaking",
-                start_time=started_speaking_at,
-                otel_context=speech_handle._agent_turn_context,
+            self._on_generation_playout_started(
+                speech_handle=speech_handle,
+                started_at=started_speaking_at,
             )
-
-            if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
-            if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2704,15 +2730,18 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
-            self._session._update_agent_state("thinking")
-        elif self._session.agent_state == "speaking":
-            self._session._update_agent_state("listening")
-            if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
-            if self.interruption_enabled:
-                self._restore_interruption_by_audio_activity()
+            self._on_generation_playout_finished(
+                speech_handle=speech_handle,
+                next_state="thinking",
+                notify_audio_recognition=False,
+                restore_interruption_by_audio_activity=False,
+            )
+        else:
+            self._on_generation_playout_finished(
+                speech_handle=speech_handle,
+                next_state="listening",
+                ignore_user_transcript_until=time.time(),
+            )
 
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
@@ -2744,7 +2773,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"speech_id": speech_handle.id},
                 )
 
-            speech_handle._num_steps += 1
+            speech_handle._advance_step()
 
             new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
@@ -3029,15 +3058,10 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
-            self._session._update_agent_state(
-                "speaking",
-                start_time=started_speaking_at,
-                otel_context=speech_handle._agent_turn_context,
+            self._on_generation_playout_started(
+                speech_handle=speech_handle,
+                started_at=started_speaking_at,
             )
-            if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
-            if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -3210,16 +3234,14 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-            self._session._update_agent_state("listening")
-            if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
-            if self.interruption_enabled:
-                self._restore_interruption_by_audio_activity()
-            current_span.set_attribute(
-                trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
-            )
+
+        self._on_generation_playout_finished(
+            speech_handle=speech_handle,
+            next_state="listening",
+            ignore_user_transcript_until=time.time(),
+        )
+
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
 
         stopped_speaking_at = time.time()
 
@@ -3324,7 +3346,7 @@ class AgentActivity(RecognitionHooks):
         # important: no agent output should be used after this point
 
         if len(tool_output.output) > 0:
-            speech_handle._num_steps += 1
+            speech_handle._advance_step()
 
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             generate_tool_reply: bool = False
@@ -3430,11 +3452,16 @@ class AgentActivity(RecognitionHooks):
         ``agent_state`` captured at first pause is preserved, so the resume
         path restores the correct state even across multiple calls.
         """
-        if self._paused_speech and self._paused_speech.handle is speech_handle:
+        if (
+            self._paused_speech
+            and self._paused_speech.handle is speech_handle
+            and self._paused_speech.generation_step == speech_handle.num_steps
+        ):
             self._paused_speech.timeout = timeout
         else:
             self._paused_speech = _PausedSpeechInfo(
                 handle=speech_handle,
+                generation_step=speech_handle.num_steps,
                 agent_state=self._session.agent_state,
                 timeout=timeout,
             )
@@ -3453,8 +3480,10 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
 
         def _on_false_interruption() -> None:
-            if self._paused_speech is None or (
-                self._current_speech and self._current_speech is not self._paused_speech.handle
+            if (
+                self._paused_speech is None
+                or (self._current_speech and self._current_speech is not self._paused_speech.handle)
+                or (self._paused_speech.generation_step != self._paused_speech.handle.num_steps)
             ):
                 # already new speech is scheduled, do nothing
                 self._paused_speech = None
