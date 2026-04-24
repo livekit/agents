@@ -3,10 +3,11 @@
 Provides LiveAvatar interactive avatar integration similar to Tavus.
 """
 
-from .api import LiveAvatarException
+from .api import LiveAvatarException, VideoQuality
 from .avatar import AvatarSession
 
 __all__ = [
     "LiveAvatarException",
     "AvatarSession",
+    "VideoQuality",
 ]
