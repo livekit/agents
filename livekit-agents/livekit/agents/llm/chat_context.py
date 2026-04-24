@@ -291,9 +291,12 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
-    playback_start_latency: float
-    """Latency between the first audio frame being forwarded and playback starting on the client.
-    Typically very small; can be significant when a remote avatar worker is in the chain.
+    playback_latency: float
+    """Delay between forwarding the first audio frame and the `AudioOutput` reporting
+    playback started. Near-zero for the default room output (self-reported when the frame
+    is pushed to the track, so it doesn't account for network delivery to the client);
+    meaningful when a remote avatar worker is in the chain and reports playback via
+    the `lk.playback_started` RPC.
 
     Assistant `ChatMessage` only
     """

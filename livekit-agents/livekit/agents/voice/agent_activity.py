@@ -2318,7 +2318,7 @@ class AgentActivity(RecognitionHooks):
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
                 if started_forwarding_at is not None:
-                    assistant_metrics["playback_start_latency"] = (
+                    assistant_metrics["playback_latency"] = (
                         started_speaking_at - started_forwarding_at
                     )
 
@@ -2557,7 +2557,7 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
-            early_metrics["playback_start_latency"] = started_speaking_at - started_forwarding_at
+            early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2643,7 +2643,7 @@ class AgentActivity(RecognitionHooks):
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
             if started_forwarding_at is not None:
-                assistant_metrics["playback_start_latency"] = (
+                assistant_metrics["playback_latency"] = (
                     started_speaking_at - started_forwarding_at
                 )
 
@@ -3232,7 +3232,7 @@ class AgentActivity(RecognitionHooks):
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
                 if started_forwarding_at is not None:
-                    assistant_metrics["playback_start_latency"] = (
+                    assistant_metrics["playback_latency"] = (
                         started_speaking_at - started_forwarding_at
                     )
 
