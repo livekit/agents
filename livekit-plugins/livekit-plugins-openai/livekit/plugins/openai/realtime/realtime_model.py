@@ -1798,6 +1798,9 @@ class RealtimeSession(
     def _handle_conversion_item_input_audio_transcription_failed(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
+        # clean up accumulated delta state on failure
+        self._input_transcriptions.pop(event.item_id, None)
+
         logger.error(
             f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
