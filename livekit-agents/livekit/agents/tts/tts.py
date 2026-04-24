@@ -739,6 +739,7 @@ class AudioEmitter:
         self._started = False
         self._num_segments = 0
         self._audio_durations: list[float] = []  # track durations per segment
+        self._provider_context_ids: list[str] = []  # deduped provider-known segment ids
 
     def pushed_duration(self, idx: int = -1) -> float:
         return (
@@ -802,6 +803,15 @@ class AudioEmitter:
                 "start_segment() can only be called when SynthesizeStream is initialized "
                 "with stream=True"
             )
+
+        if segment_id and segment_id not in self._provider_context_ids:
+            # expose the provider's per-segment context id on the current tts_request_run span
+            self._provider_context_ids.append(segment_id)
+            current_span = trace.get_current_span()
+            if current_span.is_recording():
+                current_span.set_attribute(
+                    trace_types.ATTR_PROVIDER_CONTEXT_IDS, self._provider_context_ids
+                )
 
         return self.__start_segment(segment_id=segment_id)
 
