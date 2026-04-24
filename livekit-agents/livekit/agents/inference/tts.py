@@ -537,6 +537,10 @@ class TTS(tts.TTS):
         if is_given(extra_kwargs):
             self._opts.extra_kwargs.update(extra_kwargs)
 
+        self._capabilities.aligned_transcript = _has_aligned_transcript(
+            self._opts.model, self._opts.extra_kwargs
+        )
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
