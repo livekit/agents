@@ -191,8 +191,6 @@ class HandoffMetrics(_BaseMetrics):
     """Time in seconds to drain the old activity (on_exit + pending speech tasks)."""
     new_activity_duration: float
     """Time in seconds to start or resume the new activity."""
-    on_enter_duration: float
-    """Time in seconds for the new agent's on_enter callback to complete."""
     stt_reused: bool = False
     """Whether the STT pipeline was reused from the previous agent."""
     realtime_session_reused: bool = False

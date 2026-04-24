@@ -1369,30 +1369,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     await reuse_resources.cleanup()
                 raise
 
+            total_duration = time.monotonic() - handoff_start
+
+            handoff_metrics = HandoffMetrics(
+                timestamp=time.time(),
+                duration=total_duration,
+                drain_duration=drain_duration,
+                new_activity_duration=new_activity_duration,
+                stt_reused=stt_reused,
+                realtime_session_reused=rt_session_reused,
+                old_agent_id=handoff_item.old_agent_id,
+                new_agent_id=handoff_item.new_agent_id,
+            )
+            handoff_item.metrics = handoff_metrics
+            self.emit("metrics_collected", MetricsCollectedEvent(metrics=handoff_metrics))
+
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
-            on_enter_start = time.monotonic()
             assert self._activity._on_enter_task is not None
             await asyncio.shield(self._activity._on_enter_task)
-            on_enter_duration = time.monotonic() - on_enter_start
-        else:
-            on_enter_duration = 0
-
-        total_duration = time.monotonic() - handoff_start
-
-        handoff_metrics = HandoffMetrics(
-            timestamp=time.time(),
-            duration=total_duration,
-            drain_duration=drain_duration,
-            new_activity_duration=new_activity_duration,
-            on_enter_duration=on_enter_duration,
-            stt_reused=stt_reused,
-            realtime_session_reused=rt_session_reused,
-            old_agent_id=handoff_item.old_agent_id,
-            new_agent_id=handoff_item.new_agent_id,
-        )
-        handoff_item.metrics = handoff_metrics
-        self.emit("metrics_collected", MetricsCollectedEvent(metrics=handoff_metrics))
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

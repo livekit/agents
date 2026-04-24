@@ -113,7 +113,6 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "duration": round(metrics.duration, 3),
                 "drain_duration": round(metrics.drain_duration, 3),
                 "new_activity_duration": round(metrics.new_activity_duration, 3),
-                "on_enter_duration": round(metrics.on_enter_duration, 3),
                 "stt_reused": metrics.stt_reused,
                 "realtime_session_reused": metrics.realtime_session_reused,
                 "old_agent_id": metrics.old_agent_id,
