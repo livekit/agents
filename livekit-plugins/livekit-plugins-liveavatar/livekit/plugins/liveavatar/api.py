@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .avatar import VideoQuality
 
 import aiohttp
 
@@ -54,7 +59,7 @@ class LiveAvatarAPI:
         room: rtc.Room,
         avatar_id: str,
         is_sandbox: bool = False,
-        video_quality: str | None = None,
+        video_quality: VideoQuality | None = None,
     ) -> dict[str, Any]:
         """Create a new streaming session, return a session id"""
 
