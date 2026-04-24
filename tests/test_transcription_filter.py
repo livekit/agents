@@ -150,6 +150,70 @@ async def test_markdown_filter(chunk_size: int):
     print("\n=== TEST COMPLETE ===")
 
 
+# --- emphasis adjacent to punctuation ---
+#
+# Regression tests for the case where ``**bold**`` / ``*italic*`` delimiters
+# are immediately followed (or preceded) by a punctuation character rather
+# than whitespace. Previously the patterns used ``(?<!\S)`` / ``(?!\S)``
+# boundaries which rejected punctuation as a valid boundary, causing
+# ``Hi **Frankie**!`` to leak through untouched to TTS.
+
+
+PUNCTUATION_BOUNDARY_CASES = [
+    # (input, expected)
+    ("Hi **Frankie**!", "Hi Frankie!"),
+    ("See **Dr. Smith**.", "See Dr. Smith."),
+    ("Scheduled for **Monday**, at 9am.", "Scheduled for Monday, at 9am."),
+    ("Press (**1**) to confirm.", "Press (1) to confirm."),
+    ('Try "**this**" first.', 'Try "this" first.'),
+    ("Options: **a**, **b**, or **c**?", "Options: a, b, or c?"),
+    ("He said *hello*!", "He said hello!"),
+    ("It was *amazing*, really.", "It was amazing, really."),
+]
+
+
+@pytest.mark.parametrize("text,expected", PUNCTUATION_BOUNDARY_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 50])
+async def test_punctuation_boundary(text: str, expected: str, chunk_size: int):
+    """Emphasis delimiters followed by punctuation are correctly stripped."""
+
+    async def stream():
+        for i in range(0, len(text), chunk_size):
+            yield text[i : i + chunk_size]
+
+    result = ""
+    async for chunk in filter_markdown(stream()):
+        result += chunk
+
+    assert result == expected
+
+
+# Must NOT mutate: the punctuation-boundary fix must still preserve
+# contexts where ``*`` is used for arithmetic, globs, or in-word.
+PUNCTUATION_BOUNDARY_PRESERVE_CASES = [
+    "2 * 3 = 6",
+    "Use *.py files",
+    "x**2 + y**2 = z**2",
+    "a ** b evaluated right-to-left",
+]
+
+
+@pytest.mark.parametrize("text", PUNCTUATION_BOUNDARY_PRESERVE_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 3, 50])
+async def test_punctuation_boundary_no_false_positives(text: str, chunk_size: int):
+    """Non-markdown asterisk contexts are preserved."""
+
+    async def stream():
+        for i in range(0, len(text), chunk_size):
+            yield text[i : i + chunk_size]
+
+    result = ""
+    async for chunk in filter_markdown(stream()):
+        result += chunk
+
+    assert result == text
+
+
 # Emoji test data
 EMOJI_INPUT = """Hello! 😀 Welcome to our app! 🎉
 

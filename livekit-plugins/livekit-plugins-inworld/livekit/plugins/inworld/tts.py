@@ -1287,9 +1287,7 @@ def _parse_timestamp_info(
         ends = word_align.get("wordEndTimeSeconds", [])
 
         for word, start, end in zip(words, starts, ends, strict=False):
-            # Each word gets a trailing space so that when the synchronizer concatenates
-            # them via `pushed_text += text`, the transcript reads naturally.
-            text = f"{word} "
+            text = f"{word}"
             timed_strings.append(
                 TimedString(
                     text,

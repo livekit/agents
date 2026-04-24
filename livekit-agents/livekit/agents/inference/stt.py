@@ -51,6 +51,7 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
+XaiModels = Literal["xai/stt-1",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -70,7 +71,7 @@ class DeepgramOptions(TypedDict, total=False):
     numerals: bool
     mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
-    diarize: bool
+    diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
@@ -105,6 +106,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     language_detection: bool
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    speaker_labels: bool  # when True, enables speaker diarization (default off)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
@@ -115,6 +117,30 @@ class ElevenlabsOptions(TypedDict, total=False):
     min_speech_duration_ms: int
     min_silence_duration_ms: int
     language_code: str
+
+
+class XaiOptions(TypedDict, total=False):
+    diarize: bool  # when True, enables speaker diarization (default off)
+    endpointing: int  # silence duration in ms before utterance-final (0-5000)
+    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
+    interim_results: bool  # default True; set False to opt out of interim transcripts
+
+
+# Diarization is requested via different extra_kwargs keys across
+# providers. Keep this list in one place so adding a new provider is a
+# single-line change and there's no divergence between __init__ and
+# update_options capability inference.
+_DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
+    "diarize",  # Deepgram, xAI
+    "speaker_labels",  # AssemblyAI
+)
+
+
+def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
+    """Return True if any known provider diarization flag is truthy."""
+    if not extra_kwargs:
+        return False
+    return any(bool(extra_kwargs.get(key)) for key in _DIARIZATION_EXTRA_KEYS)
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -168,6 +194,7 @@ STTModels = (
     | CartesiaModels
     | AssemblyAIModels
     | ElevenlabsModels
+    | XaiModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -280,6 +307,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: XaiModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -312,6 +356,7 @@ class STT(stt.STT):
             | DeepgramFluxOptions
             | AssemblyaiOptions
             | ElevenlabsOptions
+            | XaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -332,10 +377,18 @@ class STT(stt.STT):
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
+        # Infer diarization capability from provider-specific extra_kwargs
+        # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
+        # Deepgram); AssemblyAI uses "speaker_labels".
+        diarization_enabled = _diarization_enabled(
+            dict(extra_kwargs) if is_given(extra_kwargs) else None
+        )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
@@ -452,6 +505,10 @@ class STT(stt.STT):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._capabilities = replace(
+                self._capabilities,
+                diarization=_diarization_enabled(self._opts.extra_kwargs),
+            )
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
@@ -689,6 +746,7 @@ class SpeechStream(stt.SpeechStream):
             end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
+            speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
@@ -696,6 +754,7 @@ class SpeechStream(stt.SpeechStream):
                     end_time=word.get("end", 0) + self.start_time_offset,
                     start_time_offset=self.start_time_offset,
                     confidence=word.get("confidence", 0.0),
+                    speaker_id=word.get("speaker_id"),
                 )
                 for word in words
             ],
