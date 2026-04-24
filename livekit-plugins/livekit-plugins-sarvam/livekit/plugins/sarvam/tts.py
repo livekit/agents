@@ -1016,6 +1016,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             resp = json.loads(msg_data)
             msg_type = resp.get("type")
             self._maybe_set_server_request_id(resp)
+            if self._server_request_id:
+                # Expose the server-assigned request id on the tts_request_run span so
+                # users can correlate traces with Sarvam's logs for debugging. Deduped
+                # internally, so calling on every message is fine.
+                output_emitter.note_provider_context_id(self._server_request_id)
 
             if not msg_type:
                 logger.warning(

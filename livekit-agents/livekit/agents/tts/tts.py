@@ -804,16 +804,26 @@ class AudioEmitter:
                 "with stream=True"
             )
 
-        if segment_id and segment_id not in self._provider_context_ids:
-            # expose the provider's per-segment context id on the current tts_request_run span
-            self._provider_context_ids.append(segment_id)
-            current_span = trace.get_current_span()
-            if current_span.is_recording():
-                current_span.set_attribute(
-                    trace_types.ATTR_PROVIDER_CONTEXT_IDS, self._provider_context_ids
-                )
-
+        self.note_provider_context_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
+
+    def note_provider_context_id(self, context_id: str) -> None:
+        """Record a provider-known id for this stream on the current span.
+
+        Exposed on the `tts_request_run` span as `lk.provider_context_ids` so users
+        can correlate traces with the provider's server-side logs for debugging.
+        `start_segment()` calls this automatically; plugins can also call it when
+        the provider-known id becomes available later (e.g. from a response
+        message's `request_id`/`session_id` field after start_segment).
+        """
+        if not context_id or context_id in self._provider_context_ids:
+            return
+        self._provider_context_ids.append(context_id)
+        current_span = trace.get_current_span()
+        if current_span.is_recording():
+            current_span.set_attribute(
+                trace_types.ATTR_PROVIDER_CONTEXT_IDS, self._provider_context_ids
+            )
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:

@@ -517,6 +517,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             current_text = ""
+            current_item_id = ""
             last_interim_at: float = 0
             connected_at = time.time()
             item_audio_timing: dict[str, dict[str, int]] = {}
@@ -546,6 +547,7 @@ class SpeechStream(stt.SpeechStream):
                     msg_type = data.get("type")
                     if msg_type == "input_audio_buffer.speech_started":
                         item_id = data.get("item_id", "")
+                        current_item_id = item_id
                         audio_start_ms = data.get("audio_start_ms", 0)
                         item_audio_timing[item_id] = {"start_ms": audio_start_ms}
 
@@ -557,12 +559,16 @@ class SpeechStream(stt.SpeechStream):
 
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
+                        item_id = data.get("item_id", "") or current_item_id
+                        if item_id:
+                            current_item_id = item_id
                         if delta:
                             current_text += delta
                             if time.time() - last_interim_at > _delta_transcript_interval:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(
                                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                        request_id=current_item_id,
                                         alternatives=[
                                             stt.SpeechData(
                                                 text=current_text,
@@ -582,6 +588,7 @@ class SpeechStream(stt.SpeechStream):
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                    request_id=item_id,
                                     alternatives=[
                                         stt.SpeechData(
                                             text=transcript,
