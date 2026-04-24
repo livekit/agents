@@ -52,12 +52,14 @@ from .audio_recognition import (
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
+    AgentStateChangedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
+    UserTurnExceededEvent,
 )
 from .generation import (
     ToolExecutionOutput,
@@ -168,6 +170,9 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+
+        self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
+        self._user_turn_exceeded_locked: bool = False
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -1383,31 +1388,34 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
-    async def _wait_for_inactive(self) -> None:
+    async def _wait_for_inactive(
+        self, *, wait_for_agent: bool = True, wait_for_user: bool = True
+    ) -> None:
         agent_active = True
         user_active = True
-        while agent_active or user_active:
-            if self._current_speech is None and not self._speech_q:
-                agent_active = False
-            else:
-                agent_active = True
-                if (speech := self._current_speech) and speech._generations:
-                    await speech._wait_for_generation()
-                await asyncio.sleep(0)
+        while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+            if wait_for_agent:
+                if (
+                    self._audio_recognition
+                    and (eou_task := self._audio_recognition._end_of_turn_task)
+                    and not eou_task.done()
+                ):
+                    await eou_task
 
-            if self._user_silence_event.is_set():
-                user_active = False
-            else:
-                user_active = True
-                await self._user_silence_event.wait()
+                if self._current_speech is None and not self._speech_q:
+                    agent_active = False
+                else:
+                    agent_active = True
+                    if (speech := self._current_speech) and speech._generations:
+                        await speech._wait_for_generation()
+                    await asyncio.sleep(0)
 
-            if (
-                self._audio_recognition
-                and (eou_task := self._audio_recognition._end_of_turn_task)
-                and not eou_task.done()
-            ):
-                user_active = True
-                await eou_task
+            if wait_for_user:
+                if self._user_silence_event.is_set():
+                    user_active = False
+                else:
+                    user_active = True
+                    await self._user_silence_event.wait()
 
     # -- Realtime Session events --
 
@@ -2078,6 +2086,62 @@ class AgentActivity(RecognitionHooks):
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
+
+    def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        if self._user_turn_exceeded_locked:
+            return  # user callback is executing, drop
+
+        # cancel previous wait phase (if still waiting for EOU result)
+        if self._user_turn_exceeded_atask is not None:
+            self._user_turn_exceeded_atask.cancel()
+
+        self._user_turn_exceeded_atask = self._create_speech_task(
+            self._user_turn_exceeded_task(ev),
+            name="AgentActivity._user_turn_exceeded_task",
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _user_turn_exceeded_task(self, ev: UserTurnExceededEvent) -> None:
+        agent_speaking_fut = asyncio.Future[None]()
+
+        def _on_agent_state_changed(state_ev: AgentStateChangedEvent) -> None:
+            if state_ev.new_state == "speaking" and not agent_speaking_fut.done():
+                agent_speaking_fut.set_result(None)
+
+        if self._session.agent_state == "speaking":
+            agent_speaking_fut.set_result(None)
+        else:
+            self._session.on("agent_state_changed", _on_agent_state_changed)
+
+        # wait for the EOU-triggered agent response (cancellable by the new user turn exceeded event)
+        wait_inactive = asyncio.ensure_future(
+            self._wait_for_inactive(wait_for_agent=True, wait_for_user=False)
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (agent_speaking_fut, wait_inactive), return_when=asyncio.FIRST_COMPLETED
+            )
+            if agent_speaking_fut in done:
+                # agent started speaking, skip the user turn exceeded event
+                return
+        finally:
+            self._session.off("agent_state_changed", _on_agent_state_changed)
+            if not wait_inactive.done():
+                wait_inactive.cancel()
+
+        # custom callback, locked - don't cancel user's callback
+        logger.debug(
+            "user turn limit exceeded",
+            extra={"num_words": ev.accumulated_word_count, "duration": ev.duration},
+        )
+        self._user_turn_exceeded_locked = True
+        try:
+            await self._agent.on_user_turn_exceeded(ev)
+        except Exception:
+            logger.exception("error in on_user_turn_exceeded callback")
+        finally:
+            self._user_turn_exceeded_locked = False
+            self._user_turn_exceeded_atask = None
 
     # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model  # noqa: E501
     def retrieve_chat_ctx(self) -> llm.ChatContext:

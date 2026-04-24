@@ -15,6 +15,7 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
@@ -253,6 +254,26 @@ class Agent:
         sent to the LLM.
         """
         pass
+
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """Called when the user turn has exceeded the configured limit.
+
+        The user has been speaking for too long without the agent successfully
+        responding. By default, generates a reply using the current turn's
+        transcript (previous turns are already in the chat context).
+
+        Override to customize (e.g., use session.say() with a canned message,
+        or skip the interruption entirely).
+        """
+        await self.session.generate_reply(
+            user_input=ev.transcript,
+            instructions=(
+                "The user has been speaking too long without giving a chance to reply. "
+                "Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+            ),
+            allow_interruptions=False,
+            tool_choice="none",
+        )
 
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings

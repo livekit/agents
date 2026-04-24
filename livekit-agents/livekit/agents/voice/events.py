@@ -219,6 +219,20 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class UserTurnExceededEvent(BaseModel):
+    type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
+    transcript: str
+    """Transcript from the current (uncommitted) user turn only.
+    Previous turns in the accumulation window are already in the chat context."""
+    accumulated_transcript: str
+    """Full transcript since the start of user speaking."""
+    accumulated_word_count: int
+    """Total word count since the start of user speaking."""
+    duration: float
+    """Duration of the user turn in seconds."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
