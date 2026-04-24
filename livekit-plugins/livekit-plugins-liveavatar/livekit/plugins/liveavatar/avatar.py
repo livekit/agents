@@ -70,7 +70,9 @@ class AvatarSession(BaseAvatarSession):
                 conn_options=conn_options,
             )
         self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
-        self._video_quality: VideoQuality | None = video_quality if is_given(video_quality) else None
+        self._video_quality: VideoQuality | None = (
+            video_quality if is_given(video_quality) else None
+        )
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
