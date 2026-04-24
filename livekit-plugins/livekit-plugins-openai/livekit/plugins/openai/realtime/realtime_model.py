@@ -48,6 +48,7 @@ from openai.types.realtime import (
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
     ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
     InputAudioBufferAppendEvent,
@@ -818,6 +819,7 @@ class RealtimeSession(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
         self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
+        self._input_transcriptions: dict[str, str] = {}  # accumulated transcript per item_id
 
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
@@ -1064,10 +1066,9 @@ class RealtimeSession(
                             ConversationItemDeletedEvent.construct(**event)
                         )
                     elif event["type"] == "conversation.item.input_audio_transcription.delta":
-                        # currently incoming transcripts are transcribed only after the user stops speaking
-                        # it's not very useful to emit these as the transcribe process takes place within ~100ms
-                        # when they handle streaming transcriptions, we'll handle it then.
-                        pass
+                        self._handle_conversion_item_input_audio_transcription_delta(
+                            ConversationItemInputAudioTranscriptionDeltaEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -1751,10 +1752,33 @@ class RealtimeSession(
             else:
                 fut.set_result(None)
 
+    def _handle_conversion_item_input_audio_transcription_delta(
+        self, event: ConversationItemInputAudioTranscriptionDeltaEvent
+    ) -> None:
+        delta = event.delta or ""
+        if not delta:
+            return
+
+        accumulated = self._input_transcriptions.get(event.item_id, "")
+        accumulated += delta
+        self._input_transcriptions[event.item_id] = accumulated
+
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=accumulated,
+                is_final=False,
+            ),
+        )
+
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
         confidence = calculate_confidence_from_logprobs(event.logprobs)
+
+        # clean up accumulated delta state
+        self._input_transcriptions.pop(event.item_id, None)
 
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             assert isinstance(remote_item.item, llm.ChatMessage)
