@@ -23,6 +23,7 @@ from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.speech_handle import SpeechHandle
 
+from .fake_io import FakeAudioOutput
 from .fake_session import FakeActions, create_session, run_session
 
 
@@ -859,6 +860,25 @@ async def test_paused_speech_info_refreshes_after_handle_step_advances() -> None
     assert activity._paused_speech is not None
     assert activity._paused_speech.generation_step == 2
     assert activity._paused_speech.agent_state == "speaking"
+
+
+async def test_stale_paused_speech_cleanup_resumes_audio_output() -> None:
+    session: AgentSession[None] = AgentSession(aec_warmup_duration=None)
+    session.output.audio = audio_output = FakeAudioOutput(can_pause=True)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+    speech_handle = SpeechHandle.create()
+
+    activity._current_speech = speech_handle
+    activity._update_paused_speech(speech_handle, timeout=0)
+    audio_output.pause()
+    assert audio_output._paused_at is not None
+
+    speech_handle._advance_step()
+    activity._start_false_interruption_timer(timeout=0)
+    await asyncio.sleep(0.01)
+
+    assert activity._paused_speech is None
+    assert audio_output._paused_at is None
 
 
 # helpers

@@ -3480,13 +3480,20 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
 
         def _on_false_interruption() -> None:
+            paused_speech = self._paused_speech
             if (
-                self._paused_speech is None
-                or (self._current_speech and self._current_speech is not self._paused_speech.handle)
-                or (self._paused_speech.generation_step != self._paused_speech.handle.num_steps)
+                paused_speech is None
+                or (self._current_speech and self._current_speech is not paused_speech.handle)
+                or (paused_speech.generation_step != paused_speech.handle.num_steps)
             ):
                 # already new speech is scheduled, do nothing
                 self._paused_speech = None
+                if (
+                    paused_speech is not None
+                    and (audio_output := self._session.output.audio)
+                    and audio_output.can_pause
+                ):
+                    audio_output.resume()
                 return
 
             resumed = False
@@ -3494,13 +3501,13 @@ class AgentActivity(RecognitionHooks):
                 self._session.options.interruption["resume_false_interruption"]
                 and (audio_output := self._session.output.audio)
                 and audio_output.can_pause
-                and not self._paused_speech.handle.done()
+                and not paused_speech.handle.done()
             ):
                 self._session._update_agent_state(
-                    self._paused_speech.agent_state,
-                    otel_context=self._paused_speech.handle._agent_turn_context,
+                    paused_speech.agent_state,
+                    otel_context=paused_speech.handle._agent_turn_context,
                 )
-                if self._audio_recognition and self._paused_speech.agent_state == "speaking":
+                if self._audio_recognition and paused_speech.agent_state == "speaking":
                     self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._interruption_by_audio_activity_enabled = False
