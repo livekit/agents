@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from enum import Enum
 from typing import Any
 
 import aiohttp
@@ -22,6 +23,13 @@ class LiveAvatarException(Exception):
 
 
 DEFAULT_API_URL = "https://api.liveavatar.com/v1/sessions"
+
+
+class VideoQuality(str, Enum):
+    VERY_HIGH = "very_high"  # 1080p
+    HIGH = "high"  # 720p
+    MEDIUM = "medium"  # 480p
+    LOW = "low"  # 360p
 
 
 class LiveAvatarAPI:
@@ -54,6 +62,7 @@ class LiveAvatarAPI:
         room: rtc.Room,
         avatar_id: str,
         is_sandbox: bool = False,
+        video_quality: VideoQuality | None = None,
     ) -> dict[str, Any]:
         """Create a new streaming session, return a session id"""
 
@@ -63,12 +72,14 @@ class LiveAvatarAPI:
             "livekit_client_token": livekit_token,
         }
 
-        payload = {
+        payload: dict[str, Any] = {
             "mode": "LITE",
             "avatar_id": avatar_id,
             "is_sandbox": is_sandbox,
             "livekit_config": livekit_config,
         }
+        if video_quality is not None:
+            payload["video_settings"] = {"quality": video_quality.value}
 
         self._headers = {
             "accept": "application/json",

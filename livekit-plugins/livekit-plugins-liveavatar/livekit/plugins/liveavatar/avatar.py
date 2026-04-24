@@ -26,7 +26,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import LiveAvatarAPI, LiveAvatarException
+from .api import LiveAvatarAPI, LiveAvatarException, VideoQuality
 from .log import logger
 
 SAMPLE_RATE = 24000
@@ -45,6 +45,7 @@ class AvatarSession:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         is_sandbox: NotGivenOr[bool] = NOT_GIVEN,
+        video_quality: NotGivenOr[VideoQuality] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -65,6 +66,7 @@ class AvatarSession:
                 conn_options=conn_options,
             )
         self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
+        self._video_quality: VideoQuality | None = video_quality if is_given(video_quality) else None
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
@@ -131,6 +133,7 @@ class AvatarSession:
             room=self._room,
             avatar_id=self._avatar_id,
             is_sandbox=self._is_sandbox,
+            video_quality=self._video_quality,
         )
         self._session_id = session_config_data["data"]["session_id"]
         self._session_token = session_config_data["data"]["session_token"]
