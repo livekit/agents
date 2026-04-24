@@ -670,8 +670,8 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], Literal[None]]: ...
+        self, format: Literal["mistralai"]
+    ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
@@ -705,7 +705,7 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+            return _provider_format.mistralai.to_conversations_ctx(self)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 

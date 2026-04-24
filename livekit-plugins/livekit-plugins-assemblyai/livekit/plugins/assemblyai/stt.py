@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -282,6 +283,7 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -380,6 +382,7 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+                    self._last_frame_sent_at = time.time()
 
             closing_ws = True
             logger.debug("AssemblyAI sending close message session=%s", self._session_id)
@@ -404,6 +407,17 @@ class SpeechStream(stt.SpeechStream):
                             consecutive_timeouts * 5,
                             self._session_id,
                         )
+                        # If the send side is also idle, the stall is upstream
+                        # of this plugin (no audio reaching us). Otherwise
+                        # frames are flowing and the stall is downstream.
+                        if self._last_frame_sent_at is not None:
+                            send_idle_s = time.time() - self._last_frame_sent_at
+                            if send_idle_s >= 15:
+                                logger.warning(
+                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
+                                    send_idle_s,
+                                    self._session_id,
+                                )
                     continue
 
                 if msg.type in (
