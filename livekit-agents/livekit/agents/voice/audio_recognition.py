@@ -185,7 +185,7 @@ class AudioRecognition:
         self._agent_speaking: bool = False
 
         self._user_turn_span: trace.Span | None = None
-        self._stt_context_ids: list[str] = []
+        self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
 
         self._vad_speech_started: bool = False
@@ -681,8 +681,8 @@ class AudioRecognition:
         # Collect provider-known STT ids for this user turn. The actual attribute
         # is written once when the user_turn span ends (see _on_end_of_turn), to
         # avoid ordering issues with span creation.
-        if ev.request_id and ev.request_id not in self._stt_context_ids:
-            self._stt_context_ids.append(ev.request_id)
+        if ev.request_id and ev.request_id not in self._stt_request_ids:
+            self._stt_request_ids.append(ev.request_id)
 
         if (
             self._turn_detection_mode == "manual"
@@ -1044,13 +1044,13 @@ class AudioRecognition:
                         trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
                     }
                 )
-                if self._stt_context_ids:
+                if self._stt_request_ids:
                     user_turn_span.set_attribute(
-                        trace_types.ATTR_PROVIDER_CONTEXT_IDS, self._stt_context_ids
+                        trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
                 user_turn_span.end()
                 self._user_turn_span = None
-                self._stt_context_ids = []
+                self._stt_request_ids = []
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
