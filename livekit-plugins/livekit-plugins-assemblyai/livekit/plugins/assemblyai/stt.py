@@ -362,6 +362,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -380,6 +381,13 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    if not anchored:
+                        # Anchor the stream's wall-clock to the moment just
+                        # before the first frame is sent — aligned with the
+                        # server's stream-relative zero used by
+                        # SpeechStarted.timestamp.
+                        self.start_time = time.time()
+                        anchored = True
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
                     self._last_frame_sent_at = time.time()
@@ -568,7 +576,21 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            # SpeechStarted can arrive well after actual speech onset. The
+            # `timestamp` field carries the server VAD's onset time in stream-
+            # relative ms. Convert to wall-clock by adding self.start_time
+            # (the stream's wall-clock anchor) so the framework records an
+            # accurate _speech_start_time instead of message arrival.
+            timestamp_ms = data.get("timestamp")
+            speech_start_time: float | None = None
+            if timestamp_ms is not None:
+                speech_start_time = self.start_time + timestamp_ms / 1000
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    speech_start_time=speech_start_time,
+                )
+            )
             return
 
         if message_type == "Termination":

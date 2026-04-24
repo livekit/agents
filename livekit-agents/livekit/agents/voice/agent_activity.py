@@ -1647,10 +1647,11 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
-    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
-        speech_start_time = time.time()
-        if ev:
-            speech_start_time = speech_start_time - ev.speech_duration - ev.inference_duration
+    def on_start_of_speech(
+        self,
+        ev: vad.VADEvent | None,
+        speech_start_time: float,
+    ) -> None:
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
