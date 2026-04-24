@@ -226,19 +226,42 @@ async def test_vad_speech_events(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
     transcripts: list[str] = []
-    transcript_received = asyncio.Event()
+    final_received = asyncio.Event()
 
     def on_transcript(ev: llm.InputTranscriptionCompleted):
         transcripts.append(ev.transcript)
-        transcript_received.set()
+        if ev.is_final:
+            final_received.set()
 
     rt_session.on("input_audio_transcription_completed", on_transcript)
     await _push_speech(rt_session, "weather_question")
     rt_session.commit_audio()
 
-    await asyncio.wait_for(transcript_received.wait(), timeout=15)
+    await asyncio.wait_for(final_received.wait(), timeout=15)
     full = " ".join(transcripts).lower()
     assert "weather" in full or "paris" in full
+
+
+@pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
+async def test_input_audio_transcription_interim(rt_session: llm.RealtimeSession):
+    interim_transcripts: list[str] = []
+    final_transcript: list[str] = []
+    final_received = asyncio.Event()
+
+    def on_transcript(ev: llm.InputTranscriptionCompleted):
+        if ev.is_final:
+            final_transcript.append(ev.transcript)
+            final_received.set()
+        else:
+            interim_transcripts.append(ev.transcript)
+
+    rt_session.on("input_audio_transcription_completed", on_transcript)
+    await _push_speech(rt_session, "weather_question")
+    rt_session.commit_audio()
+
+    await asyncio.wait_for(final_received.wait(), timeout=15)
+    assert len(final_transcript) == 1
+    assert len(interim_transcripts) > 0, "expected interim transcription deltas before final"
 
 
 # -- Chat context --
