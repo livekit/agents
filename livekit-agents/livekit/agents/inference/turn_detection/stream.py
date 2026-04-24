@@ -586,31 +586,34 @@ class TurnDetectionStream:
                     )
                 )
 
-            async for frame in self._audio_ch:
-                if isinstance(frame, TurnDetectionStream._FlushSentinel):
-                    for chunk in audio_bstream.flush():
-                        ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
-                        if ogg_bytes:
-                            await _send_encoded(ogg_bytes, num_samples)
-                    await self._send_message_async(ClientMessage(session_flush=SessionFlush()))
-                    continue
+            async def audio_producer() -> None:
+                async for frame in self._audio_ch:
+                    if isinstance(frame, TurnDetectionStream._FlushSentinel):
+                        for chunk in audio_bstream.flush():
+                            encoder.push(chunk)
+                        encoder.flush()
+                        continue
 
-                for chunk in audio_bstream.push(frame.data):
-                    ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
-                    if ogg_bytes:
-                        await _send_encoded(ogg_bytes, num_samples)
+                    for chunk in audio_bstream.push(frame.data):
+                        encoder.push(chunk)
 
-            for chunk in audio_bstream.flush():
-                ogg_bytes, num_samples = encoder.push(chunk).as_tuple()
-                if ogg_bytes:
-                    await _send_encoded(ogg_bytes, num_samples)
+                for chunk in audio_bstream.flush():
+                    encoder.push(chunk)
+                encoder.end_input()
 
-            final_bytes, num_samples = encoder.close().as_tuple()
-            if final_bytes:
-                await _send_encoded(final_bytes, num_samples)
+            async def encode_consumer() -> None:
+                nonlocal closing_ws
+                async for encoded in encoder:
+                    if encoded is None:
+                        await self._send_message_async(ClientMessage(session_flush=SessionFlush()))
+                        continue
+                    if encoded.data:
+                        await _send_encoded(encoded.data, encoded.num_samples)
 
-            closing_ws = True
-            await self._send_message_async(ClientMessage(session_close=SessionClose()))
+                closing_ws = True
+                await self._send_message_async(ClientMessage(session_close=SessionClose()))
+
+            await asyncio.gather(audio_producer(), encode_consumer())
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

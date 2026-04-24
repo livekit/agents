@@ -14,7 +14,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import queue
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,6 +27,9 @@ import av.audio
 import av.container
 
 from livekit import rtc
+
+from ...log import logger
+from .. import aio
 
 
 @dataclass
@@ -47,6 +54,9 @@ _CODEC_TABLE: dict[str, tuple[str, str]] = {
 
 _SUPPORTED_CODECS = Literal["opus", "mp3", "pcm"]
 
+_CLOSE = object()
+_FLUSH = object()
+
 
 def _resolve_codec(codec: str) -> tuple[str, str]:
     """Return (av_encoder_name, container_format) for a public codec name."""
@@ -55,41 +65,16 @@ def _resolve_codec(codec: str) -> tuple[str, str]:
     return _CODEC_TABLE[codec]
 
 
-class _CompactableBuffer(io.RawIOBase):
-    _COMPACT_THRESHOLD = 5 * 1024 * 1024  # reclaim consumed prefix once it exceeds 5MB
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._buf = bytearray()
-        self._read_pos = 0
-
-    def writable(self) -> bool:
-        return True
-
-    def readable(self) -> bool:
-        return False
-
-    def seekable(self) -> bool:
-        """disable back-patching container headers"""
-        return False
-
-    def write(self, b) -> int:  # type: ignore[no-untyped-def]
-        self._buf.extend(b)
-        return len(b)
-
-    def drain(self) -> bytes:
-        if self._read_pos >= len(self._buf):
-            return b""
-        data = bytes(self._buf[self._read_pos :])
-        self._read_pos = len(self._buf)
-        if self._read_pos >= self._COMPACT_THRESHOLD:
-            self._buf.clear()
-            self._read_pos = 0
-        return data
-
-
 class AudioStreamEncoder:
-    """Encode PCM AudioFrames into a compressed audio byte stream."""
+    """Encode PCM AudioFrames into a compressed audio byte stream.
+
+    Encoding is performed on a dedicated background thread.  Call
+    ``push`` to queue frames (non-blocking), and iterate with
+    ``async for`` to receive ``EncodedAudioData`` pages.
+
+    A ``None`` value yielded by the iterator indicates a flush point
+    (see ``flush``).
+    """
 
     def __init__(
         self,
@@ -107,73 +92,147 @@ class AudioStreamEncoder:
         "compression_level": "0", "vbr": "on"}`` for a low-latency libopus profile).
         Values must be strings.
         """
+        self._codec = codec
         self._sample_rate = sample_rate
         self._num_channels = num_channels
-        self._layout = "mono" if num_channels == 1 else "stereo"
+        self._bit_rate = bit_rate
+        self._codec_options = codec_options
 
-        av_codec, container_format = _resolve_codec(codec)
-
-        self._output_buf = _CompactableBuffer()
-        self._container: av.container.OutputContainer = av.open(
-            self._output_buf,
-            mode="w",
-            format=container_format,
-        )
-        self._stream: av.audio.AudioStream = self._container.add_stream(  # type: ignore[assignment]
-            av_codec,
-            rate=sample_rate,
-            layout=self._layout,
-            options=codec_options,
-        )
-        self._stream.bit_rate = bit_rate
-
+        self._output_ch = aio.Chan[EncodedAudioData | None]()
+        self._input_q: queue.Queue[rtc.AudioFrame | object] = queue.Queue()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="AudioEncoder")
+        self._started = False
         self._closed = False
-        self._pending_samples = 0
+        self._loop = asyncio.get_event_loop()
 
-    def _flush(self) -> EncodedAudioData:
-        data = self._output_buf.drain()
-        if not data:
-            return EncodedAudioData(data=b"", num_samples=0)
-
-        num_samples = self._pending_samples
-        self._pending_samples = 0
-        return EncodedAudioData(data=data, num_samples=num_samples)
-
-    def push(self, frame: rtc.AudioFrame) -> EncodedAudioData:
-        """Encode a PCM audio frame.
-
-        Returns any new encoded bytes produced by the muxer (may be empty when
-        the container hasn't flushed a full page yet).  The very first call
-        includes container headers (e.g. OGG OpusHead / OpusTags) if not empty.
-        """
+    def push(self, frame: rtc.AudioFrame) -> None:
+        """Queue a PCM frame for encoding.  Returns immediately."""
         if self._closed:
             raise RuntimeError("encoder is closed")
 
-        av_frame = av.AudioFrame(
-            format="s16",
-            layout=self._layout,
-            samples=frame.samples_per_channel,
-        )
-        av_frame.rate = self._sample_rate
-        av_frame.planes[0].update(bytes(frame.data))
+        self._input_q.put(frame)
+        if not self._started:
+            self._started = True
+            self._loop.run_in_executor(self._executor, self._encode_loop)
 
-        for packet in self._stream.encode(av_frame):
-            self._container.mux(packet)
+    def flush(self) -> None:
+        """Insert a flush marker.
 
-        self._pending_samples += frame.samples_per_channel
-
-        return self._flush()
-
-    def close(self) -> EncodedAudioData:
-        """Finalize the container and return any remaining bytes (e.g. OGG EOS).
-
-        The encoder must not be used after calling this method.
+        The iterator will yield ``None`` once all frames pushed before
+        this call have been encoded and emitted.
         """
-        if self._closed:
-            return EncodedAudioData(data=b"", num_samples=0)
+        self._input_q.put(_FLUSH)
 
+    def end_input(self) -> None:
+        """Signal that no more frames will be pushed."""
+        self._input_q.put(_CLOSE)
+        if not self._started:
+            self._output_ch.close()
+
+    def _encode_loop(self) -> None:
+        layout = "mono" if self._num_channels == 1 else "stereo"
+        av_codec, container_format = _resolve_codec(self._codec)
+
+        output_buf = _OutputBuffer()
+        container: av.container.OutputContainer = av.open(
+            output_buf, mode="w", format=container_format
+        )
+        stream: av.audio.AudioStream = container.add_stream(  # type: ignore[assignment]
+            av_codec, rate=self._sample_rate, layout=layout, options=self._codec_options
+        )
+        stream.bit_rate = self._bit_rate
+        pending_samples = 0
+
+        def _emit() -> None:
+            nonlocal pending_samples
+            data = output_buf.drain()
+            if data:
+                enc = EncodedAudioData(data=data, num_samples=pending_samples)
+                pending_samples = 0
+                self._loop.call_soon_threadsafe(self._output_ch.send_nowait, enc)
+
+        try:
+            while True:
+                item = self._input_q.get()
+                if item is _CLOSE:
+                    break
+                if item is _FLUSH:
+                    _emit()
+                    self._loop.call_soon_threadsafe(self._output_ch.send_nowait, None)
+                    continue
+
+                frame: rtc.AudioFrame = item  # type: ignore[assignment]
+                av_frame = av.AudioFrame(
+                    format="s16", layout=layout, samples=frame.samples_per_channel
+                )
+                av_frame.rate = self._sample_rate
+                av_frame.planes[0].update(bytes(frame.data))
+
+                for packet in stream.encode(av_frame):
+                    container.mux(packet)
+                pending_samples += frame.samples_per_channel
+                _emit()
+
+            for packet in stream.encode(None):
+                container.mux(packet)
+            container.close()
+            _emit()
+        except Exception:
+            logger.exception("error encoding audio")
+        finally:
+            self._loop.call_soon_threadsafe(self._output_ch.close)
+
+    def __aiter__(self) -> AsyncIterator[EncodedAudioData | None]:
+        return self
+
+    async def __anext__(self) -> EncodedAudioData | None:
+        return await self._output_ch.__anext__()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
         self._closed = True
-        for packet in self._stream.encode(None):
-            self._container.mux(packet)
-        self._container.close()
-        return self._flush()
+        self.end_input()
+
+        async for _ in self._output_ch:
+            pass
+
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+class _OutputBuffer(io.RawIOBase):
+    """Capture buffer for PyAV's muxer output.
+
+    PyAV writes encoded bytes here via ``write()``, and the encode loop
+    drains them with ``drain()``.  All access is from the encode thread.
+    """
+
+    _COMPACT_THRESHOLD = 5 * 1024 * 1024
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._buf = bytearray()
+        self._read_pos = 0
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def write(self, b) -> int:  # type: ignore[no-untyped-def]
+        self._buf.extend(b)
+        return len(b)
+
+    def drain(self) -> bytes:
+        if self._read_pos >= len(self._buf):
+            return b""
+        data = bytes(self._buf[self._read_pos :])
+        self._read_pos = len(self._buf)
+        if self._read_pos >= self._COMPACT_THRESHOLD:
+            self._buf.clear()
+            self._read_pos = 0
+        return data
