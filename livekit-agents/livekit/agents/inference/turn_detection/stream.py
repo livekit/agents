@@ -344,10 +344,9 @@ class TurnDetectionStream:
                     return
 
                 probability = prediction.probability
-                stats = prediction.processing_stats
-                inference_stats = stats.inference_stats
+                inference_stats = prediction.inference_stats
                 window_started_at_ms = self._active_window_min_client_created_at_ms
-                request_sent_at_ms = stats.latest_client_created_at.ToMilliseconds()
+                request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
 
                 if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
                     logger.trace(
@@ -359,8 +358,8 @@ class TurnDetectionStream:
                             "probability": probability,
                             "backend": backend,
                             "stats": {
-                                "e2e_latency_ms": stats.e2e_latency.ToMilliseconds(),
-                                "inference_e2e_latency_ms": inference_stats.e2e_latency.ToMilliseconds(),
+                                "client_e2e_latency_ms": inference_stats.client_e2e_latency.ToMilliseconds(),
+                                "server_e2e_latency_ms": inference_stats.server_e2e_latency.ToMilliseconds(),
                                 "preprocessing_duration_ms": inference_stats.preprocessing_duration.ToMilliseconds(),
                                 "inference_duration_ms": inference_stats.inference_duration.ToMilliseconds(),
                             },
@@ -376,7 +375,7 @@ class TurnDetectionStream:
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
                 detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
-                inference_duration_ms = inference_stats.e2e_latency.ToMilliseconds()
+                inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
 
                 logger.debug(
                     "turn detection result received",
@@ -613,7 +612,10 @@ class TurnDetectionStream:
                 closing_ws = True
                 await self._send_message_async(ClientMessage(session_close=SessionClose()))
 
-            await asyncio.gather(audio_producer(), encode_consumer())
+            try:
+                await asyncio.gather(audio_producer(), encode_consumer())
+            finally:
+                await encoder.aclose()
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
