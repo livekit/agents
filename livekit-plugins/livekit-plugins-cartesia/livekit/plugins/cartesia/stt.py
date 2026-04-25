@@ -37,7 +37,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
-from .constants import API_VERSION, REQUEST_ID_HEADER, USER_AGENT
+from .constants import API_AUTH_HEADER, API_VERSION, REQUEST_ID_HEADER, USER_AGENT
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
 
@@ -330,7 +330,6 @@ class SpeechStream(stt.SpeechStream):
             "sample_rate": str(self._opts.sample_rate),
             "encoding": self._opts.encoding,
             "cartesia_version": API_VERSION,
-            "api_key": self._opts.api_key,
         }
 
         if self._opts.language:
@@ -343,7 +342,13 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url, headers={"User-Agent": USER_AGENT}),
+                self._session.ws_connect(
+                    ws_url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        API_AUTH_HEADER: self._opts.api_key,
+                    },
+                ),
                 self._conn_options.timeout,
             )
             c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)

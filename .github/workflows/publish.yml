@@ -238,3 +238,10 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+
+  docs:
+    name: Publish docs
+    needs: [publish]
+    if: always() && needs.publish.result == 'success'
+    uses: ./.github/workflows/publish-docs.yml
+    secrets: inherit

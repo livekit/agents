@@ -499,7 +499,7 @@ class SpeechStream(stt.SpeechStream):
                             else:
                                 non_final.update(token)
 
-                        # 2) emit START_OF_SPEECH + interim for remaining content.
+                        # 2) emit START_OF_SPEECH + transcript for remaining content.
                         if final.text or non_final.text:
                             if not is_speaking:
                                 is_speaking = True
@@ -513,9 +513,19 @@ class SpeechStream(stt.SpeechStream):
                                 LanguageCode(lang) for lang, _ in interim_segs
                             ] or None
                             interim_src_texts = [t for _, t in interim_segs] or None
+
+                            # When all tokens in this batch are final (no non-final pending),
+                            # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
+                            # allow preemptive LLM generation. This mirrors Deepgram v2's
+                            # EagerEndOfTurn behavior.
+                            event_type = (
+                                SpeechEventType.PREFLIGHT_TRANSCRIPT
+                                if final.text and not non_final.text
+                                else SpeechEventType.INTERIM_TRANSCRIPT
+                            )
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
-                                    type=SpeechEventType.INTERIM_TRANSCRIPT,
+                                    type=event_type,
                                     alternatives=[
                                         final.merged_speech_data(
                                             non_final,
