@@ -876,13 +876,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         reason: CloseReason,
         drain: bool = False,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        error: llm.LLMError
+        | stt.STTError
+        | tts.TTSError
+        | llm.RealtimeModelError
+        | inference.InterruptionDetectionError
+        | None = None,
     ) -> None:
         if self._closing_task:
             return
-        self._closing_task = asyncio.create_task(
+
+        def on_close_done(task: asyncio.Task[None]) -> None:
+            if self._closing_task is task:
+                self._closing_task = None
+
+        task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
+        self._closing_task = task
+        task.add_done_callback(on_close_done)
 
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
@@ -1399,13 +1411,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 exc_info=error.error,
             )
 
-        def on_close_done(_: asyncio.Task[None]) -> None:
-            self._closing_task = None
-
-        self._closing_task = asyncio.create_task(
-            self._aclose_impl(error=error, reason=CloseReason.ERROR)
-        )
-        self._closing_task.add_done_callback(on_close_done)
+        self._close_soon(error=error, reason=CloseReason.ERROR)
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
