@@ -142,7 +142,7 @@ GroqChatModels = Literal[
 ]
 
 GroqAudioModels = Literal[
-    "whisper-large-v3", "distil-whisper-large-v3-en", "whisper-large-v3-turbo"
+    "whisper-large-v3", "whisper-large-v3-turbo"
 ]
 
 DeepSeekChatModels = Literal[
