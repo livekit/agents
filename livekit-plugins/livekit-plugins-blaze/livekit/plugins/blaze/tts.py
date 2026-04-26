@@ -191,7 +191,11 @@ def _find_batch_split(
     # Hard limit reached: we must split to avoid unbounded buffering.
     if len(text) >= max_chars:
         if punct_positions:
-            return punct_positions[-1]
+            split_pos = punct_positions[-1]
+            # Avoid returning a tiny chunk that caller logic will prepend back,
+            # which can cause a non-progress loop under continuous input.
+            if split_pos >= 8:
+                return split_pos
         return _safe_split_on_whitespace(text, max_chars, floor_idx=min_chars)
 
     # Subsequent batches: prefer a boundary around target size (instead of
