@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
@@ -33,6 +34,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     tts,
+    utils,
 )
 from livekit.agents.utils import shortuuid
 from livekit.agents.utils.aio.channel import ChanClosed, ChanEmpty
@@ -48,7 +50,7 @@ _SENTENCE_END_RE = re.compile(r"(?:\n\n+|\n|[.!?;:。！？；：](?:\s|$))")
 
 
 @asynccontextmanager
-async def _asyncio_timeout(timeout_s: float):
+async def _asyncio_timeout(timeout_s: float) -> AsyncIterator[None]:
     """Compatibility timeout context for Python 3.10+.
 
     Uses ``asyncio.timeout`` when available (3.11+). On older versions,
@@ -849,12 +851,12 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         # Close the single speech session
                         await ws.send(json.dumps({"event": "speech-end"}))
 
-                    except Exception:
-                        reader_task.cancel()
-                        raise
-
-                    # Wait for all audio to arrive
-                    seg_count, _ = await reader_task
+                        # Wait for all audio to arrive
+                        seg_count, _ = await reader_task
+                    finally:
+                        # Always cancel and await reader_task to prevent
+                        # "Task destroyed but pending" / exception-not-retrieved warnings.
+                        await utils.aio.gracefully_cancel(reader_task)
 
                     if not stream_initialized:
                         # No audio arrived, but keep emitter lifecycle consistent.
