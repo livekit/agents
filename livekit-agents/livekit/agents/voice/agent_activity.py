@@ -5,6 +5,7 @@ import contextvars
 import heapq
 import json
 import time
+import warnings
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -1074,16 +1075,28 @@ class AgentActivity(RecognitionHooks):
             and isinstance(self.llm, llm.RealtimeModel)
             and self.llm.capabilities.supports_say
         ):
-            if not add_to_chat_ctx:
-                logger.warning(
-                    "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
-                    "the message will still be added to the chat context"
+            if not add_to_chat_ctx and not self.llm.capabilities.ephemeral_say:
+                # Per ADR 0005-style deprecation cycle: emit DeprecationWarning
+                # in this release; a future release will replace this with
+                # NotImplementedError. Silent-degrade preserved for the
+                # deprecation window.
+                warnings.warn(
+                    f"{type(self.llm).__name__} supports say() but does not "
+                    "support add_to_chat_ctx=False (ephemeral say). The text "
+                    "will be added to chat context anyway in this release. "
+                    "In a future release this will raise NotImplementedError "
+                    "instead of warning. Either remove add_to_chat_ctx=False "
+                    "or use a plugin that declares ephemeral_say=True "
+                    "(currently: OpenAI plugin).",
+                    DeprecationWarning,
+                    stacklevel=2,
                 )
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
                     text=text,
                     model_settings=ModelSettings(),
+                    add_to_chat_ctx=add_to_chat_ctx,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.realtime_say",
@@ -2812,6 +2825,7 @@ class AgentActivity(RecognitionHooks):
         instructions: str | None = None,
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
+        add_to_chat_ctx: bool = True,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
@@ -2828,7 +2842,7 @@ class AgentActivity(RecognitionHooks):
 
         if text is not None:
             try:
-                generation_ev = await self._rt_session.say(text)
+                generation_ev = await self._rt_session.say(text, add_to_chat_ctx=add_to_chat_ctx)
             except llm.RealtimeError as e:
                 logger.error("failed to say text: %s", str(e))
                 return
@@ -2837,6 +2851,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                add_to_chat_ctx=add_to_chat_ctx,
             )
             return
 
@@ -2916,6 +2931,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        add_to_chat_ctx: bool = True,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
@@ -2930,6 +2946,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                add_to_chat_ctx=add_to_chat_ctx,
             )
 
     async def _realtime_generation_task_impl(
@@ -2939,6 +2956,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        add_to_chat_ctx: bool = True,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
