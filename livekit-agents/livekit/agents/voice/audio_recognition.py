@@ -190,7 +190,6 @@ class AudioRecognition:
 
     async def aclose(self) -> None:
         self._closing.set()
-
         if self._commit_user_turn_atask is not None:
             try:
                 await self._commit_user_turn_atask
