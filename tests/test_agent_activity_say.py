@@ -13,7 +13,6 @@ otherwise spins up audio recognition and other subsystems.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -98,6 +97,12 @@ def _make_activity_with_realtime(
     def _capture_dispatch(coro: Any, **kwargs: Any) -> Any:
         captured_dispatch["coro"] = coro
         captured_dispatch["kwargs"] = kwargs
+        # Capture the coroutine's frame locals so we can verify the actual
+        # kwargs that AgentActivity.say() forwarded into _realtime_reply_task
+        # (e.g., add_to_chat_ctx). cr_frame.f_locals is populated immediately
+        # after coroutine creation with the function's argument bindings.
+        if coro.cr_frame is not None:
+            captured_dispatch["coro_locals"] = dict(coro.cr_frame.f_locals)
         # Close the coroutine so it doesn't warn about being un-awaited.
         coro.close()
         return None
@@ -139,15 +144,26 @@ def test_agent_activity_say_realtime_no_warning_when_ephemeral_say_true() -> Non
 
 
 def test_agent_activity_say_realtime_dispatches_with_add_to_chat_ctx() -> None:
-    """add_to_chat_ctx kwarg flows from say() into _realtime_reply_task."""
+    """add_to_chat_ctx kwarg flows from say() into _realtime_reply_task.
+
+    Verifies BOTH (a) the realtime path is dispatched (task name marker) AND
+    (b) the actual add_to_chat_ctx value is forwarded to _realtime_reply_task
+    by inspecting the coroutine's frame locals.
+    """
     activity, _rt_model = _make_activity_with_realtime(ephemeral_say=True)
 
     activity.say("verification token alpha-bravo", add_to_chat_ctx=False)
 
     captured = activity._captured_dispatch  # type: ignore[attr-defined]
-    # The dispatch arg should be the _realtime_reply_task coroutine.
-    # Verify the dispatched task has the correct name marker.
     assert captured["kwargs"].get("name") == "AgentActivity.realtime_say"
+    coro_locals = captured.get("coro_locals", {})
+    # _realtime_reply_task is decorated; the kwargs are inside coro_locals["kwargs"].
+    inner_kwargs = coro_locals.get("kwargs", {})
+    assert inner_kwargs.get("add_to_chat_ctx") is False, (
+        f"AgentActivity.say() did not forward add_to_chat_ctx=False to "
+        f"_realtime_reply_task; inner_kwargs={inner_kwargs!r}"
+    )
+    assert inner_kwargs.get("text") == "verification token alpha-bravo"
 
 
 def test_agent_activity_say_realtime_dispatches_default_add_to_chat_ctx_true() -> None:
@@ -160,43 +176,12 @@ def test_agent_activity_say_realtime_dispatches_default_add_to_chat_ctx_true() -
     assert captured["kwargs"].get("name") == "AgentActivity.realtime_say"
 
 
-def test_openai_realtime_say_isolation_no_local_leak() -> None:
-    """The chat_ctx upsert in _realtime_generation_task_impl is gated on add_to_chat_ctx.
-
-    Source-level inspection: detects regressions where the gate is removed.
-    Behavioral end-to-end coverage is provided by the integration tests against
-    the real OpenAI API.
-    """
-    import inspect as _inspect  # noqa: PLC0415
-
-    src = _inspect.getsource(AgentActivity._realtime_generation_task_impl)
-    lines = src.splitlines()
-    upsert_line_idx = next((i for i, ln in enumerate(lines) if "_upsert_item(msg)" in ln), -1)
-    assert upsert_line_idx >= 0, (
-        "_upsert_item(msg) call not found in _realtime_generation_task_impl"
-    )
-    # Look at the conditional that precedes the upsert (within ~10 lines).
-    preceding = "\n".join(lines[max(0, upsert_line_idx - 10) : upsert_line_idx])
-    assert "and add_to_chat_ctx" in preceding, (
-        "the chat_ctx upsert is no longer guarded by add_to_chat_ctx"
-    )
-
-
-def test_agent_handoff_does_not_propagate_isolated_text() -> None:
-    """_realtime_generation_task_impl signature exposes add_to_chat_ctx as keyword-only.
-
-    The handoff path mutates a new agent's chat_ctx by reading the prior agent's
-    chat_ctx; gating the upsert ensures isolated text is never written, so it
-    cannot propagate. Behavioral coverage in integration tests.
-    """
-    import inspect as _inspect  # noqa: PLC0415
-
-    sig = _inspect.signature(AgentActivity._realtime_generation_task_impl)
-    assert "add_to_chat_ctx" in sig.parameters
-    param = sig.parameters["add_to_chat_ctx"]
-    assert param.default is True
-    assert param.kind is _inspect.Parameter.KEYWORD_ONLY
-
-
-# Suppress unused-import lint
-_ = asyncio
+# The source-inspection stubs for test_openai_realtime_say_isolation_no_local_leak
+# and test_agent_handoff_does_not_propagate_isolated_text were replaced with
+# behavioral tests in tests/test_realtime/test_realtime_say_integration.py:
+#   - test_openai_realtime_say_isolation_no_local_leak: behavioral positive+negative
+#     control that runs _realtime_generation_task_impl with a real message stream
+#     and asserts _chat_ctx._upsert_item is/isn't called per add_to_chat_ctx.
+#   - test_agent_handoff_does_not_propagate_isolated_text: dropped per OQ-1 (the
+#     gate proof at _realtime_generation_task_impl makes this redundant; update_agent
+#     does not propagate the old agent's chat_ctx, so the assertion was vacuous).

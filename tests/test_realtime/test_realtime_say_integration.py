@@ -1,21 +1,28 @@
-"""Integration tests for ephemeral say() on the OpenAI Realtime plugin.
+"""Integration and behavioral tests for ephemeral say() on the OpenAI Realtime plugin.
 
-Verifies the isolation contract for ephemeral say() end-to-end against the
-real OpenAI Realtime API:
+Verifies the isolation contract for ephemeral say():
 
 - Audibility: text passed to say() reaches the audio channel.
 - Server-side isolation: text passed with add_to_chat_ctx=False does not enter
   the substrate's conversation state (verified by a follow-up generate_reply
   that cannot retrieve the text).
 - Wire-format metadata: outbound response.create carries client_event_id.
+- Local chat_ctx gate (behavioral): the gate at _realtime_generation_task_impl
+  prevents the secret from entering agent._chat_ctx when add_to_chat_ctx=False.
+  Verified with positive control (add_to_chat_ctx=True must write to context).
+- Orphan filter (behavioral): late-arriving response.created with a popped
+  future is discarded, _current_generation is not set, response.cancel sent.
 
-Tests skip when OPENAI_API_KEY is not set.
+Tests requiring the real OpenAI API skip when OPENAI_API_KEY is not set.
+The local-gate and orphan-filter tests run without a network connection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import nullcontext
+from typing import Any
 
 import pytest
 from dotenv import load_dotenv
@@ -170,3 +177,299 @@ async def test_openai_realtime_say_isolation_no_remote_chat_ctx_leak(
         repr(getattr(item, "content", "")) for item in getattr(chat_ctx, "items", [])
     ).lower()
     assert secret not in flat, f"secret leaked into substrate chat_ctx: {flat!r}"
+
+
+# ---------------------------------------------------------------------------
+# Behavioral tests (no real OpenAI API needed)
+# ---------------------------------------------------------------------------
+
+
+async def test_openai_realtime_say_isolation_no_local_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local chat_ctx gate prevents the secret from entering agent._chat_ctx.
+
+    Behavioral proof with positive+negative control: first verifies that
+    add_to_chat_ctx=True populates agent._chat_ctx (positive control — would
+    catch a regression where local insertion silently stops working), then
+    verifies add_to_chat_ctx=False does NOT.
+
+    This test exercises the actual gate code at _realtime_generation_task_impl
+    by running the function with minimal infrastructure patches. No OpenAI API
+    call is made.
+    """
+    from livekit.agents.llm.chat_context import ChatContext  # noqa: PLC0415
+    from livekit.agents.voice.agent import ModelSettings  # noqa: PLC0415
+    from livekit.agents.voice.agent_activity import AgentActivity  # noqa: PLC0415
+    from livekit.agents.voice.speech_handle import SpeechHandle  # noqa: PLC0415
+
+    # Stub the tracer so start_as_current_span doesn't require an OTEL backend.
+    class _NoopSpan:
+        def set_attribute(self, *a: Any, **kw: Any) -> None:
+            pass
+
+        def set_attributes(self, *a: Any, **kw: Any) -> None:
+            pass
+
+    class _NoopTracer:
+        def start_as_current_span(self, *a: Any, **kw: Any) -> Any:
+            return nullcontext(_NoopSpan())
+
+    monkeypatch.setattr("livekit.agents.voice.agent_activity.tracer", _NoopTracer())
+
+    # Stub perform_tool_executions to return a pre-completed no-op task
+    # with a _ToolOutput object that has the required first_tool_started_fut.
+    from livekit.agents.voice.generation import _ToolOutput  # noqa: PLC0415
+
+    async def _noop_tool_exec(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    def _stub_perform_tool_executions(*args: Any, **kwargs: Any) -> Any:
+        fut: asyncio.Future[None] = asyncio.Future()
+        fut.set_result(None)  # pre-complete so callbacks fire immediately
+        return (
+            asyncio.create_task(_noop_tool_exec()),
+            _ToolOutput(output=[], first_tool_started_fut=fut),
+        )
+
+    monkeypatch.setattr(
+        "livekit.agents.voice.agent_activity.perform_tool_executions",
+        _stub_perform_tool_executions,
+    )
+
+    async def _run_gate_test(add_to_chat_ctx: bool) -> list[Any]:
+        """Run _realtime_generation_task_impl with a given add_to_chat_ctx flag.
+
+        Returns the list of items captured by the _upsert_item spy.
+        """
+        secret = "purple-elephant-42"
+
+        class _Caps:
+            supports_say = True
+            ephemeral_say = True
+            turn_detection = False
+            audio_output = False
+
+        caps = _Caps()
+
+        chat_ctx = ChatContext.empty()
+        upsert_calls: list[Any] = []
+        real_upsert = chat_ctx._upsert_item
+
+        def _spy_upsert(item: Any) -> Any:
+            upsert_calls.append(item)
+            return real_upsert(item)
+
+        chat_ctx._upsert_item = _spy_upsert  # type: ignore[method-assign]
+
+        class _ModelStub(llm.RealtimeModel):
+            def __init__(self) -> None:
+                self._capabilities = caps
+
+            @property
+            def capabilities(self) -> Any:  # type: ignore[override]
+                return self._capabilities
+
+            @property
+            def model(self) -> str:
+                return "test-model"
+
+            @property
+            def provider(self) -> str:
+                return "test"
+
+            def session(self) -> Any:
+                raise NotImplementedError
+
+            async def aclose(self) -> None:
+                pass
+
+        rt_model = _ModelStub()
+
+        activity = AgentActivity.__new__(AgentActivity)
+
+        class _AgentShim:
+            llm = rt_model
+            tts = None
+            stt = None
+            allow_interruptions = True
+            _chat_ctx = chat_ctx
+            tools: list[Any] = []
+
+            def transcription_node(self, text: Any, model_settings: Any) -> Any:
+                return text
+
+            def tts_node(self, *a: Any, **kw: Any) -> Any:
+                return None
+
+            @property
+            def use_tts_aligned_transcript(self) -> bool:
+                return False
+
+        class _OutputShim:
+            audio = None
+            audio_enabled = False
+            transcription = None
+            transcription_enabled = False
+
+        class _SessionShim:
+            llm = rt_model
+            tts = None
+            output = _OutputShim()
+            _room_io = None
+            _root_span_context = None
+            tools: list[Any] = []
+
+            def _conversation_item_added(self, *a: Any) -> None:
+                pass
+
+            def _tool_items_added(self, *a: Any) -> None:
+                pass
+
+            def _update_agent_state(self, *a: Any, **kw: Any) -> None:
+                pass
+
+        activity._agent = _AgentShim()  # type: ignore[attr-defined]
+        activity._session = _SessionShim()  # type: ignore[attr-defined]
+
+        class _RtSessionStub:
+            pass
+
+        activity._rt_session = _RtSessionStub()  # type: ignore[attr-defined]
+        activity._realtime_spans = None  # type: ignore[attr-defined]
+        activity._audio_recognition = None  # type: ignore[attr-defined]
+        activity._interruption_by_audio_activity_enabled = False  # type: ignore[attr-defined]
+        activity._interruption_detection_enabled = False  # type: ignore[attr-defined]
+        activity._mcp_tools: list[Any] = []  # type: ignore[attr-defined]
+        activity._background_speeches: set[Any] = set()  # type: ignore[attr-defined]
+
+        authorized = asyncio.Event()
+        authorized.set()
+        activity._authorization_allowed = authorized  # type: ignore[attr-defined]
+        silence = asyncio.Event()
+        silence.set()
+        activity._user_silence_event = silence  # type: ignore[attr-defined]
+
+        handle = SpeechHandle.create(allow_interruptions=True)
+        # Pre-authorize: set the authorize event so _wait_for_authorization
+        # resolves immediately, and mark scheduled so the handle is valid.
+        handle._authorize_event.set()  # type: ignore[attr-defined]
+        handle._scheduled_fut.set_result(None)  # type: ignore[attr-defined]
+        # Also push one generation future so _mark_generation_done works.
+        handle._generations.append(asyncio.Future())  # type: ignore[attr-defined]
+
+        # Build a generation event with one message that yields our secret text.
+        async def _text_stream() -> Any:
+            yield secret
+
+        async def _empty_audio() -> Any:
+            return
+            yield  # make it an async generator
+
+        async def _empty_func_stream() -> Any:
+            return
+            yield  # make it an async generator
+
+        modalities_fut: asyncio.Future[list[str]] = asyncio.Future()
+        modalities_fut.set_result(["text"])
+
+        msg_gen = llm.MessageGeneration(
+            message_id="test-gate-msg",
+            text_stream=_text_stream(),
+            audio_stream=_empty_audio(),
+            modalities=modalities_fut,
+        )
+
+        async def _msg_stream() -> Any:
+            yield msg_gen
+
+        gen_ev = llm.GenerationCreatedEvent(
+            message_stream=_msg_stream(),
+            function_stream=_empty_func_stream(),
+            user_initiated=True,
+        )
+
+        await activity._realtime_generation_task_impl(
+            speech_handle=handle,
+            generation_ev=gen_ev,
+            model_settings=ModelSettings(),
+            add_to_chat_ctx=add_to_chat_ctx,
+        )
+
+        return upsert_calls
+
+    # Positive control: add_to_chat_ctx=True MUST populate chat_ctx.
+    positive_calls = await _run_gate_test(add_to_chat_ctx=True)
+    assert len(positive_calls) > 0, (
+        "positive control FAILED: add_to_chat_ctx=True did not populate chat_ctx. "
+        "The local insertion path is broken — the negative test would be meaningless."
+    )
+    positive_texts = " ".join(repr(c) for c in positive_calls).lower()
+    assert "purple-elephant-42" in positive_texts, (
+        f"positive control: secret not found in upserted items: {positive_calls!r}"
+    )
+
+    # Negative: add_to_chat_ctx=False must NOT populate chat_ctx.
+    negative_calls = await _run_gate_test(add_to_chat_ctx=False)
+    assert len(negative_calls) == 0, (
+        f"gate FAILED: add_to_chat_ctx=False still called _upsert_item with: {negative_calls!r}"
+    )
+
+
+async def test_orphaned_response_after_timeout_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Orphan filter discards a late response.created when the future has been popped.
+
+    Behavioral proof: directly invokes _handle_response_created with a
+    synthetic late event whose metadata.client_event_id is missing from
+    _response_created_futures. Asserts:
+    - _current_generation remains None (orphan filter early-returned).
+    - A defensive ResponseCancelEvent with the correct response_id was sent.
+
+    No OpenAI API call is made.
+    """
+    from openai.types.realtime import ResponseCancelEvent, ResponseCreatedEvent  # noqa: PLC0415
+    from openai.types.realtime.realtime_response import RealtimeResponse  # noqa: PLC0415
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-not-real")
+    from livekit.plugins.openai.realtime.realtime_model import (  # noqa: PLC0415
+        RealtimeSession,
+    )
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    # Simulate the timeout-popped state: no in-flight futures.
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._current_generation = None  # type: ignore[attr-defined]
+    captured: list[object] = []
+    session.send_event = captured.append  # type: ignore[method-assign]
+
+    orphan_event_id = "response_create_say_orphan-test-abc"
+    response = RealtimeResponse.construct(
+        id="resp_orphan_test_abc",
+        metadata={"client_event_id": orphan_event_id},
+    )
+    event = ResponseCreatedEvent.construct(
+        event_id="evt_orphan_test",
+        response=response,
+        type="response.created",
+    )
+
+    session._handle_response_created(event)
+
+    # Orphan filter must have early-returned: _current_generation stays None.
+    assert session._current_generation is None, (
+        "_current_generation must remain None after orphan-filter early-return"
+    )
+
+    # Defensive cancel WITH response_id must have been sent.
+    cancel_events = [
+        e
+        for e in captured
+        if isinstance(e, ResponseCancelEvent)
+        and getattr(e, "response_id", None) == "resp_orphan_test_abc"
+    ]
+    assert len(cancel_events) == 1, (
+        f"expected exactly one ResponseCancelEvent(response_id='resp_orphan_test_abc'); "
+        f"captured: {captured!r}"
+    )
