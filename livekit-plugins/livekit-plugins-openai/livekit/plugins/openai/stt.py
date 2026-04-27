@@ -50,7 +50,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
 )
 
 from .log import logger
-from .models import GroqAudioModels, STTModels
+from .models import STTModels
 from .utils import AsyncAzureADTokenProvider
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
@@ -229,41 +229,6 @@ class STT(stt.STT):
         )
 
     @staticmethod
-    def with_groq(
-        *,
-        model: GroqAudioModels | str = "whisper-large-v3-turbo",
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
-        language: str = "en",
-        detect_language: bool = False,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
-    ) -> STT:
-        """
-        Create a new instance of Groq STT.
-
-        ``api_key`` must be set to your Groq API key, either using the argument or by setting
-        the ``GROQ_API_KEY`` environmental variable.
-        """
-        groq_api_key = api_key if is_given(api_key) else os.environ.get("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError("Groq API key is required")
-
-        if not is_given(base_url):
-            base_url = "https://api.groq.com/openai/v1"
-
-        return STT(
-            model=model,
-            api_key=groq_api_key,
-            base_url=base_url,
-            client=client,
-            language=language,
-            detect_language=detect_language,
-            prompt=prompt,
-            use_realtime=False,
-        )
-
-    @staticmethod
     def with_ovhcloud(
         *,
         model: str = "whisper-large-v3-turbo",
@@ -314,7 +279,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
