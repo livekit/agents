@@ -1325,13 +1325,13 @@ class SpeechStream(stt.SpeechStream):
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
+            # request_data = {
+            #     "original_id": request_id,
+            #     "processing_latency": metrics.get("processing_latency", 0.0),
+            # }
             usage_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
+                request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),

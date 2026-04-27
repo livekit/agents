@@ -1020,7 +1020,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # Expose the server-assigned request id on the tts_request_run span so
                 # users can correlate traces with Sarvam's logs for debugging. Deduped
                 # internally, so calling on every message is fine.
-                output_emitter.note_provider_request_id(self._server_request_id)
+                output_emitter._note_provider_request_id(self._server_request_id)
 
             if not msg_type:
                 logger.warning(

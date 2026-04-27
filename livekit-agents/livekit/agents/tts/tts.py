@@ -804,10 +804,10 @@ class AudioEmitter:
                 "with stream=True"
             )
 
-        self.note_provider_request_id(segment_id)
+        self._note_provider_request_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
 
-    def note_provider_request_id(self, context_id: str) -> None:
+    def _note_provider_request_id(self, context_id: str) -> None:
         """Record a provider-known id for this stream on the current span.
 
         Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
