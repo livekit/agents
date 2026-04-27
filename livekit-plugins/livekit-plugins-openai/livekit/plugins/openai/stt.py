@@ -50,7 +50,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
 )
 
 from .log import logger
-from .models import GroqAudioModels, STTModels
+from .models import STTModels
 from .utils import AsyncAzureADTokenProvider
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
@@ -229,41 +229,6 @@ class STT(stt.STT):
         )
 
     @staticmethod
-    def with_groq(
-        *,
-        model: GroqAudioModels | str = "whisper-large-v3-turbo",
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
-        language: str = "en",
-        detect_language: bool = False,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
-    ) -> STT:
-        """
-        Create a new instance of Groq STT.
-
-        ``api_key`` must be set to your Groq API key, either using the argument or by setting
-        the ``GROQ_API_KEY`` environmental variable.
-        """
-        groq_api_key = api_key if is_given(api_key) else os.environ.get("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError("Groq API key is required")
-
-        if not is_given(base_url):
-            base_url = "https://api.groq.com/openai/v1"
-
-        return STT(
-            model=model,
-            api_key=groq_api_key,
-            base_url=base_url,
-            client=client,
-            language=language,
-            detect_language=detect_language,
-            prompt=prompt,
-            use_realtime=False,
-        )
-
-    @staticmethod
     def with_ovhcloud(
         *,
         model: str = "whisper-large-v3-turbo",
@@ -314,7 +279,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
@@ -517,6 +482,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             current_text = ""
+            current_item_id = ""
             last_interim_at: float = 0
             connected_at = time.time()
             item_audio_timing: dict[str, dict[str, int]] = {}
@@ -546,6 +512,7 @@ class SpeechStream(stt.SpeechStream):
                     msg_type = data.get("type")
                     if msg_type == "input_audio_buffer.speech_started":
                         item_id = data.get("item_id", "")
+                        current_item_id = item_id
                         audio_start_ms = data.get("audio_start_ms", 0)
                         item_audio_timing[item_id] = {"start_ms": audio_start_ms}
 
@@ -557,12 +524,16 @@ class SpeechStream(stt.SpeechStream):
 
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
+                        item_id = data.get("item_id", "") or current_item_id
+                        if item_id:
+                            current_item_id = item_id
                         if delta:
                             current_text += delta
                             if time.time() - last_interim_at > _delta_transcript_interval:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(
                                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                        request_id=current_item_id,
                                         alternatives=[
                                             stt.SpeechData(
                                                 text=current_text,
@@ -582,6 +553,7 @@ class SpeechStream(stt.SpeechStream):
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                    request_id=item_id,
                                     alternatives=[
                                         stt.SpeechData(
                                             text=transcript,
@@ -630,6 +602,9 @@ class SpeechStream(stt.SpeechStream):
         while True:
             closing_ws = False  # reset the flag
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._report_connection_acquired(
+                    self._pool.last_acquire_time, self._pool.last_connection_reused
+                )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

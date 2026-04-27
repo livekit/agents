@@ -43,6 +43,8 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import _supports_reasoning_effort
 
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 
@@ -141,6 +143,8 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
+    service_tier: NotGivenOr[ServiceTier]
+    max_output_tokens: NotGivenOr[int]
     use_websocket: bool
 
 
@@ -160,6 +164,8 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -189,6 +195,8 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
             reasoning=reasoning,
+            service_tier=service_tier,
+            max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
         )
         self._client = client
@@ -281,6 +289,12 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.reasoning):
             extra["reasoning"] = self._opts.reasoning
+
+        if is_given(self._opts.service_tier):
+            extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.max_output_tokens):
+            extra["max_output_tokens"] = self._opts.max_output_tokens
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
@@ -380,7 +394,6 @@ class LLMStream(llm.LLMStream):
     async def _run_impl(self) -> None:
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
-
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
@@ -451,6 +464,20 @@ class LLMStream(llm.LLMStream):
                 raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+        # Strip prompt_cache_retention from any response object before validation:
+        # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
+        # vs "in-memory"). We don't use this field so dropping it is safe.
+        if (
+            isinstance(event.get("response"), dict)
+            and "prompt_cache_retention" in event["response"]
+        ):
+            event = {
+                **event,
+                "response": {
+                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
+                },
+            }
+
         event_type = event.get("type", "")
         if event_type == "error":
             return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
@@ -521,6 +548,7 @@ class LLMStream(llm.LLMStream):
                     if usage.input_tokens_details
                     else 0,
                     total_tokens=usage.total_tokens,
+                    service_tier=getattr(event.response, "service_tier", None),
                 ),
             )
         return chunk

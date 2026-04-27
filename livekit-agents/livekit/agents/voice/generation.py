@@ -50,6 +50,7 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
@@ -175,6 +176,9 @@ async def _llm_inference_task(
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
+
+                if chunk.delta.extra:
+                    data.generated_extra.update(chunk.delta.extra)
 
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
@@ -373,6 +377,8 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    started_forwarding_at: float | None = None
+
     def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
         if not self.first_frame_fut.done():
             self.first_frame_fut.set_result(ev.created_at)
@@ -406,6 +412,8 @@ async def _audio_forwarding_task(
 
         async for frame in tts_output:
             out.audio.append(frame)
+            if out.started_forwarding_at is None:
+                out.started_forwarding_at = time.time()
 
             if (
                 not out.first_frame_fut.done()

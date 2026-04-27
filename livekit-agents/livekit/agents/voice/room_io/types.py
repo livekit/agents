@@ -14,13 +14,6 @@ from ..io import TextOutput
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
-
-DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
-]
-
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
     rtc.DisconnectReason.CLIENT_INITIATED,
     rtc.DisconnectReason.ROOM_DELETED,
@@ -106,6 +99,8 @@ class TextOutputOptions:
     Only effective if `sync_transcription` is True."""
     next_in_chain: TextOutput | None = None
     """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
+    json_format: bool = False
+    """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString."""
 
 
 @dataclass

@@ -3,6 +3,12 @@ ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
+ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
+"""Provider-known correlation ids associated with this span (list[str]).
+
+Populated by STT/TTS plugins when the id is either sent to the provider
+(e.g. WS context_id) or returned by it (e.g. response request_id / session_id),
+so it can be cross-referenced with the provider's logs for debugging."""
 
 
 ATTR_PARTICIPANT_ID = "lk.participant_id"
@@ -93,6 +99,13 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+
+# AMD (Answering Machine Detection) attributes
+ATTR_AMD_CATEGORY = "lk.amd.category"
+ATTR_AMD_REASON = "lk.amd.reason"
+ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
+ATTR_AMD_DELAY = "lk.amd.delay"
+ATTR_AMD_TRANSCRIPT = "lk.amd.transcript"
 
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"

@@ -45,6 +45,9 @@ class CompletionUsage(BaseModel):
     """The number of tokens read from the cache."""
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
+    service_tier: str | None = None
+    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
+    Returned by providers that support tiered processing (e.g. OpenAI)."""
 
 
 class FunctionToolCall(BaseModel):
@@ -60,6 +63,9 @@ class CollectedResponse(BaseModel):
     text: str = ""
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
     usage: CompletionUsage | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Provider-specific extra data accumulated across chunks
+    (e.g., xAI encrypted reasoning, Google thought signatures)."""
 
 
 class ChoiceDelta(BaseModel):
@@ -175,6 +181,7 @@ class LLMStream(ABC):
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
+        self._provider_request_ids: list[str] = []
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -209,11 +216,20 @@ class LLMStream(ABC):
             try:
                 with tracer.start_as_current_span("llm_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    # Reset per-attempt context ids; the monitor task populates
+                    # this as ChatChunks arrive.
+                    self._provider_request_ids = []
                     try:
-                        return await self._run()
+                        await self._run()
                     except Exception as e:
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
+                    finally:
+                        if self._provider_request_ids:
+                            attempt_span.set_attribute(
+                                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+                            )
+                    return
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
@@ -275,6 +291,8 @@ class LLMStream(ABC):
 
         async for ev in event_aiter:
             request_id = ev.id
+            if request_id and request_id not in self._provider_request_ids:
+                self._provider_request_ids.append(request_id)
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
@@ -425,6 +443,7 @@ class LLMStream(ABC):
         text_parts: list[str] = []
         tool_calls: list[FunctionToolCall] = []
         usage: CompletionUsage | None = None
+        extra: dict[str, Any] = {}
 
         async with self:
             async for chunk in self:
@@ -433,6 +452,8 @@ class LLMStream(ABC):
                         text_parts.append(chunk.delta.content)
                     if chunk.delta.tool_calls:
                         tool_calls.extend(chunk.delta.tool_calls)
+                    if chunk.delta.extra:
+                        extra.update(chunk.delta.extra)
                 if chunk.usage is not None:
                     usage = chunk.usage
 
@@ -440,4 +461,5 @@ class LLMStream(ABC):
             text="".join(text_parts).strip(),
             tool_calls=tool_calls,
             usage=usage,
+            extra=extra,
         )

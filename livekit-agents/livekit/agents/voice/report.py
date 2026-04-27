@@ -63,7 +63,7 @@ class SessionReport:
                 "max_tool_steps": self.options.max_tool_steps,
                 "user_away_timeout": self.options.user_away_timeout,
                 "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
-                "preemptive_generation": self.options.preemptive_generation,
+                "preemptive_generation": dict(self.options.preemptive_generation),
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,

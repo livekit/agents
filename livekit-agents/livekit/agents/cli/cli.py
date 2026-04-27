@@ -68,7 +68,7 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(Exception):
+class _ExitCli(BaseException):
     pass
 
 
@@ -1622,7 +1622,10 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
         try:
             exit_triggered = False  # allow a new _ExitCLI raise
             if not args.devmode:
-                loop.run_until_complete(server.drain())
+                try:
+                    loop.run_until_complete(server.drain())
+                except asyncio.TimeoutError:
+                    logger.warning("drain timed out, forcing shutdown")
 
             loop.run_until_complete(server.aclose())
 
