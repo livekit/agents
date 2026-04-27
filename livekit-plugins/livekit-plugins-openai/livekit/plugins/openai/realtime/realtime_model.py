@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
-from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics import RealtimeModelMetrics, STTMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -1771,6 +1771,8 @@ class RealtimeSession(
             ),
         )
 
+        self._emit_transcription_metrics(event)
+
     def _handle_conversion_item_input_audio_transcription_failed(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
@@ -1778,6 +1780,57 @@ class RealtimeSession(
             f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
         )
+
+    def _emit_transcription_metrics(
+        self, event: ConversationItemInputAudioTranscriptionCompletedEvent
+    ) -> None:
+        from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
+            UsageTranscriptTextUsageDuration,
+            UsageTranscriptTextUsageTokens,
+        )
+
+        transcription_opts = self._realtime_model._opts.input_audio_transcription
+        transcription_model = transcription_opts.model if transcription_opts else None
+        metadata = Metadata(
+            model_name=transcription_model,
+            model_provider=self._realtime_model.provider,
+        )
+
+        usage = event.usage
+        if isinstance(usage, UsageTranscriptTextUsageTokens):
+            details = usage.input_token_details
+            input_audio_tokens = (
+                details.audio_tokens if details and details.audio_tokens is not None else 0
+            )
+            stt_metrics = STTMetrics(
+                request_id=event.event_id,
+                timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events
+                duration=0.0,
+                label=self._realtime_model.label,
+                audio_duration=0.0,
+                # uses websocket but results are not streamed incrementally so streamed=False
+                streamed=False,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                input_audio_tokens=input_audio_tokens,
+                metadata=metadata,
+            )
+            self.emit("metrics_collected", stt_metrics)
+        elif isinstance(usage, UsageTranscriptTextUsageDuration):
+            stt_metrics = STTMetrics(
+                request_id=event.event_id,
+                timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events)
+                duration=0.0,
+                label=self._realtime_model.label,
+                audio_duration=usage.seconds,
+                # uses websocket but results are not streamed incrementally so streamed=False
+                streamed=False,
+                metadata=metadata,
+            )
+            self.emit("metrics_collected", stt_metrics)
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
