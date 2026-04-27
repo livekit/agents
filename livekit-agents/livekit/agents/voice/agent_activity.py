@@ -3527,22 +3527,25 @@ class AgentActivity(RecognitionHooks):
             self._session.output.audio.resume()
 
     def _disable_vad_interruption_soon(self) -> None:
-        """disable VAD interruption after the interruption holdoff expires."""
-        if self._audio_recognition and self._audio_recognition.interruption_holdoff_active:
+        """Disable VAD interruption after the speech boundary cooldown expires."""
+        if self._audio_recognition and self._audio_recognition.speech_boundary_cooldown_active:
 
-            def _disable_vad() -> None:
+            def _disable_vad_interruption() -> None:
                 # only disable it if the agent is still speaking
-                if self._session.agent_state == "speaking":
-                    logger.trace("interruption holdoff expired")
+                if (
+                    self._session.agent_state == "speaking"
+                    and self._interruption_by_audio_activity_enabled
+                ):
+                    logger.trace("speech boundary cooldown expired")
                     self._interruption_by_audio_activity_enabled = False
 
-            self._audio_recognition.interruption_holdoff_cb = _disable_vad
+            self._audio_recognition.speech_boundary_cooldown_callback = _disable_vad_interruption
         else:
             self._interruption_by_audio_activity_enabled = False
 
     def _restore_interruption_by_audio_activity(self) -> None:
         if self._audio_recognition:
-            self._audio_recognition.cancel_interruption_holdoff()
+            self._audio_recognition._cancel_speech_boundary_cooldown()
 
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
