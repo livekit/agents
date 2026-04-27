@@ -473,3 +473,98 @@ async def test_orphaned_response_after_timeout_filtered(
         f"expected exactly one ResponseCancelEvent(response_id='resp_orphan_test_abc'); "
         f"captured: {captured!r}"
     )
+
+
+@pytest.mark.parametrize(
+    "metadata_case",
+    [
+        pytest.param(None, id="metadata_None"),
+        pytest.param({}, id="metadata_empty_dict"),
+    ],
+)
+async def test_response_created_without_metadata_bypasses_orphan_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_case: object,
+) -> None:
+    """Orphan filter MUST NOT fire when response.metadata has no client_event_id.
+
+    This is the sister case to test_orphaned_response_after_timeout_filtered.
+    The metadata-presence guard exists so that server-VAD-initiated responses
+    (which carry no client_event_id, because we did not issue them) flow
+    through the normal generation-creation path. If the guard is stripped or
+    inverted, every server-VAD response would be silently discarded and the
+    agent would stop responding to user speech — a critical regression.
+
+    Parametrized across the two no-client_event_id substrate representations:
+    metadata=None (no metadata field) and metadata={} (present but empty).
+
+    For each case the test directly invokes _handle_response_created and
+    asserts the OBSERVABLE post-guard contract:
+    - The "generation_created" event IS emitted with the expected response_id
+      (this is the user-visible success signal — without it, server-VAD
+      turns stall even if _current_generation is set).
+    - No ResponseCancelEvent was sent (the orphan filter did not fire).
+    - _current_generation IS NOT None (post-guard _ResponseGeneration ran).
+
+    No OpenAI API call is made.
+    """
+    from openai.types.realtime import ResponseCancelEvent, ResponseCreatedEvent  # noqa: PLC0415
+    from openai.types.realtime.realtime_response import RealtimeResponse  # noqa: PLC0415
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-not-real")
+    from livekit.plugins.openai.realtime.realtime_model import (  # noqa: PLC0415
+        RealtimeSession,
+    )
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._current_generation = None  # type: ignore[attr-defined]
+    sent_events: list[object] = []
+    session.send_event = sent_events.append  # type: ignore[method-assign]
+
+    emitted_events: list[tuple[str, object]] = []
+
+    def _capture_emit(name: str, payload: object, *args: object, **kwargs: object) -> None:
+        emitted_events.append((name, payload))
+
+    session.emit = _capture_emit  # type: ignore[method-assign]
+
+    response_id = "resp_server_vad_test"
+    response = RealtimeResponse.construct(
+        id=response_id,
+        metadata=metadata_case,
+    )
+    event = ResponseCreatedEvent.construct(
+        event_id="evt_server_vad_test",
+        response=response,
+        type="response.created",
+    )
+
+    session._handle_response_created(event)
+
+    # Observable contract: "generation_created" event IS emitted with the
+    # response_id. This is what callers wait on; missing emit = stalled turn.
+    generation_emits = [
+        payload for (name, payload) in emitted_events if name == "generation_created"
+    ]
+    assert len(generation_emits) == 1, (
+        f"metadata-presence guard FAILED: expected exactly one 'generation_created' "
+        f"emission for a server-VAD response (metadata={metadata_case!r}); "
+        f"all emits: {emitted_events!r}"
+    )
+    emitted_gen = generation_emits[0]
+    assert getattr(emitted_gen, "response_id", None) == response_id, (
+        f"emitted generation_created event has wrong response_id: {emitted_gen!r}"
+    )
+
+    # No defensive cancel must have been emitted (orphan filter did not fire).
+    cancel_events = [e for e in sent_events if isinstance(e, ResponseCancelEvent)]
+    assert cancel_events == [], (
+        f"orphan filter incorrectly emitted ResponseCancelEvent for a server-VAD "
+        f"response (metadata={metadata_case!r}): {cancel_events!r}"
+    )
+
+    # Internal state: _current_generation populated as a structural sanity check.
+    assert session._current_generation is not None, (
+        f"_current_generation should be populated post-guard (metadata={metadata_case!r})"
+    )
