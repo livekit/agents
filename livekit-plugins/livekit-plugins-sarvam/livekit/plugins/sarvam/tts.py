@@ -62,7 +62,29 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
     "flac",
     "aac",
     "wav",
+    "linear16",
+    "mulaw",
+    "alaw",
 }
+
+_CODEC_TO_MIME: dict[str, str] = {
+    "mp3": "audio/mp3",
+    "wav": "audio/wav",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+    "linear16": "audio/pcm",
+    "mulaw": "audio/pcm",
+    "alaw": "audio/pcm",
+}
+
+
+def _codec_to_mime_type(codec: str) -> str:
+    """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
+    mime = _CODEC_TO_MIME.get(codec)
+    if mime is None:
+        raise ValueError(f"Unsupported output_audio_codec: {codec}")
+    return mime
 
 
 # Supported languages in BCP-47 format
@@ -699,7 +721,7 @@ class ChunkedStream(tts.ChunkedStream):
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
-        mime_type = f"audio/{self._opts.output_audio_codec}"
+        mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -765,7 +787,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
-        mime_type = f"audio/{self._opts.output_audio_codec}"
+        mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
@@ -835,29 +857,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             extra={**self._build_log_context(), "user-agent": USER_AGENT},
         )
 
+        input_sent_event = asyncio.Event()
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
-                # Send initial config
                 data: dict[str, object] = {
                     "target_language_code": self._opts.target_language_code,
                     "speaker": self._opts.speaker,
                     "pace": self._opts.pace,
                     "model": self._opts.model,
                     "speech_sample_rate": self._opts.speech_sample_rate,
+                    "output_audio_codec": self._opts.output_audio_codec,
+                    "output_audio_bitrate": self._opts.output_audio_bitrate,
+                    "min_buffer_size": self._opts.min_buffer_size,
+                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
                     data["loudness"] = self._opts.loudness
                     data["enable_preprocessing"] = self._opts.enable_preprocessing
-                    data["output_audio_codec"] = self._opts.output_audio_codec
                     if self._opts.enable_cached_responses is not None:
                         data["enable_cached_responses"] = self._opts.enable_cached_responses
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
-                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
-                    data["min_buffer_size"] = self._opts.min_buffer_size
-                    data["max_chunk_length"] = self._opts.max_chunk_length
-                    data["output_audio_codec"] = self._opts.output_audio_codec
                 if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
                     data["dict_id"] = self._opts.dict_id
                 config_msg = {"type": "config", "data": data}
@@ -866,10 +888,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 await ws.send_str(json.dumps(config_msg))
 
-                # Count text chunks sent
                 started = False
                 text_chunks_sent = 0
-                # Send text chunks
                 async for word in word_stream:
                     if not started:
                         self._mark_started()
@@ -878,17 +898,32 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await ws.send_str(json.dumps(text_msg))
                     text_chunks_sent += 1
 
-                # Send flush signal
                 flush_msg = {"type": "flush"}
                 await ws.send_str(json.dumps(flush_msg))
+                input_sent_event.set()
 
+            except (ConnectionResetError, RuntimeError) as e:
+                err_str = str(e).lower()
+                if "closing" in err_str or "closed" in err_str:
+                    logger.debug(
+                        "WebSocket transport closing during send (likely interruption)",
+                        extra=self._build_log_context(),
+                    )
+                    return
+                logger.error(
+                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
+                )
+                raise APIConnectionError(f"Send task failed: {e}") from e
             except Exception as e:
                 logger.error(
                     f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
                 )
                 raise APIConnectionError(f"Send task failed: {e}") from e
+            finally:
+                input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            await input_sent_event.wait()
             try:
                 while True:
                     msg = await ws.receive(timeout=self._conn_options.timeout)
@@ -936,7 +971,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         success = await self._handle_websocket_message(msg.data, output_emitter)
                         if not success:
-                            break  # Stop processing on error or completion
+                            break
 
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         error_msg = f"WebSocket error: {msg.data}"
@@ -946,13 +981,26 @@ class SynthesizeStream(tts.SynthesizeStream):
             except asyncio.TimeoutError as e:
                 logger.error("WebSocket received timeout", extra=self._build_log_context())
                 raise APITimeoutError("WebSocket receive timeout") from e
+            except (APIStatusError, APIConnectionError, APITimeoutError):
+                raise
+            except ConnectionResetError as e:
+                err_str = str(e).lower()
+                if "closing" in err_str or "closed" in err_str:
+                    logger.debug(
+                        "WebSocket transport closing during receive (likely interruption)",
+                        extra=self._build_log_context(),
+                    )
+                    return
+                logger.error(
+                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
+                )
+                raise
             except Exception as e:
                 logger.error(
                     f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
                 )
                 raise
 
-        # Use connection pool for WebSocket management
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._acquire_time = self._tts._pool.last_acquire_time
@@ -972,15 +1020,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.info(
                         "WebSocket session completed successfully", extra=self._build_log_context()
                     )
-                except Exception as e:
-                    logger.error(
-                        f"WebSocket session failed: {e}",
-                        extra=self._build_log_context(),
-                        exc_info=True,
-                    )
-                    raise
                 finally:
-                    # Gracefully cancel tasks
+                    input_sent_event.set()
                     await utils.aio.gracefully_cancel(*tasks)
                     self._send_task = None
                     self._recv_task = None
@@ -1150,51 +1191,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._server_request_id = str(request_id)
 
     async def aclose(self) -> None:
-        """Close the stream and cleanup resources."""
-        logger.debug("Starting TTS stream cleanup", extra=self._build_log_context())
+        """Close the stream and cleanup resources.
 
-        self._connection_state = ConnectionState.DISCONNECTED
-
-        # Cancel running tasks first
-        tasks_to_cancel = []
-        for task_attr in ["_send_task", "_recv_task"]:
-            task = getattr(self, task_attr, None)
-            if task and not task.done():
-                tasks_to_cancel.append(task)
-
-        if tasks_to_cancel:
-            for task in tasks_to_cancel:
-                task.cancel()
-            try:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-            except Exception as e:
-                logger.warning(f"Error cancelling tasks: {e}", extra=self._build_log_context())
-
-        # Close WebSocket connection
-        if self._ws_conn and not self._ws_conn.closed:
-            try:
-                await self._ws_conn.close()
-                logger.debug("WebSocket connection closed", extra=self._build_log_context())
-            except Exception as e:
-                logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
-
-        # Close channels
-        for channel_name, channel in [("segments", self._segments_ch), ("input", self._input_ch)]:
-            try:
-                if hasattr(channel, "closed") and not channel.closed:
-                    if hasattr(channel, "close"):
-                        channel.close()
-                    logger.debug(f"{channel_name} channel closed", extra=self._build_log_context())
-            except Exception as e:
-                logger.warning(
-                    f"Error closing {channel_name} channel: {e}", extra=self._build_log_context()
-                )
-
-        # Call parent cleanup
-        try:
-            await super().aclose()
-        except Exception as e:
-            logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
-        finally:
-            self._client_request_id = None
-            self._server_request_id = None
+        The base class cancels ``_run`` (and therefore all child tasks
+        spawned inside ``_run_ws``).  The ``ConnectionPool`` context manager
+        handles WebSocket cleanup on cancellation.  We only need to close
+        the segments channel so that ``_process_segments`` unblocks.
+        """
+        self._segments_ch.close()
+        await super().aclose()
