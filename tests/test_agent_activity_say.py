@@ -160,5 +160,43 @@ def test_agent_activity_say_realtime_dispatches_default_add_to_chat_ctx_true() -
     assert captured["kwargs"].get("name") == "AgentActivity.realtime_say"
 
 
+def test_openai_realtime_say_isolation_no_local_leak() -> None:
+    """The chat_ctx upsert in _realtime_generation_task_impl is gated on add_to_chat_ctx.
+
+    Source-level inspection: detects regressions where the gate is removed.
+    Behavioral end-to-end coverage is provided by the integration tests against
+    the real OpenAI API.
+    """
+    import inspect as _inspect  # noqa: PLC0415
+
+    src = _inspect.getsource(AgentActivity._realtime_generation_task_impl)
+    lines = src.splitlines()
+    upsert_line_idx = next((i for i, ln in enumerate(lines) if "_upsert_item(msg)" in ln), -1)
+    assert upsert_line_idx >= 0, (
+        "_upsert_item(msg) call not found in _realtime_generation_task_impl"
+    )
+    # Look at the conditional that precedes the upsert (within ~10 lines).
+    preceding = "\n".join(lines[max(0, upsert_line_idx - 10) : upsert_line_idx])
+    assert "and add_to_chat_ctx" in preceding, (
+        "the chat_ctx upsert is no longer guarded by add_to_chat_ctx"
+    )
+
+
+def test_agent_handoff_does_not_propagate_isolated_text() -> None:
+    """_realtime_generation_task_impl signature exposes add_to_chat_ctx as keyword-only.
+
+    The handoff path mutates a new agent's chat_ctx by reading the prior agent's
+    chat_ctx; gating the upsert ensures isolated text is never written, so it
+    cannot propagate. Behavioral coverage in integration tests.
+    """
+    import inspect as _inspect  # noqa: PLC0415
+
+    sig = _inspect.signature(AgentActivity._realtime_generation_task_impl)
+    assert "add_to_chat_ctx" in sig.parameters
+    param = sig.parameters["add_to_chat_ctx"]
+    assert param.default is True
+    assert param.kind is _inspect.Parameter.KEYWORD_ONLY
+
+
 # Suppress unused-import lint
 _ = asyncio

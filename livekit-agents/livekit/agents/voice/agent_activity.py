@@ -3267,7 +3267,7 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
 
-        if msg_gen and forwarded_text:
+        if msg_gen and forwarded_text and add_to_chat_ctx:
             msg = _create_assistant_message(
                 message_id=msg_gen.message_id,
                 forwarded_text=forwarded_text,
