@@ -2643,9 +2643,7 @@ class AgentActivity(RecognitionHooks):
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
             if started_forwarding_at is not None:
-                assistant_metrics["playback_latency"] = (
-                    started_speaking_at - started_forwarding_at
-                )
+                assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
