@@ -8,7 +8,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import AsyncIterable, Iterator
 from dataclasses import dataclass, replace
 from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -1537,6 +1537,99 @@ class RealtimeSession(
         fut.add_done_callback(lambda _: handle.cancel())
         return fut
 
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        add_to_chat_ctx: bool = True,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Render text to user via OpenAI Realtime API.
+
+        Uses response.create(conversation: "none") for
+        add_to_chat_ctx=False with text wrapped in an assistant
+        message in the input field. The OpenAI Realtime API's
+        documented behavior is that conversation: "none" responses
+        do not enter the server-side conversation state.
+
+        On client-side 10s timeout, the future is rejected and
+        popped from _response_created_futures (existing behavior).
+        The orphan filter in _handle_response_created detects
+        late-arriving response.created by checking
+        missing-from-_response_created_futures.
+        """
+        if isinstance(text, str):
+            return self._say_with_text(text, add_to_chat_ctx=add_to_chat_ctx)
+
+        async def _materialize_and_say() -> llm.GenerationCreatedEvent:
+            full_text = ""
+            async for chunk in text:
+                full_text += chunk
+            return await self._say_with_text(full_text, add_to_chat_ctx=add_to_chat_ctx)
+
+        # Wrap async materialization in a Future to match the abstract base contract
+        outer_fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+
+        async def _runner() -> None:
+            try:
+                inner = await _materialize_and_say()
+                if not outer_fut.done():
+                    outer_fut.set_result(inner)
+            except BaseException as e:
+                if not outer_fut.done():
+                    outer_fut.set_exception(e)
+
+        asyncio.ensure_future(_runner())
+        return outer_fut
+
+    def _say_with_text(
+        self, full_text: str, *, add_to_chat_ctx: bool
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        event_id = utils.shortuuid("response_create_say_")
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        self._response_created_futures[event_id] = fut
+
+        params = RealtimeResponseCreateParams(
+            input=[
+                realtime.RealtimeConversationItemAssistantMessage(
+                    type="message",
+                    role="assistant",
+                    content=[
+                        realtime.realtime_conversation_item_assistant_message.Content(
+                            type="output_text",
+                            text=full_text,
+                        )
+                    ],
+                )
+            ],
+            metadata={"client_event_id": event_id},
+        )
+        if not add_to_chat_ctx:
+            params.conversation = "none"
+
+        self.send_event(
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
+        )
+
+        def _on_timeout() -> None:
+            self._response_created_futures.pop(event_id, None)
+            if fut and not fut.done():
+                fut.set_exception(llm.RealtimeError("say() timed out."))
+                try:
+                    # response_id intentionally omitted: response.created has not
+                    # arrived yet at timeout, so the server-assigned id is unknown.
+                    # Best-effort cancel. The orphan filter
+                    # (_handle_response_created) sends a second cancel WITH
+                    # response_id when the late response.created arrives, giving
+                    # full coverage. The OpenAI substrate treats duplicate cancels
+                    # as no-ops.
+                    self.send_event(ResponseCancelEvent(type="response.cancel"))
+                except Exception:
+                    logger.debug("response.cancel failed on say() timeout")
+
+        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
+        return fut
+
     @property
     def has_active_generation(self) -> bool:
         return self._current_generation is not None or len(self._response_created_futures) > 0
@@ -1647,6 +1740,39 @@ class RealtimeSession(
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
 
+        # Orphan filter: discard a late-arriving response.created when
+        # the corresponding caller-future has already been popped
+        # (e.g., by _on_timeout). Reads missing-from-dict pattern using
+        # the existing _response_created_futures — adds no new state.
+        # The metadata-presence guard ensures only client-issued
+        # responses can be filtered; server-VAD-initiated responses
+        # (no client_event_id in metadata) flow through normally.
+        client_event_id_for_orphan_check = (
+            event.response.metadata.get("client_event_id")
+            if isinstance(event.response.metadata, dict)
+            else None
+        )
+        if (
+            client_event_id_for_orphan_check is not None
+            and client_event_id_for_orphan_check not in self._response_created_futures
+        ):
+            logger.debug(
+                "discarding orphaned response %s (client_event_id=%s); "
+                "future was popped before resolution (likely timeout)",
+                event.response.id,
+                client_event_id_for_orphan_check,
+            )
+            # Defensive cancel WITH response_id to clean up substrate state.
+            # Distinct from _on_timeout's cancel (which omits response_id
+            # because the server-assigned id is not yet known at timeout).
+            self.send_event(
+                ResponseCancelEvent(
+                    type="response.cancel",
+                    response_id=event.response.id,
+                )
+            )
+            return
+
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan(),
             function_ch=utils.aio.Chan(),
@@ -1676,7 +1802,11 @@ class RealtimeSession(
         self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            # Late event for an orphaned (timed-out) response;
+            # safe to drop. Mirrors the existing graceful handling
+            # in _handle_response_done.
+            return
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
 
@@ -1702,7 +1832,9 @@ class RealtimeSession(
             self._current_generation.messages[item_id] = item_generation
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            # Late event for an orphaned (timed-out) response; safe to drop.
+            return
         assert (item_id := event.item_id) is not None, "item_id is None"
         assert (item_type := event.part.type) is not None, "part.type is None"
 

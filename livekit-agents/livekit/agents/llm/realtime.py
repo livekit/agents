@@ -305,7 +305,36 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def say(
         self,
         text: str | AsyncIterable[str],
+        *,
+        add_to_chat_ctx: bool = True,
     ) -> asyncio.Future[GenerationCreatedEvent]:
+        """Render text to the user channel via the realtime substrate.
+
+        Args:
+            text: The text to render. Either a complete string or
+                  an async iterable of string chunks.
+            add_to_chat_ctx: If True (default), the rendered text
+                  enters the agent's reasoning context per the
+                  substrate's session model. If False, plugins
+                  declaring ephemeral_say=True render the text
+                  WITHOUT it entering the context. Plugins that
+                  cannot honor False MUST declare
+                  RealtimeCapabilities.ephemeral_say=False so that
+                  AgentActivity.say()'s dispatcher emits a
+                  DeprecationWarning and preserves backward-compat
+                  silent-degrade behavior.
+
+        Returns:
+            A future that resolves to GenerationCreatedEvent when
+            the underlying substrate confirms the response was
+            created.
+
+        Raises:
+            NotImplementedError: If the plugin does not implement
+                say().
+            RealtimeError: On substrate-specific failures (network,
+                API errors, provider rejection, client-side timeout).
+        """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement say(). use a TTS model instead"
         )
