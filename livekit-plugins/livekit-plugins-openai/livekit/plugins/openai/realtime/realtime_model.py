@@ -423,6 +423,8 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_instructions=True,
                 mutable_tools=True,
                 per_response_tool_choice=True,
+                supports_say=True,
+                ephemeral_say=True,
             )
         )
 

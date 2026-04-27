@@ -73,7 +73,32 @@ class RealtimeCapabilities:
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
     supports_say: bool = False
-    """Whether the model supports session.say()"""
+    """Whether the model supports session.say(). Note: RealtimeModel
+    implementations typically only support say() when
+    add_to_chat_ctx=True; for ephemeral say() see ephemeral_say."""
+    ephemeral_say: bool = False
+    """Whether the plugin's say() honors add_to_chat_ctx=False
+    (renders text to the user without adding it to the agent's
+    reasoning context).
+
+    Plugins must satisfy this only if the underlying substrate
+    provides an out-of-band response primitive that does not enter
+    conversation state.
+
+    Substrate landscape (verified empirically against the OpenAI Realtime API):
+      OpenAI Realtime: True  — response.create(conversation: "none")
+      Phonic:          False — substrate strictly turn-based;
+                                no isolation primitive
+      Gemini Live:     False — Bidi append-only; no isolation
+                                primitive (47 SDK fields verified)
+      Ultravox:        False — no isolation primitive observed
+      AWS Nova Sonic:  False — no isolation primitive observed
+
+    A plugin that sets supports_say=True MAY set
+    ephemeral_say=False (basic say() supported but no isolation
+    primitive). A plugin that sets ephemeral_say=True MUST also
+    set supports_say=True.
+    """
 
 
 class RealtimeError(Exception):
