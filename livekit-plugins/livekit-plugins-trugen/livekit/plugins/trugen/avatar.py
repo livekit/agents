@@ -25,7 +25,7 @@ from .log import logger
 _BASE_API_URL = "https://api.trugen.ai"
 _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
-_DEFAULT_AVATAR_ID = "7d881c1b"
+_DEFAULT_AVATAR_ID = "665a1170"
 
 
 class TrugenException(Exception):
