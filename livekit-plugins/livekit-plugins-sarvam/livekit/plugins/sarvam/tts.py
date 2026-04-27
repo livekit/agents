@@ -74,8 +74,8 @@ _CODEC_TO_MIME: dict[str, str] = {
     "flac": "audio/flac",
     "aac": "audio/aac",
     "linear16": "audio/pcm",
-    "mulaw": "audio/pcm",
-    "alaw": "audio/pcm",
+    "mulaw": "audio/mulaw",
+    "alaw": "audio/alaw",
 }
 
 
@@ -887,6 +887,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
                 await ws.send_str(json.dumps(config_msg))
+                input_sent_event.set()
 
                 started = False
                 text_chunks_sent = 0
@@ -900,7 +901,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 flush_msg = {"type": "flush"}
                 await ws.send_str(json.dumps(flush_msg))
-                input_sent_event.set()
 
             except (ConnectionResetError, RuntimeError) as e:
                 err_str = str(e).lower()
