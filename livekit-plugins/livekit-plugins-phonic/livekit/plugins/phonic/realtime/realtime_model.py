@@ -414,7 +414,23 @@ class RealtimeSession(llm.RealtimeSession):
     def say(
         self,
         text: str | AsyncIterable[str],
+        *,
+        add_to_chat_ctx: bool = True,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Render text via the Phonic Realtime substrate.
+
+        Note: Phonic's substrate is strictly turn-based and does
+        not have an out-of-band response primitive equivalent to
+        OpenAI's response.create(conversation: "none"). Phonic's
+        RealtimeCapabilities declares ephemeral_say=False so that
+        AgentActivity.say()'s capability check emits a
+        DeprecationWarning BEFORE reaching this method when
+        add_to_chat_ctx=False is requested. The parameter is
+        accepted here for signature compatibility with the
+        abstract base; if Phonic later gains an isolation
+        primitive, this method should be updated to honor
+        add_to_chat_ctx=False.
+        """
         if self._generate_reply_task and not self._generate_reply_task.done():
             self._generate_reply_task.cancel()
         self._generate_reply_task = asyncio.create_task(self._send_say(text), name="phonic-say")

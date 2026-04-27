@@ -10,6 +10,8 @@ to satisfy plugin constructors without triggering any remote connections.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 
@@ -47,3 +49,31 @@ def test_phonic_realtime_capability_does_not_advertise_ephemeral_say(
     model = PhonicRealtimeModel()
     assert model.capabilities.ephemeral_say is False
     assert model.capabilities.supports_say is True
+
+
+def test_phonic_say_signature_accepts_add_to_chat_ctx() -> None:
+    """Phonic's say() signature accepts add_to_chat_ctx as a keyword-only kwarg.
+
+    The dispatcher (AgentActivity.say) emits a DeprecationWarning before reaching
+    Phonic's say() because Phonic declares ephemeral_say=False. The kwarg is
+    accepted here for forward-compatible signature alignment with the abstract base.
+    """
+    pytest.importorskip(
+        "livekit.plugins.phonic",
+        reason="livekit-plugins-phonic not installed in this environment",
+    )
+
+    from livekit.plugins.phonic.realtime.realtime_model import (  # noqa: PLC0415
+        RealtimeSession as PhonicRealtimeSession,
+    )
+
+    sig = inspect.signature(PhonicRealtimeSession.say)
+    assert "add_to_chat_ctx" in sig.parameters
+    param = sig.parameters["add_to_chat_ctx"]
+    assert param.default is True
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+    # Verify the full argument-binding rules accept the kwarg.
+    _SELF_SENTINEL = object()
+    bound = sig.bind(_SELF_SENTINEL, "hello", add_to_chat_ctx=False)
+    assert bound.arguments["add_to_chat_ctx"] is False
