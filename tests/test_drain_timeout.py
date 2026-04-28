@@ -27,11 +27,21 @@ from livekit.agents.ipc.supervised_proc import SupervisedProc
 from livekit.agents.utils import aio
 from livekit.agents.worker import AgentServer
 
-_CLI_ARGS = CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None)
+_CLI_ARGS = CliArgs(
+    log_level="ERROR",
+    url="wss://diagnostics-test.livekit.cloud",
+    api_key="api-key",
+    api_secret="api-secret",
+)
+
+
+async def _entrypoint(ctx: object) -> None:
+    pass
 
 
 def _make_server(drain_timeout: int = 1) -> AgentServer:
     server = AgentServer(drain_timeout=drain_timeout)
+    server.rtc_session(_entrypoint)
     return server
 
 
