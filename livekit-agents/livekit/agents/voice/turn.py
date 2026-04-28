@@ -60,12 +60,17 @@ class EndpointingOptions(TypedDict, total=False):
     max_delay: float
     """Maximum time (s) the agent waits before terminating the turn.
     Defaults to ``3.0``."""
+    alpha: float
+    """Exponential moving average coefficient for dynamic endpointing.
+    The higher the value, the more weight is given to the history.
+    Defaults to ``0.9``. Only applies when mode is ``dynamic``."""
 
 
 _ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "mode": "fixed",
     "min_delay": 0.5,
     "max_delay": 3.0,
+    "alpha": 0.9,
 }
 
 

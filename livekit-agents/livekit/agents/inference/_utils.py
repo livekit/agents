@@ -14,6 +14,8 @@ STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
 HEADER_USER_AGENT = "User-Agent"
 HEADER_ROOM_ID = "X-LiveKit-Room-ID"
 HEADER_JOB_ID = "X-LiveKit-Job-ID"
+HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
+HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 
 def get_default_inference_url() -> str:

@@ -29,7 +29,7 @@ dependencies = [
     "typer>=0.15.1",
     "click~=8.1",
     "certifi>=2025.6.15",
-    "livekit==1.1.5",
+    "livekit==1.1.7",
     "livekit-api>=1.0.7,<2",
     "livekit-protocol>=1.1.6,<2",
     "livekit-blingfire~=1.1,<2",
@@ -65,6 +65,7 @@ anthropic = ["livekit-plugins-anthropic>=1.5.6"]
 assemblyai = ["livekit-plugins-assemblyai>=1.5.6"]
 asyncai = ["livekit-plugins-asyncai>=1.5.6"]
 avatario = ["livekit-plugins-avatario>=1.5.6"]
+avatartalk = ["livekit-plugins-avatartalk>=1.5.6"]
 aws = ["livekit-plugins-aws>=1.5.6"]
 azure = ["livekit-plugins-azure>=1.5.6"]
 baseten = ["livekit-plugins-baseten>=1.5.6"]

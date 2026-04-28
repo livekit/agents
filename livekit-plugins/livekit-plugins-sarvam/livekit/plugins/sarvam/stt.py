@@ -1313,8 +1313,10 @@ class SpeechStream(stt.SpeechStream):
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
         language = LanguageCode(transcript_data.get("language_code", ""))
-        request_id = transcript_data.get("request_id", "")
         self._maybe_set_server_request_id(transcript_data)
+        # Prefer the per-message request_id from the server; fall back to the
+        # session-wide server request_id captured from an earlier message.
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
@@ -1323,13 +1325,13 @@ class SpeechStream(stt.SpeechStream):
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
+            # request_data = {
+            #     "original_id": request_id,
+            #     "processing_latency": metrics.get("processing_latency", 0.0),
+            # }
             usage_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
+                request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),

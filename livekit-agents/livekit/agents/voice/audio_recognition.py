@@ -63,7 +63,7 @@ class _PreemptiveGenerationInfo:
 
 class RecognitionHooks(Protocol):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
-    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
+    def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
@@ -185,6 +185,7 @@ class AudioRecognition:
         self._agent_speaking: bool = False
 
         self._user_turn_span: trace.Span | None = None
+        self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
 
         self._vad_speech_started: bool = False
@@ -448,9 +449,11 @@ class AudioRecognition:
 
     async def aclose(self) -> None:
         self._closing.set()
-
         if self._commit_user_turn_atask is not None:
-            await self._commit_user_turn_atask
+            try:
+                await self._commit_user_turn_atask
+            except asyncio.CancelledError:
+                pass
 
         if self._stt_pipeline is not None:
             await self._stt_pipeline.aclose()
@@ -468,7 +471,10 @@ class AudioRecognition:
             await aio.cancel_and_wait(self._interruption_atask)
 
         if self._end_of_turn_task is not None:
-            await self._end_of_turn_task
+            try:
+                await self._end_of_turn_task
+            except asyncio.CancelledError:
+                pass
 
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
@@ -677,6 +683,12 @@ class AudioRecognition:
         return self._audio_transcript
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        # Collect provider-known STT ids for this user turn. The actual attribute
+        # is written once when the user_turn span ends (see _on_end_of_turn), to
+        # avoid ordering issues with span creation.
+        if ev.request_id and ev.request_id not in self._stt_request_ids:
+            self._stt_request_ids.append(ev.request_id)
+
         if (
             self._turn_detection_mode == "manual"
             and self._user_turn_committed
@@ -852,12 +864,15 @@ class AudioRecognition:
             self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_start_of_speech(None)
+            # If the plugin provided a server onset timestamp, use it;
+            # otherwise fall back to message arrival time.
+            if self._speech_start_time is None:
+                self._speech_start_time = ev.speech_start_time or time.time()
+
+            with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
+                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
-            if self._speech_start_time is None:
-                self._speech_start_time = time.time()
             self._last_speaking_time = time.time()
 
             if self._end_of_turn_task is not None:
@@ -872,7 +887,7 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
-                self._hooks.on_start_of_speech(ev)
+                self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
 
@@ -1037,8 +1052,13 @@ class AudioRecognition:
                         trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
                     }
                 )
+                if self._stt_request_ids:
+                    user_turn_span.set_attribute(
+                        trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
+                    )
                 user_turn_span.end()
                 self._user_turn_span = None
+                self._stt_request_ids = []
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
