@@ -919,9 +919,7 @@ class AudioRecognition:
                 with trace.use_span(
                     self._ensure_user_turn_span(start_time=self._speech_start_time)
                 ):
-                    self._hooks.on_start_of_speech(
-                        None, speech_start_time=self._speech_start_time
-                    )
+                    self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
                 self._speaking = True
 
