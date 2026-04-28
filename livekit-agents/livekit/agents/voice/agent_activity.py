@@ -1772,6 +1772,7 @@ class AgentActivity(RecognitionHooks):
     def on_stt_speech_ended(self) -> None:
         """Notify that STT detected speech end (without triggering endpointing)."""
         self._stt_eos_received = True
+        self._user_silence_event.set()
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
