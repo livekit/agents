@@ -358,6 +358,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
+        self._agent_name_source = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -496,7 +497,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name or os.environ.get("LIVEKIT_AGENT_NAME", "")
+            if agent_name:
+                self._agent_name = agent_name
+                self._agent_name_source = "code"
+            elif os.environ.get("LIVEKIT_AGENT_NAME"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
+                self._agent_name_source = "env"
+            else:
+                self._agent_name = ""
+                self._agent_name_source = ""
             self._server_type = type
             return f
 
@@ -632,6 +641,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 body = json.dumps(
                     {
                         "agent_name": self._agent_name,
+                        "agent_name_source": self._agent_name_source,
                         "worker_type": agent.JobType.Name(self._server_type.value),
                         "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
