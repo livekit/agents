@@ -886,10 +886,13 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
-                self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
+            # When turn_detection is "stt", STT drives user_state; VAD still runs
+            # for interruption detection but should not flip _speaking.
+            if self._turn_detection_mode != "stt":
+                with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+                    self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
-            self._speaking = True
+                self._speaking = True
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -908,11 +911,15 @@ class AudioRecognition:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
-            with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech(ev)
-
             self._vad_speech_started = False
-            self._speaking = False
+
+            # When turn_detection is "stt", STT drives user_state; VAD still runs
+            # for interruption detection but should not flip _speaking.
+            if self._turn_detection_mode != "stt":
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(ev)
+
+                self._speaking = False
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1131,11 +1138,11 @@ class AudioRecognition:
             await stream.aclose()
 
             # reset the speaking state to prevent stuck user speaking state during handoff
-            if self._speaking:
+            if self._speaking and self._turn_detection_mode != "stt":
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
-                self._vad_speech_started = False
+            self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
