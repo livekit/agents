@@ -123,9 +123,7 @@ class TestSpeechStartTimePersistence:
 
         # End of burst 1
         await audio_recognition._on_vad_event(
-            self._vad_event(
-                VADEventType.END_OF_SPEECH, speech_duration=5.0, silence_duration=0.6
-            )
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=5.0, silence_duration=0.6)
         )
 
         # Brief silence between bursts — same logical turn (no EOT yet)
@@ -136,9 +134,7 @@ class TestSpeechStartTimePersistence:
             self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.0)
         )
 
-        assert audio_recognition._speech_start_time == pytest.approx(
-            first_burst_start, abs=0.01
-        ), (
+        assert audio_recognition._speech_start_time == pytest.approx(first_burst_start, abs=0.01), (
             "_speech_start_time was overwritten by the second SOS within the same turn. "
             f"Expected {first_burst_start:.3f}, got {audio_recognition._speech_start_time:.3f}. "
             "It should only be cleared by the EOT cleanup in _bounce_eou_task."
@@ -159,9 +155,7 @@ class TestSpeechStartTimePersistence:
         assert audio_recognition._vad_speech_started is True
 
         await audio_recognition._on_vad_event(
-            self._vad_event(
-                VADEventType.END_OF_SPEECH, speech_duration=1.0, silence_duration=0.6
-            )
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=1.0, silence_duration=0.6)
         )
 
         assert audio_recognition._vad_speech_started is True, (
