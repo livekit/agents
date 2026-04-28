@@ -215,7 +215,9 @@ class ServerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""  # noqa: E501
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
+
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -494,7 +496,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name
+            self._agent_name = agent_name or os.environ.get("LIVEKIT_AGENT_NAME", "")
             self._server_type = type
             return f
 
