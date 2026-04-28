@@ -208,11 +208,14 @@ class SpeechStream(stt.SpeechStream):
                         except Exception:
                             pass
 
-                    receive_task.cancel()
                     try:
-                        await receive_task
-                    except asyncio.CancelledError:
-                        pass
+                        await asyncio.wait_for(receive_task, timeout=self._conn_options.timeout)
+                    except asyncio.TimeoutError:
+                        receive_task.cancel()
+                        try:
+                            await receive_task
+                        except asyncio.CancelledError:
+                            pass
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
