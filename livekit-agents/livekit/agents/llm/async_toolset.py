@@ -370,7 +370,14 @@ class AsyncToolset(Toolset):
             return None
 
         if self._on_duplicate_call == "replace":
-            await asyncio.gather(*[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls])
+            results = await asyncio.gather(
+                *[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls],
+                return_exceptions=True,
+            )
+            exceptions = [result for result in results if isinstance(result, Exception)]
+            if exceptions:
+                error_messages = "\n".join([str(e) for e in exceptions])
+                raise ToolError(f"Failed to cancel duplicate tool calls: {error_messages}")
             return None
 
         if self._on_duplicate_call == "reject":
