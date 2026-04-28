@@ -504,11 +504,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def user_state_source(self) -> UserStateSource:
         return self._user_state_source
 
-    @user_state_source.setter
-    def user_state_source(self, value: UserStateSource) -> None:
-        self._user_state_source = value
-        self._opts.turn_handling["user_state_source"] = value
-
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
         return self._mcp_servers
@@ -1081,7 +1076,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._turn_detection = turn_detection
 
         if is_given(user_state_source):
-            self.user_state_source = user_state_source
+            self._user_state_source = user_state_source
+            self._opts.turn_handling["user_state_source"] = user_state_source
 
         if self._activity is not None:
             self._activity.update_options(

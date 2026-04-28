@@ -864,11 +864,10 @@ class AudioRecognition:
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
             self._stt_drives_user_state or self._turn_detection_mode == "stt"
         ):
-            # user-state: hooks only (only when STT drives user state)
-            # _speaking is always driven by VAD; STT only drives user_state
+            # user-state: update directly (bypass hooks to avoid duplicate
+            # endpointing/overlap notifications — VAD hooks handle those)
             if self._stt_drives_user_state:
-                with trace.use_span(self._ensure_user_turn_span()):
-                    self._hooks.on_end_of_speech(None)
+                self._session._update_user_state("listening", last_speaking_time=time.time())
 
             # turn-detection: reset VAD so incorrect end-of-turn from STT can be
             # corrected by a VAD interruption if the user is still speaking
@@ -896,13 +895,12 @@ class AudioRecognition:
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            # user-state: hooks only (only when STT drives user state)
-            # _speaking is always driven by VAD; STT only drives user_state
+            # user-state: update directly (bypass hooks to avoid duplicate
+            # endpointing/overlap notifications — VAD hooks handle those)
             if self._stt_drives_user_state:
-                with trace.use_span(
-                    self._ensure_user_turn_span(start_time=self._speech_start_time)
-                ):
-                    self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
+                self._session._update_user_state(
+                    "speaking", last_speaking_time=self._speech_start_time
+                )
 
             # turn-detection: timing + cancel EOU (only when turn_detection is "stt")
             if self._turn_detection_mode == "stt":
