@@ -37,6 +37,7 @@ __all__ = [
 ]
 
 from livekit.agents import Plugin
+from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 
 from .log import logger
 
@@ -44,6 +45,13 @@ from .log import logger
 class ElevenLabsPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
+    def diagnostic_info(self) -> PluginDiagnosticInfo:
+        return PluginDiagnosticInfo(
+            capabilities=[PluginCapability.STT, PluginCapability.TTS],
+            required_env_vars=["ELEVEN_API_KEY"],
+            docs_url="https://docs.livekit.io/agents/integrations/tts/elevenlabs/",
+        )
 
 
 Plugin.register_plugin(ElevenLabsPlugin())

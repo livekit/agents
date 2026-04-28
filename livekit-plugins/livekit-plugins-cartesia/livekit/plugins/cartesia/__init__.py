@@ -24,6 +24,7 @@ from .version import __version__
 __all__ = ["STT", "TTS", "ChunkedStream", "__version__"]
 
 from livekit.agents import Plugin
+from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 
 from .log import logger
 
@@ -31,6 +32,13 @@ from .log import logger
 class CartesiaPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
+    def diagnostic_info(self) -> PluginDiagnosticInfo:
+        return PluginDiagnosticInfo(
+            capabilities=[PluginCapability.STT, PluginCapability.TTS],
+            required_env_vars=["CARTESIA_API_KEY"],
+            docs_url="https://docs.livekit.io/agents/integrations/tts/cartesia/",
+        )
 
 
 Plugin.register_plugin(CartesiaPlugin())

@@ -56,6 +56,7 @@ __all__ = [
 ]
 
 from livekit.agents import Plugin
+from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 
 from .log import logger
 
@@ -63,6 +64,25 @@ from .log import logger
 class OpenAIPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
+    def diagnostic_info(self) -> PluginDiagnosticInfo:
+        return PluginDiagnosticInfo(
+            capabilities=[
+                PluginCapability.LLM,
+                PluginCapability.STT,
+                PluginCapability.TTS,
+                PluginCapability.REALTIME,
+            ],
+            required_env_vars=["OPENAI_API_KEY"],
+            optional_env_vars=[
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT_ID",
+                "AZURE_OPENAI_API_KEY",
+                "AZURE_OPENAI_ENDPOINT",
+                "OPENAI_API_VERSION",
+            ],
+            docs_url="https://docs.livekit.io/agents/integrations/openai/",
+        )
 
 
 Plugin.register_plugin(OpenAIPlugin())

@@ -13,6 +13,7 @@ from typing import Any
 from huggingface_hub import errors
 
 from livekit.agents import LanguageCode, Plugin, llm
+from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
@@ -195,6 +196,13 @@ class EOUPlugin(Plugin):
 
     def download_files(self) -> None:
         self._runner_class._download_files()
+
+    def diagnostic_info(self) -> PluginDiagnosticInfo:
+        return PluginDiagnosticInfo(
+            capabilities=[PluginCapability.VAD],
+            downloadable_files=["LiveKit turn detector model"],
+            docs_url="https://docs.livekit.io/agents/build/turns/turn-detector/",
+        )
 
 
 class EOUModelBase(ABC):
