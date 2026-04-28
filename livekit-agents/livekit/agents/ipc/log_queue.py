@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
-import pickle
+import json
 import queue
 import sys
 import threading
@@ -59,7 +59,7 @@ class LogQueueListener:
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 
-            record = pickle.loads(data)
+            record = logging.makeLogRecord(json.loads(data.decode()))
             self.handle(record)
 
 
@@ -112,7 +112,7 @@ class LogQueueHandler(logging.Handler):
             if hasattr(record, "websocket"):
                 record.websocket = None
 
-            self._send_q.put_nowait(pickle.dumps(record))
+            self._send_q.put_nowait(json.dumps(record.__dict__, default=str).encode())
 
         except Exception:
             self.handleError(record)
