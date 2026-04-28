@@ -904,10 +904,12 @@ class AudioRecognition:
                 ):
                     self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
-            self._last_speaking_time = time.time()
+            # turn-detection: timing + cancel EOU (only when turn_detection is "stt")
+            if self._turn_detection_mode == "stt":
+                self._last_speaking_time = time.time()
 
-            if self._end_of_turn_task is not None:
-                self._end_of_turn_task.cancel()
+                if self._end_of_turn_task is not None:
+                    self._end_of_turn_task.cancel()
 
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
