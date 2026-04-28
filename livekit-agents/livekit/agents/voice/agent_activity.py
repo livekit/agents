@@ -200,6 +200,17 @@ class AgentActivity(RecognitionHooks):
         )
         self._turn_detection = self._validate_turn_detection(turn_detection)
 
+        # validate user_state_source requires the corresponding model
+        user_state_source = self._session.user_state_source
+        if user_state_source == "stt" and not self.stt:
+            logger.warning(
+                "user_state_source is set to 'stt', but no STT model is provided. "
+                "STT events will never fire, so user_state will be stuck. "
+                "Falling back to 'auto'."
+            )
+            self._session._user_state_source = "auto"
+            self._session._opts.turn_handling["user_state_source"] = "auto"
+
         self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
             self._resolve_interruption_detection()
         )

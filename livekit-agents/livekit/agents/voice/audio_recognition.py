@@ -208,6 +208,22 @@ class AudioRecognition:
         # "auto": VAD drives unless turn_detection mode is "stt"
         return self._turn_detection_mode != "stt"
 
+    @property
+    def _stt_drives_user_state(self) -> bool:
+        """Whether STT START/END_OF_SPEECH events should write ``_speaking``.
+
+        - ``"stt"``: always ``True`` - STT drives ``user_state`` regardless of
+          ``turn_detection`` mode.
+        - ``"vad"``: always ``False`` - VAD drives ``user_state``.
+        - ``"auto"``: ``True`` only when ``turn_detection`` is ``"stt"``.
+        """
+        if self._user_state_source == "stt":
+            return True
+        if self._user_state_source == "vad":
+            return False
+        # "auto": STT drives only when turn_detection mode is "stt"
+        return self._turn_detection_mode == "stt"
+
     def update_options(
         self,
         *,
@@ -861,7 +877,7 @@ class AudioRecognition:
             )
             self._audio_interim_transcript = ev.alternatives[0].text
 
-        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._stt_drives_user_state:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
@@ -885,7 +901,7 @@ class AudioRecognition:
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
 
-        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._stt_drives_user_state:
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
