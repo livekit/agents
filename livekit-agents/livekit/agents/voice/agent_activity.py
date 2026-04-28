@@ -200,22 +200,22 @@ class AgentActivity(RecognitionHooks):
         )
         self._turn_detection = self._validate_turn_detection(turn_detection)
 
-        # validate user_state_source requires the corresponding model
-        user_state_source = self._session.user_state_source
-        if user_state_source == "stt" and not self.stt:
+        # validate + resolve user_state_source locally (don't mutate session)
+        self._user_state_source: UserStateSource = self._session.user_state_source
+        if self._user_state_source == "stt" and not self.stt:
             logger.warning(
                 "user_state_source is set to 'stt', but no STT model is provided. "
                 "STT events will never fire, so user_state will be stuck. "
                 "Falling back to 'auto'."
             )
-            self._session.user_state_source = "auto"
-        elif user_state_source == "vad" and not self.vad:
+            self._user_state_source = "auto"
+        elif self._user_state_source == "vad" and not self.vad:
             logger.warning(
                 "user_state_source is set to 'vad', but no VAD model is provided. "
                 "VAD events will never fire, so user_state will be stuck. "
                 "Falling back to 'auto'."
             )
-            self._session.user_state_source = "auto"
+            self._user_state_source = "auto"
 
         self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
             self._resolve_interruption_detection()
@@ -500,7 +500,7 @@ class AgentActivity(RecognitionHooks):
                     "Falling back to 'auto'."
                 )
                 user_state_source = "auto"
-            self._session.user_state_source = user_state_source
+            self._user_state_source = user_state_source
 
         if utils.is_given(turn_detection):
             turn_detection = self._validate_turn_detection(turn_detection)
@@ -523,7 +523,9 @@ class AgentActivity(RecognitionHooks):
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
-                user_state_source=user_state_source,
+                user_state_source=self._user_state_source
+                if utils.is_given(user_state_source)
+                else NOT_GIVEN,
             )
 
     def _create_speech_task(
@@ -818,7 +820,7 @@ class AgentActivity(RecognitionHooks):
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
-            user_state_source=self._session.user_state_source,
+            user_state_source=self._user_state_source,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
@@ -1685,12 +1687,27 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
+    def _should_update_user_state(self, from_vad: bool) -> bool:
+        """Whether this event source should drive ``user_state`` transitions."""
+        if self._user_state_source == "vad":
+            return from_vad
+        if self._user_state_source == "stt":
+            return not from_vad
+        # "auto": VAD drives unless turn_detection is "stt"
+        if from_vad:
+            td = self._turn_detection
+            return not (isinstance(td, str) and td == "stt")
+        else:
+            td = self._turn_detection
+            return isinstance(td, str) and td == "stt"
+
     def on_start_of_speech(
         self,
         ev: vad.VADEvent | None,
         speech_start_time: float,
     ) -> None:
-        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
+        if self._should_update_user_state(from_vad=ev is not None):
+            self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
                 started_at=speech_start_time,
@@ -1737,10 +1754,11 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
             )
 
-        self._session._update_user_state(
-            "listening",
-            last_speaking_time=speech_end_time,
-        )
+        if self._should_update_user_state(from_vad=ev is not None):
+            self._session._update_user_state(
+                "listening",
+                last_speaking_time=speech_end_time,
+            )
         self._user_silence_event.set()
 
         if self._paused_speech:

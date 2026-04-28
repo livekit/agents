@@ -193,24 +193,8 @@ class AudioRecognition:
         self._vad_speech_started: bool = False
 
     @property
-    def _vad_drives_user_state(self) -> bool:
-        """Whether VAD callbacks should write ``_speaking`` and invoke user-state hooks.
-
-        - ``"vad"``: always ``True`` - VAD unconditionally drives ``user_state``.
-        - ``"stt"``: always ``False`` - STT drives ``user_state``; VAD still runs for
-          interruption detection but must not flip ``_speaking``.
-        - ``"auto"``: ``True`` unless ``turn_detection`` is ``"stt"``.
-        """
-        if self._user_state_source == "stt":
-            return False
-        if self._user_state_source == "vad":
-            return True
-        # "auto": VAD drives unless turn_detection mode is "stt"
-        return self._turn_detection_mode != "stt"
-
-    @property
     def _stt_drives_user_state(self) -> bool:
-        """Whether STT START/END_OF_SPEECH events should write ``_speaking``.
+        """Whether STT START/END_OF_SPEECH events should call user-state hooks.
 
         - ``"stt"``: always ``True`` - STT drives ``user_state`` regardless of
           ``turn_detection`` mode.
@@ -880,7 +864,8 @@ class AudioRecognition:
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
             self._stt_drives_user_state or self._turn_detection_mode == "stt"
         ):
-            # user-state: hooks + _speaking flip (only when STT drives user state)
+            # user-state: hooks only (only when STT drives user state)
+            # _speaking is always driven by VAD; STT only drives user_state
             if self._stt_drives_user_state:
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
@@ -893,17 +878,6 @@ class AudioRecognition:
                         "stt end of speech received while user is speaking, resetting vad"
                     )
                 self.update_vad(self._vad)
-
-            if self._stt_drives_user_state:
-                self._speaking = False
-
-                # When STT drives user_state but VAD drives turn detection,
-                # FINAL_TRANSCRIPT may have arrived while _speaking was True,
-                # which prevented EOU from firing. Now that _speaking is False
-                # and a transcript exists, trigger EOU.
-                if self._vad_base_turn_detection and self._audio_transcript:
-                    chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                    self._run_eou_detection(chat_ctx)
 
             # turn-detection: commit turn + EOU (only when turn_detection is "stt")
             if self._turn_detection_mode == "stt":
@@ -922,14 +896,13 @@ class AudioRecognition:
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            # user-state: hooks + _speaking flip (only when STT drives user state)
+            # user-state: hooks only (only when STT drives user state)
+            # _speaking is always driven by VAD; STT only drives user_state
             if self._stt_drives_user_state:
                 with trace.use_span(
                     self._ensure_user_turn_span(start_time=self._speech_start_time)
                 ):
                     self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
-
-                self._speaking = True
 
             self._last_speaking_time = time.time()
 
@@ -944,11 +917,10 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
-            if self._vad_drives_user_state:
-                with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
-                    self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
+            with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+                self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
-                self._speaking = True
+            self._speaking = True
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -969,11 +941,10 @@ class AudioRecognition:
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._vad_speech_started = False
 
-            if self._vad_drives_user_state:
-                with trace.use_span(self._ensure_user_turn_span()):
-                    self._hooks.on_end_of_speech(ev)
+            with trace.use_span(self._ensure_user_turn_span()):
+                self._hooks.on_end_of_speech(ev)
 
-                self._speaking = False
+            self._speaking = False
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1192,7 +1163,7 @@ class AudioRecognition:
             await stream.aclose()
 
             # reset the speaking state to prevent stuck user speaking state during handoff
-            if self._speaking and self._vad_drives_user_state:
+            if self._speaking:
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
