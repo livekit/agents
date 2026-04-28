@@ -129,9 +129,14 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         assert self._room is not None
 
         started_time = time.time()
-        await utils.wait_for_participant(room=self._room, identity=self.avatar_identity)
+        await utils.wait_for_participant(
+            room=self._room, identity=self.avatar_identity, include_local=True
+        )
         await utils.wait_for_track_publication(
-            room=self._room, identity=self.avatar_identity, kind=rtc.TrackKind.KIND_VIDEO
+            room=self._room,
+            identity=self.avatar_identity,
+            kind=rtc.TrackKind.KIND_VIDEO,
+            include_local=True,
         )
         joined_time = time.time()
         self._emit_metrics(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal, overload
 
 from livekit import rtc
 
@@ -67,23 +68,46 @@ async def wait_for_agent(
         room.off("connection_state_changed", on_connection_state_changed)
 
 
+@overload
 async def wait_for_participant(
     room: rtc.Room,
     *,
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
-) -> rtc.RemoteParticipant:
+    include_local: Literal[False] = False,
+) -> rtc.RemoteParticipant: ...
+
+
+@overload
+async def wait_for_participant(
+    room: rtc.Room,
+    *,
+    identity: str | None = None,
+    kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
+    include_local: Literal[True],
+) -> rtc.Participant: ...
+
+
+async def wait_for_participant(
+    room: rtc.Room,
+    *,
+    identity: str | None = None,
+    kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
+    include_local: bool = False,
+) -> rtc.Participant:
     """
     Returns a participant that matches the given identity. If identity is None, the first
     participant that joins the room will be returned.
     If the participant has already joined, the function will return immediately.
+
+    When `include_local` is True, the local participant is also considered.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
 
-    fut = asyncio.Future[rtc.RemoteParticipant]()
+    fut = asyncio.Future[rtc.Participant]()
 
-    def kind_match(p: rtc.RemoteParticipant) -> bool:
+    def kind_match(p: rtc.Participant) -> bool:
         if kind is None:
             return True
 
@@ -105,6 +129,11 @@ async def wait_for_participant(
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
+        if include_local:
+            local = room.local_participant
+            if (identity is None or local.identity == identity) and kind_match(local):
+                return local
+
         for p in room.remote_participants.values():
             if p.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE:
                 _on_participant_active(p)
@@ -117,20 +146,43 @@ async def wait_for_participant(
         room.off("connection_state_changed", _on_connection_state_changed)
 
 
+@overload
 async def wait_for_track_publication(
     room: rtc.Room,
     *,
     identity: str | None = None,
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
-) -> rtc.RemoteTrackPublication:
-    """Returns a remote track matching the given identity and kind.
+    include_local: Literal[False] = False,
+) -> rtc.RemoteTrackPublication: ...
+
+
+@overload
+async def wait_for_track_publication(
+    room: rtc.Room,
+    *,
+    identity: str | None = None,
+    kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
+    include_local: Literal[True],
+) -> rtc.TrackPublication: ...
+
+
+async def wait_for_track_publication(
+    room: rtc.Room,
+    *,
+    identity: str | None = None,
+    kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
+    include_local: bool = False,
+) -> rtc.TrackPublication:
+    """Returns a track publication matching the given identity and kind.
     If identity is None, the first track matching the kind will be returned.
     If the track has already been published, the function will return immediately.
+
+    When `include_local` is True, tracks published by the local participant are also considered.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
 
-    fut = asyncio.Future[rtc.RemoteTrackPublication]()
+    fut = asyncio.Future[rtc.TrackPublication]()
 
     def kind_match(k: rtc.TrackKind.ValueType) -> bool:
         if kind is None:
@@ -150,15 +202,33 @@ async def wait_for_track_publication(
         if (identity is None or participant.identity == identity) and kind_match(publication.kind):
             fut.set_result(publication)
 
+    def _on_local_track_published(
+        publication: rtc.LocalTrackPublication, _track: rtc.Track
+    ) -> None:
+        if fut.done():
+            return
+
+        local = room.local_participant
+        if (identity is None or local.identity == identity) and kind_match(publication.kind):
+            fut.set_result(publication)
+
     def _on_connection_state_changed(state: int) -> None:
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for track publication"))
 
-    # room.on("track_subscribed", _on_track_subscribed)
     room.on("track_published", _on_track_published)
+    if include_local:
+        room.on("local_track_published", _on_local_track_published)
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
+        if include_local:
+            local = room.local_participant
+            if identity is None or local.identity == identity:
+                for local_publication in local.track_publications.values():
+                    if kind_match(local_publication.kind):
+                        return local_publication
+
         for p in room.remote_participants.values():
             for publication in p.track_publications.values():
                 _on_track_published(publication, p)
@@ -168,4 +238,6 @@ async def wait_for_track_publication(
         return await fut
     finally:
         room.off("track_published", _on_track_published)
+        if include_local:
+            room.off("local_track_published", _on_local_track_published)
         room.off("connection_state_changed", _on_connection_state_changed)

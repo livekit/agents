@@ -215,6 +215,10 @@ class AvatarSession(BaseAvatarSession):
 
     @property
     def avatar_identity(self) -> str:
+        # In local mode the avatar video is published by the local agent participant,
+        # so the avatar identity is the local participant's identity.
+        if self._mode == "local" and self._room is not None:
+            return self._room.local_participant.identity
         return self._avatar_participant_identity
 
     @property
@@ -617,6 +621,7 @@ class AvatarSession(BaseAvatarSession):
         return self._runtime
 
     async def aclose(self) -> None:
+        await super().aclose()
         if self._mode == "local" and utils.is_given(self._runtime) and self._runtime is not None:
             self._runtime.cleanup()
 
