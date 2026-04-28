@@ -12,6 +12,8 @@ from livekit.agents import (
     cli,
     inference,
 )
+
+# from livekit.agents.utils import wait_for_participant
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -60,6 +62,9 @@ async def entrypoint(ctx: JobContext):
         agent=MyAgent(),
         room=ctx.room,
     )
+
+    # wait until the SIP participant is active
+    # await wait_for_participant(ctx.room, kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
 
     async with AMD(session, llm="openai/gpt-5-mini") as detector:
         result = await detector.execute()
