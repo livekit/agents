@@ -8,7 +8,6 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, 
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
-    ChatItem,
     ToolChoice,
 )
 from livekit.agents.types import (
