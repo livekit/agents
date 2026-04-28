@@ -897,6 +897,14 @@ class AudioRecognition:
             if self._stt_drives_user_state:
                 self._speaking = False
 
+                # When STT drives user_state but VAD drives turn detection,
+                # FINAL_TRANSCRIPT may have arrived while _speaking was True,
+                # which prevented EOU from firing. Now that _speaking is False
+                # and a transcript exists, trigger EOU.
+                if self._vad_base_turn_detection and self._audio_transcript:
+                    chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                    self._run_eou_detection(chat_ctx)
+
             # turn-detection: commit turn + EOU (only when turn_detection is "stt")
             if self._turn_detection_mode == "stt":
                 self._user_turn_committed = True

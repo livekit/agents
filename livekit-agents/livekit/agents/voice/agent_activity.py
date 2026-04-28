@@ -487,6 +487,21 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
+        if utils.is_given(user_state_source):
+            if user_state_source == "stt" and not self.stt:
+                logger.warning(
+                    "user_state_source is set to 'stt', but no STT model is provided. "
+                    "Falling back to 'auto'."
+                )
+                user_state_source = "auto"
+            elif user_state_source == "vad" and not self.vad:
+                logger.warning(
+                    "user_state_source is set to 'vad', but no VAD model is provided. "
+                    "Falling back to 'auto'."
+                )
+                user_state_source = "auto"
+            self._session.user_state_source = user_state_source
+
         if utils.is_given(turn_detection):
             turn_detection = self._validate_turn_detection(turn_detection)
 
