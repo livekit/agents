@@ -126,6 +126,7 @@ class LLMStream(llm.LLMStream):
         body: dict[str, Any] = {
             "model": self._llm_instance._model,
             "messages": messages,
+            "stream": True,
         }
 
         if tool_schemas:
