@@ -208,8 +208,14 @@ class AgentActivity(RecognitionHooks):
                 "STT events will never fire, so user_state will be stuck. "
                 "Falling back to 'auto'."
             )
-            self._session._user_state_source = "auto"
-            self._session._opts.turn_handling["user_state_source"] = "auto"
+            self._session.user_state_source = "auto"
+        elif user_state_source == "vad" and not self.vad:
+            logger.warning(
+                "user_state_source is set to 'vad', but no VAD model is provided. "
+                "VAD events will never fire, so user_state will be stuck. "
+                "Falling back to 'auto'."
+            )
+            self._session.user_state_source = "auto"
 
         self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
             self._resolve_interruption_detection()

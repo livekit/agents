@@ -877,40 +877,54 @@ class AudioRecognition:
             )
             self._audio_interim_transcript = ev.alternatives[0].text
 
-        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._stt_drives_user_state:
-            with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech(None)
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
+            self._stt_drives_user_state or self._turn_detection_mode == "stt"
+        ):
+            # user-state: hooks + _speaking flip (only when STT drives user state)
+            if self._stt_drives_user_state:
+                with trace.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
 
-            # STT EOT changes user state from speaking to listening without updating VAD internal states
-            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
-            # and user state won't be updated until a new VAD SOS is received
-            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
-            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
-            if self._vad:
+            # turn-detection: reset VAD so incorrect end-of-turn from STT can be
+            # corrected by a VAD interruption if the user is still speaking
+            if self._turn_detection_mode == "stt" and self._vad:
                 if self._speaking:
                     logger.warning(
                         "stt end of speech received while user is speaking, resetting vad"
                     )
                 self.update_vad(self._vad)
 
-            self._speaking = False
-            self._user_turn_committed = True
-            if not self._vad or self._last_speaking_time is None:
-                self._last_speaking_time = time.time()
+            if self._stt_drives_user_state:
+                self._speaking = False
 
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            # turn-detection: commit turn + EOU (only when turn_detection is "stt")
+            if self._turn_detection_mode == "stt":
+                self._user_turn_committed = True
+                if not self._vad or self._last_speaking_time is None:
+                    self._last_speaking_time = time.time()
 
-        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._stt_drives_user_state:
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
+
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and (
+            self._stt_drives_user_state or self._turn_detection_mode == "stt"
+        ):
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
-                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
+            # user-state: hooks + _speaking flip (only when STT drives user state)
+            if self._stt_drives_user_state:
+                with trace.use_span(
+                    self._ensure_user_turn_span(start_time=self._speech_start_time)
+                ):
+                    self._hooks.on_start_of_speech(
+                        None, speech_start_time=self._speech_start_time
+                    )
 
-            self._speaking = True
+                self._speaking = True
+
             self._last_speaking_time = time.time()
 
             if self._end_of_turn_task is not None:
