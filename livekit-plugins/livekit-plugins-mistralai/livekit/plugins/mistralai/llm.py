@@ -113,9 +113,6 @@ class LLM(llm.LLM):
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
-        self._conversation_id: str | None = None
-        self._prev_chat_ctx: ChatContext | None = None
-        self._pending_tool_calls: set[str] = set()
 
     @property
     def model(self) -> str:
@@ -139,9 +136,6 @@ class LLM(llm.LLM):
     ) -> None:
         if is_given(model):
             self._opts.model = model
-            self._conversation_id = None
-            self._prev_chat_ctx = None
-            self._pending_tool_calls = set()
         if is_given(max_completion_tokens):
             self._opts.max_completion_tokens = max_completion_tokens
         if is_given(temperature):
@@ -195,35 +189,15 @@ class LLM(llm.LLM):
         if completion_args:
             extra["completion_args"] = CompletionArgs(**completion_args)
 
-        input_chat_ctx = chat_ctx
-        conversation_id: str | None = None
-        if self._prev_chat_ctx is not None and self._conversation_id:
-            n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
-                self._prev_chat_ctx
-            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
-                conversation_id = self._conversation_id
-
         return LLMStream(
             self,
             model=self._opts.model,
             client=self._client,
-            chat_ctx=input_chat_ctx,
-            full_chat_ctx=chat_ctx,
-            conversation_id=conversation_id,
+            chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
-
-    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
-        """Check that all pending function calls from the previous response have results."""
-        if not self._pending_tool_calls:
-            return True
-
-        completed = {item.call_id for item in items if isinstance(item, llm.FunctionCallOutput)}
-        return all(call_id in completed for call_id in self._pending_tool_calls)
 
 
 class LLMStream(llm.LLMStream):
@@ -234,8 +208,6 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         client: Mistral,
         chat_ctx: ChatContext,
-        full_chat_ctx: ChatContext,
-        conversation_id: str | None,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
@@ -243,19 +215,14 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._client = client
-        self._mistral_llm = llm_v
-        self._full_chat_ctx = full_chat_ctx.copy()
-        self._conversation_id = conversation_id
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
         self._provider_tool_args: dict[str, str] = {}
-        self._received_conversation_id: str | None = None
 
     async def _run(self) -> None:
         self._emitted_tool_calls = set()
         self._provider_tool_args = {}
-        self._received_conversation_id = None
         retryable = True
 
         try:
@@ -269,24 +236,14 @@ class LLMStream(llm.LLMStream):
             if tools_list:
                 start_kwargs["tools"] = tools_list
 
-            if self._conversation_id is None:
-                async_response = await self._client.beta.conversations.start_stream_async(
-                    inputs=entries,
-                    model=self._model,
-                    instructions=extra_data.instructions,
-                    timeout_ms=int(self._conn_options.timeout * 1000),
-                    **start_kwargs,
-                    **self._extra_kwargs,
-                )
-            else:
-                async_response = await self._client.beta.conversations.append_stream_async(
-                    conversation_id=self._conversation_id,
-                    inputs=[
-                        e for e in entries if e.get("type") in ("function.result", "message.input")
-                    ],
-                    timeout_ms=int(self._conn_options.timeout * 1000),
-                    **self._extra_kwargs,
-                )
+            async_response = await self._client.beta.conversations.start_stream_async(
+                inputs=entries,
+                model=self._model,
+                instructions=extra_data.instructions,
+                timeout_ms=int(self._conn_options.timeout * 1000),
+                **start_kwargs,
+                **self._extra_kwargs,
+            )
 
             pending_fnc_calls: dict[str, _PendingFunctionCall] = {}
 
@@ -298,10 +255,6 @@ class LLMStream(llm.LLMStream):
 
             for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
                 self._event_ch.send_nowait(chat_chunk)
-
-            self._mistral_llm._conversation_id = self._received_conversation_id
-            self._mistral_llm._prev_chat_ctx = self._full_chat_ctx
-            self._mistral_llm._pending_tool_calls = self._emitted_tool_calls
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
@@ -342,7 +295,6 @@ class LLMStream(llm.LLMStream):
         chunks: list[ChatChunk] = []
 
         if isinstance(data, ResponseStartedEvent):
-            self._received_conversation_id = data.conversation_id
             return chunks
 
         if isinstance(data, FunctionCallEvent):
