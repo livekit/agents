@@ -18,8 +18,8 @@ from ...utils import EventEmitter, aio, is_given, log_exceptions
 HUMAN_SPEECH_THRESHOLD = 2.5
 HUMAN_SILENCE_THRESHOLD = 0.5
 MACHINE_SILENCE_THRESHOLD = 1.5
-NO_SPEECH_THRESHOLD = 10.0
-TIMEOUT = 20.0
+NO_SPEECH_THRESHOLD = 50.0
+TIMEOUT = 60.0
 
 
 class AMDCategory(str, Enum):
@@ -71,6 +71,9 @@ Output: uncertain
 Input: "You for calling Truly Pizza in Dana Pointe. Our hours of operation are 11AM to 8PM, Sunday through Thursday, 11AM to 9PM, Friday and Saturday, and we're closed on Tuesdays. If you'd like to place an order, please press 1 or head to our website to order online for pickup and local delivery."
 Output: machine-ivr
 
+Input: "Please state your name and why you're calling, and I will check if the person is available"
+Output: machine-ivr
+
 Input: "I'm away from my desk. If you leave a message, I will get back to you."
 Output: machine-vm
 
@@ -96,11 +99,22 @@ def _state_guard(method: Callable[..., Any]) -> Callable[..., Any]:
 
 
 class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
-    def __init__(self, llm: LLM):
+    def __init__(
+        self,
+        llm: LLM,
+        human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
+        human_silence_threshold: float = HUMAN_SILENCE_THRESHOLD,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
+        no_speech_threshold: float = NO_SPEECH_THRESHOLD,
+        timeout: float = TIMEOUT,
+        prompt: str = AMD_PROMPT,
+    ):
         super().__init__()
-        self._human_speech_threshold = HUMAN_SPEECH_THRESHOLD
-        self._human_silence_threshold = HUMAN_SILENCE_THRESHOLD
-        self._machine_silence_threshold = MACHINE_SILENCE_THRESHOLD
+        self._human_speech_threshold = human_speech_threshold
+        self._human_silence_threshold = human_silence_threshold
+        self._machine_silence_threshold = machine_silence_threshold
+        self._no_speech_threshold = no_speech_threshold
+        self._timeout = timeout
 
         self._input_ch: aio.Chan[str] = aio.Chan()
         self._classify_task: asyncio.Task[None] | None = None
@@ -112,19 +126,21 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._verdict_ready = asyncio.Event()
 
         self._llm = llm
+        self._prompt = prompt
         self._speech_started_at: float | None = None
         self._speech_ended_at: float | None = None
         self._started = False
         self._closed = False
         self._machine_silence_reached = False
         self._emitted = False
+        self._transcript = ""
 
     def start(self) -> None:
         if self._started:
             return
         self._started = True
         self._no_speech_timer = asyncio.get_running_loop().call_later(
-            NO_SPEECH_THRESHOLD,
+            self._no_speech_threshold,
             functools.partial(
                 self._silence_timer_callback,
                 category=AMDCategory.MACHINE_UNAVAILABLE,
@@ -132,7 +148,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             ),
         )
         self._detection_timeout_timer = asyncio.get_running_loop().call_later(
-            TIMEOUT,
+            self._timeout,
             functools.partial(
                 self._silence_timer_callback,
                 category=AMDCategory.UNCERTAIN,
@@ -164,15 +180,24 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
-            self._silence_timer = asyncio.get_running_loop().call_later(
-                max(0, self._human_silence_threshold - silence_duration),
-                functools.partial(
-                    self._silence_timer_callback,
-                    category=AMDCategory.HUMAN,
-                    reason="short_greeting",
-                    speech_duration=speech_duration,
-                ),
-            )
+            if not self._transcript:
+                self._silence_timer = asyncio.get_running_loop().call_later(
+                    max(0, self._human_silence_threshold - silence_duration),
+                    functools.partial(
+                        self._silence_timer_callback,
+                        category=AMDCategory.HUMAN,
+                        reason="short_greeting",
+                        speech_duration=speech_duration,
+                    ),
+                )
+            else:
+                self._silence_timer = asyncio.get_running_loop().call_later(
+                    max(0, self._machine_silence_threshold - silence_duration),
+                    functools.partial(
+                        self._silence_timer_callback,
+                        speech_duration=speech_duration,
+                    ),
+                )
             return
 
         if self._classify_task is None:
@@ -238,6 +263,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             self._no_speech_timer.cancel()
             self._no_speech_timer = None
         self._input_ch.send_nowait(text)
+        self._transcript = (self._transcript + " " + text).lstrip()
 
     def end_input(self) -> None:
         if self._input_ch.closed:
@@ -270,7 +296,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             stream = self._llm.chat(
                 chat_ctx=ChatContext(
                     items=[
-                        ChatMessage(role="system", content=[AMD_PROMPT]),
+                        ChatMessage(role="system", content=[self._prompt]),
                         ChatMessage(role="user", content=[transcript]),
                     ]
                 ),

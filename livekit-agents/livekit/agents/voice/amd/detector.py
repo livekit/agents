@@ -11,6 +11,12 @@ from ...llm import LLM as _LLM
 from ...log import logger
 from ...telemetry import trace_types, tracer
 from .classifier import (
+    AMD_PROMPT,
+    HUMAN_SILENCE_THRESHOLD,
+    HUMAN_SPEECH_THRESHOLD,
+    MACHINE_SILENCE_THRESHOLD,
+    NO_SPEECH_THRESHOLD,
+    TIMEOUT,
     AMDCategory,
     AMDResult,
     _AMDClassifier,
@@ -61,6 +67,12 @@ class AMD:
         llm: LLM | LLMModels | str | None = None,
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
+        human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
+        human_silence_threshold: float = HUMAN_SILENCE_THRESHOLD,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
+        no_speech_threshold: float = NO_SPEECH_THRESHOLD,
+        timeout: float = TIMEOUT,
+        prompt: str = AMD_PROMPT,
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
@@ -70,6 +82,13 @@ class AMD:
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
         self._span: trace.Span | None = None
+
+        self._human_speech_threshold = human_speech_threshold
+        self._human_silence_threshold = human_silence_threshold
+        self._machine_silence_threshold = machine_silence_threshold
+        self._no_speech_threshold = no_speech_threshold
+        self._timeout = timeout
+        self._prompt = prompt
 
     @property
     def enabled(self) -> bool:
@@ -260,18 +279,29 @@ class AMD:
         self._span.end()
         self._span = None
 
-    @staticmethod
     def _resolve_classifier(
+        self,
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
     ) -> _AMDClassifier | None:
+        _llm: _InferenceLLM | _LLM | None = None
         if isinstance(llm, str):
-            return _AMDClassifier(_InferenceLLM(llm))
-        if isinstance(llm, _LLM):
-            return _AMDClassifier(llm)
+            _llm = _InferenceLLM(llm)
+        elif isinstance(llm, _LLM):
+            _llm = llm
+        elif (candidate := session.llm) is not None and isinstance(candidate, _LLM):
+            _llm = candidate
 
-        if (candidate := session.llm) is not None and isinstance(candidate, _LLM):
-            return _AMDClassifier(candidate)
+        if _llm is not None:
+            return _AMDClassifier(
+                _llm,
+                human_speech_threshold=self._human_speech_threshold,
+                human_silence_threshold=self._human_silence_threshold,
+                machine_silence_threshold=self._machine_silence_threshold,
+                no_speech_threshold=self._no_speech_threshold,
+                timeout=self._timeout,
+                prompt=self._prompt,
+            )
 
         return None
 
