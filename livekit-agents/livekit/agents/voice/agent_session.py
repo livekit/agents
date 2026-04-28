@@ -1585,7 +1585,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """End user speaking state when audio is disabled by default."""
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
-                self._activity.on_end_of_speech(None)
+                self._activity.on_end_of_speech(None, force=True)
             else:
                 self._update_user_state("listening")
 
