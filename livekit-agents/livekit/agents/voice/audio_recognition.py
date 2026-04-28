@@ -66,6 +66,8 @@ class RecognitionHooks(Protocol):
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None, *, force: bool = False) -> None: ...
+    def on_stt_speech_started(self) -> None: ...
+    def on_stt_speech_ended(self) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
@@ -864,8 +866,12 @@ class AudioRecognition:
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
             self._stt_drives_user_state or self._turn_detection_mode == "stt"
         ):
-            # user-state: update directly (bypass hooks to avoid duplicate
-            # endpointing/overlap notifications — VAD hooks handle those)
+            # Notify activity of STT speech end (sets _stt_eos_received, etc.)
+            # without triggering duplicate endpointing — VAD hooks handle those.
+            self._hooks.on_stt_speech_ended()
+
+            # user-state: update directly (bypass on_end_of_speech hooks to avoid
+            # duplicate endpointing/overlap notifications)
             if self._stt_drives_user_state:
                 self._session._update_user_state("listening", last_speaking_time=time.time())
 
@@ -895,8 +901,12 @@ class AudioRecognition:
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            # user-state: update directly (bypass hooks to avoid duplicate
-            # endpointing/overlap notifications — VAD hooks handle those)
+            # Notify activity of STT speech start (resets _stt_eos_received, etc.)
+            # without triggering duplicate endpointing — VAD hooks handle those.
+            self._hooks.on_stt_speech_started()
+
+            # user-state: update directly (bypass on_start_of_speech hooks to avoid
+            # duplicate endpointing/overlap notifications)
             if self._stt_drives_user_state:
                 self._session._update_user_state(
                     "speaking", last_speaking_time=self._speech_start_time

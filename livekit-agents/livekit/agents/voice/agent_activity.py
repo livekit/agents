@@ -1764,6 +1764,15 @@ class AgentActivity(RecognitionHooks):
         if self._paused_speech:
             self._start_false_interruption_timer(self._paused_speech.timeout)
 
+    def on_stt_speech_started(self) -> None:
+        """Notify that STT detected speech start (without triggering endpointing)."""
+        self._stt_eos_received = False
+        self._user_silence_event.clear()
+
+    def on_stt_speech_ended(self) -> None:
+        """Notify that STT detected speech end (without triggering endpointing)."""
+        self._stt_eos_received = True
+
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
