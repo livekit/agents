@@ -1738,7 +1738,7 @@ class AgentActivity(RecognitionHooks):
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()
 
-    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
+    def on_end_of_speech(self, ev: vad.VADEvent | None, *, force: bool = False) -> None:
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration - ev.inference_duration
@@ -1754,7 +1754,7 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
             )
 
-        if self._should_update_user_state(from_vad=ev is not None):
+        if force or self._should_update_user_state(from_vad=ev is not None):
             self._session._update_user_state(
                 "listening",
                 last_speaking_time=speech_end_time,
