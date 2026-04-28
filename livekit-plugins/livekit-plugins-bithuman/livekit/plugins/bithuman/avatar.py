@@ -158,6 +158,7 @@ class AvatarSession(BaseAvatarSession):
                  * "essence" for predefined actions and expressions
                - Allows flexibility in choosing the interaction style
         """
+        super().__init__()
         self._api_url = (
             api_url
             or os.getenv("BITHUMAN_API_URL")
@@ -211,6 +212,14 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
         self._runtime = runtime
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "bithuman"
 
     async def start(
         self,

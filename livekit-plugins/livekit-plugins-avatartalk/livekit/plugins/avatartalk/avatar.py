@@ -28,12 +28,21 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
     ):
+        super().__init__()
         self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
         self._avatar = avatar or (os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME)
         self._emotion = emotion or (os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION)
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._agent_track = None
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "avatartalk"
 
     def __generate_lk_token(
         self,

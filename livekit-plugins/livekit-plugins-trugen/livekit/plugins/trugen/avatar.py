@@ -44,6 +44,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._avatar_id = (
             _DEFAULT_AVATAR_ID if avatar_id is NOT_GIVEN or avatar_id is None else avatar_id
         )
@@ -64,6 +65,14 @@ class AvatarSession(BaseAvatarSession):
             self._avatar_participant_name = str(avatar_participant_name)
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "trugen"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
