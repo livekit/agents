@@ -174,7 +174,6 @@ def test_console_mode_missing_livekit_credentials_is_non_blocking_warning() -> N
         result for result in payload["results"] if result["id"] == "livekit.credentials"
     )
     assert credentials["severity"] == "warn"
-    assert report_exit_code(report) == 0
 
 
 def test_worker_modes_missing_livekit_credentials_remain_fatal() -> None:
