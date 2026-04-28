@@ -372,28 +372,40 @@ def _rime_lang_from_variant(variant: str | None) -> str | None:
     return None
 
 
-def is_deepgram_aura_model(model: str) -> bool:
-    ref = parse_model_ref(model)
+def _is_aura_ref(ref: ModelRef) -> bool:
     return ref.route_provider == "deepgram" and ref.route_model == "aura"
 
 
-def is_rime_arcana_model(model: str) -> bool:
-    ref = parse_model_ref(model)
+def _is_arcana_ref(ref: ModelRef) -> bool:
     return ref.route_provider == "rime" and ref.route_model == "arcana"
 
 
-def is_sarvam_bulbul_model(model: str) -> bool:
-    ref = parse_model_ref(model)
+def _is_bulbul_ref(ref: ModelRef) -> bool:
     return ref.route_provider == "sarvam" and ref.route_model == "bulbul"
 
 
-def is_sarvam_model(model: str) -> bool:
-    ref = parse_model_ref(model)
+def _is_sarvam_ref(ref: ModelRef) -> bool:
     return ref.route_provider == "sarvam"
 
 
-def normalize_language_for_model(
-    model: str | None,
+def is_deepgram_aura_model(model: str) -> bool:
+    return _is_aura_ref(parse_model_ref(model))
+
+
+def is_rime_arcana_model(model: str) -> bool:
+    return _is_arcana_ref(parse_model_ref(model))
+
+
+def is_sarvam_bulbul_model(model: str) -> bool:
+    return _is_bulbul_ref(parse_model_ref(model))
+
+
+def is_sarvam_model(model: str) -> bool:
+    return _is_sarvam_ref(parse_model_ref(model))
+
+
+def _normalize_language_for_ref(
+    ref: ModelRef | None,
     language: str,
     *,
     model_options: Mapping[str, Any] | None = None,
@@ -405,20 +417,29 @@ def normalize_language_for_model(
             override = candidate.strip() or None
 
     cleaned = (override or language or "").strip()
-    if not cleaned or model is None:
+    if not cleaned or ref is None:
         return cleaned
 
-    if is_sarvam_model(model):
+    if _is_sarvam_ref(ref):
         return SARVAM_BCP47_LANGUAGE_BY_CODE.get(cleaned.lower(), cleaned)
 
     return cleaned
 
 
-def normalize_tts_voice(model: str, voice: str) -> str:
-    cleaned = (voice or "").strip()
-    ref = parse_model_ref(model)
+def normalize_language_for_model(
+    model: str | None,
+    language: str,
+    *,
+    model_options: Mapping[str, Any] | None = None,
+) -> str:
+    ref = parse_model_ref(model) if model else None
+    return _normalize_language_for_ref(ref, language, model_options=model_options)
 
-    if is_rime_arcana_model(model):
+
+def _normalize_tts_voice_for_ref(ref: ModelRef, voice: str) -> str:
+    cleaned = (voice or "").strip()
+
+    if _is_arcana_ref(ref):
         if cleaned and cleaned != "default":
             return cleaned
         lang = _rime_lang_from_variant(ref.variant)
@@ -426,7 +447,7 @@ def normalize_tts_voice(model: str, voice: str) -> str:
             return RIME_DEFAULT_SPEAKER_BY_LANG[lang]
         return RIME_DEFAULT_SPEAKER_BY_LANG["en"]
 
-    if is_deepgram_aura_model(model):
+    if _is_aura_ref(ref):
         if cleaned and cleaned != "default":
             return cleaned
         if ref.variant and ref.variant in AURA_DEFAULT_VOICE_BY_VARIANT:
@@ -436,12 +457,19 @@ def normalize_tts_voice(model: str, voice: str) -> str:
     return cleaned
 
 
-def validate_tts_voice(model: str, voice: str) -> list[str]:
+def normalize_tts_voice(model: str, voice: str) -> str:
+    return _normalize_tts_voice_for_ref(parse_model_ref(model), voice)
+
+
+def _validate_tts_voice_for_ref(ref: ModelRef, voice: str) -> list[str]:
     errors: list[str] = []
     cleaned = (voice or "").strip()
-    ref = parse_model_ref(model)
+    model = ref.raw
 
-    if is_deepgram_aura_model(model):
+    is_aura = _is_aura_ref(ref)
+    is_arcana = _is_arcana_ref(ref)
+
+    if is_aura:
         if not cleaned:
             errors.append(
                 f"tts_voice is required for {model}; expected an aura-2 voice like "
@@ -468,7 +496,7 @@ def validate_tts_voice(model: str, voice: str) -> list[str]:
                 f"tts_voice '{cleaned}' is invalid for {model}; expected an '-en' or '-es' voice"
             )
 
-    if is_rime_arcana_model(model):
+    if is_arcana:
         lang = _rime_lang_from_variant(ref.variant)
         if not cleaned:
             errors.append(f"tts_voice is required for {model}; expected a valid speaker")
@@ -483,22 +511,17 @@ def validate_tts_voice(model: str, voice: str) -> list[str]:
                 )
 
     # Generic check for all other models: warn if voice is empty
-    if (
-        not errors
-        and not cleaned
-        and not is_deepgram_aura_model(model)
-        and not is_rime_arcana_model(model)
-    ):
+    if not errors and not cleaned and not is_aura and not is_arcana:
         errors.append(f"tts_voice is empty for {model}; a voice identifier should be provided")
 
     return errors
 
 
-def resolve_deepgram_stt_model(model: str | None) -> str | None:
-    if not model:
-        return None
+def validate_tts_voice(model: str, voice: str) -> list[str]:
+    return _validate_tts_voice_for_ref(parse_model_ref(model), voice)
 
-    ref = parse_model_ref(model)
+
+def _resolve_deepgram_stt_model_for_ref(ref: ModelRef) -> str | None:
     if ref.route_provider != "deepgram" or ref.route_model != "nova":
         return None
 
@@ -512,6 +535,12 @@ def resolve_deepgram_stt_model(model: str | None) -> str | None:
     return None
 
 
+def resolve_deepgram_stt_model(model: str | None) -> str | None:
+    if not model:
+        return None
+    return _resolve_deepgram_stt_model_for_ref(parse_model_ref(model))
+
+
 def build_tts_init_payload(
     *,
     model: str,
@@ -522,9 +551,10 @@ def build_tts_init_payload(
     speed: float,
     model_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    ref = parse_model_ref(model)
     options = dict(model_options or {})
-    normalized_language = normalize_language_for_model(
-        model,
+    normalized_language = _normalize_language_for_ref(
+        ref,
         language,
         model_options=options,
     )
@@ -542,10 +572,10 @@ def build_tts_init_payload(
         "config": config,
     }
 
-    if is_deepgram_aura_model(model):
+    if _is_aura_ref(ref):
         payload["model"] = voice
 
-    if is_rime_arcana_model(model):
+    if _is_arcana_ref(ref):
         config["modelId"] = options.get("modelId", "arcana")
         config["segment"] = options.get("segment", "bySentence")
         for key in (
@@ -559,7 +589,7 @@ def build_tts_init_payload(
                 config[key] = options[key]
         payload["speaker"] = voice
 
-    if is_sarvam_bulbul_model(model):
+    if _is_bulbul_ref(ref):
         config["speech_sample_rate"] = str(sample_rate)
         config["pace"] = options.get("pace", speed)
         for key in (
@@ -589,11 +619,10 @@ def build_stt_init_payload(
     max_speakers: int | None = None,
     model_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if model is not None:
-        parse_model_ref(model)
+    ref = parse_model_ref(model) if model is not None else None
 
-    normalized_language = normalize_language_for_model(
-        model,
+    normalized_language = _normalize_language_for_ref(
+        ref,
         language,
         model_options=model_options,
     )
@@ -626,8 +655,9 @@ def build_stt_init_payload(
 
     payload: dict[str, Any] = {"type": "init", "config": config}
 
-    deepgram_model = resolve_deepgram_stt_model(model)
-    if deepgram_model:
-        payload["model"] = deepgram_model
+    if ref is not None:
+        deepgram_model = _resolve_deepgram_stt_model_for_ref(ref)
+        if deepgram_model:
+            payload["model"] = deepgram_model
 
     return payload
