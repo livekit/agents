@@ -76,7 +76,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .turn import EndpointingOptions, TurnDetectionMode
+from .turn import EndpointingOptions, TurnDetectionMode, UserStateSource
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -444,6 +444,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        user_state_source: NotGivenOr[UserStateSource] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -490,6 +491,7 @@ class AgentActivity(RecognitionHooks):
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
+                user_state_source=user_state_source,
             )
 
     def _create_speech_task(
@@ -784,6 +786,7 @@ class AgentActivity(RecognitionHooks):
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
+            user_state_source=self._session.user_state_source,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )

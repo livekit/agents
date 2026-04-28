@@ -67,6 +67,7 @@ from .turn import (
     PreemptiveGenerationOptions,
     TurnDetectionMode,
     TurnHandlingOptions,
+    UserStateSource,
     _migrate_turn_handling,
     _resolve_endpointing,
     _resolve_interruption,
@@ -354,6 +355,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         interruption = _resolve_interruption(turn_handling.get("interruption"))
         preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
         raw_turn_detection = turn_handling.get("turn_detection", None)
+        raw_user_state_source: UserStateSource = turn_handling.get("user_state_source", "auto")
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -362,6 +364,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 endpointing=endpointing,
                 interruption=interruption,
                 turn_detection=raw_turn_detection,
+                user_state_source=raw_user_state_source,
                 preemptive_generation=preemptive_gen,
             ),
             max_tool_steps=max_tool_steps,
@@ -396,6 +399,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._turn_detection = raw_turn_detection
+        self._user_state_source: UserStateSource = raw_user_state_source
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
@@ -495,6 +499,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
         return self._turn_detection
+
+    @property
+    def user_state_source(self) -> UserStateSource:
+        return self._user_state_source
 
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
@@ -1018,6 +1026,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        user_state_source: NotGivenOr[UserStateSource] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -1029,6 +1038,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
+            user_state_source (NotGivenOr[UserStateSource], optional): Which signal drives the
+                user_state machine. ``"vad"`` for VAD, ``"stt"`` for STT, ``"auto"`` for default.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
@@ -1064,12 +1075,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
+        if is_given(user_state_source):
+            self._user_state_source = user_state_source
+            self._opts.turn_handling["user_state_source"] = user_state_source
+
         if self._activity is not None:
             self._activity.update_options(
                 endpointing_opts=(
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),
                 turn_detection=turn_detection,
+                user_state_source=user_state_source,
             )
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:

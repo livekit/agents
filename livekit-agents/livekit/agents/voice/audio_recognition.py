@@ -30,7 +30,7 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .turn import TurnDetectionMode as TurnDetectionMode
+from .turn import TurnDetectionMode as TurnDetectionMode, UserStateSource as UserStateSource
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -133,6 +133,7 @@ class AudioRecognition:
         vad: vad.VAD | None,
         interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
+        user_state_source: UserStateSource = "auto",
         stt_model: str | None = None,
         stt_provider: str | None = None,
     ) -> None:
@@ -151,6 +152,7 @@ class AudioRecognition:
         self._stt_provider = stt_provider
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
+        self._user_state_source: UserStateSource = user_state_source
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
         self._sample_rate: int | None = None
@@ -190,17 +192,37 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
+    @property
+    def _vad_drives_user_state(self) -> bool:
+        """Whether VAD callbacks should write ``_speaking`` and invoke user-state hooks.
+
+        - ``"vad"``: always ``True`` - VAD unconditionally drives ``user_state``.
+        - ``"stt"``: always ``False`` - STT drives ``user_state``; VAD still runs for
+          interruption detection but must not flip ``_speaking``.
+        - ``"auto"``: ``True`` unless ``turn_detection`` is ``"stt"``.
+        """
+        if self._user_state_source == "stt":
+            return False
+        if self._user_state_source == "vad":
+            return True
+        # "auto": VAD drives unless turn_detection mode is "stt"
+        return self._turn_detection_mode != "stt"
+
     def update_options(
         self,
         *,
         endpointing: NotGivenOr[BaseEndpointing] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        user_state_source: NotGivenOr[UserStateSource] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(endpointing):
             self._endpointing = endpointing
+
+        if is_given(user_state_source):
+            self._user_state_source = user_state_source
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
@@ -886,9 +908,7 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
-            # When turn_detection is "stt", STT drives user_state; VAD still runs
-            # for interruption detection but should not flip _speaking.
-            if self._turn_detection_mode != "stt":
+            if self._vad_drives_user_state:
                 with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                     self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
@@ -913,9 +933,7 @@ class AudioRecognition:
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._vad_speech_started = False
 
-            # When turn_detection is "stt", STT drives user_state; VAD still runs
-            # for interruption detection but should not flip _speaking.
-            if self._turn_detection_mode != "stt":
+            if self._vad_drives_user_state:
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(ev)
 
@@ -1138,7 +1156,7 @@ class AudioRecognition:
             await stream.aclose()
 
             # reset the speaking state to prevent stuck user speaking state during handoff
-            if self._speaking and self._turn_detection_mode != "stt":
+            if self._speaking and self._vad_drives_user_state:
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
