@@ -10,6 +10,7 @@ from livekit.agents.diagnostics import (
     DiagnosticCategory,
     DiagnosticCheck,
     DiagnosticContext,
+    DiagnosticMode,
     DiagnosticResult,
     DiagnosticSeverity,
     PluginCapability,
@@ -36,11 +37,18 @@ def _make_server() -> AgentServer:
     return server
 
 
-def _context(*, strict: bool = False, deep: bool = False) -> DiagnosticContext:
+def _context(
+    *,
+    mode: DiagnosticMode = "doctor",
+    strict: bool = False,
+    deep: bool = False,
+    env: dict[str, str] | None = None,
+) -> DiagnosticContext:
     return DiagnosticContext(
+        mode=mode,
         strict=strict,
         deep=deep,
-        env={},
+        env=env or {},
         registered_plugins=tuple(Plugin.registered_plugins),
         server=_make_server(),
     )
@@ -146,3 +154,45 @@ def test_plugin_diagnostics_exception_becomes_plugin_error_without_crashing() ->
     assert report_exit_code(report) == 1
     assert "livekit.plugins.exploding" in serialized
     assert "provider self-test exploded" in serialized
+
+
+def test_console_mode_missing_livekit_credentials_is_non_blocking_warning() -> None:
+    server = AgentServer()
+    server.rtc_session(_entrypoint)
+
+    report = collect_diagnostics(
+        DiagnosticContext(
+            mode="console",
+            env={},
+            registered_plugins=(),
+            server=server,
+        )
+    )
+    payload = _report_dict(report)
+
+    credentials = next(
+        result for result in payload["results"] if result["id"] == "livekit.credentials"
+    )
+    assert credentials["severity"] == "warn"
+    assert report_exit_code(report) == 0
+
+
+def test_worker_modes_missing_livekit_credentials_remain_fatal() -> None:
+    server = AgentServer()
+    server.rtc_session(_entrypoint)
+
+    report = collect_diagnostics(
+        DiagnosticContext(
+            mode="dev",
+            env={},
+            registered_plugins=(),
+            server=server,
+        )
+    )
+    payload = _report_dict(report)
+
+    credentials = next(
+        result for result in payload["results"] if result["id"] == "livekit.credentials"
+    )
+    assert credentials["severity"] == "fatal"
+    assert report_exit_code(report) == 1

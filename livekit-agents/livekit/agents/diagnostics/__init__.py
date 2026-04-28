@@ -156,7 +156,7 @@ class DiagnosticReport:
         }
 
 
-_LIVEKIT_REQUIRED_MODES = {"console", "dev", "start", "connect"}
+_LIVEKIT_REQUIRED_MODES = {"dev", "start", "connect"}
 
 
 def collect_diagnostics(context: DiagnosticContext) -> DiagnosticReport:
@@ -263,7 +263,12 @@ def _check_entrypoint(context: DiagnosticContext) -> DiagnosticResult:
 
 def _check_livekit_credentials(context: DiagnosticContext) -> list[DiagnosticResult]:
     required = context.mode in _LIVEKIT_REQUIRED_MODES
-    missing_severity = DiagnosticSeverity.FATAL if required else DiagnosticSeverity.ERROR
+    if required:
+        missing_severity = DiagnosticSeverity.FATAL
+    elif context.mode == "console":
+        missing_severity = DiagnosticSeverity.WARN
+    else:
+        missing_severity = DiagnosticSeverity.ERROR
     results: list[DiagnosticResult] = []
 
     credentials = {
@@ -274,13 +279,26 @@ def _check_livekit_credentials(context: DiagnosticContext) -> list[DiagnosticRes
 
     missing = [name for name, value in credentials.items() if not value]
     if missing:
+        if context.mode == "console":
+            message = (
+                "LiveKit credentials are not configured; console mode can still run local agents"
+            )
+            fix_hint = (
+                "Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET if this agent uses "
+                "LiveKit Cloud services."
+            )
+        else:
+            message = f"Missing LiveKit credential environment variables: {', '.join(missing)}"
+            fix_hint = (
+                "Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET, or pass CLI options."
+            )
         results.append(
             DiagnosticResult(
                 id="livekit.credentials",
                 category=DiagnosticCategory.LIVEKIT,
                 severity=missing_severity,
-                message=f"Missing LiveKit credential environment variables: {', '.join(missing)}",
-                fix_hint="Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET, or pass CLI options.",
+                message=message,
+                fix_hint=fix_hint,
                 docs_url="https://docs.livekit.io/agents/start/voice-ai/",
                 details={"missing": missing},
             )
