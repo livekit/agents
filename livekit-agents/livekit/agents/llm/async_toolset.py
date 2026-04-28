@@ -12,6 +12,7 @@ from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
     Tool,
+    ToolError,
     Toolset,
     function_tool,
 )
@@ -195,6 +196,10 @@ class AsyncToolset(Toolset):
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
         if task is not None:
+            if not task.ctx.speech_handle.allow_interruptions:
+                raise ToolError(
+                    f"Tool call {call_id} is not cancellable because interruptions are disallowed"
+                )
             await utils.aio.cancel_and_wait(task.exe_task)
             return True
         return False
