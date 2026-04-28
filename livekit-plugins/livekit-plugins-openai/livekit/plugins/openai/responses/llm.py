@@ -44,6 +44,7 @@ from ..log import logger
 from ..models import _supports_reasoning_effort
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
@@ -144,6 +145,7 @@ class _LLMOptions:
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
     service_tier: NotGivenOr[ServiceTier]
+    verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
     use_websocket: bool
 
@@ -165,6 +167,7 @@ class LLM(llm.LLM):
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
@@ -196,6 +199,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
             service_tier=service_tier,
+            verbosity=verbosity,
             max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
         )
@@ -292,6 +296,10 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.verbosity):
+            text_cfg = extra.get("text") or {}
+            extra["text"] = {**text_cfg, "verbosity": self._opts.verbosity}
 
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
