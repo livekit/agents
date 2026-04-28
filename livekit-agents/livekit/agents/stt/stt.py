@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,11 +62,16 @@ class SpeechData:
     words: list[TimedString] | None = None
     source_languages: list[LanguageCode] | None = None
     """the source languages spoken by the user. populated by STT services that support translation,
-    where `language` holds the target language and `source_languages` holds the original spoken language(s).
+    where `language` holds the target language and `source_languages` holds the original spoken language(s),
+    or by multi-language detection services where `language` holds the dominant language and
+    `source_languages` holds all detected languages sorted by prevalence.
     may contain multiple entries when a single utterance spans multiple source languages."""
     source_texts: list[str] | None = None
     """the original transcription segments in the source language(s), when translation is active.
     each entry corresponds to the same-indexed entry in `source_languages`."""
+    metadata: dict[str, Any] | None = None
+    """optional plugin-specific metadata (e.g. voice profile, provider diagnostics).
+    plugins may populate this with provider-specific data that doesn't map to standard fields."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.language, LanguageCode) and isinstance(self.language, str):
@@ -94,6 +99,9 @@ class SpeechEvent:
     request_id: str = ""
     alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
+    speech_start_time: float | None = None
+    """server-reported wall-clock time of speech onset, when the provider sends
+    a separate speech-start signal carrying onset timing."""
 
 
 @dataclass
@@ -311,6 +319,7 @@ class RecognizeStream(ABC):
         self._resampler: rtc.AudioResampler | None = None
 
         self._start_time_offset: float = 0.0
+        self._start_time: float = time.time()
 
     @property
     def start_time_offset(self) -> float:
@@ -321,6 +330,24 @@ class RecognizeStream(ABC):
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
         self._start_time_offset = value
+
+    @property
+    def start_time(self) -> float:
+        """Wall-clock anchor for the stream. Seeded to `time.time()` when the
+        stream is initialized (and re-seeded on each retry). Plugins may
+        override this via the setter to anchor it at a more accurate moment
+        (e.g., when the first audio frame is sent to the provider) so that
+        server-provided stream-relative timestamps (like
+        `SpeechEvent.speech_start_time`) can be converted to wall-clock
+        accurately.
+        """
+        return self._start_time
+
+    @start_time.setter
+    def start_time(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time must be non-negative")
+        self._start_time = value
 
     def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
         """Report connection timing as an STTMetrics event with zero usage."""
@@ -351,6 +378,7 @@ class RecognizeStream(ABC):
         while self._num_retries <= max_retries:
             try:
                 self._start_time_offset += time.time() - last_start_time
+                self._start_time = time.time()
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:

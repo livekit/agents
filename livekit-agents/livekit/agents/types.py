@@ -113,13 +113,27 @@ DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
 
 
 class TimedString(str):
-    """A string with optional start and end timestamps for word-level alignment."""
+    """A string with optional start and end timestamps for word-level alignment.
+
+    Attributes:
+        start_time: Word start time in seconds (NOT_GIVEN when unavailable).
+        end_time: Word end time in seconds (NOT_GIVEN when unavailable).
+        confidence: Per-word confidence score (NOT_GIVEN when unavailable).
+        start_time_offset: Offset in seconds relative to the start of the audio
+            input stream or session. Used by STT plugins to align words against
+            the session timeline (NOT_GIVEN when unavailable).
+        speaker_id: Speaker identifier when the provider supports diarization.
+            Uses ``str | None`` rather than ``NotGivenOr[str]`` because the
+            absence of a speaker is a routine, expected case across all
+            providers — not a "not given" boundary condition — and downstream
+            consumers gate on ``speaker_id is None`` rather than ``is_given``.
+    """
 
     start_time: NotGivenOr[float]
     end_time: NotGivenOr[float]
     confidence: NotGivenOr[float]
     start_time_offset: NotGivenOr[float]
-    # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+    speaker_id: str | None
 
     def __new__(
         cls,
@@ -128,10 +142,12 @@ class TimedString(str):
         end_time: NotGivenOr[float] = NOT_GIVEN,
         confidence: NotGivenOr[float] = NOT_GIVEN,
         start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+        speaker_id: str | None = None,
     ) -> "TimedString":
         obj = super().__new__(cls, text)
         obj.start_time = start_time
         obj.end_time = end_time
         obj.confidence = confidence
         obj.start_time_offset = start_time_offset
+        obj.speaker_id = speaker_id
         return obj

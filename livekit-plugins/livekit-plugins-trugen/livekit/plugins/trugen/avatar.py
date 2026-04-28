@@ -17,7 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
@@ -25,14 +25,14 @@ from .log import logger
 _BASE_API_URL = "https://api.trugen.ai"
 _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
-_DEFAULT_AVATAR_ID = "7d881c1b"
+_DEFAULT_AVATAR_ID = "665a1170"
 
 
 class TrugenException(Exception):
     """Exception for TruGen.AI errors"""
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """TruGen Realtime Avatar Session"""
 
     def __init__(
@@ -80,6 +80,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         if livekit_url is NOT_GIVEN:
             livekit_url = os.getenv("LIVEKIT_URL") or NOT_GIVEN
         if livekit_api_key is NOT_GIVEN:

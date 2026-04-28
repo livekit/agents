@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.5.3",
+    "livekit-agents>=1.5.6",
     "aiohttp",
     "livekit",
 ]
