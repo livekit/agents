@@ -8,10 +8,11 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from ...inference import LLM as _InferenceLLM, LLMModels
+from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
 from ...job import get_job_context
 from ...llm import LLM as _LLM
 from ...log import logger
+from ...stt import STT as _STT
 from ...telemetry import trace_types, tracer
 from ...utils import aio
 from .classifier import (
@@ -103,7 +104,7 @@ class AMD:
         session: AgentSession | None = None,
         *,
         llm: LLM | LLMModels | str | None = "google/gemini-3.1-flash-lite-preview",
-        stt: STT | None = "cartesia/ink-whisper",
+        stt: STT | str | None = "cartesia/ink-whisper",
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
         human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
@@ -134,12 +135,12 @@ class AMD:
         self._prompt = prompt
 
         self._participant_identity = participant_identity
-        self._stt = stt
+        self._stt: _STT | None = _InferenceSTT(stt) if isinstance(stt, str) else stt
         self._max_hold_duration = max_hold_duration
 
-        stt_model = self._stt.model.lower()
+        stt_model = self._stt.model.lower() if self._stt is not None else None
         if (
-            self._stt is not None
+            stt_model is not None
             and all(
                 stt_model != candidate.lower() and stt_model not in candidate.lower()
                 for candidate in VERIFIED_STT_MODELS
@@ -148,7 +149,7 @@ class AMD:
         ):
             logger.warning(
                 "stt model %s might not be compatible with amd, proceed with caution",
-                self._stt.model,
+                stt_model,
             )
 
         self._stt_task: asyncio.Task[None] | None = None
@@ -473,9 +474,10 @@ class AMD:
         elif (candidate := session.llm) is not None and isinstance(candidate, _LLM):
             _llm = candidate
 
-        model_name = _llm.model.lower()
+        model_name = _llm.model.lower() if _llm is not None else None
         if (
-            all(
+            model_name is not None
+            and all(
                 model_name != candidate.lower() and model_name not in candidate.lower()
                 for candidate in VERIFIED_LLM_MODELS
             )
