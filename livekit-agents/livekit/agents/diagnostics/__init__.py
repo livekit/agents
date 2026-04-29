@@ -72,6 +72,7 @@ class DiagnosticContext:
     env: Mapping[str, str] = field(default_factory=lambda: os.environ.copy())
     registered_plugins: Sequence[Any] = ()
     server: Any | None = None
+    console_audio: bool = True
     input_device: str | int | None = None
     output_device: str | int | None = None
 
@@ -167,7 +168,7 @@ def collect_diagnostics(context: DiagnosticContext) -> DiagnosticReport:
         *_check_plugins(context),
     ]
 
-    if context.mode == "console":
+    if context.mode == "console" and context.console_audio:
         results.extend(_check_audio_devices(context))
 
     if context.mode == "start":
@@ -386,16 +387,7 @@ def _plugin_metadata_results(context: DiagnosticContext, plugin: Any) -> list[Di
         ]
 
     if info is None:
-        return [
-            DiagnosticResult(
-                id=f"plugins.{plugin_id}.metadata",
-                category=DiagnosticCategory.PLUGIN,
-                severity=DiagnosticSeverity.WARN,
-                message="Plugin does not expose diagnostic metadata",
-                fix_hint="Update the plugin to return PluginDiagnosticInfo from diagnostic_info().",
-                details={"plugin": plugin_id},
-            )
-        ]
+        return []
 
     results = [
         DiagnosticResult(

@@ -1513,6 +1513,7 @@ def _run_console(
         server=server,
         mode="console",
         console=c,
+        console_audio=mode == "audio",
         input_device=input_device,
         output_device=output_device,
     )
@@ -1534,7 +1535,8 @@ def _run_console(
         # c.print(f"Importing from {import_data.module_data.extra_sys_path}")
         # c.print(" ")
 
-        c._validate_device_or_raise(input_device=input_device, output_device=output_device)
+        if mode == "audio":
+            c._validate_device_or_raise(input_device=input_device, output_device=output_device)
 
         exit_triggered = False
 
@@ -1697,11 +1699,11 @@ def _apply_cli_server_options(
     api_secret: str | None = None,
 ) -> None:
     update_kwargs: dict[str, Any] = {}
-    if url is not None:
+    if url:
         update_kwargs["ws_url"] = url
-    if api_key is not None:
+    if api_key:
         update_kwargs["api_key"] = api_key
-    if api_secret is not None:
+    if api_secret:
         update_kwargs["api_secret"] = api_secret
 
     if update_kwargs:
@@ -1715,6 +1717,7 @@ def _diagnostic_context(
     online: bool = False,
     deep: bool = False,
     strict: bool = False,
+    console_audio: bool = True,
     input_device: str | int | None = None,
     output_device: str | int | None = None,
 ) -> DiagnosticContext:
@@ -1726,6 +1729,7 @@ def _diagnostic_context(
         env=os.environ.copy(),
         registered_plugins=tuple(Plugin.registered_plugins),
         server=server,
+        console_audio=console_audio,
         input_device=input_device,
         output_device=output_device,
     )
@@ -1736,6 +1740,7 @@ def _run_preflight(
     server: AgentServer,
     mode: Literal["console", "dev", "start", "connect"],
     console: AgentsConsole | None,
+    console_audio: bool = True,
     input_device: str | int | None = None,
     output_device: str | int | None = None,
 ) -> None:
@@ -1743,6 +1748,7 @@ def _run_preflight(
         _diagnostic_context(
             server,
             mode=mode,
+            console_audio=console_audio,
             input_device=input_device,
             output_device=output_device,
         )

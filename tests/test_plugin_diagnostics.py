@@ -103,6 +103,15 @@ class ExplodingPlugin(Plugin):
         raise RuntimeError("provider self-test exploded")
 
 
+class LegacyPlugin(Plugin):
+    def __init__(self) -> None:
+        super().__init__(
+            title="Legacy Plugin",
+            version="0.1.0",
+            package="livekit.plugins.legacy",
+        )
+
+
 @pytest.fixture(autouse=True)
 def restore_plugins() -> Iterator[None]:
     previous = list(Plugin.registered_plugins)
@@ -154,6 +163,18 @@ def test_plugin_diagnostics_exception_becomes_plugin_error_without_crashing() ->
     assert report_exit_code(report) == 1
     assert "livekit.plugins.exploding" in serialized
     assert "provider self-test exploded" in serialized
+
+
+def test_plugin_without_diagnostic_metadata_does_not_warn_or_fail_strict() -> None:
+    Plugin.register_plugin(LegacyPlugin())
+
+    report = collect_diagnostics(_context(strict=True))
+    payload = _report_dict(report)
+
+    assert report_exit_code(report) == 0
+    assert all(result["severity"] != "warn" for result in payload["results"])
+    assert all("legacy.metadata" not in result["id"] for result in payload["results"])
+    assert any(plugin["package"] == "livekit.plugins.legacy" for plugin in payload["plugins"])
 
 
 def test_console_mode_missing_livekit_credentials_is_non_blocking_warning() -> None:
