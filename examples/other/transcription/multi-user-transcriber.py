@@ -79,7 +79,7 @@ class MultiUserTranscriber:
         task.add_done_callback(on_task_done)
 
     def on_participant_disconnected(self, participant: rtc.RemoteParticipant):
-        if (session := self._sessions.pop(participant.identity)) is None:
+        if (session := self._sessions.pop(participant.identity, None)) is None:
             return
 
         logger.info(f"closing session for {participant.identity}")
@@ -122,6 +122,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
+    logger.info(f"starting multi-user transcriber, room: {ctx.room.name}")
     transcriber = MultiUserTranscriber(ctx)
     transcriber.start()
 
