@@ -400,6 +400,15 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
+    elif item.type == "agent_config_update":
+        acu = item_pb.agent_config_update
+        acu.id = item.id
+        if item.instructions is not None:
+            acu.instructions = item.instructions
+        acu.tools_added[:] = item.tools_added or []
+        acu.tools_removed[:] = item.tools_removed or []
+        acu.created_at.FromMilliseconds(int(item.created_at * 1000))
+
     return MessageToDict(item_pb, preserving_proto_field_name=True)
 
 
