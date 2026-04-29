@@ -21,6 +21,9 @@ MACHINE_SILENCE_THRESHOLD = 1.5
 NO_SPEECH_THRESHOLD = 50.0
 TIMEOUT = 60.0
 
+MAX_EXTENSIONS = 3
+MAX_EXTENSION_SECS = 10.0
+
 
 class AMDCategory(str, Enum):
     HUMAN = "human"
@@ -108,6 +111,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         no_speech_threshold: float = NO_SPEECH_THRESHOLD,
         timeout: float = TIMEOUT,
         prompt: str = AMD_PROMPT,
+        source: str = "stt",
     ):
         super().__init__()
         self._human_speech_threshold = human_speech_threshold
@@ -115,6 +119,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._machine_silence_threshold = machine_silence_threshold
         self._no_speech_threshold = no_speech_threshold
         self._timeout = timeout
+        self._source = source
 
         self._input_ch: aio.Chan[str] = aio.Chan()
         self._classify_task: asyncio.Task[None] | None = None
@@ -134,11 +139,18 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._machine_silence_reached = False
         self._emitted = False
         self._transcript = ""
+        self._extension_count = 0
 
     def start(self) -> None:
+        """Mark classifier as started (enables state guard). Call start_timers() separately."""
         if self._started:
             return
         self._started = True
+
+    def start_timers(self) -> None:
+        """Start the no-speech and detection-timeout timers. Call after start()."""
+        if not self._started or self._closed:
+            return
         self._no_speech_timer = asyncio.get_running_loop().call_later(
             self._no_speech_threshold,
             functools.partial(
@@ -252,11 +264,15 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._try_emit_result()
 
     @_state_guard
-    def push_text(self, text: str) -> None:
+    def push_text(self, text: str, source: str = "stt") -> None:
         """Push transcript text to the AMD classifier."""
         if self._input_ch.closed:
             logger.debug("push_text called after close")
             return
+        # ignore text from other sources (e.g. when both session and AMD have STT specified)
+        if source != self._source:
+            return
+
         if self._classify_task is None:
             self._classify_task = asyncio.create_task(self._classify_user_speech())
         if self._no_speech_timer is not None:
@@ -288,11 +304,34 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                     )
                 )
 
-        tools: list[Tool] = [function_tool(save_prediction)]
+        async def postpone_termination(seconds: float) -> str:
+            """Postpone the termination of the classification task.
+            Use when the transcript is ambiguous and more audio is expected.
+
+            Args:
+                seconds: Additional seconds to wait (max 10).
+            """
+            clamped = min(seconds, MAX_EXTENSION_SECS)
+            self._extension_count += 1
+            if self._silence_timer is not None:
+                self._silence_timer.cancel()
+            loop = asyncio.get_running_loop()
+            self._silence_timer = loop.call_later(
+                clamped,
+                lambda: (
+                    self._input_ch.send_nowait(self._transcript)
+                    if not self._input_ch.closed
+                    else None
+                ),
+            )
+            return f"waiting {clamped:.1f}s for more audio"
 
         @log_exceptions(logger=logger)
         async def _run(transcript: str) -> None:
             ctx["transcript"] = transcript
+            tools: list[Tool] = [function_tool(save_prediction)]
+            if self._extension_count < MAX_EXTENSIONS:
+                tools.append(function_tool(postpone_termination))
             stream = self._llm.chat(
                 chat_ctx=ChatContext(
                     items=[

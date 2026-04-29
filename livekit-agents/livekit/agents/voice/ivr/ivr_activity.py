@@ -20,9 +20,11 @@ class IVRActivity:
         session: AgentSession,
         *,
         max_silence_duration: float = 5.0,
+        max_hold_duration: float = 300.0,
     ) -> None:
         self._session = session
         self._max_silence_duration = max_silence_duration
+        self._max_hold_duration = max_hold_duration
         self._loop_detector = TfidfLoopDetector()
 
         self._current_user_state: str | None = None  # noqa: UP007

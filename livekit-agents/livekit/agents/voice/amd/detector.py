@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from types import TracebackType
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
+
+from livekit import rtc
 
 from ...inference import LLM as _InferenceLLM, LLMModels
 from ...job import get_job_context
 from ...llm import LLM as _LLM
 from ...log import logger
 from ...telemetry import trace_types, tracer
+from ...utils import aio
 from .classifier import (
     AMD_PROMPT,
     HUMAN_SILENCE_THRESHOLD,
@@ -24,6 +28,7 @@ from .classifier import (
 
 if TYPE_CHECKING:
     from ...llm import LLM
+    from ...stt import STT
     from ..agent_session import AgentSession
 
 
@@ -41,11 +46,14 @@ class AMD:
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    AMD must be wired to an :class:`AgentSession` before classification begins.
-    The recommended pattern is the async context manager, which handles pausing
-    and resuming speech playout around the detection window::
+    AMD should be started before the SIP participant is created so no audio is
+    missed. Timers begin when the participant's audio track is subscribed.
+
+    The recommended pattern is the async context manager::
 
         async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
+            await ctx.api.sip.create_sip_participant(...)
+            await ctx.wait_for_participant(identity=participant_identity)
             result = await detector.execute()
 
     Args:
@@ -58,6 +66,14 @@ class AMD:
             agent speech immediately when a machine is detected.
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
+        participant_identity: If set, only this participant's audio track
+            subscription triggers the detection timers. If ``None``, the first
+            remote audio track wins.
+        stt: Optional STT to use for transcript generation. Required when the
+            session uses no STT (e.g. a realtime model). If ``None``
+            and the session has its own STT, AMD reuses those transcripts.
+        max_hold_duration: Maximum seconds the IVR navigator will stay in hold
+            mode before auto-exiting. Passed through to :class:`IVRActivity`.
     """
 
     def __init__(
@@ -73,6 +89,9 @@ class AMD:
         no_speech_threshold: float = NO_SPEECH_THRESHOLD,
         timeout: float = TIMEOUT,
         prompt: str = AMD_PROMPT,
+        participant_identity: str | None = None,
+        stt: STT | None = None,
+        max_hold_duration: float = 300.0,
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
@@ -89,6 +108,15 @@ class AMD:
         self._no_speech_threshold = no_speech_threshold
         self._timeout = timeout
         self._prompt = prompt
+
+        self._participant_identity = participant_identity
+        self._stt = stt
+        self._max_hold_duration = max_hold_duration
+
+        self._stt_task: asyncio.Task[None] | None = None
+        self._audio_ch: aio.Chan[rtc.AudioFrame] | None = None
+
+        self._track_subscribed_handler: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -129,7 +157,10 @@ class AMD:
             await self._session.interrupt(force=True)
 
         if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
-            await self._session._start_ivr_detection(transcript=result.transcript)
+            await self._session._start_ivr_detection(
+                transcript=result.transcript,
+                max_hold_duration=self._max_hold_duration,
+            )
 
         # eagerly resume so agent can speak immediately to a human
         if self._session._activity is not None:
@@ -140,13 +171,6 @@ class AMD:
     async def __aenter__(self) -> AMD:
         if self._session is not None:
             await self._run(self._session)
-            # if the session is already running, start classifier and pause
-            # authorization immediately (audio may already be flowing)
-            if self._classifier is not None and not self._classifier.started:
-                self._classifier.start()
-                self._start_span()
-                if self._session._activity is not None:
-                    self._session._activity._pause_authorization()
         return self
 
     async def __aexit__(
@@ -159,14 +183,13 @@ class AMD:
 
     # region: lifecycle hooks (called by AudioRecognition)
 
-    def _on_first_audio(self) -> None:
-        """Start AMD on the first audio frame and pause speech authorization."""
-        if self._classifier is None or self._classifier.started:
-            return
-        self._classifier.start()
-        self._start_span()
-        if self._session is not None and self._session._activity is not None:
-            self._session._activity._pause_authorization()
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if (
+            self._audio_ch is not None
+            and not self._audio_ch.closed
+            and self._classifier is not None
+        ):
+            self._audio_ch.send_nowait(frame)
 
     def _on_user_speech_started(self) -> None:
         if self._classifier is not None:
@@ -184,6 +207,17 @@ class AMD:
         if self._closed:
             return
         self._closed = True
+
+        self._unsubscribe_track_event()
+
+        if self._stt_task is not None:
+            self._stt_task.cancel()
+            try:
+                await self._stt_task
+            except asyncio.CancelledError:
+                pass
+            self._stt_task = None
+
         if self._classifier is not None:
             self._classifier.off("amd_result", self._on_amd_result)
             await self._classifier.close()
@@ -230,10 +264,119 @@ class AMD:
 
         session._amd = self
 
+        # start the classifier first and the timers later when the track is subscribed
+        self._classifier.start()
+        self._start_span()
+        if session._activity is not None:
+            session._activity._pause_authorization()
+
+        self._stt_task = asyncio.create_task(self._setup(session), name="amd_setup")
+
+    def _on_track_subscribed(
+        self,
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        if track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
+        if self._participant_identity is not None:
+            if participant.identity != self._participant_identity:
+                return
+
+        self._unsubscribe_track_event()
+
+        if self._classifier is not None:
+            self._classifier.start_timers()
+
+    def _unsubscribe_track_event(self) -> None:
+        """Unsubscribe from the track subscribed event."""
+        if (
+            self._track_subscribed_handler
+            and self._session is not None
+            and self._session._room_io is not None
+        ):
+            self._session._room_io.room.off("track_subscribed", self._on_track_subscribed)
+            self._track_subscribed_handler = False
+
+    async def _setup(self, session: AgentSession) -> None:
+        if not self._closed:
+            if session._room_io is not None:
+                room = session._room_io.room
+                room.on("track_subscribed", self._on_track_subscribed)
+                self._track_subscribed_handler = True
+
+                for participant in room.remote_participants.values():
+                    for pub in participant.track_publications.values():
+                        if (
+                            pub.subscribed
+                            and pub.track is not None
+                            and pub.track.kind == rtc.TrackKind.KIND_AUDIO
+                        ):
+                            if (
+                                self._participant_identity is None
+                                or participant.identity == self._participant_identity
+                            ):
+                                self._on_track_subscribed(
+                                    pub.track,
+                                    pub,
+                                    participant,
+                                )
+                                break
+            else:
+                logger.warning(
+                    "session room_io unavailable, starting amd timers immediately as fallback"
+                )
+                if self._classifier is not None:
+                    self._classifier.start_timers()
+
+        if self._stt is not None and not self._closed:
+            logger.debug("starting amd stt pipeline")
+            await self._run_stt()
+
+    async def _run_stt(self) -> None:
+        assert self._stt is not None
+        assert self._classifier is not None
+
+        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        stt_stream = self._stt.stream()
+        try:
+
+            async def _send(chan: aio.Chan[rtc.AudioFrame]) -> None:
+                async for frame in chan:
+                    stt_stream.push_frame(frame)
+
+                stt_stream.end_input()
+
+            async def _receive() -> None:
+                from ...stt import SpeechEventType
+
+                async for event in stt_stream:
+                    if (
+                        event.type == SpeechEventType.FINAL_TRANSCRIPT
+                        and event.alternatives
+                        and self._classifier is not None
+                        and (text := event.alternatives[0].text)
+                    ):
+                        self._classifier.push_text(text, source="amd_stt")
+
+            tasks = [
+                asyncio.create_task(_send(self._audio_ch), name="amd_stt_send"),
+                asyncio.create_task(_receive(), name="amd_stt_receive"),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await aio.cancel_and_wait(*tasks)
+        finally:
+            await stt_stream.aclose()
+
     def _on_amd_result(self, result: AMDResult) -> None:
         self._result = result
         if self._classifier is not None:
             self._classifier.end_input()
+        if self._audio_ch is not None:
+            self._audio_ch.close()
 
         if self._span is not None:
             self._span.set_attributes(
@@ -301,6 +444,7 @@ class AMD:
                 no_speech_threshold=self._no_speech_threshold,
                 timeout=self._timeout,
                 prompt=self._prompt,
+                source="stt" if self._stt is None else "amd_stt",
             )
 
         return None

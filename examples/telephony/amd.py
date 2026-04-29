@@ -1,7 +1,11 @@
+import asyncio
+import json
 import logging
+import os
 
 from dotenv import load_dotenv
 
+from livekit import api, rtc
 from livekit.agents import (
     AMD,
     Agent,
@@ -11,6 +15,7 @@ from livekit.agents import (
     JobProcess,
     cli,
     inference,
+    utils,
 )
 
 # from livekit.agents.utils import wait_for_participant
@@ -63,29 +68,122 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-    # wait until the SIP participant is active
-    # await wait_for_participant(ctx.room, kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ):
+        logger.info(f"track {track.name} subscribed by {participant.identity}")
 
-    async with AMD(session, llm="openai/gpt-5-mini") as detector:
-        result = await detector.execute()
+    outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
+    amd_task: asyncio.Task | None = None
 
-        if result.category == "human":
-            logger.info("human answered the call, proceeding with normal conversation")
-        elif result.category == "machine-ivr":
-            logger.info("ivr menu detected, starting navigation")
-        elif result.category == "machine-vm":
-            logger.info("voicemail detected, leaving a message")
-            speech_handle = session.generate_reply(
-                instructions=(
-                    "You've reached voicemail. Leave a brief message asking "
-                    "the customer to call back."
-                ),
+    async def hangup():
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(
+                room=ctx.room.name,
             )
-            await speech_handle.wait_for_playout()
+        )
+
+    async def run_amd(
+        phone_number: str,
+        participant_identity: str,
+    ):
+        # focus the session on the callee before AMD starts so audio recognition
+        # doesn't push frames from any pre-existing participant into AMD's pipeline
+        session.room_io.set_participant(participant_identity)
+
+        async with AMD(
+            session,
+            llm="openai/gpt-5-mini",
+            stt=inference.STT("deepgram/nova-3", language="en"),
+            participant_identity=participant_identity,
+            no_speech_threshold=20,
+            timeout=30,
+        ) as detector:
+            logger.info(f"creating SIP participant for {phone_number[:4]}****{phone_number[-4:]}")
+            await ctx.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=ctx.room.name,
+                    sip_trunk_id=outbound_trunk_id,
+                    sip_call_to=phone_number,
+                    participant_identity=participant_identity,
+                    wait_until_answered=True,
+                )
+            )
+            participant = await ctx.wait_for_participant(identity=participant_identity)
+            logger.info(
+                "participant joined",
+                extra={
+                    "actual_identity": participant.identity,
+                    "expected_identity": participant_identity,
+                    "kind": participant.kind,
+                    "audio_tracks_subscribed": [
+                        pub.sid
+                        for pub in participant.track_publications.values()
+                        if pub.subscribed and pub.kind == rtc.TrackKind.KIND_AUDIO
+                    ],
+                },
+            )
+
+            result = await detector.execute()
+            logger.info(f"AMD result: {result}")
+            if result.category == "human":
+                logger.info(
+                    "human answered the call, proceeding with normal conversation",
+                    extra={"transcript": result.transcript},
+                )
+            elif result.category == "machine-ivr":
+                logger.info(
+                    "ivr menu detected, starting navigation",
+                    extra={"transcript": result.transcript},
+                )
+            elif result.category == "machine-vm":
+                logger.info(
+                    "voicemail detected, leaving a message",
+                    extra={"transcript": result.transcript},
+                )
+                speech_handle = session.generate_reply(
+                    instructions=(
+                        "You've reached voicemail. Leave a brief message asking "
+                        "the customer to call back."
+                    ),
+                )
+                await speech_handle.wait_for_playout()
+                session.shutdown()
+                ctx.shutdown("voicemail detected")
+                await hangup()
+            elif result.category == "machine-unavailable":
+                logger.info(
+                    "mailbox unavailable, ending call", extra={"transcript": result.transcript}
+                )
+                session.shutdown()
+                ctx.shutdown("mailbox unavailable")
+                await hangup()
+
+    @ctx.room.local_participant.register_rpc_method("dial_number")
+    async def dial_number(data: rtc.RpcInvocationData):
+        nonlocal amd_task
+
+        try:
+            dial_info = json.loads(data.payload)
+            phone_number = dial_info["phone_number"]
+            participant_identity = dial_info["participant_identity"]
+            amd_task = asyncio.create_task(run_amd(phone_number, participant_identity))
+
+        except Exception as e:
+            logger.error(f"Error dialing number: {e}")
             session.shutdown()
-        elif result.category == "machine-unavailable":
-            logger.info("mailbox unavailable, ending call")
-            session.shutdown()
+            raise e
+
+    async def wait_for_amd():
+        nonlocal amd_task
+        if amd_task is not None:
+            await utils.aio.cancel_and_wait(amd_task)
+            amd_task = None
+
+    ctx.add_shutdown_callback(wait_for_amd)
 
 
 if __name__ == "__main__":
