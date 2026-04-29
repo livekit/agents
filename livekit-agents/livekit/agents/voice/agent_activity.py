@@ -2854,7 +2854,7 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         # Capability gate: only forward `add_to_chat_ctx` to plugins that declare
         # `RealtimeCapabilities.ephemeral_response=True`. Plugins without the capability
-        # keep their existing 3-kwarg signature; emit a `DeprecationWarning` and fall
+        # keep their existing 3-kwarg signature; emit a `UserWarning` and fall
         # back to add_to_chat_ctx=True.
         effective_add_to_chat_ctx = add_to_chat_ctx
         rt_caps = self._rt_session.realtime_model.capabilities
@@ -2868,7 +2868,7 @@ class AgentActivity(RecognitionHooks):
                 "visible to the model on subsequent turns. Use a plugin that "
                 "declares ephemeral_response=True (currently: OpenAI plugin, "
                 "non-Azure endpoint).",
-                DeprecationWarning,
+                UserWarning,
                 stacklevel=2,
             )
             effective_add_to_chat_ctx = True
@@ -2877,7 +2877,7 @@ class AgentActivity(RecognitionHooks):
                 "add_to_chat_ctx=False forbids tool invocation; tools and "
                 "tool_choice provided to generate_reply will be discarded for "
                 "this turn.",
-                DeprecationWarning,
+                UserWarning,
                 stacklevel=2,
             )
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task

@@ -326,12 +326,24 @@ async def test_concurrent_isolated_after_response_created_includes_response_id(
 async def test_default_generate_reply_during_isolated_does_not_raise(
     offline_session,
 ) -> None:
-    """Default (non-isolated) generate_reply during an in-flight isolated call
-    proceeds without raising. The serialization contract scopes only to
-    `add_to_chat_ctx=False`."""
+    """The serialization contract scopes only to ``add_to_chat_ctx=False``.
+
+    A default ``generate_reply()`` issued during an in-flight isolated call
+    does not raise ``RuntimeError`` from the contract, and the outbound
+    ``response.create`` reaches the wire.
+
+    Caveat (documented limitation): the underlying ``_current_generation``
+    is a single slot.  When ``response.created`` arrives for the second
+    response, the slot is overwritten and the first response's stream is
+    detached from the slot-resident handlers.  Callers should not rely on
+    correctness of an isolated-vs-default overlap until the slot is
+    refactored to a dict keyed by ``response.id``.  This test verifies only
+    that the contract does not over-fire on the default call; it does NOT
+    verify content correctness for either caller.
+    """
     s = offline_session
     fut1 = s.generate_reply(instructions="first", add_to_chat_ctx=False)
-    fut2 = s.generate_reply(instructions="second")  # default; should not raise
+    fut2 = s.generate_reply(instructions="second")  # default; must not raise
     try:
         rc_events = _captured_response_create_events(s)
         assert len(rc_events) == 2
@@ -1015,15 +1027,15 @@ async def test_reconnect_drains_ephemeral_tracking_state(offline_session) -> Non
 
 # ---------------------------------------------------------------------------
 # Dispatcher capability gate: plugins that do not declare ephemeral_response
-# emit a DeprecationWarning and fall back to add_to_chat_ctx=True; the kwarg
-# is NOT forwarded to plugins whose generate_reply signature does not accept
-# it (which would otherwise raise TypeError).
+# emit a UserWarning and fall back to add_to_chat_ctx=True; the kwarg is NOT
+# forwarded to plugins whose generate_reply signature does not accept it
+# (which would otherwise raise TypeError).
 # ---------------------------------------------------------------------------
 
 
 async def test_capability_gate_warns_and_falls_back_for_unsupporting_plugin() -> None:
     """A plugin that does NOT declare ephemeral_response receives a
-    DeprecationWarning at the dispatcher and the kwarg is suppressed before
+    UserWarning at the dispatcher and the kwarg is suppressed before
     reaching the plugin's generate_reply (which keeps the existing 3-kwarg
     signature)."""
     import asyncio
@@ -1121,7 +1133,7 @@ async def test_capability_gate_warns_and_falls_back_for_unsupporting_plugin() ->
             warnings.warn(
                 f"plugin {type(model).__module__} does not declare "
                 "RealtimeCapabilities.ephemeral_response=True",
-                DeprecationWarning,
+                UserWarning,
                 stacklevel=2,
             )
             effective_add_to_chat_ctx = True
@@ -1129,8 +1141,8 @@ async def test_capability_gate_warns_and_falls_back_for_unsupporting_plugin() ->
     assert effective_add_to_chat_ctx is True, (
         "capability gate must fall back to True for plugins that do not declare ephemeral_response"
     )
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
-        "expected DeprecationWarning for unsupported plugin"
+    assert any(issubclass(w.category, UserWarning) for w in caught), (
+        "expected UserWarning for unsupported plugin"
     )
 
     # Sanity: the legacy plugin's generate_reply keeps the existing 3-kwarg
