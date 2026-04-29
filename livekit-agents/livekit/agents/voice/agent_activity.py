@@ -1448,6 +1448,16 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
+        # Skip items correlated with an in-flight ephemeral response.  The
+        # OpenAI plugin already drops these at the source in
+        # `_handle_conversion_item_added`; this is a defensive second layer
+        # that also covers any future plugin that exposes `ephemeral_response`
+        # without intercepting at the wrapper layer.  Duck-typed lookup so
+        # plugins without the attribute behave normally.
+        ephemeral_ids: set[str] = getattr(self._rt_session, "_ephemeral_remote_item_ids", set())
+        if ev.item.id in ephemeral_ids:
+            return
+
         # add the remote item to the local chat context as a placeholder
         local_chat_ctx = self._agent._chat_ctx
         if local_chat_ctx.get_by_id(ev.item.id) is not None:
@@ -2954,6 +2964,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                add_to_chat_ctx=effective_add_to_chat_ctx,
             )
         finally:
             # reset tool_choice and tools
@@ -2977,6 +2988,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        add_to_chat_ctx: bool = True,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
@@ -2991,6 +3003,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                add_to_chat_ctx=add_to_chat_ctx,
             )
 
     async def _realtime_generation_task_impl(
@@ -3000,6 +3013,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        add_to_chat_ctx: bool = True,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3217,6 +3231,12 @@ class AgentActivity(RecognitionHooks):
         )
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            # When add_to_chat_ctx=False the OpenAI plugin forces tools=[] /
+            # tool_choice="none", so this callback should not fire for an
+            # isolated turn.  Gate as defense-in-depth in case a future plugin
+            # implementation does not honor the tool override.
+            if not add_to_chat_ctx:
+                return
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
@@ -3325,7 +3345,13 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
 
-        if msg_gen and forwarded_text:
+        if msg_gen and forwarded_text and add_to_chat_ctx:
+            # Suppressed for add_to_chat_ctx=False: the rendered text must not
+            # enter agent._chat_ctx (next-turn model context), the session's
+            # public conversation_item_added stream, the speech_handle's
+            # observable item list, or the OTel response-text span attribute
+            # that tracing backends would log.  The audio output above is
+            # intentionally unaffected — rendering to the user is the point.
             msg = _create_assistant_message(
                 message_id=msg_gen.message_id,
                 forwarded_text=forwarded_text,
@@ -3382,9 +3408,14 @@ class AgentActivity(RecognitionHooks):
                         generate_tool_reply = True
                         fnc_executed_ev._reply_required = True
 
-                    # add tool output to the chat context
-                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                    self._session._tool_items_added([sanitized_out.fnc_call_out])
+                    # add tool output to the chat context (suppressed for
+                    # add_to_chat_ctx=False; tools are forced off at the plugin
+                    # layer for isolated turns, so this branch is defense-in-
+                    # depth in case a future plugin does not honor the
+                    # tool-override contract).
+                    if add_to_chat_ctx:
+                        self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                        self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(

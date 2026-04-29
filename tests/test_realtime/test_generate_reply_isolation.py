@@ -612,7 +612,6 @@ async def test_isolated_generate_reply_does_not_pollute_substrate_live(job_proce
     transfers through the LiveKit `RealtimeSession` wrapper end-to-end."""
     import asyncio
 
-
     say_instruction = (
         f"Say to the user, in plain English: 'Your verification token is {_NONCE}.' "
         "Render the value clearly. Do not paraphrase the value itself."
@@ -695,3 +694,116 @@ async def test_ephemeral_item_skipped_from_remote_chat_ctx(offline_session) -> N
 
     assert before_size == after_size
     assert emitted == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: AgentActivity._on_remote_item_added defensive gate.
+# ---------------------------------------------------------------------------
+
+
+async def test_on_remote_item_added_skips_ephemeral_items() -> None:
+    """`AgentActivity._on_remote_item_added` skips items whose id is in
+    `self._rt_session._ephemeral_remote_item_ids`."""
+    from livekit.agents import llm as lk_llm
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    class _FakeAgent:
+        def __init__(self) -> None:
+            self._chat_ctx = lk_llm.ChatContext.empty()
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self._ephemeral_remote_item_ids: set[str] = {"it_eph_X"}
+
+    class _FakeActivity:
+        def __init__(self) -> None:
+            self._agent = _FakeAgent()
+            self._rt_session = _FakeSession()
+
+    activity = _FakeActivity()
+    msg = lk_llm.ChatMessage(role="assistant", content=["hidden"], id="it_eph_X")
+    ephemeral_ev = lk_llm.RemoteItemAddedEvent(previous_item_id=None, item=msg)
+    AgentActivity._on_remote_item_added(activity, ephemeral_ev)  # type: ignore[arg-type]
+    assert activity._agent._chat_ctx.get_by_id("it_eph_X") is None
+
+    # Calibration: a non-ephemeral item DOES pass through.
+    other = lk_llm.ChatMessage(role="assistant", content=["public"], id="it_normal_Y")
+    other_ev = lk_llm.RemoteItemAddedEvent(previous_item_id=None, item=other)
+    AgentActivity._on_remote_item_added(activity, other_ev)  # type: ignore[arg-type]
+    assert activity._agent._chat_ctx.get_by_id("it_normal_Y") is not None
+
+
+async def test_on_remote_item_added_works_for_plugin_without_ephemeral_attr() -> None:
+    """If the rt_session does not expose `_ephemeral_remote_item_ids`, the
+    handler still appends the item.  The duck-typed `getattr(..., set())`
+    default is what makes this safe for plugins that did not opt in."""
+    from livekit.agents import llm as lk_llm
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    class _FakeAgent:
+        def __init__(self) -> None:
+            self._chat_ctx = lk_llm.ChatContext.empty()
+
+    class _FakeSession:
+        # Intentionally no _ephemeral_remote_item_ids attribute.
+        pass
+
+    class _FakeActivity:
+        def __init__(self) -> None:
+            self._agent = _FakeAgent()
+            self._rt_session = _FakeSession()
+
+    activity = _FakeActivity()
+    msg = lk_llm.ChatMessage(role="assistant", content=["public"], id="it_Z")
+    ev = lk_llm.RemoteItemAddedEvent(previous_item_id=None, item=msg)
+    AgentActivity._on_remote_item_added(activity, ev)  # type: ignore[arg-type]
+    assert activity._agent._chat_ctx.get_by_id("it_Z") is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: live-substrate test that the assistant message is NOT written to
+# the agent's chat context when add_to_chat_ctx=False.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _has_openai_key(), reason="OPENAI_API_KEY not set")
+async def test_isolated_generate_reply_does_not_pollute_chat_ctx_live(job_process) -> None:
+    """End-to-end: after an isolated `RealtimeSession.generate_reply`, the
+    session's `chat_ctx` does not contain a new assistant message carrying
+    the rendered text."""
+    import asyncio
+
+    say_instruction = (
+        "Say to the user, in plain English: 'Your verification token is "
+        "purple-elephant-42.' Render the value clearly."
+    )
+
+    model = lk_openai.realtime.RealtimeModel(model="gpt-realtime", voice="alloy")
+    session = model.session()
+    try:
+        before_items = list(session.chat_ctx.items)
+        gen = await asyncio.wait_for(
+            session.generate_reply(instructions=say_instruction, add_to_chat_ctx=False),
+            timeout=20,
+        )
+        # Drain.
+        async for msg in gen.message_stream:
+            async for _ in msg.text_stream:
+                pass
+            async for _ in msg.audio_stream:
+                pass
+        # Allow response.done to flush.
+        await asyncio.sleep(0.5)
+        after_items = list(session.chat_ctx.items)
+    finally:
+        await session.aclose()
+
+    # No new assistant items appended to the wrapper-layer chat_ctx.
+    new_items = [it for it in after_items if it not in before_items]
+    assistant_text = " ".join(
+        " ".join(c if isinstance(c, str) else "" for c in it.content)
+        for it in new_items
+        if hasattr(it, "role") and getattr(it, "role", None) == "assistant"
+    )
+    assert "purple-elephant" not in assistant_text.lower()
+    assert "elephant 42" not in assistant_text.lower()
