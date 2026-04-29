@@ -158,8 +158,8 @@ class LLM(llm.LLM):
                     tool_config["toolChoice"] = {"any": {}}
                 elif tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
-                else:
-                    return None
+                # tool_choice="none" means no forced tool use; omit toolChoice but keep toolConfig
+                # so AWS does not raise ValidationException when tool use/result blocks are present
 
             return tool_config
 
