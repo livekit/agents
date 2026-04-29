@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 WRITE_INTERVAL = 2.5
+FFMPEG_STRICT_LEVEL = "experimental"
 
 
 class RecorderIO:
@@ -163,7 +164,7 @@ class RecorderIO:
 
         # native ffmpeg opus encoder is experimental
         if codec_name == "opus":
-            stream.codec_context.options["strict"] = "-2"
+            stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
 
         in_resampler: rtc.AudioResampler | None = None
         out_resampler: rtc.AudioResampler | None = None
