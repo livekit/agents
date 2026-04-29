@@ -928,6 +928,16 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
+            # Drain ephemeral tracking on reconnect: any in-flight isolated
+            # response is forfeit (its caller-future was just cancelled above),
+            # and the substrate's response_id is invalidated by the new
+            # connection.  Without this drain, stale entries persist and the
+            # serialization-contract check would falsely treat the next
+            # isolated call as already-in-flight, raising RuntimeError forever.
+            self._ephemeral_event_ids.clear()
+            self._active_ephemeral_response_ids.clear()
+            self._ephemeral_started_at.clear()
+            self._ephemeral_remote_item_ids.clear()
             self._close_current_generation("session reconnection")
 
             logger.debug(f"reconnected to {self._realtime_model._provider_label}")
@@ -2052,13 +2062,19 @@ class RealtimeSession(
 
         # Drain ephemeral tracking for this response (drives the
         # serialization contract: a stale entry would make the next legitimate
-        # isolated call look in-flight to the rejection check).
+        # isolated call look in-flight to the rejection check).  Also drain
+        # the per-response remote-item ids registered during this response's
+        # lifecycle so the gate's set does not grow unbounded across many
+        # ephemeral calls in a long-lived session.
         for eid, rid in list(self._active_ephemeral_response_ids.items()):
             if rid == event.response.id:
                 del self._active_ephemeral_response_ids[eid]
                 self._ephemeral_event_ids.discard(eid)
                 self._ephemeral_started_at.pop(eid, None)
                 break
+        if self._current_generation is not None:
+            for item_id in self._current_generation.messages.keys():
+                self._ephemeral_remote_item_ids.discard(item_id)
 
         created_timestamp = self._current_generation._created_timestamp
         first_token_timestamp = self._current_generation._first_token_timestamp
