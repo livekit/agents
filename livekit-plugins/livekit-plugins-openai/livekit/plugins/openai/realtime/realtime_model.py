@@ -259,6 +259,8 @@ class _ResponseGeneration:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    _response_id: str | None = None
+    """server-assigned response.id (known once response.created arrives)"""
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -810,6 +812,21 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
+        # Ephemeral-response tracking (drives the add_to_chat_ctx=False path).
+        # `_ephemeral_event_ids` holds outbound client_event_ids whose response
+        # carries `conversation: "none"`; client-side emit/log is suppressed for
+        # these.  `_active_ephemeral_response_ids` maps client_event_id ->
+        # server-assigned response.id once response.created arrives; drives
+        # `interrupt()` cancel and server-event suppression.
+        # `_ephemeral_remote_item_ids` is the set of server-emitted item.ids
+        # correlated to an in-flight ephemeral response; the local-context gate
+        # consults it.  `_ephemeral_started_at` records issue time for the
+        # serialization-contract diagnostic message.
+        self._ephemeral_event_ids: set[str] = set()
+        self._active_ephemeral_response_ids: dict[str, str] = {}
+        self._ephemeral_remote_item_ids: set[str] = set()
+        self._ephemeral_started_at: dict[str, float] = {}
+
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
 
@@ -825,6 +842,30 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _is_client_event_ephemeral(self, ev: Any) -> bool:
+        """True if an outbound client event correlates to an in-flight isolated response."""
+        if not self._ephemeral_event_ids:
+            return False
+        if isinstance(ev, dict):
+            eid = ev.get("event_id")
+        else:
+            eid = getattr(ev, "event_id", None)
+        return bool(eid and eid in self._ephemeral_event_ids)
+
+    def _is_server_event_ephemeral(self, event: dict[str, Any]) -> bool:
+        """True if a server event correlates to an in-flight isolated response."""
+        if not self._active_ephemeral_response_ids:
+            return False
+        active_rids = set(self._active_ephemeral_response_ids.values())
+        # response-level events: response.id nested
+        resp = event.get("response")
+        if isinstance(resp, dict) and resp.get("id") in active_rids:
+            return True
+        # item-level / delta events: response_id at top level
+        if event.get("response_id") in active_rids:
+            return True
+        return False
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -870,7 +911,8 @@ class RealtimeSession(
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(ev)
 
-                    self.emit("openai_client_event_queued", ev)
+                    if not self._is_client_event_ephemeral(ev):
+                        self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
@@ -984,10 +1026,12 @@ class RealtimeSession(
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(msg)
 
-                    self.emit("openai_client_event_queued", msg)
+                    is_ephemeral = self._is_client_event_ephemeral(msg)
+                    if not is_ephemeral:
+                        self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    if lk_oai_debug:
+                    if lk_oai_debug and not is_ephemeral:
                         msg_copy = msg.copy()
                         if msg_copy["type"] == "input_audio_buffer.append":
                             msg_copy = {**msg_copy, "audio": "..."}
@@ -1032,10 +1076,12 @@ class RealtimeSession(
 
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
-                self.emit("openai_server_event_received", event)
+                is_ephemeral_server_event = self._is_server_event_ephemeral(event)
+                if not is_ephemeral_server_event:
+                    self.emit("openai_server_event_received", event)
 
                 try:
-                    if lk_oai_debug:
+                    if lk_oai_debug and not is_ephemeral_server_event:
                         event_copy = event.copy()
                         if event_copy["type"] == "response.output_audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
@@ -1508,10 +1554,29 @@ class RealtimeSession(
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        # The substrate-level behavior for ``add_to_chat_ctx=False`` lands in a
-        # follow-up commit; this commit accepts the kwarg so the dispatcher
-        # capability gate can forward it without raising TypeError.
-        del add_to_chat_ctx
+        if not add_to_chat_ctx:
+            # Single-isolated-call serialization contract: reject rather than
+            # clobber the existing _current_generation slot.  Diagnostic
+            # context (client_event_id, response_id, elapsed-since-issue,
+            # docstring section reference) makes the error actionable without
+            # forcing callers to introspect session state.
+            in_flight_eid = next(iter(self._active_ephemeral_response_ids), None) or next(
+                iter(self._ephemeral_event_ids & self._response_created_futures.keys()),
+                None,
+            )
+            if in_flight_eid is not None:
+                rid = self._active_ephemeral_response_ids.get(in_flight_eid, "<not-yet-assigned>")
+                started = self._ephemeral_started_at.get(in_flight_eid, time.monotonic())
+                elapsed = time.monotonic() - started
+                raise RuntimeError(
+                    f"generate_reply(add_to_chat_ctx=False) already in flight: "
+                    f"client_event_id={in_flight_eid}, response_id={rid}, "
+                    f"started {elapsed:.2f}s ago. Concurrent isolated responses "
+                    "are not supported on this session; await the prior call's "
+                    "future before issuing the next. See "
+                    "RealtimeSession.generate_reply docstring §Concurrency."
+                )
+
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
@@ -1521,14 +1586,39 @@ class RealtimeSession(
             # by the new instructions for this response
             instructions = f"{self._instructions}\n{instructions}"
 
+        # Tool override for isolated turns: function_call items are placed
+        # outside conversation when conversation: "none" is set, which breaks
+        # the standard agent-side function_call_output flow.  Force them off
+        # for the duration of the isolated response and emit a warning if the
+        # caller passed any.
+        effective_tool_choice = tool_choice
+        effective_tools = tools
+        if not add_to_chat_ctx:
+            if is_given(tool_choice) or is_given(tools):
+                logger.warning(
+                    "tools/tool_choice ignored: add_to_chat_ctx=False forbids "
+                    "tool invocation in isolated responses (function_call items "
+                    "would be placed outside conversation, breaking the "
+                    "standard tool-result flow)"
+                )
+            effective_tool_choice = "none"
+            effective_tools = []
+
         params = RealtimeResponseCreateParams(
             instructions=instructions or None,
             metadata={"client_event_id": event_id},
         )
-        if is_given(tool_choice):
-            params.tool_choice = to_oai_tool_choice(tool_choice)
-        if is_given(tools):
-            params.tools = self._convert_tools_to_oai(tools)  # type: ignore
+        if not add_to_chat_ctx:
+            # Pydantic models in the openai SDK accept attribute assignment.
+            # Setting the field after construction matches the existing pattern
+            # used for tool_choice/tools below.
+            params.conversation = "none"
+            self._ephemeral_event_ids.add(event_id)
+            self._ephemeral_started_at[event_id] = time.monotonic()
+        if is_given(effective_tool_choice):
+            params.tool_choice = to_oai_tool_choice(effective_tool_choice)
+        if is_given(effective_tools):
+            params.tools = self._convert_tools_to_oai(effective_tools)  # type: ignore
 
         self.send_event(
             ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
@@ -1536,6 +1626,8 @@ class RealtimeSession(
 
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
+            self._ephemeral_event_ids.discard(event_id)
+            self._ephemeral_started_at.pop(event_id, None)
             if fut and not fut.done():
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
@@ -1653,12 +1745,45 @@ class RealtimeSession(
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
 
+        # Orphan filter: discard a late-arriving response.created whose
+        # corresponding caller-future was already popped (e.g. by _on_timeout).
+        # Must run BEFORE `_current_generation` is assigned, otherwise the slot
+        # gets clobbered by a response no caller is awaiting.  The
+        # metadata-presence guard restricts filtering to client-issued
+        # responses; server-VAD-initiated responses (no metadata) flow through.
+        client_event_id_for_orphan_check = (
+            event.response.metadata.get("client_event_id")
+            if isinstance(event.response.metadata, dict)
+            else None
+        )
+        if (
+            client_event_id_for_orphan_check is not None
+            and client_event_id_for_orphan_check not in self._response_created_futures
+        ):
+            logger.debug(
+                "discarding orphaned response %s (client_event_id=%s); "
+                "future was popped before resolution (likely timeout)",
+                event.response.id,
+                client_event_id_for_orphan_check,
+            )
+            # Defensive cancel to clean up substrate state.  Out-of-band
+            # responses require an explicit response_id to actually cancel.
+            self.send_event(
+                ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
+            )
+            # If we registered the orphan as ephemeral, prune the tracking
+            # records so the serialization-contract check is not stuck.
+            self._ephemeral_event_ids.discard(client_event_id_for_orphan_check)
+            self._ephemeral_started_at.pop(client_event_id_for_orphan_check, None)
+            return
+
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan(),
             function_ch=utils.aio.Chan(),
             messages={},
             _created_timestamp=time.time(),
             _done_fut=asyncio.Future(),
+            _response_id=event.response.id,
         )
 
         generation_ev = llm.GenerationCreatedEvent(
@@ -1673,6 +1798,11 @@ class RealtimeSession(
             and (client_event_id := event.response.metadata.get("client_event_id"))
             and (fut := self._response_created_futures.pop(client_event_id, None))
         ):
+            # Register response_id for ephemeral correlation (drives
+            # interrupt() cancel and server-event suppression).
+            if client_event_id in self._ephemeral_event_ids:
+                self._active_ephemeral_response_ids[client_event_id] = event.response.id
+
             if not fut.done():
                 generation_ev.user_initiated = True
                 fut.set_result(generation_ev)
@@ -1682,9 +1812,21 @@ class RealtimeSession(
         self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            # Late event after the slot was popped (e.g., orphan filter or timeout).
+            return
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
+
+        # If the active generation belongs to an ephemeral response, register the
+        # item id so `_handle_conversion_item_added` can skip it (and the
+        # downstream `_on_remote_item_added` gate can defensively drop it).
+        if (
+            self._current_generation._response_id is not None
+            and self._current_generation._response_id
+            in self._active_ephemeral_response_ids.values()
+        ):
+            self._ephemeral_remote_item_ids.add(item_id)
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1708,7 +1850,8 @@ class RealtimeSession(
             self._current_generation.messages[item_id] = item_generation
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
         assert (item_id := event.item_id) is not None, "item_id is None"
         assert (item_type := event.part.type) is not None, "part.type is None"
 
@@ -1724,6 +1867,15 @@ class RealtimeSession(
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         assert event.item.id is not None, "item.id is None"
+
+        # Shadow-state leak fix: items belonging to an in-flight ephemeral
+        # response must NOT enter `_remote_chat_ctx` (which backs the public
+        # `chat_ctx` property and reconnection-replay state) or get emitted
+        # via `remote_item_added`.  The substrate's `conversation: "none"`
+        # keeps items out of next-turn model recall, but the items remain
+        # addressable by id and the substrate still emits this event for them.
+        if event.item.id in self._ephemeral_remote_item_ids:
+            return
 
         try:
             lk_item = openai_item_to_livekit_item(event.item)
@@ -1788,7 +1940,8 @@ class RealtimeSession(
         )
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
         item_generation = self._current_generation.messages[event.item_id]
         if (
             item_generation.audio_ch.closed
@@ -1801,10 +1954,12 @@ class RealtimeSession(
         item_generation.audio_transcript += event.delta
 
     def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
 
         item_id = event["item_id"]
         delta = event["delta"]
@@ -1817,7 +1972,8 @@ class RealtimeSession(
         item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
         item_generation = self._current_generation.messages[event.item_id]
         if self._current_generation._first_token_timestamp is None:
             self._current_generation._first_token_timestamp = time.time()
@@ -1836,10 +1992,12 @@ class RealtimeSession(
         )
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
 
@@ -1857,7 +2015,8 @@ class RealtimeSession(
                 item_generation.modalities.set_result(self._opts.modalities)
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            return
 
         assert item.id is not None, "item.id is None"
         assert item.call_id is not None, "call_id is None"
@@ -1877,7 +2036,15 @@ class RealtimeSession(
         if self._current_generation is None:
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
-        assert self._current_generation is not None, "current_generation is None"
+        # Drain ephemeral tracking for this response (drives the
+        # serialization contract: a stale entry would make the next legitimate
+        # isolated call look in-flight to the rejection check).
+        for eid, rid in list(self._active_ephemeral_response_ids.items()):
+            if rid == event.response.id:
+                del self._active_ephemeral_response_ids[eid]
+                self._ephemeral_event_ids.discard(eid)
+                self._ephemeral_started_at.pop(eid, None)
+                break
 
         created_timestamp = self._current_generation._created_timestamp
         first_token_timestamp = self._current_generation._first_token_timestamp
