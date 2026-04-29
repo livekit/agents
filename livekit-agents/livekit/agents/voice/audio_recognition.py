@@ -1084,10 +1084,6 @@ class AudioRecognition:
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
-                # Use the turn-level start (set when the user_turn_span was
-                # created on first SOS) so `started_speaking_at` on the EOT
-                # metrics reflects when the user *first* started speaking
-                # within this turn — not the latest VAD burst.
                 self._user_turn_start,
             )
         )
