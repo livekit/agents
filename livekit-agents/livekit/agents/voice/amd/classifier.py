@@ -76,6 +76,7 @@ Output: machine-ivr
 
 Input: "Please state your name and why you're calling, and I will check if the person is available"
 Output: machine-ivr
+Note: this should apply for any call screening prompts.
 
 Input: "I'm away from my desk. If you leave a message, I will get back to you."
 Output: machine-vm
@@ -318,11 +319,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             loop = asyncio.get_running_loop()
             self._silence_timer = loop.call_later(
                 clamped,
-                lambda: (
-                    self._input_ch.send_nowait(self._transcript)
-                    if not self._input_ch.closed
-                    else None
-                ),
+                lambda: self._input_ch.send_nowait("") if not self._input_ch.closed else None,
             )
             return f"waiting {clamped:.1f}s for more audio"
 

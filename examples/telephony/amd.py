@@ -68,14 +68,6 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-    @ctx.room.on("track_subscribed")
-    def on_track_subscribed(
-        track: rtc.Track,
-        publication: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
-    ):
-        logger.info(f"track {track.name} subscribed by {participant.identity}")
-
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
     amd_task: asyncio.Task | None = None
 
@@ -90,6 +82,8 @@ async def entrypoint(ctx: JobContext):
         phone_number: str,
         participant_identity: str,
     ):
+        nonlocal amd_task
+
         # focus the session on the callee before AMD starts so audio recognition
         # doesn't push frames from any pre-existing participant into AMD's pipeline
         session.room_io.set_participant(participant_identity)
@@ -102,7 +96,7 @@ async def entrypoint(ctx: JobContext):
             no_speech_threshold=20,
             timeout=30,
         ) as detector:
-            logger.info(f"creating SIP participant for {phone_number[:4]}****{phone_number[-4:]}")
+            logger.info(f"creating SIP participant for {participant_identity}")
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
@@ -162,6 +156,8 @@ async def entrypoint(ctx: JobContext):
                 ctx.shutdown("mailbox unavailable")
                 await hangup()
 
+        amd_task = None
+
     @ctx.room.local_participant.register_rpc_method("dial_number")
     async def dial_number(data: rtc.RpcInvocationData):
         nonlocal amd_task
@@ -177,13 +173,13 @@ async def entrypoint(ctx: JobContext):
             session.shutdown()
             raise e
 
-    async def wait_for_amd():
+    async def cancel_amd():
         nonlocal amd_task
         if amd_task is not None:
             await utils.aio.cancel_and_wait(amd_task)
             amd_task = None
 
-    ctx.add_shutdown_callback(wait_for_amd)
+    ctx.add_shutdown_callback(cancel_amd)
 
 
 if __name__ == "__main__":
