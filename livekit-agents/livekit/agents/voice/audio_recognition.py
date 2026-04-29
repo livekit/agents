@@ -185,6 +185,7 @@ class AudioRecognition:
         self._agent_speaking: bool = False
 
         self._user_turn_span: trace.Span | None = None
+        self._user_turn_start: float | None = None
         self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
 
@@ -1057,6 +1058,7 @@ class AudioRecognition:
                     )
                 user_turn_span.end()
                 self._user_turn_span = None
+                self._user_turn_start = None
                 self._stt_request_ids = []
 
                 # clear the transcript if the user turn was committed
@@ -1081,7 +1083,11 @@ class AudioRecognition:
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
-                self._speech_start_time,
+                # Use the turn-level start (set when the user_turn_span was
+                # created on first SOS) so `started_speaking_at` on the EOT
+                # metrics reflects when the user *first* started speaking
+                # within this turn — not the latest VAD burst.
+                self._user_turn_start,
             )
         )
 
@@ -1168,6 +1174,9 @@ class AudioRecognition:
 
         start_time_ns = int(start_time * 1_000_000_000) if start_time else None
         self._user_turn_span = tracer.start_span("user_turn", start_time=start_time_ns)
+
+        if start_time is not None and self._user_turn_start is None:
+            self._user_turn_start = start_time
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
