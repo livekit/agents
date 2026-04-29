@@ -912,6 +912,7 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
+            self._vad_speech_started = False
             self._speaking = False
 
             if self._vad_base_turn_detection or (
