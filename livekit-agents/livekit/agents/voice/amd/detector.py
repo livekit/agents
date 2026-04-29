@@ -31,6 +31,27 @@ if TYPE_CHECKING:
     from ...stt import STT
     from ..agent_session import AgentSession
 
+VERIFIED_LLM_MODELS = {
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3-flash-preview",
+    "openai/gpt-4.1",
+    "openai/gpt-5.2",
+    "openai/gpt-5.4",
+    "openai/gpt-5.1",
+    "openai/gpt-4o",
+    "openai/gpt-5.1-chat-latest",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1-nano",
+    "openai/gpt-5.2-chat-latest",
+    "google/gemini-2.5-flash-lite",
+}
+
+VERIFIED_STT_MODELS = {
+    "deepgram/nova-3",
+    "assemblyai/universal-streaming-multilingual",
+    "cartesia/ink-whisper",
+}
+
 
 class AMD:
     """Answering Machine Detection (AMD).
@@ -74,13 +95,15 @@ class AMD:
             and the session has its own STT, AMD reuses those transcripts.
         max_hold_duration: Maximum seconds the IVR navigator will stay in hold
             mode before auto-exiting. Passed through to :class:`IVRActivity`.
+        suppress_compatibility_warning: If ``True``, suppress model compatibility warning messages.
     """
 
     def __init__(
         self,
         session: AgentSession | None = None,
         *,
-        llm: LLM | LLMModels | str | None = None,
+        llm: LLM | LLMModels | str | None = "google/gemini-3.1-flash-lite-preview",
+        stt: STT | None = "cartesia/ink-whisper",
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
         human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
@@ -90,8 +113,8 @@ class AMD:
         timeout: float = TIMEOUT,
         prompt: str = AMD_PROMPT,
         participant_identity: str | None = None,
-        stt: STT | None = None,
         max_hold_duration: float = 300.0,
+        suppress_compatibility_warning: bool = False,
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
@@ -101,6 +124,7 @@ class AMD:
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
         self._span: trace.Span | None = None
+        self._suppress_compatibility_warning = suppress_compatibility_warning
 
         self._human_speech_threshold = human_speech_threshold
         self._human_silence_threshold = human_silence_threshold
@@ -112,6 +136,20 @@ class AMD:
         self._participant_identity = participant_identity
         self._stt = stt
         self._max_hold_duration = max_hold_duration
+
+        stt_model = self._stt.model.lower()
+        if (
+            self._stt is not None
+            and all(
+                stt_model != candidate.lower() and stt_model not in candidate.lower()
+                for candidate in VERIFIED_STT_MODELS
+            )
+            and not self._suppress_compatibility_warning
+        ):
+            logger.warning(
+                "stt model %s might not be compatible with amd, proceed with caution",
+                self._stt.model,
+            )
 
         self._stt_task: asyncio.Task[None] | None = None
         self._audio_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -434,6 +472,18 @@ class AMD:
             _llm = llm
         elif (candidate := session.llm) is not None and isinstance(candidate, _LLM):
             _llm = candidate
+
+        model_name = _llm.model.lower()
+        if (
+            all(
+                model_name != candidate.lower() and model_name not in candidate.lower()
+                for candidate in VERIFIED_LLM_MODELS
+            )
+            and not self._suppress_compatibility_warning
+        ):
+            logger.warning(
+                "llm model %s might not be compatible with amd, proceed with caution", model_name
+            )
 
         if _llm is not None:
             return _AMDClassifier(

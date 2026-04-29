@@ -317,10 +317,21 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
             loop = asyncio.get_running_loop()
-            self._silence_timer = loop.call_later(
-                clamped,
-                lambda: self._input_ch.send_nowait("") if not self._input_ch.closed else None,
-            )
+
+            def _on_postpone_elapsed() -> None:
+                # the extension window expired without another postpone: treat this as
+                # silence reached so any pending verdict (or one produced by the
+                # re-classification below) can emit instead of waiting on the
+                # detection timeout.
+                self._machine_silence_reached = True
+                if not self._input_ch.closed:
+                    # re-trigger classification with the latest transcript; on the
+                    # next run, postpone is unavailable once extensions are
+                    # exhausted, forcing the LLM to commit to save_prediction.
+                    self._input_ch.send_nowait("")
+                self._try_emit_result()
+
+            self._silence_timer = loop.call_later(clamped, _on_postpone_elapsed)
             return f"waiting {clamped:.1f}s for more audio"
 
         @log_exceptions(logger=logger)
