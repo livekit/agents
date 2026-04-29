@@ -1642,6 +1642,20 @@ class RealtimeSession(
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
+        # For each in-flight isolated response, send `response.cancel` with
+        # the server-assigned `response_id`.  Cancel-without-id is silently
+        # no-op for out-of-band responses on the OpenAI substrate, so an
+        # isolated turn cannot be stopped unless the id is included.
+        for eid, rid in list(self._active_ephemeral_response_ids.items()):
+            self.send_event(ResponseCancelEvent(type="response.cancel", response_id=rid))
+            self._active_ephemeral_response_ids.pop(eid, None)
+            self._ephemeral_event_ids.discard(eid)
+            self._ephemeral_started_at.pop(eid, None)
+        # Default-conversation cancel preserved.  Also serves as the
+        # race-window fallback for an isolated response whose response.create
+        # has been sent but whose response.created has not yet arrived: in
+        # that window the server has not assigned a response_id we can target,
+        # and cancel-without-id is no-op for OOB but at least signals intent.
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(

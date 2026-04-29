@@ -807,3 +807,84 @@ async def test_isolated_generate_reply_does_not_pollute_chat_ctx_live(job_proces
     )
     assert "purple-elephant" not in assistant_text.lower()
     assert "elephant 42" not in assistant_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: interrupt() with response_id + cleanup on response.done.
+# ---------------------------------------------------------------------------
+
+
+async def test_interrupt_sends_cancel_with_response_id(offline_session) -> None:
+    """`interrupt()` sends a `ResponseCancelEvent` with the server-assigned
+    `response_id` for each in-flight isolated response.  Cancel-without-id
+    is silently no-op for out-of-band responses on the substrate, so the
+    explicit id is what makes interrupt actually work for isolated turns."""
+    from openai.types.realtime import ResponseCancelEvent, ResponseCreatedEvent
+
+    s = offline_session
+    fut = s.generate_reply(instructions="long utterance", add_to_chat_ctx=False)
+
+    # Synthesize response.created so the response_id becomes known.
+    rc = _captured_response_create_events(s)
+    cid = rc[0].event_id
+    response = type(
+        "_R",
+        (),
+        {"id": "resp_INTERRUPT_X", "metadata": {"client_event_id": cid}, "output": []},
+    )()
+    s._handle_response_created(
+        ResponseCreatedEvent.model_construct(  # type: ignore[attr-defined]
+            type="response.created", response=response
+        )
+    )
+
+    s._captured_events.clear()
+    s.interrupt()
+
+    cancels = [ev for ev in s._captured_events if isinstance(ev, ResponseCancelEvent)]
+    # First cancel carries response_id; second is the default no-id fallback.
+    assert any(ev.response_id == "resp_INTERRUPT_X" for ev in cancels)
+
+    # Tracking should be drained for the cancelled response.
+    assert s._active_ephemeral_response_ids == {}
+    assert s._ephemeral_event_ids == set()
+    assert s._ephemeral_started_at == {}
+
+    if not fut.done():
+        fut.set_exception(RuntimeError("test cleanup"))
+
+
+async def test_interrupt_in_race_window_falls_back_to_default(offline_session) -> None:
+    """If `interrupt()` fires before `response.created` arrives (so the
+    server-assigned id is not yet known), `_active_ephemeral_response_ids`
+    is empty and the default no-id cancel is the only thing sent.  No
+    exception is raised."""
+    from openai.types.realtime import ResponseCancelEvent
+
+    s = offline_session
+    fut = s.generate_reply(instructions="will be cancelled", add_to_chat_ctx=False)
+
+    # No response.created delivered.  _active_ephemeral_response_ids is empty.
+    assert s._active_ephemeral_response_ids == {}
+
+    s._captured_events.clear()
+    s.interrupt()
+
+    cancels = [ev for ev in s._captured_events if isinstance(ev, ResponseCancelEvent)]
+    # Exactly one cancel (the default no-id fallback); no per-id cancels.
+    assert len(cancels) == 1
+    assert cancels[0].response_id is None or not getattr(cancels[0], "response_id", None)
+
+    if not fut.done():
+        fut.set_exception(RuntimeError("test cleanup"))
+
+
+async def test_interrupt_with_no_active_generation_is_noop(offline_session) -> None:
+    """`interrupt()` with no active generation does nothing."""
+    from openai.types.realtime import ResponseCancelEvent
+
+    s = offline_session
+    s._captured_events.clear()
+    s.interrupt()
+    cancels = [ev for ev in s._captured_events if isinstance(ev, ResponseCancelEvent)]
+    assert cancels == []
