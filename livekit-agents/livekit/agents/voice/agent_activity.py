@@ -5,6 +5,7 @@ import contextvars
 import heapq
 import json
 import time
+import warnings
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -1113,6 +1114,7 @@ class AgentActivity(RecognitionHooks):
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -1192,6 +1194,7 @@ class AgentActivity(RecognitionHooks):
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
+                    add_to_chat_ctx=add_to_chat_ctx,
                     tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
@@ -2834,10 +2837,39 @@ class AgentActivity(RecognitionHooks):
         tools: list[llm.Tool | llm.Toolset] | None = None,
         user_input: str | None = None,
         instructions: str | None = None,
+        add_to_chat_ctx: bool = True,
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
+        # Capability gate: only forward `add_to_chat_ctx` to plugins that declare
+        # `RealtimeCapabilities.ephemeral_response=True`. Plugins without the capability
+        # keep their existing 3-kwarg signature; emit a `DeprecationWarning` and fall
+        # back to add_to_chat_ctx=True.
+        effective_add_to_chat_ctx = add_to_chat_ctx
+        rt_caps = self._rt_session.realtime_model.capabilities
+        if not add_to_chat_ctx and not rt_caps.ephemeral_response:
+            plugin_module = type(self._rt_session.realtime_model).__module__
+            warnings.warn(
+                f"plugin {plugin_module} does not declare "
+                "RealtimeCapabilities.ephemeral_response=True; "
+                "add_to_chat_ctx=False falls back to True (no isolation). The text "
+                "passed to generate_reply will be added to the chat context and "
+                "visible to the model on subsequent turns. Use a plugin that "
+                "declares ephemeral_response=True (currently: OpenAI plugin, "
+                "non-Azure endpoint).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            effective_add_to_chat_ctx = True
+        if not add_to_chat_ctx and (is_given(model_settings.tool_choice) or tools):
+            warnings.warn(
+                "add_to_chat_ctx=False forbids tool invocation; tools and "
+                "tool_choice provided to generate_reply will be discarded for "
+                "this turn.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
@@ -2891,17 +2923,22 @@ class AgentActivity(RecognitionHooks):
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
             try:
-                generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN,
-                    tool_choice=(
+                rt_kwargs: dict[str, Any] = {
+                    "instructions": instructions or NOT_GIVEN,
+                    "tool_choice": (
                         model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
                     ),
-                    tools=(
+                    "tools": (
                         llm.ToolContext(tools).flatten()
                         if per_response_tool_choice and tools is not None
                         else NOT_GIVEN
                     ),
-                )
+                }
+                # Only forward `add_to_chat_ctx` to plugins that declare the capability;
+                # plugins without it keep the existing 3-kwarg signature.
+                if rt_caps.ephemeral_response:
+                    rt_kwargs["add_to_chat_ctx"] = effective_add_to_chat_ctx
+                generation_ev = await self._rt_session.generate_reply(**rt_kwargs)
             except llm.RealtimeError as e:
                 logger.error(
                     "failed to generate a reply%s: %s",

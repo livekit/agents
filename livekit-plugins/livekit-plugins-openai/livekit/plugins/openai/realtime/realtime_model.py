@@ -411,6 +411,9 @@ class RealtimeModel(llm.RealtimeModel):
             )
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
+        is_azure = (
+            api_version is not None or entra_token is not None or azure_deployment is not None
+        )
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
@@ -423,11 +426,11 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_instructions=True,
                 mutable_tools=True,
                 per_response_tool_choice=True,
+                # Azure Realtime endpoint is not verified for `conversation: "none"`
+                # semantics; advertise the capability only for the public OpenAI endpoint
+                # so Azure-backed sessions fall through to the dispatcher's legacy path.
+                ephemeral_response=not is_azure,
             )
-        )
-
-        is_azure = (
-            api_version is not None or entra_token is not None or azure_deployment is not None
         )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -1501,9 +1504,14 @@ class RealtimeSession(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        # The substrate-level behavior for ``add_to_chat_ctx=False`` lands in a
+        # follow-up commit; this commit accepts the kwarg so the dispatcher
+        # capability gate can forward it without raising TypeError.
+        del add_to_chat_ctx
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._response_created_futures[event_id] = fut
