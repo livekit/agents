@@ -1,26 +1,5 @@
 import re
-from collections.abc import AsyncIterable, Sequence
-from typing import Literal
-
-TextTransforms = Literal["filter_markdown", "filter_emoji"]
-
-
-def apply_text_transforms(
-    text: AsyncIterable[str], transforms: Sequence[TextTransforms]
-) -> AsyncIterable[str]:
-    all_transforms = {
-        "filter_markdown": filter_markdown,
-        "filter_emoji": filter_emoji,
-    }
-
-    for transform in transforms:
-        if transform not in all_transforms:
-            raise ValueError(
-                f"Invalid transform: {transform}, available transforms: {all_transforms.keys()}"
-            )
-        text = all_transforms[transform](text)
-    return text
-
+from collections.abc import AsyncIterable
 
 LINE_PATTERNS = [
     # headers: remove # and following spaces
@@ -36,10 +15,11 @@ INLINE_PATTERNS = [
     (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),
     # links: keep text part [text](url) -> text
     (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),
-    # bold: remove asterisks from **text** (not preceded/followed by non-whitespace)
-    (re.compile(r"(?<!\S)\*\*([^*]+?)\*\*(?!\S)"), r"\1"),
-    # italic: remove asterisks from *text* (not preceded/followed by non-whitespace)
-    (re.compile(r"(?<!\S)\*([^*]+?)\*(?!\S)"), r"\1"),
+    # bold: remove asterisks from **text** (word/asterisk boundaries, so
+    # punctuation like ``**bold**!`` still matches)
+    (re.compile(r"(?<![\w*])\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*(?![\w*])"), r"\1"),
+    # italic: remove asterisks from *text* (word/asterisk boundaries)
+    (re.compile(r"(?<![\w*])\*(?!\s|\*)([^*\n]+?)(?<!\s)\*(?![\w*])"), r"\1"),
     # bold with underscores: remove underscores from __text__ (word boundaries)
     (re.compile(r"(?<!\w)__([^_]+?)__(?!\w)"), r"\1"),
     # italic with underscores: remove underscores from _text_ (word boundaries)

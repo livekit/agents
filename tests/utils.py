@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import pathlib
 from collections.abc import AsyncGenerator
 
 import jiwer as tr
@@ -9,8 +11,8 @@ import tiktoken
 from livekit import rtc
 from livekit.agents import utils
 
-# TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
-# TEST_AUDIO_TRANSCRIPT = pathlib.Path(os.path.dirname(__file__), "long_transcript.txt").read_text()
+TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
+TEST_AUDIO_TRANSCRIPT = pathlib.Path(os.path.dirname(__file__), "long_transcript.txt").read_text()
 
 
 def wer(hypothesis: str, reference: str) -> float:
@@ -63,40 +65,40 @@ async def read_audio_file(path) -> rtc.AudioFrame:
     return rtc.combine_audio_frames(frames)
 
 
-# async def make_test_speech(
-#     *,
-#     chunk_duration_ms: int | None = None,
-#     sample_rate: int | None = None,  # resample if not None
-# ) -> tuple[list[rtc.AudioFrame], str]:
-#     input_audio = await read_mp3_file(TEST_AUDIO_FILEPATH)
+async def make_test_speech(
+    *,
+    chunk_duration_ms: int | None = None,
+    sample_rate: int | None = None,  # resample if not None
+) -> tuple[list[rtc.AudioFrame], str, float]:
+    input_audio = await read_audio_file(TEST_AUDIO_FILEPATH)
 
-#     if sample_rate is not None and input_audio.sample_rate != sample_rate:
-#         resampler = rtc.AudioResampler(
-#             input_rate=input_audio.sample_rate,
-#             output_rate=sample_rate,
-#             num_channels=input_audio.num_channels,
-#         )
+    if sample_rate is not None and input_audio.sample_rate != sample_rate:
+        resampler = rtc.AudioResampler(
+            input_rate=input_audio.sample_rate,
+            output_rate=sample_rate,
+            num_channels=input_audio.num_channels,
+        )
 
-#         frames = []
-#         if resampler:
-#             frames = resampler.push(input_audio)
-#             frames.extend(resampler.flush())
+        frames = []
+        if resampler:
+            frames = resampler.push(input_audio)
+            frames.extend(resampler.flush())
 
-#         input_audio = rtc.combine_audio_frames(frames)
+        input_audio = rtc.combine_audio_frames(frames)
 
-#     if not chunk_duration_ms:
-#         return [input_audio], TEST_AUDIO_TRANSCRIPT
+    if not chunk_duration_ms:
+        return [input_audio], TEST_AUDIO_TRANSCRIPT, input_audio.duration
 
-#     chunk_size = int(input_audio.sample_rate / (1000 / chunk_duration_ms))
-#     bstream = utils.audio.AudioByteStream(
-#         sample_rate=input_audio.sample_rate,
-#         num_channels=input_audio.num_channels,
-#         samples_per_channel=chunk_size,
-#     )
+    chunk_size = int(input_audio.sample_rate / (1000 / chunk_duration_ms))
+    bstream = utils.audio.AudioByteStream(
+        sample_rate=input_audio.sample_rate,
+        num_channels=input_audio.num_channels,
+        samples_per_channel=chunk_size,
+    )
 
-#     frames = bstream.write(input_audio.data.tobytes())
-#     frames.extend(bstream.flush())
-#     return frames, TEST_AUDIO_TRANSCRIPT
+    frames = bstream.write(input_audio.data.tobytes())
+    frames.extend(bstream.flush())
+    return frames, TEST_AUDIO_TRANSCRIPT, input_audio.duration
 
 
 async def fake_llm_stream(

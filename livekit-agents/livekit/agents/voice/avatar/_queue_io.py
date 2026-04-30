@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
-from typing import Literal, Union
+from typing import Literal
 
 from livekit import rtc
 
@@ -16,20 +17,26 @@ logger = logging.getLogger(__name__)
 class QueueAudioOutput(
     AudioOutput,
     AudioReceiver,
-    rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]],
+    rtc.EventEmitter[Literal["clear_buffer"]],
 ):
     """
     AudioOutput implementation that sends audio frames through a queue.
     """
 
-    def __init__(self, *, sample_rate: int | None = None):
+    def __init__(
+        self,
+        *,
+        sample_rate: int | None = None,
+        wait_playback_start: bool = False,
+    ):
         super().__init__(
             label="DebugQueueIO",
             next_in_chain=None,
             sample_rate=sample_rate,
             capabilities=AudioOutputCapabilities(pause=False),
         )
-        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
+        self._wait_playback_start = wait_playback_start
+        self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -37,6 +44,8 @@ class QueueAudioOutput(
         await super().capture_frame(frame)
         if not self._capturing:
             self._capturing = True
+            if not self._wait_playback_start:
+                self.on_playback_started(created_at=time.time())
 
         await self._data_ch.send(frame)
 
@@ -61,6 +70,12 @@ class QueueAudioOutput(
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
         self.on_playback_finished(playback_position=playback_position, interrupted=interrupted)
+
+    def notify_playback_started(self) -> None:
+        if not self._wait_playback_start:
+            # already fired eagerly in capture_frame; avoid double-firing
+            return
+        self.on_playback_started(created_at=time.time())
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self._data_ch

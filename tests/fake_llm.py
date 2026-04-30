@@ -12,10 +12,9 @@ from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
     ChoiceDelta,
-    FunctionTool,
     FunctionToolCall,
     LLMStream,
-    RawFunctionTool,
+    Tool,
     ToolChoice,
 )
 from livekit.agents.types import (
@@ -59,7 +58,7 @@ class FakeLLM(LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -74,7 +73,7 @@ class FakeLLMStream(LLMStream):
         llm: FakeLLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -119,19 +118,18 @@ class FakeLLMStream(LLMStream):
         assert self.chat_ctx.items
         items = self.chat_ctx.items
 
-        # for generate_reply(instructions=...)
-        for item in items:
-            if item.type == "message" and item.role == "system":
-                contents = item.text_content.split("\n")
-                if len(contents) > 1 and contents[-1].startswith("instructions:"):
-                    return contents[-1]
+        item = items[-1]
 
-        # if the last item is a user message
-        if items[-1].type == "message" and items[-1].role == "user":
-            return items[-1].text_content
+        # for user message and generate_reply(instructions=...)
+        if (
+            item.type == "message"
+            and item.role in ("user", "system")
+            and (text := item.text_content)
+        ):
+            return text
 
         # if the last item is a function call output, use the tool output
-        if items[-1].type == "function_call_output":
-            return items[-1].output
+        if item.type == "function_call_output":
+            return item.output
 
-        raise ValueError("No input text found")
+        raise ValueError(f"No input text found: {item}")

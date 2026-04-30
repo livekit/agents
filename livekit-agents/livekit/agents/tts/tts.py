@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,12 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIError
+from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
-from ..utils import aio, audio, codecs, log_exceptions
+from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
     from ..voice.io import TimedString
@@ -65,7 +65,7 @@ TEvent = TypeVar("TEvent")
 
 class TTS(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(
@@ -133,6 +133,21 @@ class TTS(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
 
+    def _synthesize_with_stream(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
+        """Helper method to implement synthesize() using stream() for TTS providers
+        that only support streaming inference.
+
+        This creates a stream, pushes the text as a single chunk, ends the input,
+        and returns a ChunkedStream wrapper around it.
+        """
+        return _ChunkedStreamFromStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
+
     def prewarm(self) -> None:
         """Pre-warm connection to the TTS service"""
         pass
@@ -167,6 +182,10 @@ class ChunkedStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -198,6 +217,10 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
+    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
 
@@ -224,10 +247,14 @@ class ChunkedStream(ABC):
             ttfb=ttfb,
             duration=duration,
             characters_count=len(self._input_text),
+            input_tokens=self._input_tokens,
+            output_tokens=self._output_tokens,
             audio_duration=audio_duration,
             cancelled=self._synthesize_task.cancelled(),
             label=self._tts._label,
             streamed=False,
+            acquire_time=self._acquire_time,
+            connection_reused=self._connection_reused,
             metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
         )
         if self._tts_request_span:
@@ -277,6 +304,10 @@ class ChunkedStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
@@ -284,8 +315,7 @@ class ChunkedStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
+                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
                         extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
                     )
 
@@ -343,6 +373,47 @@ class ChunkedStream(ABC):
         await self.aclose()
 
 
+class _ChunkedStreamFromStream(ChunkedStream):
+    """Implementation of ChunkedStream that wraps a SynthesizeStream.
+
+    Used by TTS providers that only support streaming inference to implement
+    the synthesize() method.
+    """
+
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(
+            tts=tts,
+            input_text=input_text,
+            conn_options=conn_options,
+        )
+
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+            stream=False,
+        )
+        async with self._tts.stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=self._conn_options.timeout)
+        ) as stream:
+            stream.push_text(self._input_text)
+            stream.end_input()
+            async for ev in stream:
+                output_emitter.push(ev.frame.data.tobytes())
+                if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                    output_emitter.push_timed_transcript(timed_transcripts)
+
+        output_emitter.flush()
+
+
 class SynthesizeStream(ABC):
     _tts_request_span_name: ClassVar[str] = "tts_request"
 
@@ -352,7 +423,7 @@ class SynthesizeStream(ABC):
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
@@ -368,12 +439,24 @@ class SynthesizeStream(ABC):
         self._started_time: float = 0
         self._pushed_text: str = ""
 
+        # buffered input events for retry replay
+        self._input_buffer: list[str | SynthesizeStream._FlushSentinel] = []
+        self._input_ended = False
+
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
         self._mtc_text = ""
         self._num_segments = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
 
         self._tts_request_span: trace.Span | None = None
+
+    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -415,19 +498,49 @@ class SynthesizeStream(ABC):
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 return
             except APIError as e:
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
+                pushed_duration = output_emitter.pushed_duration()
+                should_retry = (
+                    e.retryable
+                    and pushed_duration == 0.0
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+
+                if not should_retry:
+                    if pushed_duration > 0.0:
+                        logger.error(
+                            "TTS failed after partial audio was already sent to the user, skip retrying.",
+                            extra={
+                                "tts": self._tts._label,
+                                "streamed": True,
+                                "pushed_duration": pushed_duration,
+                            },
+                        )
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
-                    )
+
+                retry_interval = self._conn_options._interval_for_retry(i)
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    "failed to synthesize speech: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                )
 
                 await asyncio.sleep(retry_interval)
+
+                # replay buffered input into a fresh channel for retry
+                self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                for event in self._input_buffer:
+                    self._input_ch.send_nowait(event)
+                if self._input_ended:
+                    self._input_ch.close()
+
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
             finally:
@@ -479,10 +592,14 @@ class SynthesizeStream(ABC):
                 ttfb=ttfb,
                 duration=duration,
                 characters_count=len(text),
+                input_tokens=self._input_tokens,
+                output_tokens=self._output_tokens,
                 audio_duration=audio_duration,
                 cancelled=self._task.cancelled(),
                 label=self._tts._label,
                 streamed=True,
+                acquire_time=self._acquire_time,
+                connection_reused=self._connection_reused,
                 metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:
@@ -532,6 +649,7 @@ class SynthesizeStream(ABC):
 
         self._mtc_text += token
         self._input_ch.send_nowait(token)
+        self._input_buffer.append(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
@@ -542,12 +660,15 @@ class SynthesizeStream(ABC):
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._input_ch.send_nowait(self._FlushSentinel())
+        sentinel = self._FlushSentinel()
+        self._input_ch.send_nowait(sentinel)
+        self._input_buffer.append(sentinel)
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
         self._input_ch.close()
+        self._input_ended = True
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
@@ -618,6 +739,7 @@ class AudioEmitter:
         self._started = False
         self._num_segments = 0
         self._audio_durations: list[float] = []  # track durations per segment
+        self._provider_request_ids: list[str] = []  # deduped provider-known segment ids
 
     def pushed_duration(self, idx: int = -1) -> float:
         return (
@@ -664,13 +786,11 @@ class AudioEmitter:
         from ..voice.io import TimedString
 
         self._write_ch = aio.Chan[
-            Union[
-                bytes,
-                AudioEmitter._FlushSegment,
-                AudioEmitter._StartSegment,
-                AudioEmitter._EndSegment,
-                TimedString,
-            ]
+            bytes
+            | AudioEmitter._FlushSegment
+            | AudioEmitter._StartSegment
+            | AudioEmitter._EndSegment
+            | TimedString
         ]()
         self._main_atask = asyncio.create_task(self._main_task(), name="AudioEmitter._main_task")
 
@@ -684,7 +804,26 @@ class AudioEmitter:
                 "with stream=True"
             )
 
+        self._note_provider_request_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
+
+    def _note_provider_request_id(self, context_id: str) -> None:
+        """Record a provider-known id for this stream on the current span.
+
+        Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
+        can correlate traces with the provider's server-side logs for debugging.
+        `start_segment()` calls this automatically; plugins can also call it when
+        the provider-known id becomes available later (e.g. from a response
+        message's `request_id`/`session_id` field after start_segment).
+        """
+        if not context_id or context_id in self._provider_request_ids:
+            return
+        self._provider_request_ids.append(context_id)
+        current_span = trace.get_current_span()
+        if current_span.is_recording():
+            current_span.set_attribute(
+                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+            )
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:
@@ -798,68 +937,117 @@ class AudioEmitter:
                 self.flush()
                 logger.debug("flush audio emitter due to slow audio generation")
 
-            if flush_if_delayed:
-                # force flush the buffer if the audio comes slower than realtime
+            if flush_if_delayed and sent_duration > 0.15:
+                # force flush the buffer if the audio comes slower than realtime.
+                # skip during the initial progressive ramp-up where sent_duration
+                # is too small for a meaningful slow-generation check.
                 delay = sent_duration - (event_loop.time() - sent_start) - 0.02
-                flush_timer = event_loop.call_later(delay, _flush)
+                if delay > 0:
+                    flush_timer = event_loop.call_later(delay, _flush)
+
+        # Number of samples held back in last_frame so we can tag is_final
+        # on the very last audio of a segment.  10 ms is small enough to be
+        # imperceptible but avoids holding a full-sized frame.
+        _TAIL_SAMPLES = self._sample_rate * 10 // 1000
+
+        def _split_tail(frame: rtc.AudioFrame) -> tuple[rtc.AudioFrame | None, rtc.AudioFrame]:
+            """Split *frame* into (head, tail) where tail is exactly _TAIL_SAMPLES.
+
+            If the frame is too small to split, returns (None, frame).
+            """
+            if frame.samples_per_channel <= _TAIL_SAMPLES:
+                return None, frame
+            head_samples = frame.samples_per_channel - _TAIL_SAMPLES
+            # frame.data is a memoryview of int16 — slice by sample * num_channels
+            split_idx = head_samples * frame.num_channels
+            head = rtc.AudioFrame(
+                data=frame.data[:split_idx],
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+                samples_per_channel=head_samples,
+            )
+            tail = rtc.AudioFrame(
+                data=frame.data[split_idx:],
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+                samples_per_channel=_TAIL_SAMPLES,
+            )
+            return head, tail
+
+        def _do_send(frame: rtc.AudioFrame, *, is_final: bool) -> None:
+            """Send a frame downstream and update bookkeeping."""
+            nonlocal segment_ctx, timed_transcripts
+            assert segment_ctx is not None
+
+            frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
+            timed_transcripts = []
+            _send_audio(
+                SynthesizedAudio(
+                    frame=frame,
+                    request_id=self._request_id,
+                    segment_id=segment_ctx.segment_id,
+                    is_final=is_final,
+                ),
+                flush_if_delayed=not is_final,
+            )
+            segment_ctx.audio_duration += frame.duration
+            self._audio_durations[-1] += frame.duration
+            if lk_dump_tts:
+                debug_frames.append(frame)
 
         def _emit_frame(frame: rtc.AudioFrame | None = None, *, is_final: bool = False) -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
             assert segment_ctx is not None
 
-            if last_frame is None:
-                if not is_final:
-                    last_frame = frame
-                    return
+            if is_final:
+                # end of segment — flush everything
+                if last_frame is not None and frame is not None:
+                    # merge last_frame + frame, send as final
+                    combined = rtc.combine_audio_frames([last_frame, frame])
+                    _do_send(combined, is_final=True)
+                    last_frame = None
+                elif last_frame is not None:
+                    _do_send(last_frame, is_final=True)
+                    last_frame = None
+                elif frame is not None:
+                    _do_send(frame, is_final=True)
                 elif segment_ctx.audio_duration > 0:
-                    if frame is None:
-                        # NOTE: if end_input called after flush with no new audio frames pushed,
-                        # it will create a 0.01s empty frame to indicate the end of the segment
-                        frame = rtc.AudioFrame(
-                            data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
-                            sample_rate=self._sample_rate,
-                            num_channels=self._num_channels,
-                            samples_per_channel=self._sample_rate // 100,
-                        )
-                    else:
-                        segment_ctx.audio_duration += frame.duration
-                        self._audio_durations[-1] += frame.duration
-
-                        if lk_dump_tts:
-                            debug_frames.append(frame)
-
-                    frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
+                    # no frame but segment had audio — send a tiny empty marker
+                    # without updating duration tracking (it's synthetic silence)
+                    marker = rtc.AudioFrame(
+                        data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
+                        sample_rate=self._sample_rate,
+                        num_channels=self._num_channels,
+                        samples_per_channel=self._sample_rate // 100,
+                    )
+                    marker.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
+                    timed_transcripts = []
                     _send_audio(
                         SynthesizedAudio(
-                            frame=frame,
+                            frame=marker,
                             request_id=self._request_id,
                             segment_id=segment_ctx.segment_id,
                             is_final=True,
                         ),
                         flush_if_delayed=False,
                     )
-                    timed_transcripts = []
-                    return
+                return
 
+            if frame is None:
+                return
+
+            # Normal (non-final) frame: send as much as possible, hold back
+            # only a small tail so we can mark the last audio as is_final.
             if last_frame is not None:
-                last_frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
-                _send_audio(
-                    SynthesizedAudio(
-                        frame=last_frame,
-                        request_id=self._request_id,
-                        segment_id=segment_ctx.segment_id,
-                        is_final=is_final,
-                    ),
-                    flush_if_delayed=not is_final,
-                )
-                timed_transcripts = []
-                segment_ctx.audio_duration += last_frame.duration
-                self._audio_durations[-1] += last_frame.duration
+                # combine previous tail with new frame before splitting
+                combined = rtc.combine_audio_frames([last_frame, frame])
+            else:
+                combined = frame
 
-                if lk_dump_tts:
-                    debug_frames.append(last_frame)
-
-            last_frame = frame
+            head, tail = _split_tail(combined)
+            if head is not None:
+                _do_send(head, is_final=False)
+            last_frame = tail
 
         def _flush_frame() -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
@@ -925,6 +1113,7 @@ class AudioEmitter:
                         sample_rate=frame.sample_rate,
                         num_channels=frame.num_channels,
                         samples_per_channel=int(frame.sample_rate // 1000 * self._frame_size_ms),
+                        progressive=True,
                     )
                 for f in audio_byte_stream.push(frame.data):
                     _emit_frame(f)
@@ -970,6 +1159,7 @@ class AudioEmitter:
                                 samples_per_channel=int(
                                     self._sample_rate // 1000 * self._frame_size_ms
                                 ),
+                                progressive=True,
                             )
 
                         for f in audio_byte_stream.push(data):
@@ -979,6 +1169,7 @@ class AudioEmitter:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
                             _flush_frame()
+                            audio_byte_stream.clear()  # reset progressive for next burst
 
                         elif isinstance(data, AudioEmitter._EndSegment):
                             for f in audio_byte_stream.flush():

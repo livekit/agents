@@ -1,4 +1,4 @@
-# Copyright 202 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,17 +26,19 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
+    create_api_error_from_http,
     tts,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSEncoding, TTSModels
+from .version import __version__
 
 NUM_CHANNELS = 1
-SMALLEST_BASE_URL = "https://waves-api.smallest.ai/api/v1"
+SMALLEST_BASE_URL = "https://api.smallest.ai/waves/v1"
 
 
 @dataclass
@@ -49,7 +51,7 @@ class _TTSOptions:
     consistency: float
     similarity: float
     enhancement: float
-    language: str
+    language: LanguageCode
     output_format: TTSEncoding | str
     base_url: str
 
@@ -59,8 +61,8 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "lightning-large",
-        voice_id: str = "irisha",
+        model: TTSModels | str = "lightning-v3.1",
+        voice_id: str = "sophia",
         sample_rate: int = 24000,
         speed: float = 1.0,
         consistency: float = 0.5,
@@ -72,10 +74,12 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
-        Create a new instance of smallest.ai Waves TTS.
+        Create a new instance of Smallest AI Lightning TTS.
         Args:
             api_key: Your Smallest AI API key.
-            model: The TTS model to use (e.g., "lightning", "lightning-large", "lightning-v2").
+            model: The TTS model to use. Use "lightning-v3.1" (default) for the latest
+                model with 80+ voices and ~100ms latency, or "lightning-v2" for the
+                previous generation.
             voice_id: The voice ID to use for synthesis.
             sample_rate: Sample rate for the audio output.
             speed: Speed of the speech synthesis.
@@ -96,11 +100,9 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("SMALLEST_API_KEY")
         if not api_key:
-            raise ValueError("SMALLEST_API_KEY must be set")
-
-        if (consistency or similarity or enhancement) and model == "lightning":
-            logger.warning(
-                "consistency, similarity, and enhancement are only supported for model 'lightning-large' and 'lightning-v2'. "
+            raise ValueError(
+                "Smallest.ai API key is required, either as argument or set"
+                " SMALLEST_API_KEY environment variable"
             )
 
         self._opts = _TTSOptions(
@@ -112,7 +114,7 @@ class TTS(tts.TTS):
             consistency=consistency,
             similarity=similarity,
             enhancement=enhancement,
-            language=language,
+            language=LanguageCode(language),
             output_format=output_format,
             base_url=base_url,
         )
@@ -161,7 +163,7 @@ class TTS(tts.TTS):
         if is_given(enhancement):
             self._opts.enhancement = enhancement
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = LanguageCode(language)
         if is_given(output_format):
             self._opts.output_format = output_format
 
@@ -179,7 +181,7 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """Synthesize chunked text using the Waves API endpoint"""
+    """Synthesize chunked text using the Smallest AI TTS endpoint."""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -192,13 +194,13 @@ class ChunkedStream(tts.ChunkedStream):
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
 
-            url = f"{SMALLEST_BASE_URL}/{self._opts.model}/get_speech_long_text"
-            if self._opts.model == "lightning-v2":
-                url = f"{SMALLEST_BASE_URL}/{self._opts.model}/get_speech"
+            url = f"{self._opts.base_url}/{self._opts.model}/get_speech"
 
             headers = {
                 "Authorization": f"Bearer {self._opts.api_key}",
                 "Content-Type": "application/json",
+                "X-Source": "livekit",
+                "X-LiveKit-Version": __version__,
             }
             async with self._tts._ensure_session().post(
                 url,
@@ -206,7 +208,9 @@ class ChunkedStream(tts.ChunkedStream):
                 json=data,
                 timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
             ) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise create_api_error_from_http(body, status=resp.status)
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -215,24 +219,28 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.output_format}",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise create_api_error_from_http(e.message, status=e.status) from None
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
     base_keys = ["voice_id", "sample_rate", "speed", "language", "output_format"]
+    # consistency, similarity, enhancement are lightning-v2 only params
     extra_keys = ["consistency", "similarity", "enhancement"]
 
-    keys = base_keys if opts.model == "lightning" else base_keys + extra_keys
-    return {key: getattr(opts, key) for key in keys}
+    keys = base_keys + extra_keys if opts.model == "lightning-v2" else base_keys
+    result = {key: getattr(opts, key) for key in keys}
+    if "language" in result and isinstance(result["language"], LanguageCode):
+        result["language"] = result["language"].language
+    return result

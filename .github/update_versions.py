@@ -10,6 +10,27 @@ colorama.init()
 
 BUMP_ORDER: Dict[str, int] = {"patch": 0, "minor": 1, "major": 2}
 
+
+def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
+    """Return all plugin directories."""
+    return list(plugins_root.glob("livekit-plugins-*"))
+
+
+def _read_pypi_name(pdir: pathlib.Path) -> str:
+    """Read the actual PyPI package name from pyproject.toml or setup.py."""
+    pyproject = pdir / "pyproject.toml"
+    if pyproject.exists():
+        m = re.search(r'^name\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE)
+        if m:
+            return m.group(1)
+    setup_py = pdir / "setup.py"
+    if setup_py.exists():
+        m = re.search(r'name\s*=\s*"([^"]+)"', setup_py.read_text())
+        if m:
+            return m.group(1)
+    return pdir.name
+
+
 def _esc(*codes: int) -> str:
     return "\033[" + ";".join(str(c) for c in codes) + "m"
 
@@ -72,6 +93,8 @@ def write_new_version(f: pathlib.Path, new_version: str) -> None:
 
 def bump_version(cur: str, bump_type: str) -> str:
     v = Version(cur)
+    if bump_type == "release":
+        return v.base_version
     if bump_type == "patch":
         return f"{v.major}.{v.minor}.{v.micro + 1}"
     if bump_type == "minor":
@@ -98,11 +121,11 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
 
 def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
     plugins_root = pathlib.Path("livekit-plugins")
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
             old_text = pyproject.read_text()
-            pattern = r'("livekit-agents(?:\[.*?\])?[=><!~]+)([\w\.\-]+)(?=")'
+            pattern = r'("livekit-agents(?:\[.*?\])?\s*[=><!~]+\s*)([\w\.\-]+)(?=")'
 
             def replacer(m: re.Match) -> str:
                 return f"{m.group(1)}{new_agents_version}"
@@ -121,18 +144,18 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str
     old_text = agents_pyproject.read_text()
     new_text = old_text
     
-    for plugin_name, new_version in plugin_versions.items():
-        if plugin_name.startswith("livekit-plugins-"):
-            dep_key = plugin_name[len("livekit-plugins-"):]
-            pattern = rf'({dep_key}\s*=\s*\["livekit-plugins-{re.escape(dep_key)}>=)([\w\.\-]+)(\"])'
-            
-            def replacer(m: re.Match) -> str:
-                return f"{m.group(1)}{new_version}{m.group(3)}"
-            
+    for pypi_name, new_version in plugin_versions.items():
+        if pypi_name.startswith("livekit-plugins-"):
+            # Match any dep key that references this PyPI package name
+            pattern = rf'(\w[\w-]*\s*=\s*\["{re.escape(pypi_name)}>=)([\w\.\-]+)(\"])'
+
+            def replacer(m: re.Match, _new_version=new_version) -> str:
+                return f"{m.group(1)}{_new_version}{m.group(3)}"
+
             updated_text = re.sub(pattern, replacer, new_text)
             if updated_text != new_text:
                 new_text = updated_text
-                print(f"Updated optional dependency {dep_key} to version {new_version}")
+                print(f"Updated optional dependency {pypi_name} to version {new_version}")
     
     if new_text != old_text:
         agents_pyproject.write_text(new_text)
@@ -155,24 +178,25 @@ def update_versions(changesets: Dict[str, Tuple[str, List[str]]]) -> None:
     else:
         print("Warning: No version.py or no bump info for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             if pdir.name in changesets:
                 bump_type, _ = changesets[pdir.name]
                 cur = read_version(vf)
                 new = bump_version(cur, bump_type)
-                print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+                print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
                 write_new_version(vf, new)
-                plugin_versions[pdir.name] = new
+                plugin_versions[pypi_name] = new
             else:
-                print(f"Warning: Found version.py for {pdir.name}, but no bump info in next-release.")
+                print(f"Warning: Found version.py for {pypi_name}, but no bump info in next-release.")
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
@@ -192,20 +216,21 @@ def update_versions_ignore_changesets(bump_type: str) -> None:
     else:
         print("Warning: No version.py found for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
             new = bump_version(cur, bump_type)
-            print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+            print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
             write_new_version(vf, new)
-            plugin_versions[pdir.name] = new
+            plugin_versions[pypi_name] = new
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
@@ -225,20 +250,21 @@ def update_prerelease(prerelease_type: str) -> None:
     else:
         print("Warning: No version.py for livekit-agents.")
 
-    for pdir in plugins_root.glob("livekit-plugins-*"):
+    for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
             new_v = bump_prerelease(cur, prerelease_type)
-            print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new_v}{_esc(0)}")
+            print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new_v}{_esc(0)}")
             write_new_version(vf, new_v)
-            plugin_versions[pdir.name] = new_v
+            plugin_versions[pypi_name] = new_v
         else:
-            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+            print(f"Warning: version.py not found for {pypi_name} at {vf}")
 
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
-    
+
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
@@ -257,9 +283,9 @@ def update_prerelease(prerelease_type: str) -> None:
 )
 @click.option(
     "--bump-type",
-    type=click.Choice(["patch", "minor", "major"]),
+    type=click.Choice(["patch", "minor", "major", "release"]),
     default="patch",
-    help="Type of version bump to apply when ignoring changesets. Defaults to patch."
+    help="Type of version bump to apply when ignoring changesets. Use 'release' to strip pre-release suffixes. Defaults to patch."
 )
 def bump(pre: str, ignore_changesets: bool, bump_type: str) -> None:
     """

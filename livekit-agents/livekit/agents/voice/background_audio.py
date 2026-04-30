@@ -7,7 +7,7 @@ import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import Any, NamedTuple, Union, cast
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -40,7 +40,7 @@ class BuiltinAudioClip(enum.Enum):
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 
-AudioSource = Union[AsyncIterator[rtc.AudioFrame], str, BuiltinAudioClip]
+AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
 class AudioConfig(NamedTuple):
@@ -154,7 +154,7 @@ class BackgroundAudioPlayer:
         if isinstance(source, BuiltinAudioClip):
             return self._normalize_builtin_audio(source), 1.0
         elif isinstance(source, list):
-            selected = self._select_sound_from_list(cast(list[AudioConfig], source))
+            selected = self._select_sound_from_list(source)
             if selected is None:
                 return None
             return selected.source, selected.volume
@@ -268,9 +268,7 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(
-                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
-                )
+                normalized = self._normalize_sound_source(self._ambient_sound)
                 if normalized:
                     sound_source, volume = normalized
                     selected_sound = AudioConfig(sound_source, volume)
@@ -324,9 +322,7 @@ class BackgroundAudioPlayer:
                 return
 
             assert self._thinking_sound is not None
-            self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
-            )
+            self._thinking_handle = self.play(self._thinking_sound)
 
         elif self._thinking_handle:
             self._thinking_handle.stop()
@@ -344,35 +340,46 @@ class BackgroundAudioPlayer:
             else:
                 sound = audio_frames_from_file(sound)
 
-        async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
-            async for frame in sound:
-                if volume != 1.0:
-                    data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                    data *= 10 ** (np.log10(volume))
-                    np.clip(data, -32768, 32767, out=data)
-                    yield rtc.AudioFrame(
-                        data=data.astype(np.int16).tobytes(),
-                        sample_rate=frame.sample_rate,
-                        num_channels=frame.num_channels,
-                        samples_per_channel=frame.samples_per_channel,
-                    )
-                else:
-                    yield frame
+        stopped = False
 
-            # TODO(theomonnom): the wait_for_playout() may be innaccurate by 400ms
-            play_handle._mark_playout_done()
+        async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
+            try:
+                async for frame in sound:
+                    if stopped:
+                        break
+
+                    if volume != 1.0:
+                        data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+                        data *= 10 ** (np.log10(volume))
+                        np.clip(data, -32768, 32767, out=data)
+                        yield rtc.AudioFrame(
+                            data=data.astype(np.int16).tobytes(),
+                            sample_rate=frame.sample_rate,
+                            num_channels=frame.num_channels,
+                            samples_per_channel=frame.samples_per_channel,
+                        )
+                    else:
+                        yield frame
+            finally:
+                # use try/finally because the mixer's asyncio.wait_for can cancel
+                # __anext__, which finalizes the generator and skips code after
+                # the async for loop
+                play_handle._mark_playout_done()
 
         gen = _gen_wrapper()
         try:
             self._audio_mixer.add_stream(gen)
-            await play_handle.wait_for_playout()  # wait for playout or interruption
+            await play_handle.wait_for_playout()
         finally:
             self._audio_mixer.remove_stream(gen)
             play_handle._mark_playout_done()
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                await gen.aclose()
+                stopped = True
+                with contextlib.suppress(RuntimeError):
+                    # ignore error caused by race condition between aclose() and gen.__anext__()
+                    await gen.aclose()
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:

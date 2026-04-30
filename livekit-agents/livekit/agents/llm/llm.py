@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, ClassVar, Generic, Literal, TypeVar, Union
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
@@ -29,7 +29,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
+from .tool_context import Tool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -45,6 +45,9 @@ class CompletionUsage(BaseModel):
     """The number of tokens read from the cache."""
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
+    service_tier: str | None = None
+    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
+    Returned by providers that support tiered processing (e.g. OpenAI)."""
 
 
 class FunctionToolCall(BaseModel):
@@ -52,12 +55,25 @@ class FunctionToolCall(BaseModel):
     name: str
     arguments: str
     call_id: str
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
+
+
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Provider-specific extra data accumulated across chunks
+    (e.g., xAI encrypted reasoning, Google thought signatures)."""
 
 
 class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class ChatChunk(BaseModel):
@@ -80,7 +96,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -120,7 +136,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -153,7 +169,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -162,8 +178,10 @@ class LLMStream(ABC):
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
+        self._provider_request_ids: list[str] = []
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -186,18 +204,37 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        self._llm_request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+            }
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
                 with tracer.start_as_current_span("llm_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    # Reset per-attempt context ids; the monitor task populates
+                    # this as ChatChunks arrive.
+                    self._provider_request_ids = []
                     try:
-                        return await self._run()
+                        await self._run()
                     except Exception as e:
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
+                    finally:
+                        if self._provider_request_ids:
+                            attempt_span.set_attribute(
+                                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+                            )
+                    return
             except APIError as e:
+                # 499 (Client Closed Request) - close gracefully without raising
+                if isinstance(e, APIStatusError) and e.status_code == 499:
+                    return
+
                 retry_interval = self._conn_options._interval_for_retry(i)
 
                 if self._conn_options.max_retry == 0 or not e.retryable:
@@ -212,8 +249,7 @@ class LLMStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
-                        exc_info=e,
+                        f"failed to generate LLM completion: {e}, retrying in {retry_interval}s",  # noqa: E501
                         extra={
                             "llm": self._llm._label,
                             "attempt": i + 1,
@@ -255,6 +291,8 @@ class LLMStream(ABC):
 
         async for ev in event_aiter:
             request_id = ev.id
+            if request_id and request_id not in self._provider_request_ids:
+                self._provider_request_ids.append(request_id)
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
@@ -300,6 +338,9 @@ class LLMStream(ABC):
             # set gen_ai attributes
             self._llm_request_span.set_attributes(
                 {
+                    trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
+                    trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
+                    trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
                     trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: metrics.prompt_tokens,
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
                 },
@@ -332,7 +373,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool]:
+    def tools(self) -> list[Tool]:
         return self._tools
 
     async def aclose(self) -> None:
@@ -341,6 +382,8 @@ class LLMStream(ABC):
         if self._llm_request_span:
             self._llm_request_span.end()
             self._llm_request_span = None
+
+        await self._tee_aiter.aclose()
 
     async def __anext__(self) -> ChatChunk:
         try:
@@ -380,3 +423,43 @@ class LLMStream(ABC):
                         yield chunk.delta.content
 
         return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                if result.fnc_call_out:
+                    ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+        extra: dict[str, Any] = {}
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                    if chunk.delta.extra:
+                        extra.update(chunk.delta.extra)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+            extra=extra,
+        )

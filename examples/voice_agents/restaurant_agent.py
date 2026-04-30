@@ -1,15 +1,14 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Annotated, Optional
+from typing import Annotated
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import AgentServer, JobContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, inference
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, RunContext
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 # from livekit.plugins import noise_cancellation
 
@@ -28,31 +27,31 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 voices = {
-    "greeter": "794f9389-aac1-45b6-b726-9d9369183238",
-    "reservation": "156fb8d2-335b-4950-9cb3-a2d33befec77",
-    "takeaway": "6f84f4b8-58a2-430c-8c79-688dad597532",
-    "checkout": "39b376fc-488e-4d0c-8b37-e00b72059fdd",
+    "greeter": "e07c00bc-4134-4eae-9ea4-1a55fb45746b",
+    "reservation": "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+    "takeaway": "5ee9feff-1265-424a-9d7f-8e4d431a12c7",
+    "checkout": "a167e0f3-df7e-4d52-a9c3-f949145efdab",
 }
 
 
 @dataclass
 class UserData:
-    customer_name: Optional[str] = None
-    customer_phone: Optional[str] = None
+    customer_name: str | None = None
+    customer_phone: str | None = None
 
-    reservation_time: Optional[str] = None
+    reservation_time: str | None = None
 
-    order: Optional[list[str]] = None
+    order: list[str] | None = None
 
-    customer_credit_card: Optional[str] = None
-    customer_credit_card_expiry: Optional[str] = None
-    customer_credit_card_cvv: Optional[str] = None
+    customer_credit_card: str | None = None
+    customer_credit_card_expiry: str | None = None
+    customer_credit_card_cvv: str | None = None
 
-    expense: Optional[float] = None
-    checked_out: Optional[bool] = None
+    expense: float | None = None
+    checked_out: bool | None = None
 
     agents: dict[str, Agent] = field(default_factory=dict)
-    prev_agent: Optional[Agent] = None
+    prev_agent: Agent | None = None
 
     def summarize(self) -> str:
         data = {
@@ -123,7 +122,10 @@ class BaseAgent(Agent):
         # add the previous agent's chat history to the current agent
         if isinstance(userdata.prev_agent, Agent):
             truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
-                exclude_instructions=True, exclude_function_call=False
+                exclude_instructions=True,
+                exclude_function_call=False,
+                exclude_handoff=True,
+                exclude_config_update=True,
             ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
             items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]
@@ -154,8 +156,10 @@ class Greeter(BaseAgent):
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(parallel_tool_calls=False),
-            tts=cartesia.TTS(voice=voices["greeter"]),
+            llm=inference.LLM(
+                model="openai/gpt-4.1-mini", extra_kwargs={"parallel_tool_calls": False}
+            ),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["greeter"]),
         )
         self.menu = menu
 
@@ -182,7 +186,7 @@ class Reservation(BaseAgent):
             "the reservation time, then customer's name, and phone number. Then "
             "confirm the reservation details with the customer.",
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["reservation"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["reservation"]),
         )
 
     @function_tool()
@@ -219,7 +223,7 @@ class Takeaway(BaseAgent):
                 "Clarify special requests and confirm the order with the customer."
             ),
             tools=[to_greeter],
-            tts=cartesia.TTS(voice=voices["takeaway"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["takeaway"]),
         )
 
     @function_tool()
@@ -253,7 +257,7 @@ class Checkout(BaseAgent):
                 "information, including the card number, expiry date, and CVV step by step."
             ),
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["checkout"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["checkout"]),
         )
 
     @function_tool()
@@ -323,9 +327,9 @@ async def entrypoint(ctx: JobContext):
     )
     session = AgentSession[UserData](
         userdata=userdata,
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        stt=inference.STT(model="deepgram/nova-3"),
+        llm=inference.LLM(model="openai/gpt-4.1-mini"),
+        tts=inference.TTS(model="cartesia/sonic-3"),
         vad=silero.VAD.load(),
         max_tool_steps=5,
         # to use realtime model, replace the stt, llm, tts and vad with the following

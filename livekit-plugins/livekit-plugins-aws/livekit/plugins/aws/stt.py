@@ -23,19 +23,21 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    LanguageCode,
     stt,
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
-    from aws_sdk_transcribe_streaming.config import Config  # type: ignore
-    from aws_sdk_transcribe_streaming.models import (  # type: ignore
+    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
+    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
         AudioStreamAudioEvent,
@@ -45,11 +47,16 @@ try:
         TranscriptEvent,
         TranscriptResultStream,
     )
-    from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-    from smithy_core.aio.interfaces.eventstream import (
-        EventPublisher,
-        EventReceiver,
+    from smithy_aws_core.identity import (
+        AWSCredentialsIdentity,
+        ContainerCredentialsResolver,
+        EnvironmentCredentialsResolver,
+        IMDSCredentialsResolver,
+        StaticCredentialsResolver,
     )
+    from smithy_core.aio.identity import ChainedIdentityResolver
+    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_http.aio.crt import AWSCRTHTTPClient
 
     _AWS_SDK_AVAILABLE = True
 except ImportError:
@@ -66,7 +73,7 @@ class Credentials:
 @dataclass
 class STTOptions:
     sample_rate: int
-    language: str
+    language: LanguageCode | None
     encoding: str
     vocabulary_name: NotGivenOr[str]
     session_id: NotGivenOr[str]
@@ -79,6 +86,12 @@ class STTOptions:
     partial_results_stability: NotGivenOr[str]
     language_model_name: NotGivenOr[str]
     region: str
+    identify_language: bool
+    identify_multiple_languages: bool
+    language_options: NotGivenOr[str]
+    preferred_language: NotGivenOr[str]
+    vocabulary_names: NotGivenOr[str]
+    vocabulary_filter_names: NotGivenOr[str]
 
 
 class STT(stt.STT):
@@ -87,7 +100,7 @@ class STT(stt.STT):
         *,
         region: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        language: str = "en-US",
+        language: str | None = "en-US",
         encoding: str = "pcm",
         vocabulary_name: NotGivenOr[str] = NOT_GIVEN,
         session_id: NotGivenOr[str] = NOT_GIVEN,
@@ -100,8 +113,21 @@ class STT(stt.STT):
         partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
+        identify_language: bool = False,
+        identify_multiple_languages: bool = False,
+        language_options: NotGivenOr[str] = NOT_GIVEN,
+        preferred_language: NotGivenOr[str] = NOT_GIVEN,
+        vocabulary_names: NotGivenOr[str] = NOT_GIVEN,
+        vocabulary_filter_names: NotGivenOr[str] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
+            )
+        )
 
         if not _AWS_SDK_AVAILABLE:
             raise ImportError(
@@ -112,8 +138,19 @@ class STT(stt.STT):
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
 
+        if identify_language and identify_multiple_languages:
+            raise ValueError(
+                "identify_language and identify_multiple_languages are mutually exclusive. "
+                "Set only one to True."
+            )
+
+        # When auto language detection is enabled, language_code must not be set
+        lang: LanguageCode | None = None
+        if not identify_language and not identify_multiple_languages:
+            lang = LanguageCode(language) if language else LanguageCode("en-US")
+
         self._config = STTOptions(
-            language=language,
+            language=lang,
             sample_rate=sample_rate,
             encoding=encoding,
             vocabulary_name=vocabulary_name,
@@ -127,6 +164,12 @@ class STT(stt.STT):
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
             region=region,
+            identify_language=identify_language,
+            identify_multiple_languages=identify_multiple_languages,
+            language_options=language_options,
+            preferred_language=preferred_language,
+            vocabulary_names=vocabulary_names,
+            vocabulary_filter_names=vocabulary_filter_names,
         )
 
         self._credentials = credentials if is_given(credentials) else None
@@ -180,17 +223,36 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
+        self._http_client = AWSCRTHTTPClient()
 
     async def _run(self) -> None:
         while True:
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
-                config_kwargs["aws_access_key_id"] = self._credentials.access_key_id
-                config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
-                config_kwargs["aws_session_token"] = self._credentials.session_token
+                # Use a credentials resolver for explicit credentials
+                # for some reason, Config with direct values doesn't work
+                class StaticCredsResolver:
+                    def __init__(self, creds: Credentials):
+                        self._identity = AWSCredentialsIdentity(
+                            access_key_id=creds.access_key_id,
+                            secret_access_key=creds.secret_access_key,
+                            session_token=creds.session_token,
+                        )
+
+                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+                        return self._identity
+
+                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
+                    self._credentials
+                )
             else:
-                config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
+                    resolvers=(
+                        StaticCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),
+                        ContainerCredentialsResolver(http_client=self._http_client),
+                        IMDSCredentialsResolver(http_client=self._http_client),
+                    )
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
@@ -198,7 +260,6 @@ class SpeechStream(stt.SpeechStream):
             )
 
             live_config = {
-                "language_code": self._opts.language,
                 "media_sample_rate_hertz": self._opts.sample_rate,
                 "media_encoding": self._opts.encoding,
                 "vocabulary_name": self._opts.vocabulary_name,
@@ -212,7 +273,42 @@ class SpeechStream(stt.SpeechStream):
                 "partial_results_stability": self._opts.partial_results_stability,
                 "language_model_name": self._opts.language_model_name,
             }
-            filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
+
+            # Auto language detection is mutually exclusive with language_code
+            if self._opts.identify_language:
+                live_config["identify_language"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            elif self._opts.identify_multiple_languages:
+                live_config["identify_multiple_languages"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            else:
+                if self._opts.language:
+                    live_config["language_code"] = self._opts.language
+
+            filtered_config: dict[str, Any] = {}
+            for k, v in live_config.items():
+                if isinstance(v, bool):
+                    filtered_config[k] = v
+                elif isinstance(v, (int, float)):
+                    filtered_config[k] = v
+                elif v is not None and is_given(v):
+                    filtered_config[k] = v
+
+            tasks: list[asyncio.Task[Any]] = []
 
             try:
                 stream = await client.start_stream_transcription(
@@ -233,13 +329,17 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
-                        # Send empty frame to close
-                        await audio_stream.send(
-                            AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                        )
                     finally:
-                        with contextlib.suppress(Exception):
-                            await audio_stream.close()
+                        # Send empty frame to close (required by AWS Transcribe)
+                        try:
+                            await audio_stream.send(
+                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                            )
+                        except Exception:
+                            pass
+                        finally:
+                            with contextlib.suppress(Exception):
+                                await audio_stream.close()
 
                 async def handle_transcript_events(
                     output_stream: EventReceiver[TranscriptResultStream],
@@ -248,6 +348,18 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                    except BadRequestException as e:
+                        if (
+                            e.message
+                            and "complete signal was sent without the preceding empty frame"
+                            in e.message
+                        ):
+                            # This can happen during cancellation if the empty frame wasn't sent in time
+                            logger.warning(
+                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
+                            )
+                        else:
+                            raise
                     except concurrent.futures.InvalidStateError:
                         logger.warning(
                             "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
@@ -271,14 +383,15 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise e
             finally:
-                # Close input stream first
-                await utils.aio.gracefully_cancel(tasks[0])
+                if tasks:
+                    # Close input stream first
+                    await utils.aio.gracefully_cancel(tasks[0])
 
-                # Wait for output stream to close cleanly
-                try:
-                    await asyncio.wait_for(tasks[1], timeout=3.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    await utils.aio.gracefully_cancel(tasks[1])
+                    # Wait for output stream to close cleanly
+                    try:
+                        await asyncio.wait_for(tasks[1], timeout=3.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        await utils.aio.gracefully_cancel(tasks[1])
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):
@@ -320,10 +433,32 @@ class SpeechStream(stt.SpeechStream):
         if resp.alternatives and (items := resp.alternatives[0].items):
             confidence = items[0].confidence or 0.0
 
+        detected_lang = resp.language_code or self._opts.language or "en-US"
+
+        # Populate source_languages when language identification is active
+        source_languages: list[LanguageCode] | None = None
+        if (
+            self._opts.identify_language or self._opts.identify_multiple_languages
+        ) and resp.language_code:
+            source_languages = [LanguageCode(resp.language_code)]
+
         return stt.SpeechData(
-            language=resp.language_code or self._opts.language,
-            start_time=resp.start_time if resp.start_time is not None else 0.0,
-            end_time=resp.end_time if resp.end_time is not None else 0.0,
+            language=LanguageCode(detected_lang),
+            start_time=(resp.start_time or 0.0) + self.start_time_offset,
+            end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            source_languages=source_languages,
+            words=[
+                TimedString(
+                    text=item.content,
+                    start_time=item.start_time + self.start_time_offset,
+                    end_time=item.end_time + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=item.confidence or 0.0,
+                )
+                for item in resp.alternatives[0].items
+            ]
+            if resp.alternatives and resp.alternatives[0].items
+            else None,
         )

@@ -3,10 +3,11 @@ from __future__ import annotations
 import itertools
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -17,6 +18,8 @@ class BedrockFormatData:
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], BedrockFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     messages: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None
@@ -98,3 +101,38 @@ def _build_image(image: llm.ImageContent) -> dict:
             "source": {"bytes": img.data_bytes},
         }
     }
+
+
+def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
+    return [_build_tool_spec(tool) for tool in tool_ctx.function_tools.values()]
+
+
+def _build_tool_spec(tool: llm.FunctionTool | llm.RawFunctionTool) -> dict:
+    if isinstance(tool, llm.FunctionTool):
+        fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+        return {
+            "toolSpec": _strip_nones(
+                {
+                    "name": fnc["name"],
+                    "description": fnc["description"] if fnc["description"] else None,
+                    "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
+                }
+            )
+        }
+    elif isinstance(tool, llm.RawFunctionTool):
+        info = tool.info
+        return {
+            "toolSpec": _strip_nones(
+                {
+                    "name": info.name,
+                    "description": info.raw_schema.get("description", ""),
+                    "inputSchema": {"json": info.raw_schema.get("parameters", {})},
+                }
+            )
+        }
+    else:
+        raise ValueError("Invalid function tool")
+
+
+def _strip_nones(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v is not None}

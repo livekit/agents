@@ -1,11 +1,11 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobRequest, RoomIO, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobRequest, cli, inference
 from livekit.agents.llm import ChatContext, ChatMessage, StopResponse
-from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk")
 logger.setLevel(logging.INFO)
@@ -22,10 +22,9 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful assistant.",
-            stt=deepgram.STT(),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(),
-            # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
+            stt=inference.STT("deepgram/nova-3"),
+            llm=inference.LLM("google/gemini-2.5-flash"),
+            tts=inference.TTS("cartesia/sonic-3"),
         )
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
@@ -50,11 +49,9 @@ server = AgentServer()
 @server.rtc_session(on_request=handle_request)
 async def entrypoint(ctx: JobContext):
     session = AgentSession(turn_detection="manual")
-    room_io = RoomIO(session, room=ctx.room)
-    await room_io.start()
 
     agent = MyAgent()
-    await session.start(agent=agent)
+    await session.start(agent=agent, room=ctx.room)
 
     # disable input audio at the start
     session.input.set_audio_enabled(False)
@@ -65,19 +62,25 @@ async def entrypoint(ctx: JobContext):
         session.clear_user_turn()
 
         # listen to the caller if multi-user
-        room_io.set_participant(data.caller_identity)
+        session.room_io.set_participant(data.caller_identity)
         session.input.set_audio_enabled(True)
 
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        session.commit_user_turn(
-            # the timeout for the final transcript to be received after committing the user turn
-            # increase this value if the STT is slow to respond
-            transcript_timeout=10.0,
-            # the duration of the silence to be appended to the STT to make it generate the final transcript
-            stt_flush_duration=2.0,
-        )
+        try:
+            user_transcript = await session.commit_user_turn(
+                # the timeout for the final transcript to be received after committing the user turn
+                # increase this value if the STT is slow to respond
+                transcript_timeout=5.0,
+                # the duration of the silence to be appended to the STT to make it generate the final transcript
+                stt_flush_duration=2.0,
+            )
+            logger.info(f"user transcript: {user_transcript}")
+        except asyncio.CancelledError:
+            logger.info("commit user turn cancelled")
+        except Exception as e:
+            logger.error("error committing user turn", exc_info=e)
 
     @ctx.room.local_participant.register_rpc_method("cancel_turn")
     async def cancel_turn(data: rtc.RpcInvocationData):

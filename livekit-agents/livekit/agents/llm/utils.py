@@ -4,14 +4,13 @@ import asyncio
 import base64
 import inspect
 import re
-import sys
 import types
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Callable,
     Union,
     cast,
     get_args,
@@ -19,6 +18,7 @@ from typing import (
     get_type_hints,
 )
 
+import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined, from_json
@@ -30,16 +30,13 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import (
-    FunctionTool,
-    RawFunctionTool,
-    get_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from .tool_context import FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+    from .chat_context import FunctionCall, FunctionCallOutput
+    from .llm import FunctionToolCall
+    from .tool_context import ToolContext
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
@@ -164,13 +161,24 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
-def is_context_type(ty: type) -> bool:
+def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
     from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is RunContext or origin is RunContext
 
-    return is_call_context
+    if not allow_subclasses:
+        return ty is RunContext or origin is RunContext
+
+    if origin is not None:
+        try:
+            return issubclass(origin, RunContext)
+        except TypeError:
+            return False
+
+    try:
+        return issubclass(ty, RunContext)
+    except TypeError:
+        return False
 
 
 @dataclass
@@ -247,7 +255,7 @@ def build_legacy_openai_schema(
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = model.model_json_schema()
 
     if internally_tagged:
@@ -273,7 +281,7 @@ def build_strict_openai_schema(
 ) -> dict[str, Any]:
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
 
     return {
@@ -366,25 +374,42 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     for param_name, param in signature.parameters.items():
         type_hint = type_hints[param_name]
 
-        if is_context_type(type_hint):
+        if is_context_type(type_hint, allow_subclasses=True):
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info = Field()
+        field_info: FieldInfo | None = None
+        field_attrs: dict[str, Any] = {}
 
         # Annotated[str, Field(description="...")]
         if get_origin(type_hint) is Annotated:
             annotated_args = get_args(type_hint)
             type_hint = annotated_args[0]
-            field_info = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), field_info
+            annotated_field = next(
+                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
             )
+            if annotated_field and hasattr(annotated_field, "asdict"):
+                # `asdict` is available after pydantic 2.12
+                field_attrs = annotated_field.asdict()["attributes"]
+            elif annotated_field:
+                field_attrs["default"] = annotated_field.default
+                field_attrs["description"] = annotated_field.description
+                field_info = annotated_field
 
-        if default_value is not ... and field_info.default is PydanticUndefined:
-            field_info.default = default_value
+        if (
+            default_value is not ...
+            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
+        ):
+            field_attrs["default"] = default_value
 
-        if field_info.description is None:
-            field_info.description = param_docs.get(param_name, None)
+        if field_attrs.get("description") is None:
+            field_attrs["description"] = param_docs.get(param_name, None)
+
+        if not field_info:
+            field_info = Field(**field_attrs)
+        else:
+            for k, v in field_attrs.items():
+                setattr(field_info, k, v)
 
         fields[param_name] = (type_hint, field_info)
 
@@ -394,7 +419,7 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str,  # raw function output from the LLM
+    json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
@@ -404,9 +429,30 @@ def prepare_function_arguments(
 
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-    args_dict = from_json(_sanitize_json_control_chars(json_arguments))
 
-    if is_function_tool(fnc):
+    if isinstance(json_arguments, str):
+        args_dict = from_json(_sanitize_json_control_chars(json_arguments))
+        # some providers (e.g. Nova Sonic) double-encode tool arguments as nested
+        # JSON strings. unwrap until we reach a non-string value.
+        while isinstance(args_dict, str):
+            try:
+                args_dict = from_json(_sanitize_json_control_chars(args_dict))
+            except Exception:
+                raise ValueError(
+                    f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
+                ) from None
+
+        if args_dict is None:
+            args_dict = {}
+        elif not isinstance(args_dict, dict):
+            raise ValueError(
+                f"expected dict from function arguments, "
+                f"got {type(args_dict).__name__}: {json_arguments[:200]}"
+            )
+    else:
+        args_dict = json_arguments
+
+    if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
         # Function arguments with default values are treated as optional
@@ -428,7 +474,7 @@ def prepare_function_arguments(
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
-    elif is_raw_function_tool(fnc):
+    elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
         raw_fields = {
@@ -437,12 +483,21 @@ def prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext if needed
+    # inject RunContext (or subclasses like AsyncRunContext) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if is_context_type(type_hint) and call_ctx is not None:
+        if not is_context_type(type_hint, allow_subclasses=True) or call_ctx is None:
+            continue
+
+        expected_type = get_origin(type_hint) or type_hint
+        if isinstance(call_ctx, expected_type):
             context_dict[param_name] = call_ctx
+        else:
+            logger.error(
+                f"context type mismatch for parameter '{param_name}': "
+                f"expected {expected_type.__name__}, got {type(call_ctx).__name__}"
+            )
 
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
@@ -456,8 +511,7 @@ def _is_optional_type(hint: Any) -> bool:
     origin = get_origin(hint)
 
     is_union = origin is Union
-    if sys.version_info >= (3, 10):
-        is_union = is_union or origin is types.UnionType
+    is_union = is_union or origin is types.UnionType
 
     return is_union and type(None) in get_args(hint)
 
@@ -488,3 +542,173 @@ def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str |
             content = content[idx + len(THINK_TAG_START) :]
 
     return content
+
+
+def _is_valid_function_output(value: Any) -> bool:
+    VALID_TYPES = (str, int, float, bool, complex, type(None))
+
+    if isinstance(value, VALID_TYPES):
+        return True
+    elif (
+        isinstance(value, list)
+        or isinstance(value, set)
+        or isinstance(value, frozenset)
+        or isinstance(value, tuple)
+    ):
+        return all(_is_valid_function_output(item) for item in value)
+    elif isinstance(value, dict):
+        return all(
+            isinstance(key, VALID_TYPES) and _is_valid_function_output(val)
+            for key, val in value.items()
+        )
+    return False
+
+
+@dataclass
+class FunctionCallResult:
+    fnc_call: FunctionCall
+    fnc_call_out: FunctionCallOutput | None
+    raw_output: Any
+    raw_exception: BaseException | None
+
+
+def make_function_call_output(
+    *,
+    fnc_call: FunctionCall,
+    output: Any,
+    exception: BaseException | None,
+) -> FunctionCallResult:
+    """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
+    from .chat_context import FunctionCallOutput
+    from .tool_context import StopResponse, ToolError
+
+    if isinstance(output, BaseException):
+        exception = output
+        output = None
+
+    if isinstance(exception, ToolError):
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=exception.message,
+                is_error=True,
+            ),
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if isinstance(exception, StopResponse):
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if exception is not None:
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="An internal error occurred",
+                is_error=True,
+            ),
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if not _is_valid_function_output(output):
+        logger.error(
+            f"AI function `{fnc_call.name}` returned an invalid output",
+            extra={"call_id": fnc_call.call_id, "output": output},
+        )
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=None,
+            raw_output=output,
+            raw_exception=None,
+        )
+
+    return FunctionCallResult(
+        fnc_call=fnc_call,
+        fnc_call_out=FunctionCallOutput(
+            name=fnc_call.name,
+            call_id=fnc_call.call_id,
+            output=str(output or ""),
+            is_error=False,
+        ),
+        raw_output=output,
+        raw_exception=None,
+    )
+
+
+async def execute_function_call(
+    tool_call: FunctionToolCall,
+    tool_ctx: ToolContext,
+    *,
+    call_ctx: RunContext[Any] | None = None,
+) -> FunctionCallResult:
+    """Execute a function tool call and return the result."""
+    from .chat_context import FunctionCall, FunctionCallOutput
+
+    fnc_call = FunctionCall(
+        call_id=tool_call.call_id,
+        name=tool_call.name,
+        arguments=tool_call.arguments or "{}",
+        extra=tool_call.extra or {},
+    )
+
+    function_tool = tool_ctx.function_tools.get(tool_call.name)
+    if function_tool is None:
+        logger.warning(f"unknown AI function `{tool_call.name}`")
+        return FunctionCallResult(
+            fnc_call=fnc_call,
+            fnc_call_out=FunctionCallOutput(
+                name=tool_call.name,
+                call_id=tool_call.call_id,
+                output=f"Unknown function: {tool_call.name}",
+                is_error=True,
+            ),
+            raw_output=None,
+            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+        )
+
+    try:
+        fnc_args, fnc_kwargs = prepare_function_arguments(
+            fnc=function_tool,
+            json_arguments=tool_call.arguments or "{}",
+            call_ctx=call_ctx,
+        )
+    except (pydantic.ValidationError, ValueError) as e:
+        # Surface argument validation errors to the LLM so it can self-correct.
+        # Without this, the LLM only sees "An internal error occurred" and has
+        # no signal about what was wrong with its arguments.
+        logger.warning(
+            f"invalid arguments for AI function `{tool_call.name}`: {e}",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
+    except Exception as e:
+        logger.exception(
+            f"exception preparing arguments for AI function `{tool_call.name}`",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+    try:
+        result = function_tool(*fnc_args, **fnc_kwargs)
+        if asyncio.iscoroutine(result):
+            result = await result
+
+        return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
+
+    except Exception as e:
+        logger.exception(
+            f"exception executing AI function `{tool_call.name}`",
+            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+        )
+        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)

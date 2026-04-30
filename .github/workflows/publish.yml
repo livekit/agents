@@ -1,0 +1,247 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "What to publish"
+        type: choice
+        required: true
+        options:
+          - "patch       (1.5.1 → 1.5.2)"
+          - "minor       (1.5.1 → 1.6.0)"
+          - "major       (1.5.1 → 2.0.0)"
+          - "patch-rc    (1.5.1 → 1.5.2.rc1)"
+          - "minor-rc    (1.5.1 → 1.6.0.rc1)"
+          - "major-rc    (1.5.1 → 2.0.0.rc1)"
+          - "next-rc     (.rc1 → .rc2)"
+          - "promote     (1.6.0.rc2 → 1.6.0)"
+          - "republish   (retry failed publish, no version bump)"
+      branch:
+        description: "Branch to publish from (default: main)"
+        type: string
+        required: false
+        default: "main"
+
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  actions: write
+
+jobs:
+  # ── Create a version bump PR ────────────────────────────────
+  bump:
+    name: Create release PR
+    if: |
+      github.event_name == 'workflow_dispatch'
+      && !startsWith(inputs.version, 'republish')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Guard non-main branches
+        env:
+          VERSION: ${{ inputs.version }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          key=$(echo "$VERSION" | awk '{print $1}')
+          if [ "$BRANCH" != "main" ]; then
+            case "$key" in
+              *-rc|next-rc) ;; # allowed
+              *) echo "::error::Only RC releases are allowed from non-main branches (got '$key' on '$BRANCH')"; exit 1 ;;
+            esac
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install click packaging pyyaml colorama
+
+      - name: Bump versions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          key=$(echo "$VERSION" | awk '{print $1}')
+
+          case "$key" in
+            patch|minor|major)
+              python .github/update_versions.py \
+                --ignore-changesets --bump-type "$key"
+              ;;
+            patch-rc|minor-rc|major-rc)
+              bump="${key%-rc}"
+              python .github/update_versions.py \
+                --ignore-changesets --bump-type "$bump"
+              python .github/update_versions.py --pre rc
+              ;;
+            next-rc)
+              python .github/update_versions.py --pre rc
+              ;;
+            promote)
+              python .github/update_versions.py \
+                --ignore-changesets --bump-type release
+              ;;
+          esac
+
+      - name: Read new version
+        id: version
+        run: |
+          version=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "New version: $version"
+
+      - name: Close existing release PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("release/v")) | .number' | while read -r pr; do
+            echo "Superseding release PR #$pr"
+            gh pr comment "$pr" --body "Superseded by a new release."
+            gh pr close "$pr" --delete-branch || true
+          done
+
+      - name: Create release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BASE_BRANCH: ${{ inputs.branch }}
+        run: |
+          branch="release/v${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "v${VERSION}"
+          git push --force origin "$branch"
+
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$branch" \
+            --title "livekit-agents@${VERSION}" \
+            --body "Merging this PR will publish all packages as **${VERSION}** to PyPI."
+
+  # ── Discover, build, publish ────────────────────────────────
+  # Triggered by: merging a release PR OR republish dispatch
+  discover:
+    name: Discover packages
+    if: |
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.merged == true
+        && startsWith(github.event.pull_request.head.ref, 'release/v'))
+      || (github.event_name == 'workflow_dispatch'
+        && startsWith(inputs.version, 'republish'))
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
+
+      - name: List publishable packages
+        id: list
+        run: |
+          packages=()
+
+          packages+=("livekit-agents")
+
+          for dir in livekit-plugins/livekit-plugins-*; do
+            if [ ! -d "$dir" ]; then continue; fi
+
+            name=""
+            if [ -f "$dir/pyproject.toml" ]; then
+              name=$(grep -m1 '^name\s*=\s*"' "$dir/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')
+            fi
+            if [ -z "$name" ] && [ -f "$dir/setup.py" ]; then
+              name=$(grep -m1 'name\s*=\s*"' "$dir/setup.py" | sed 's/.*"\(.*\)".*/\1/')
+            fi
+            if [ -z "$name" ]; then
+              name=$(basename "$dir")
+            fi
+
+            packages+=("$name")
+          done
+
+          json=$(printf '%s\n' "${packages[@]}" | jq -R . | jq -sc .)
+          echo "packages=$json" >> "$GITHUB_OUTPUT"
+          echo "Will publish: $json"
+
+  tag:
+    name: Tag release
+    needs: discover
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Create git tag
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # HEAD_REF is release/v1.5.2 → extract 1.5.2
+          version="${HEAD_REF#release/v}"
+          tag="livekit-agents@${version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
+
+  build:
+    name: Build ${{ matrix.package }}
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    uses: ./.github/workflows/build.yml
+    with:
+      package: ${{ matrix.package }}
+      artifact_name: dist-${{ matrix.package }}
+
+  publish:
+    name: Publish ${{ matrix.package }}
+    needs: [discover, build]
+    if: always() && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+
+      - name: List distributions
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+
+  docs:
+    name: Publish docs
+    needs: [publish]
+    if: always() && needs.publish.result == 'success'
+    uses: ./.github/workflows/publish-docs.yml
+    secrets: inherit

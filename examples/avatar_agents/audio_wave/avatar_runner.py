@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
@@ -5,7 +7,6 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 
@@ -19,6 +20,7 @@ from livekit.agents.voice.avatar import (
     DataStreamAudioReceiver,
     VideoGenerator,
 )
+from livekit.agents.voice.remote_session import TOPIC_SESSION_MESSAGES
 
 sys.path.insert(0, str(Path(__file__).parent))
 from wave_viz import WaveformVisualizer
@@ -29,8 +31,8 @@ logger = logging.getLogger("avatar-example")
 class AudioWaveGenerator(VideoGenerator):
     def __init__(self, options: AvatarOptions):
         self._options = options
-        self._audio_queue = asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]]()
-        self._audio_resampler: Optional[rtc.AudioResampler] = None
+        self._audio_queue = asyncio.Queue[rtc.AudioFrame | AudioSegmentEnd]()
+        self._audio_resampler: rtc.AudioResampler | None = None
 
         self._canvas = np.zeros((options.video_height, options.video_width, 4), dtype=np.uint8)
         self._canvas.fill(255)
@@ -163,7 +165,12 @@ async def main(api_url: str, api_token: str):
         # ignore transcription from the room
         pass
 
+    def on_session_messages_received(reader: rtc.ByteStreamReader, participant_identity: str):
+        # ignore session messages from the room
+        pass
+
     room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_transcription_received)
+    room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, on_session_messages_received)
 
     should_stop = asyncio.Event()
 

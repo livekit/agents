@@ -6,17 +6,15 @@ import contextvars
 import functools
 import json
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Generic,
     Literal,
     TypeVar,
-    Union,
     overload,
 )
 
@@ -64,7 +62,7 @@ class AgentHandoffEvent:
     type: Literal["agent_handoff"] = "agent_handoff"
 
 
-RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent]
+RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
 class RunResult(Generic[Run_T]):
@@ -81,7 +79,17 @@ class RunResult(Generic[Run_T]):
 
     @property
     def events(self) -> list[RunEvent]:
-        """List of all recorded events generated during the run."""
+        """
+        List of recorded run events in chronological order.
+
+        This surface is intended for assertions in tests. Events may include
+        `ChatMessageEvent`, `FunctionCallEvent`,
+        `FunctionCallOutputEvent`, and `AgentHandoffEvent`.
+
+        Use `RunResult.events` when validating what happened in a run instead
+        of depending on lower-level session internals, room state, or raw media
+        artifacts.
+        """
         return self._recorded_items
 
     @functools.cached_property
@@ -137,6 +145,9 @@ class RunResult(Generic[Run_T]):
     def _agent_handoff(
         self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
     ) -> None:
+        if self._done_fut.done():
+            return
+
         event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
         index = self._find_insertion_index(created_at=event.item.created_at)
         self._recorded_items.insert(index, event)
@@ -158,6 +169,9 @@ class RunResult(Generic[Run_T]):
             self._recorded_items.insert(index, event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+        if self._done_fut.done():
+            return
+
         self._handles.add(handle)
 
         if isinstance(handle, SpeechHandle):
@@ -165,12 +179,16 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
+        if handle not in self._handles:
+            return False
+
         self._handles.discard(handle)
         handle.remove_done_callback(self._mark_done_if_needed)
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
+        return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
         if isinstance(handle, SpeechHandle):
@@ -191,7 +209,7 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_exception(
                         RuntimeError(
                             f"Expected output of type {self._output_type.__name__}, "
-                            f"got {type(self._final_output).__name__}"
+                            f"got {type(final_output).__name__}"
                         )
                     )
                 else:

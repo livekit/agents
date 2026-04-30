@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal
 
 import aiohttp
 
@@ -154,7 +154,7 @@ class RealtimeModel(llm.RealtimeModel):
         temperature : float, optional
             Controls response randomness (0.0-1.0). Lower values are more deterministic.
         language_hint : str, optional
-            Language hint for better multilingual support (e.g., 'en', 'es', 'fr').
+            LanguageCode hint for better multilingual support (e.g., 'en', 'es', 'fr').
         max_duration : str, optional
             Maximum call duration (e.g., '30m', '1h'). Call ends when exceeded.
         time_exceeded_message : str, optional
@@ -166,9 +166,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_session : aiohttp.ClientSession, optional
             HTTP session to use for requests.
         """
-        output_medium = (
-            cast(Literal["text", "voice"], output_medium) if is_given(output_medium) else "voice"
-        )
+        output_medium = output_medium if is_given(output_medium) else "voice"
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -178,6 +176,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -243,7 +242,6 @@ class RealtimeModel(llm.RealtimeModel):
         """Update model options."""
 
         if is_given(output_medium):
-            output_medium = cast(Literal["text", "voice"], output_medium)
             self._opts.output_medium = output_medium
             for sess in self._sessions:
                 sess.update_options(output_medium=output_medium)
@@ -273,7 +271,7 @@ class RealtimeSession(
         self._realtime_model: RealtimeModel = realtime_model
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
+        self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
@@ -320,7 +318,7 @@ class RealtimeSession(
             # Close old channel before creating new one
             old_ch = self._msg_ch
             old_ch.close()
-            self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
+            self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
 
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -336,9 +334,7 @@ class RealtimeSession(
     ) -> None:
         """Update session options."""
         if is_given(output_medium):
-            self._send_client_event(
-                SetOutputMediumEvent(medium=cast(Literal["text", "voice"], output_medium))
-            )
+            self._send_client_event(SetOutputMediumEvent(medium=output_medium))
 
         if is_given(tool_choice):
             logger.warning("tool choice updates are not supported by Ultravox.")
@@ -424,7 +420,7 @@ class RealtimeSession(
         # Update local chat context
         self._chat_ctx = chat_ctx.copy()
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         """Update the available tools."""
         # Get current and new tool names for comparison
         current_tool_names = set(self._tools.function_tools.keys())
@@ -466,7 +462,7 @@ class RealtimeSession(
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frames (not supported by Ultravox)."""
-        pass
+        logger.warning("push_video is not supported by Ultravox.")
 
     def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
         """Send an event to the Ultravox WebSocket."""
@@ -480,9 +476,15 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the LLM based on the instructions."""
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Ultravox Realtime API, ignoring")
         # Cancel prior pending generation if exists
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
@@ -642,7 +644,9 @@ class RealtimeSession(
                     # init as text if specified
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
+                t0 = time.perf_counter()
                 ws_conn = await http_session.ws_connect(join_url)
+                self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
 
                 # Create tasks for send/recv and restart monitoring

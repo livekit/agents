@@ -11,9 +11,9 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
-import socketio
+import socketio  # type: ignore[import-not-found]
 
 from livekit.agents import (
     APIConnectionError,
@@ -50,7 +50,7 @@ DEFAULT_OUTPUT_FORMAT: OutputFormat = "MP3_22050_32"
 WEBSOCKET_NAMESPACE = "/text-to-speech/multi-stream"
 
 
-def get_content_type_from_output_format(output_format: OutputFormat):
+def get_content_type_from_output_format(output_format: OutputFormat) -> str:
     """Get MIME type based on output format"""
     if output_format == "PCM_22050_16":
         return "audio/pcm"
@@ -86,6 +86,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     sample_rate: int
     num_channels: int
+    phrase_replacement_config_id: str | None
 
 
 class TTS(tts.TTS):
@@ -99,6 +100,7 @@ class TTS(tts.TTS):
         voice_id: str = DEFAULT_VOICE_ID,
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         num_channels: int = DEFAULT_NUM_CHANNELS,
+        phrase_replacement_config_id: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
@@ -119,6 +121,7 @@ class TTS(tts.TTS):
                 - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
             sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
+            phrase_replacement_config_id: Optional ID for phrase replacement configuration
             word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
         """
         super().__init__(
@@ -131,29 +134,37 @@ class TTS(tts.TTS):
         )
 
         # Get configuration from environment if not provided
-        base_url = (
+        resolved_base_url: str = (
             base_url
             if is_given(base_url)
             else os.environ.get("UPLIFTAI_BASE_URL", DEFAULT_BASE_URL)
         )
-        api_key = api_key if is_given(api_key) else os.environ.get("UPLIFTAI_API_KEY")
+        resolved_api_key: str | None = (
+            api_key if is_given(api_key) else os.environ.get("UPLIFTAI_API_KEY")
+        )
 
-        if not api_key:
+        if not resolved_api_key:
             raise ValueError(
                 "API key is required, either as argument or set UPLIFTAI_API_KEY environment variable"
             )
 
         # Use provided tokenizer or create default
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+        resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
+        if is_given(word_tokenizer):
+            resolved_word_tokenizer = word_tokenizer
+        else:
+            resolved_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            base_url=base_url,
-            api_key=api_key,
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
             voice_settings=VoiceSettings(voice_id=voice_id, output_format=output_format),
-            word_tokenizer=word_tokenizer,
+            word_tokenizer=resolved_word_tokenizer,
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
+            phrase_replacement_config_id=phrase_replacement_config_id
+            if is_given(phrase_replacement_config_id)
+            else None,
         )
 
         self._client: WebSocketClient | None = None
@@ -210,7 +221,7 @@ class WebSocketClient:
         self.opts = opts
         self.sio: socketio.AsyncClient | None = None
         self.connected = False
-        self.audio_callbacks: dict[str, asyncio.Queue] = {}
+        self.audio_callbacks: dict[str, asyncio.Queue[bytes | None]] = {}
         self.active_requests: dict[str, bool] = {}
 
     async def connect(self) -> bool:
@@ -259,7 +270,9 @@ class WebSocketClient:
             logger.error(f"Connection failed: {e}")
             return False
 
-    async def synthesize(self, text: str, request_id: str | None = None) -> asyncio.Queue:
+    async def synthesize(
+        self, text: str, request_id: str | None = None
+    ) -> asyncio.Queue[bytes | None]:
         """Send synthesis request and return audio queue"""
         if not self.sio or not self.connected:
             if not await self.connect():
@@ -269,12 +282,12 @@ class WebSocketClient:
             request_id = str(uuid.uuid4())
 
         # Create audio queue
-        audio_queue = asyncio.Queue()
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.audio_callbacks[request_id] = audio_queue
         self.active_requests[request_id] = True
 
         # Build message
-        message = {
+        message: dict[str, Any] = {
             "type": "synthesize",
             "requestId": request_id,
             "text": text,
@@ -282,10 +295,14 @@ class WebSocketClient:
             "outputFormat": self.opts.voice_settings.output_format,
         }
 
+        if self.opts.phrase_replacement_config_id:
+            message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
+
         logger.debug(f"Sending synthesis request {request_id[:8]} for text: '{text[:50]}...'")
 
         try:
-            await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
+            if self.sio is not None:
+                await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
         except Exception as e:
             logger.error(f"Failed to emit synthesis: {e}")
             del self.audio_callbacks[request_id]
@@ -294,17 +311,17 @@ class WebSocketClient:
 
         return audio_queue
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Disconnect from service"""
         if self.sio and self.connected:
             await self.sio.disconnect()
             self.connected = False
 
-    async def _on_connect(self):
+    async def _on_connect(self) -> None:
         """Handle connection"""
         logger.debug("WebSocket connected")
 
-    async def _on_message(self, data):
+    async def _on_message(self, data: Any) -> None:
         """Handle messages"""
         message_type = data.get("type")
 
@@ -340,7 +357,7 @@ class WebSocketClient:
                 if request_id in self.active_requests:
                     del self.active_requests[request_id]
 
-    async def _on_disconnect(self):
+    async def _on_disconnect(self) -> None:
         """Handle disconnection"""
         self.connected = False
         for queue in self.audio_callbacks.values():
@@ -406,11 +423,11 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute streaming synthesis"""
         request_id = utils.shortuuid()
+        segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -429,7 +446,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._tts._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
+                        segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
@@ -440,11 +457,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             if word_stream is not None:
                 word_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
             """Process segments"""
-            async for word_stream in self._segments_ch:
+            async for word_stream in segments_ch:
                 await self._run_segment(word_stream, output_emitter)
 
         tasks = [
@@ -492,8 +509,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._mark_started()
 
             # Synthesize
-            request_id = str(uuid.uuid4())
-            audio_queue = await self._tts._client.synthesize(full_text, request_id)
+            audio_queue = await self._tts._client.synthesize(full_text, segment_id)
 
             # Stream audio
             while True:

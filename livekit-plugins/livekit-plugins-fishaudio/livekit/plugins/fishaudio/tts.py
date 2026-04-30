@@ -6,13 +6,13 @@ import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 
-from fish_audio_sdk import (  # type: ignore[import-untyped]
+from fish_audio_sdk import (
     AsyncWebSocketSession,
     Session as FishAudioSession,
     TTSRequest,
 )
-from fish_audio_sdk.exceptions import WebSocketErr  # type: ignore[import-untyped]
-from fish_audio_sdk.schemas import Backends  # type: ignore[import-untyped]
+from fish_audio_sdk.exceptions import WebSocketErr
+from fish_audio_sdk.schemas import Backends
 
 from livekit.agents import (
     APIConnectionError,
@@ -190,7 +190,7 @@ class TTS(tts.TTS):
         self._streams.clear()
 
         if self._ws_session is not None:
-            await self._ws_session.close()
+            await self._ws_session.close()  # type: ignore[no-untyped-call]
             self._ws_session = None
 
 
@@ -317,7 +317,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._request_id = utils.shortuuid()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """
@@ -331,14 +330,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             APITimeoutError: If WebSocket connection times out.
             APIStatusError: If Fish Audio returns an error.
         """
+        request_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=self._request_id,
+            request_id=request_id,
             sample_rate=self._opts.sample_rate,
             num_channels=self._opts.num_channels,
             stream=True,
             mime_type=f"audio/{self._opts.output_format}",
         )
-        output_emitter.start_segment(segment_id=self._request_id)
+        output_emitter.start_segment(segment_id=request_id)
 
         try:
             ws_session = await asyncio.wait_for(

@@ -11,7 +11,7 @@ def create_mock_room() -> Any:
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
     MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
     MockRoom.isconnected.return_value = True
-    MockRoom.name = "mock_room"
+    MockRoom.name = "console"
     MockRoom.metadata = ""
     MockRoom.num_participants = 2
     MockRoom.num_publishers = 2

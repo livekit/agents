@@ -36,6 +36,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
+from .models import TTSModels
 
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
@@ -47,6 +48,7 @@ class _TTSOptions:
     voice_uuid: str
     sample_rate: int
     tokenizer: tokenize.SentenceTokenizer
+    model: str | None
 
 
 class TTS(tts.TTS):
@@ -55,6 +57,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         voice_uuid: str | None = None,
+        model: TTSModels | str | None = None,
         tokenizer: tokenize.SentenceTokenizer | None = None,
         sample_rate: int = 44100,
         http_session: aiohttp.ClientSession | None = None,
@@ -67,6 +70,7 @@ class TTS(tts.TTS):
 
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice. Defaults to None.
+            model (TTSModels | str | None, optional): The model to use for synthesis. Can be "chatterbox" or "chatterbox-turbo". Defaults to None.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
@@ -97,6 +101,7 @@ class TTS(tts.TTS):
             voice_uuid=voice_uuid,
             sample_rate=sample_rate,
             tokenizer=tokenizer,
+            model=model,
         )
 
         self._session = http_session
@@ -108,7 +113,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._opts.model or "unknown"
 
     @property
     def provider(self) -> str:
@@ -139,14 +144,17 @@ class TTS(tts.TTS):
         self,
         *,
         voice_uuid: str | None = None,
+        model: TTSModels | str | None = None,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice.
+            model (TTSModels | str | None, optional): The model to use for synthesis.
         """  # noqa: E501
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
+        self._opts.model = model if model is not None else self._opts.model
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -178,6 +186,15 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            payload: dict[str, object] = {
+                "voice_uuid": self._opts.voice_uuid,
+                "data": self._input_text,
+                "sample_rate": self._opts.sample_rate,
+                "precision": "PCM_16",
+            }
+            if self._opts.model is not None:
+                payload["model"] = self._opts.model
+
             async with self._tts._ensure_session().post(
                 RESEMBLE_REST_API_URL,
                 headers={
@@ -185,12 +202,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                json={
-                    "voice_uuid": self._opts.voice_uuid,
-                    "data": self._input_text,
-                    "sample_rate": self._opts.sample_rate,
-                    "precision": "PCM_16",
-                },
+                json=payload,
                 timeout=aiohttp.ClientTimeout(
                     total=30,
                     sock_connect=self._conn_options.timeout,
@@ -242,9 +254,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -262,7 +274,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if input_stream is None:
                         # new segment (after flush for e.g)
                         input_stream = self._opts.tokenizer.stream()
-                        self._segments_ch.send_nowait(input_stream)
+                        segments_ch.send_nowait(input_stream)
                     input_stream.push_text(text)
                 elif isinstance(text, self._FlushSentinel):
                     if input_stream is not None:
@@ -272,10 +284,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             if input_stream is not None:
                 input_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
-            async for input_stream in self._segments_ch:
+            async for input_stream in segments_ch:
                 await self._run_ws(input_stream, output_emitter)
 
         tasks = [
@@ -308,7 +320,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal input_ended, last_index
             async for data in input_stream:
                 last_index += 1
-                payload = {
+                payload: dict[str, object] = {
                     "voice_uuid": self._opts.voice_uuid,
                     "data": data.token,
                     "request_id": last_index,
@@ -316,6 +328,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "precision": "PCM_16",
                     "output_format": "mp3",
                 }
+                if self._opts.model is not None:
+                    payload["model"] = self._opts.model
                 self._mark_started()
                 await ws.send_str(json.dumps(payload))
 
@@ -329,7 +343,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("Resemble connection closed unexpectedly")
+                    raise APIStatusError(
+                        "Resemble connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("Unexpected Resemble message type %s", msg.type)
@@ -350,6 +368,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.error("Unexpected Resemble message %s", data)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            self._acquire_time = self._tts._pool.last_acquire_time
+            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

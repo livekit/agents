@@ -9,7 +9,10 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentSession,
+    EndpointingOptions,
+    InterruptionOptions,
     NotGivenOr,
+    TurnHandlingOptions,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
@@ -29,13 +32,37 @@ def create_session(
     actions: FakeActions,
     *,
     speed_factor: float = 1.0,
+    turn_handling: TurnHandlingOptions | None = None,
     extra_kwargs: dict[str, Any] | None = None,
+    can_pause_audio: bool = False,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
+    extra = dict(extra_kwargs or {})
+    default_endpointing = EndpointingOptions(
+        min_delay=0.5 / speed_factor,
+        max_delay=6.0 / speed_factor,
+    )
+    default_interruption = InterruptionOptions(
+        min_duration=0.5 / speed_factor,
+        false_interruption_timeout=2.0 / speed_factor,
+    )
+    # allowing overriding default endpointing and interruption options
+    turn_handling = turn_handling or {}
+    turn_handling["endpointing"] = EndpointingOptions(
+        **{**default_endpointing, **turn_handling.get("endpointing", {})}
+    )
+    turn_handling["interruption"] = InterruptionOptions(
+        **{**default_interruption, **turn_handling.get("interruption", {})}
+    )
+
     stt = FakeSTT(fake_user_speeches=user_speeches)
+
+    if "aec_warmup_duration" not in extra:
+        extra["aec_warmup_duration"] = None  # disable aec warmup by default
+
     session = AgentSession[None](
         vad=FakeVAD(
             fake_user_speeches=user_speeches,
@@ -45,16 +72,13 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        min_interruption_duration=0.5 / speed_factor,
-        min_endpointing_delay=0.5 / speed_factor,
-        max_endpointing_delay=6.0 / speed_factor,
-        false_interruption_timeout=2.0 / speed_factor,
-        **(extra_kwargs or {}),
+        turn_handling=turn_handling,
+        **extra,
     )
 
     # setup io with transcription sync
     audio_input = FakeAudioInput()
-    audio_output = FakeAudioOutput()
+    audio_output = FakeAudioOutput(can_pause=can_pause_audio)
     transcription_output = FakeTextOutput()
 
     transcript_sync = TranscriptSynchronizer(
@@ -65,10 +89,11 @@ def create_session(
     session.input.audio = audio_input
     session.output.audio = transcript_sync.audio_output
     session.output.transcription = transcript_sync.text_output
+
     return session
 
 
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 1.0) -> float:
+async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 0.2) -> float:
     stt = session.stt
     audio_input = session.input.audio
     assert isinstance(stt, FakeSTT)

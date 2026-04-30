@@ -31,8 +31,9 @@ from livekit.agents import (
     ToolError,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -123,6 +124,7 @@ class DriveThruAgent(Agent):
             Regular items like a single cheeseburger cannot be made into a meal unless such a combo explicitly exists.
 
             Only call this function once the user has clearly specified both a drink and a sauce — always ask for them if they're missing.
+            Never infer or assume the drink — if the user has not explicitly named a drink, ask for it before calling this tool.
 
             A meal can only be Medium or Large; Small is not an available option.
             Drink and fries sizes can differ (e.g., “large fries but a medium Coke”).
@@ -292,6 +294,7 @@ class DriveThruAgent(Agent):
             Call this when the user orders **a single item on its own**, not as part of a Combo Meal or Happy Meal.
 
             The customer must provide clear and specific input. For example, item variants such as flavor must **always** be explicitly stated.
+            Never call this tool when size information is still needed — if the item has multiple sizes and the user has not specified one, ask for the size before calling.
 
             The user might say—for example:
             - “Just the cheeseburger, no meal”
@@ -409,22 +412,24 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
-        stt=deepgram.STT(
-            model="nova-3",
-            keyterms=[
-                "Big Mac",
-                "McFlurry",
-                "McCrispy",
-                "McNuggets",
-                "Meal",
-                "Sundae",
-                "Oreo",
-                "Jalapeno Ranch",
-            ],
-            mip_opt_out=True,
+        stt=inference.STT(
+            "deepgram/nova-3",
+            language="en",
+            extra_kwargs={
+                "keyterm": [
+                    "Big Mac",
+                    "McFlurry",
+                    "McCrispy",
+                    "McNuggets",
+                    "Meal",
+                    "Sundae",
+                    "Oreo",
+                    "Jalapeno Ranch",
+                ],
+            },
         ),
-        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
+        llm=inference.LLM("openai/gpt-5-mini"),
+        tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=10,

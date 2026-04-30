@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, TypeAlias
 
 from livekit import rtc
 
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
+from ..io import TextOutput
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
-
-
-DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-]
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
     rtc.DisconnectReason.CLIENT_INITIATED,
@@ -29,13 +24,11 @@ DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
 @dataclass
 class TextInputEvent:
     text: str
-    info: rtc.TextStreamInfo
-    participant: rtc.RemoteParticipant
+    info: rtc.TextStreamInfo | None = None
+    participant: rtc.RemoteParticipant | None = None
 
 
-TextInputCallback = Callable[
-    ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
-]
+TextInputCallback = Callable[["AgentSession", TextInputEvent], Coroutine[None, None, None] | None]
 
 
 @dataclass
@@ -44,13 +37,14 @@ class NoiseCancellationParams:
     track: rtc.Track
 
 
-NoiseCancellationSelector = Callable[
-    [NoiseCancellationParams], Optional[rtc.NoiseCancellationOptions]
+NoiseCancellationSelector: TypeAlias = Callable[
+    [NoiseCancellationParams],
+    rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
 ]
 
 
-def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
-    sess.interrupt()
+async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
+    await sess.interrupt()
     sess.generate_reply(user_input=ev.text)
 
 
@@ -65,7 +59,14 @@ class AudioInputOptions:
     num_channels: int = 1
     frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None = None
+    noise_cancellation: (
+        rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None
+    ) = None
+    auto_gain_control: bool = True
+    """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
@@ -96,6 +97,10 @@ class TextOutputOptions:
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
+    next_in_chain: TextOutput | None = None
+    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
+    json_format: bool = False
+    """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString."""
 
 
 @dataclass
@@ -242,7 +247,9 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     audio_frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | None = None
+    noise_cancellation: rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None = (
+        None
+    )
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,

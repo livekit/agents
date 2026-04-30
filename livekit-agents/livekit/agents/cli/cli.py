@@ -17,10 +17,11 @@ import textwrap
 import threading
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from time import time as _wall_time
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import numpy as np
 import typer
@@ -34,16 +35,18 @@ from rich.table import Column, Table
 from rich.text import Text
 from rich.theme import Theme
 
-from livekit import rtc
+from livekit import api, rtc
 
+from .. import llm
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio
+from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
-from ..worker import AgentServer, WorkerOptions
+from ..voice.transcription import TranscriptSynchronizer
+from ..worker import AgentServer, ServerEnvOption, WorkerOptions
 from . import proto
 from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
 
@@ -65,7 +68,7 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(Exception):
+class _ExitCli(BaseException):
     pass
 
 
@@ -108,12 +111,22 @@ class ConsoleAudioInput(io.AudioInput):
         super().__init__(label="Console")
         self._loop = loop
         self._audio_ch: aio.Chan[rtc.AudioFrame] = aio.Chan()
+        self._attached = True
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._attached:
+            # drop frames if the input is detached
+            return
         self._audio_ch.send_nowait(frame)
 
     async def __anext__(self) -> rtc.AudioFrame:
         return await self._audio_ch.__anext__()
+
+    def on_attached(self) -> None:
+        self._attached = True
+
+    def on_detached(self) -> None:
+        self._attached = False
 
 
 class ConsoleAudioOutput(io.AudioOutput):
@@ -122,20 +135,26 @@ class ConsoleAudioOutput(io.AudioOutput):
             label="Console",
             next_in_chain=None,
             sample_rate=SAMPLE_RATE,
-            capabilities=io.AudioOutputCapabilities(pause=False),  # TODO(theomonnom): support pause
+            capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self._loop = loop
 
-        self._capturing = False
         self._pushed_duration: float = 0.0
         self._capture_start: float = 0.0
-        self._dispatch_handle: asyncio.TimerHandle | None = None
-
-        self._flush_complete = asyncio.Event()
-        self._flush_complete.set()
+        self._flush_task: asyncio.Task[None] | None = None
+        self._playback_started_fired: bool = False
 
         self._output_buf = bytearray()
         self._audio_lock = threading.Lock()
+        self._output_buf_empty = asyncio.Event()
+        self._output_buf_empty.set()
+        self._interrupted_ev = asyncio.Event()
+
+        self._paused_at: float | None = None
+        self._paused_duration: float = 0.0
+
+        # track the segment id to avoid stale async operations
+        self._segment_id = 0
 
     @property
     def audio_lock(self) -> threading.Lock:
@@ -145,52 +164,115 @@ class ConsoleAudioOutput(io.AudioOutput):
     def audio_buffer(self) -> bytearray:
         return self._output_buf
 
+    @property
+    def paused(self) -> bool:
+        return self._paused_at is not None
+
+    def mark_output_empty(self) -> None:
+        self._output_buf_empty.set()
+
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
-        await self._flush_complete.wait()
 
-        if not self._capturing:
-            self._capturing = True
-            self._pushed_duration = 0.0
+        if self._flush_task and not self._flush_task.done():
+            logger.error("capture_frame called while previous flush is in progress")
+            await self._flush_task
+
+        if not self._pushed_duration:
             self._capture_start = time.monotonic()
 
         self._pushed_duration += frame.duration
         with self._audio_lock:
             self._output_buf += frame.data  # TODO: optimize
+            self._output_buf_empty.clear()
 
     def flush(self) -> None:
         super().flush()
-        if self._capturing:
-            self._flush_complete.clear()
-            self._capturing = False
-            to_wait = max(0.0, self._pushed_duration - (time.monotonic() - self._capture_start))
+        if self._pushed_duration:
+            if self._flush_task and not self._flush_task.done():
+                logger.error("flush called while previous flush is in progress")
+                self._flush_task.cancel()
 
-            def _dispatch_playback_finished() -> None:
-                self.on_playback_finished(
-                    playback_position=self._pushed_duration, interrupted=False
-                )
-                self._flush_complete.set()
-                self._pushed_duration = 0.0
-
-            self._dispatch_handle = self._loop.call_later(to_wait, _dispatch_playback_finished)
+            self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
-        self._capturing = False
-
         with self._audio_lock:
             self._output_buf.clear()
+            self._output_buf_empty.set()
+            # redundant (_wait_for_playout does the same, albeit async) but defensive
+            self._segment_id += 1
+            self._playback_started_fired = False
 
-        if self._pushed_duration > 0.0:
-            if self._dispatch_handle is not None:
-                self._dispatch_handle.cancel()
+        if self._pushed_duration:
+            self._interrupted_ev.set()
 
-            self._flush_complete.set()
-            played_duration = min(time.monotonic() - self._capture_start, self._pushed_duration)
-            self.on_playback_finished(
-                playback_position=played_duration,
-                interrupted=played_duration + 1.0 < self._pushed_duration,
+    def pause(self) -> None:
+        super().pause()
+
+        if self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        super().resume()
+
+        if self._paused_at is not None:
+            self._paused_duration += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+    async def _wait_for_playout(self) -> None:
+        async def _wait_buffered_audio() -> None:
+            while len(self._output_buf) > 0:
+                await self._output_buf_empty.wait()
+                await asyncio.sleep(0)
+
+        wait_for_interruption = asyncio.create_task(self._interrupted_ev.wait())
+        wait_for_playout = asyncio.create_task(_wait_buffered_audio())
+        try:
+            await asyncio.wait(
+                [wait_for_playout, wait_for_interruption],
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            self._pushed_duration = 0.0
+            interrupted = wait_for_interruption.done()
+        finally:
+            wait_for_playout.cancel()
+            wait_for_interruption.cancel()
+
+        if self._paused_at is not None:
+            self._paused_duration += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+        if interrupted:
+            played_duration = time.monotonic() - self._capture_start - self._paused_duration
+            played_duration = min(max(0, played_duration), self._pushed_duration)
+        else:
+            played_duration = self._pushed_duration
+
+        self.on_playback_finished(playback_position=played_duration, interrupted=interrupted)
+
+        self._pushed_duration = 0.0
+        self._paused_at = None
+        self._paused_duration = 0.0
+        self._interrupted_ev.clear()
+        with self._audio_lock:
+            self._output_buf_empty.set()
+            self._playback_started_fired = False
+            self._segment_id += 1
+
+    def _maybe_mark_playback_started(self) -> None:
+        """Mark the playback as started if it hasn't been already. Must be called under ``audio_lock``."""
+        if self._playback_started_fired:
+            return
+        self._playback_started_fired = True
+        t = _wall_time()
+        segment_id = self._segment_id
+        self._loop.call_soon_threadsafe(
+            lambda: self._on_playback_started(created_at=t, segment_id=segment_id)
+        )
+
+    def _on_playback_started(self, *, created_at: float, segment_id: int) -> None:
+        if self._segment_id != segment_id:
+            return
+        self.on_playback_started(created_at=created_at)
 
 
 class AgentsConsole:
@@ -249,11 +331,15 @@ class AgentsConsole:
         self._enabled = False
         self._record = False
 
+        self._last_metrics_text: Text | None = None
+        self._last_user_metrics: llm.MetricsReport | None = None
+
         self._text_mode_log_filter = TextModeLogFilter()
         self._log_handler = RichLoggingHandler(self)
 
         self._session_directory = pathlib.Path(
-            self._console_directory, f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}"
+            self._console_directory,
+            f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
         )
 
     def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
@@ -271,12 +357,51 @@ class AgentsConsole:
             self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
+            self._io_transcription_sync = TranscriptSynchronizer(
+                next_in_chain_audio=self._io_audio_output,
+                next_in_chain_text=None,
+            )
             self._io_acquired_event.set()
             self._io_session = session
 
-        self._update_sess_io(
-            session, self.console_mode, self._io_audio_input, self._io_audio_output
-        )
+        if session:
+            from ..voice.events import (
+                AgentStateChangedEvent,
+                ConversationItemAddedEvent,
+            )
+
+            @session.on("conversation_item_added")
+            def _on_conversation_item_added(event: ConversationItemAddedEvent) -> None:
+                if not isinstance(event.item, llm.ChatMessage):
+                    return
+
+                if event.item.role == "user":
+                    self._last_user_metrics = event.item.metrics
+                elif event.item.role == "assistant":
+                    self._last_metrics_text = _format_turn_metrics(
+                        self._last_user_metrics, event.item.metrics
+                    )
+                    self._last_user_metrics = None
+
+            @session.on("agent_state_changed")
+            def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
+                if event.new_state == "speaking":
+                    early = session._early_assistant_metrics
+                    if early:
+                        self._last_metrics_text = _format_turn_metrics(
+                            self._last_user_metrics, early
+                        )
+                        session._early_assistant_metrics = None
+                elif event.new_state == "thinking":
+                    self._last_metrics_text = None
+
+            self._update_sess_io(
+                session,
+                self.console_mode,
+                self._io_audio_input,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
+            )
 
     @property
     def enabled(self) -> bool:
@@ -352,7 +477,8 @@ class AgentsConsole:
                 self.io_session,
                 mode,
                 self._io_audio_input,
-                self._io_audio_output,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
             )
 
     def _update_sess_io(
@@ -360,7 +486,8 @@ class AgentsConsole:
         sess: AgentSession,
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
-        audio_output: ConsoleAudioOutput,
+        audio_output: io.AudioOutput,
+        text_output: io.TextOutput,
     ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
@@ -375,10 +502,12 @@ class AgentsConsole:
             if mode == "text":
                 sess.input.audio = None
                 sess.output.audio = None
+                sess.output.transcription = None
                 self._log_handler.addFilter(self._text_mode_log_filter)
             else:
                 sess.input.audio = audio_input
                 sess.output.audio = audio_output
+                sess.output.transcription = text_output
                 self._log_handler.removeFilter(self._text_mode_log_filter)
 
     def print(
@@ -588,18 +717,27 @@ class AgentsConsole:
 
         FRAME_SAMPLES = 240
         with self._io_audio_output.audio_lock:
-            bytes_needed = frames * 2
-            if len(self._io_audio_output.audio_buffer) < bytes_needed:
-                available_bytes = len(self._io_audio_output.audio_buffer)
-                outdata[: available_bytes // 2, 0] = np.frombuffer(
-                    self._io_audio_output.audio_buffer, dtype=np.int16, count=available_bytes // 2
-                )
-                outdata[available_bytes // 2 :, 0] = 0
-                del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
+            if self._io_audio_output.paused:
+                outdata[:] = 0
             else:
-                chunk = self._io_audio_output.audio_buffer[:bytes_needed]
-                outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
-                del self._io_audio_output.audio_buffer[:bytes_needed]
+                bytes_needed = frames * 2
+                if len(self._io_audio_output.audio_buffer) < bytes_needed:
+                    available_bytes = len(self._io_audio_output.audio_buffer)
+                    if available_bytes > 0:
+                        self._io_audio_output._maybe_mark_playback_started()
+                    outdata[: available_bytes // 2, 0] = np.frombuffer(
+                        self._io_audio_output.audio_buffer,
+                        dtype=np.int16,
+                        count=available_bytes // 2,
+                    )
+                    outdata[available_bytes // 2 :, 0] = 0
+                    del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
+                    self.io_loop.call_soon_threadsafe(self._io_audio_output.mark_output_empty)
+                else:
+                    self._io_audio_output._maybe_mark_playback_started()
+                    chunk = self._io_audio_output.audio_buffer[:bytes_needed]
+                    outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
+                    del self._io_audio_output.audio_buffer[:bytes_needed]
 
         num_chunks = frames // FRAME_SAMPLES
         for i in range(num_chunks):
@@ -615,11 +753,18 @@ class AgentsConsole:
             self._apm.process_reverse_stream(render_frame_for_aec)
 
 
+AUDIO_SHORTCUTS = [
+    ("Ctrl+T", "text mode"),
+    ("Ctrl+C", "exit"),
+]
+
+
 class FrequencyVisualizer:
     def __init__(self, agents_console: AgentsConsole, *, label: str = "Unlabeled microphone"):
         self.label = label
         self.height_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         self.c = agents_console
+        self.show_shortcuts = False
 
     def update(self) -> None:
         with self.c._input_lock:
@@ -627,25 +772,62 @@ class FrequencyVisualizer:
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
 
     def __rich__(self) -> RenderableType:
+        table = Table.grid(padding=0, expand=True)
+        table.add_column()
+
         label = f"   {self.label}  "
-        table = Table.grid(
+        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
+        style = self.c.console.get_style("label")
+        label_seg = Text(label, style=style)
+
+        metrics_text = self.c._last_metrics_text
+        left_width = len(label) + len(bar)
+
+        inner_table = Table.grid(
             Column(width=len(label), no_wrap=True),
             Column(no_wrap=True, overflow="fold"),
-            Column(),
             padding=(0, 0, 0, 0),
             collapse_padding=True,
             pad_edge=False,
         )
+        inner_table.add_row(Group(label_seg), Group(bar))
+        table.add_row(inner_table)
 
-        style = self.c.console.get_style("label")
-        label_seg = Text(label, style=style)
+        if metrics_text is not None:
+            metrics_width = len(metrics_text.plain)
+            console_width = self.c.console.width
 
-        bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
-        table.add_row(
-            Group(label_seg),
-            Group(bar),
-            Text.from_markup("  [bold]<Ctrl+T>[/bold] Text Mode", style="dim"),
-        )
+            if left_width + metrics_width + 4 <= console_width:
+                # fits on the same row — re-do as 3-column layout
+                table = Table.grid(padding=0, expand=True)
+                table.add_column()
+                wide_table = Table.grid(
+                    Column(width=len(label), no_wrap=True),
+                    Column(no_wrap=True, overflow="fold"),
+                    Column(no_wrap=True, justify="right"),
+                    padding=(0, 0, 0, 0),
+                    collapse_padding=True,
+                    pad_edge=False,
+                    expand=True,
+                )
+                wide_table.add_row(Group(label_seg), Group(bar), metrics_text)
+                table.add_row(wide_table)
+            else:
+                # metrics on a separate line, right-aligned
+                right_metrics = metrics_text.copy()
+                right_metrics.justify = "right"
+                table.add_row(right_metrics)
+
+        table.add_row(Text(""))
+
+        if self.show_shortcuts:
+            for shortcut_key, desc in AUDIO_SHORTCUTS:
+                table.add_row(
+                    Text.assemble(("   ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim"))
+                )
+        else:
+            table.add_row(Text("   ? for shortcuts", style="dim"))
+
         return table
 
 
@@ -687,7 +869,7 @@ class RichLoggingHandler(logging.Handler):
 
         output = Table.grid(padding=(0, 1))
         output.add_column(style="log.time")
-        output.add_column(style="log.level", width=6, no_wrap=True)
+        output.add_column(style="log.level", width=8, no_wrap=True)
         output.add_column(style="log.name", width=MAX_NAME_WIDTH, no_wrap=True, overflow="ellipsis")
         output.add_column(ratio=1, style="log.message")
         output.add_column(style="log.extra", no_wrap=True)
@@ -867,16 +1049,53 @@ def _print_audio_devices() -> None:
     console.print(table)
 
 
+TEXT_SHORTCUTS = [
+    ("Ctrl+T", "audio mode"),
+    ("Ctrl+C", "exit"),
+]
+
+
 def prompt(
-    message: str | Text, *, console: Console, key_read_cb: Callable[[str], Any] | None = None
+    message: str | Text,
+    *,
+    console: Console,
+    key_read_cb: Callable[[str], Any] | None = None,
+    placeholder: str = "",
 ) -> str:
     buffer: list[str] = []
+    width = console.size.width
+    line_char = "\u2500"
+    show_shortcuts = False
 
-    def render_prompt() -> Text:
-        return Text.assemble(message, ("".join(buffer), "bold blue"))
+    def render_prompt() -> Table:
+        table = Table.grid(padding=0)
+        table.add_column()
 
-    with Live(render_prompt(), console=console, transient=True) as live:
-        console.show_cursor(True)
+        table.add_row(Text(line_char * width, style="dim"))
+
+        input_text = "".join(buffer)
+        if input_text:
+            table.add_row(Text.assemble(("\u276f ", "bold"), (input_text, ""), ("\u2588", "white")))
+        else:
+            table.add_row(
+                Text.assemble(
+                    ("\u276f ", "bold"), ("\u2588", "white"), (" ", ""), (placeholder, "dim italic")
+                )
+            )
+
+        table.add_row(Text(line_char * width, style="dim"))
+
+        if show_shortcuts:
+            for shortcut_key, desc in TEXT_SHORTCUTS:
+                table.add_row(
+                    Text.assemble(("  ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim"))
+                )
+        elif not buffer:
+            table.add_row(Text("  ? for shortcuts", style="dim"))
+
+        return table
+
+    with Live(render_prompt(), console=console, transient=True, refresh_per_second=30) as live:
         while True:
             ch = readkey()
 
@@ -886,25 +1105,32 @@ def prompt(
             if ch == key.ENTER:
                 break
 
+            # Toggle shortcuts menu with ? (only when buffer is empty) or close with Escape
+            if ch == "?" and not buffer:
+                show_shortcuts = not show_shortcuts
+                live.update(render_prompt())
+                continue
+
+            if ch == key.ESC:
+                if show_shortcuts:
+                    show_shortcuts = False
+                    live.update(render_prompt())
+                continue
+
             if ch == key.BACKSPACE:
                 if buffer:
                     buffer.pop()
                     live.update(render_prompt())
-                    live.refresh()
-
                 continue
 
             if len(ch) == 1 and ch.isprintable():
                 buffer.append(ch)
                 live.update(render_prompt())
-                live.refresh()
-
-        live.update(render_prompt())
 
     return "".join(buffer)
 
 
-UpdateFn = Callable[[Optional[Union[str, Text]]], None]
+UpdateFn = Callable[[str | Text | None], None]
 
 
 @contextmanager
@@ -924,7 +1150,10 @@ def live_status(
         return Columns([msg, spin], expand=False, equal=False, padding=(0, 1))
 
     with Live(
-        _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
+        _render(),
+        console=console,
+        refresh_per_second=refresh_per_second,
+        transient=transient,
     ) as live:
 
         def update(new_text: str | Text | None = None) -> None:
@@ -947,6 +1176,7 @@ def _text_mode(c: AgentsConsole) -> None:
                 Text.from_markup("  [bold]User input[/bold]: "),
                 console=c.console,
                 key_read_cb=_key_read,
+                placeholder="Type to talk to your agent",
             )
         except KeyboardInterrupt:
             break
@@ -969,21 +1199,38 @@ def _text_mode(c: AgentsConsole) -> None:
             task = asyncio.create_task(_generate(text))
             task.add_done_callback(_done_callback)
 
-        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        h: asyncio.Future[list[RunEvent]] = c.io_loop.create_future()
         c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
 
-        # h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
-        c.print(text, tag="You")
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u25cf ", "#1FD5F9"),
+                ("You", "bold #1FD5F9"),
+            )
+        )
+        for line in text.split("\n"):
+            c.console.print(Text(f"    {line}"))
 
-        with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+        with live_status(c.console, Text.from_markup("  [dim]Thinking...[/dim]")):
             while not h.done():
                 time.sleep(0.1)
 
+        last_user_metrics: llm.MetricsReport | None = None
         for event in h.result():
-            _print_run_event(c, event)
+            if event.type == "message" and event.item.role == "user":
+                last_user_metrics = event.item.metrics
+            _print_run_event(c, event, last_user_metrics)
 
 
-AGENT_PALETTE: list[str] = ["#1FD5F9", "#09C338", "#1F5DF9", "#BA1FF9", "#F9AE1F", "#FA4C39"]
+AGENT_PALETTE: list[str] = [
+    "#1FD5F9",
+    "#09C338",
+    "#1F5DF9",
+    "#BA1FF9",
+    "#F9AE1F",
+    "#FA4C39",
+]
 
 
 def _agent_style(name: str) -> Style:
@@ -1005,56 +1252,175 @@ def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
     return "\n".join(head + ["..."] + tail)
 
 
-def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
+def _format_duration_ms(seconds: float) -> str:
+    ms = seconds * 1000
+    if ms >= 10:
+        return f"{ms:.0f}ms"
+    elif ms >= 1:
+        return f"{ms:.1f}ms"
+    else:
+        return f"{ms:.2f}ms"
+
+
+def _format_turn_metrics(
+    user_metrics: llm.MetricsReport | None,
+    assistant_metrics: llm.MetricsReport | None,
+) -> Text | None:
+    parts: list[tuple[str, str]] = []
+
+    # user-side metrics
+    if user_metrics:
+        if "end_of_turn_delay" in user_metrics:
+            v = user_metrics["end_of_turn_delay"]
+            parts.append(("end_of_turn: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "on_user_turn_completed_delay" in user_metrics:
+            v = user_metrics["on_user_turn_completed_delay"]
+            parts.append(("turn_completed_cb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+
+    # assistant-side metrics
+    if assistant_metrics:
+        if "llm_node_ttft" in assistant_metrics:
+            v = assistant_metrics["llm_node_ttft"]
+            parts.append(("llm_ttft: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+        if "tts_node_ttfb" in assistant_metrics:
+            v = assistant_metrics["tts_node_ttfb"]
+            parts.append(("tts_ttfb: ", "dim"))
+            parts.append((_format_duration_ms(v), "dim"))
+    e2e_parts: list[tuple[str, str]] = []
+    if assistant_metrics and "e2e_latency" in assistant_metrics:
+        v = assistant_metrics["e2e_latency"]
+        e2e_parts.append(("e2e: ", "dim"))
+        e2e_parts.append((_format_duration_ms(v), "red" if v >= 1.0 else "dim"))
+
+    if not parts and not e2e_parts:
+        return None
+
+    assembled: list[tuple[str, str]] = []
+    pair_count = len(parts) // 2
+    for i in range(pair_count):
+        if i > 0:
+            assembled.append((" \u00b7 ", "dim"))
+        assembled.append(parts[i * 2])  # label
+        assembled.append(parts[i * 2 + 1])  # value
+
+    if e2e_parts:
+        if assembled:
+            assembled.append(("  \u2500  ", "dim"))
+        assembled.extend(e2e_parts)
+
+    return Text.assemble(*assembled)
+
+
+def _print_run_event(
+    c: AgentsConsole,
+    event: RunEvent,
+    last_user_metrics: llm.MetricsReport | None = None,
+) -> None:
     if event.type == "function_call":
-        c.print(
-            Text.from_markup(
-                f"[bold]{event.item.name}[/bold] [dim](arguments: {event.item.arguments})[/dim]"
-            ),
-            tag="Tool",
-            tag_style=Style.parse("black on #6E9DFE"),
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u279c ", "#1FD5F9"),
+                (event.item.name, "bold #1FD5F9"),
+            )
         )
     elif event.type == "function_call_output":
-        truncated_output = _truncate_text(event.item.output)
-        c.print(
-            Text.from_markup(f"Tool output: [dim]{event.item.name}\n {truncated_output}[/dim]"),
-            tag="Tool",
-            tag_style=Style.parse("black on #6E9DFE"),
-        )
+        output = event.item.output
+        display_output = output
+        is_error = output.lower().startswith("error") or output.lower().startswith("exception")
+
+        if not is_error:
+            try:
+                import json
+
+                json_start = output.find("{")
+                if json_start >= 0:
+                    json_str = output[json_start:]
+                    data = json.loads(json_str)
+                    if isinstance(data, dict):
+                        summary_parts = []
+                        for k, v in data.items():
+                            if v is not None and k != "type":
+                                summary_parts.append(f"{k}={v}")
+                        display_output = ", ".join(summary_parts[:3])
+                        if len(summary_parts) > 3:
+                            display_output += ", ..."
+            except (json.JSONDecodeError, TypeError, ValueError):
+                display_output = _truncate_text(output, max_lines=2)
+
+        if is_error:
+            c.console.print(
+                Text.assemble(
+                    ("    \u2717 ", "#EF4444"),
+                    (_truncate_text(output, max_lines=2), "#EF4444"),
+                )
+            )
+        else:
+            c.console.print(
+                Text.assemble(
+                    ("    \u2713 ", "#6BCB77"),
+                    (display_output, "dim"),
+                )
+            )
     elif event.type == "agent_handoff":
         old_agent = event.old_agent
         new_agent = event.new_agent
 
         old_style = _agent_style(old_agent.__class__.__name__)
         new_style = _agent_style(new_agent.__class__.__name__)
-        c.print(
+        c.console.print(
             Text.assemble(
+                ("  \u25cf ", "#FFD93D"),
+                ("Handoff: ", "bold #FFD93D"),
                 Text(f"{old_agent.__class__.__name__}", style=old_style),
-                Text.from_markup(" [dim]->[/dim] "),
+                (" \u2192 ", "dim"),
                 Text(f"{new_agent.__class__.__name__}", style=new_style),
-            ),
-            tag="Handoff",
-            tag_style=Style.parse("black on #6E9DFE"),
+            )
         )
 
     elif event.type == "message":
         if event.item.text_content:
-            c.print(event.item.text_content, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+            c.console.print()
+            c.console.print(
+                Text.assemble(
+                    ("  \u25cf ", "#6BCB77"),
+                    ("Agent", "bold #6BCB77"),
+                )
+            )
+            for line in event.item.text_content.split("\n"):
+                c.console.print(Text(f"    {line}"))
+
+            metrics_text = _format_turn_metrics(
+                last_user_metrics if event.item.role == "assistant" else None,
+                event.item.metrics if event.item.role == "assistant" else None,
+            )
+            if metrics_text is not None:
+                metrics_line = Text("    ")
+                metrics_line.append_text(metrics_text)
+                c.console.print(metrics_line)
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 
 
 def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:
     ctrl_t_e = threading.Event()
+    visualizer: FrequencyVisualizer | None = None
 
-    def _listen_for_toggle() -> None:
+    def _listen_for_keys() -> None:
         while not ctrl_t_e.is_set():
             ch = readkey()
             if ch == key.CTRL_T:
                 ctrl_t_e.set()
                 break
+            elif ch == "?" and visualizer is not None:
+                visualizer.show_shortcuts = not visualizer.show_shortcuts
+            elif ch == key.ESC and visualizer is not None:
+                visualizer.show_shortcuts = False
 
-    listener = threading.Thread(target=_listen_for_toggle, daemon=True)
+    listener = threading.Thread(target=_listen_for_keys, daemon=True)
     listener.start()
 
     c.set_microphone_enabled(True, device=input_device)
@@ -1127,13 +1493,14 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    log_level: int | str = logging.DEBUG,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
     c.record = record
 
-    _configure_logger(c, logging.DEBUG)
+    _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1199,7 +1566,7 @@ def _run_console(
             console_worker.shutdown()
             console_worker.join()
 
-    except CLIError as e:
+    except (CLIError, ValueError) as e:
         c.print(" ")
         c.print(f"[error]{e}")
         c.print(" ")
@@ -1234,6 +1601,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     async def _worker_run(worker: AgentServer) -> None:
         try:
             await server.run(devmode=args.devmode, unregistered=jupyter)
+
         except Exception:
             logger.exception("worker failed")
 
@@ -1254,7 +1622,10 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
         try:
             exit_triggered = False  # allow a new _ExitCLI raise
             if not args.devmode:
-                loop.run_until_complete(server.drain())
+                try:
+                    loop.run_until_complete(server.drain())
+                except asyncio.TimeoutError:
+                    logger.warning("drain timed out, forcing shutdown")
 
             loop.run_until_complete(server.aclose())
 
@@ -1269,19 +1640,18 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     finally:
         if jupyter:
             loop.close()  # close can only be called from the main thread
-            return  # noqa: B012
+        else:
+            with contextlib.suppress(_ExitCli):
+                try:
+                    tasks = asyncio.all_tasks(loop)
+                    for task in tasks:
+                        task.cancel()
 
-        with contextlib.suppress(_ExitCli):
-            try:
-                tasks = asyncio.all_tasks(loop)
-                for task in tasks:
-                    task.cancel()
-
-                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            finally:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
-                loop.close()
+                    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                finally:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                    loop.run_until_complete(loop.shutdown_default_executor())
+                    loop.close()
 
 
 class LogLevel(str, enum.Enum):
@@ -1296,17 +1666,28 @@ class LogLevel(str, enum.Enum):
 def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
+    @app.callback(invoke_without_command=True)
+    def _set_dev_mode(ctx: typer.Context) -> None:
+        if ctx.invoked_subcommand is None:
+            print(ctx.get_help())
+            raise typer.Exit()
+        if ctx.invoked_subcommand in ("console", "dev"):
+            os.environ["LIVEKIT_DEV_MODE"] = "1"
+
+    _start_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, False))
+    _dev_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, True))
+
     @app.command()
     def console(
         *,
         input_device: Annotated[
-            Optional[str],  # noqa: UP007, required for python 3.9
+            str | None,  # noqa: UP007, required for python 3.9
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),
@@ -1322,6 +1703,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1342,6 +1729,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             output_device=output_device,
             mode="text" if text else "audio",
             record=record,
+            log_level=log_level.value,
         )
 
     @app.command()
@@ -1349,31 +1737,33 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.info,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _start_log_default,
         url: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
             ),
         ] = None,
         drain_timeout: Annotated[
-            Optional[int],  # noqa: UP007
+            int | None,  # noqa: UP007
             typer.Option(
                 help="Time in seconds to wait for jobs to finish before shutting down.",
             ),
@@ -1385,7 +1775,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _run_worker(
             server=server,
             args=proto.CliArgs(
-                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+                log_level=log_level.value,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
             ),
         )
 
@@ -1394,28 +1787,30 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         *,
         log_level: Annotated[
             LogLevel,
-            typer.Option(help="Set the log level", case_sensitive=False),
-        ] = LogLevel.debug,
+            typer.Option(
+                help="Set the log level", case_sensitive=False, envvar="LIVEKIT_LOG_LEVEL"
+            ),
+        ] = _dev_log_default,
         reload: Annotated[
             bool,
             typer.Option(help="Enable auto-reload of the server when (code) files change."),
         ] = True,
         url: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            Optional[str],  # noqa: UP007
+            str | None,  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1448,7 +1843,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
         main_file = pathlib.Path(sys.argv[0]).parent
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         watch_server = WatchServer(_run_worker, server, main_file, args, loop=loop)
@@ -1463,12 +1858,95 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             await watch_server.run()
 
         try:
-            loop = asyncio.get_event_loop()
-            asyncio.set_event_loop(loop)
-
             loop.run_until_complete(_run_loop())
         except _ExitCli:
             raise typer.Exit() from None
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            os._exit(1)
+
+    @app.command()
+    def connect(
+        *,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(help="Set the log level", case_sensitive=False),
+        ] = LogLevel.debug,
+        url: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(
+                help="The WebSocket URL of your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_URL",
+            ),
+        ] = None,
+        api_key: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(
+                help="API key for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_KEY",
+            ),
+        ] = None,
+        api_secret: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(
+                help="API secret for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_SECRET",
+            ),
+        ] = None,
+        room: Annotated[
+            str,
+            typer.Option(help="Room name to connect to"),
+        ],
+        participant_identity: Annotated[
+            str | None,  # noqa: UP007
+            typer.Option(help="Participant identity"),
+        ] = None,
+    ) -> None:
+        if participant_identity is None:
+            participant_identity = shortuuid("agent-")
+
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _task: asyncio.Task | None = None
+
+        @server.once("worker_started")
+        def _simulate_job() -> None:
+            nonlocal _task
+
+            async def simulate_job() -> None:
+                async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room])
+                    active_room = await lk_api.room.list_rooms(room_request)
+
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room))
+                    else:
+                        room_info = active_room.rooms[0]
+
+                await server.simulate_job(
+                    room=room,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=participant_identity,
+                )
+
+            _task = asyncio.create_task(simulate_job())
+
+        try:
+            loop.run_until_complete(server.run(devmode=True, unregistered=True))
+        except _ExitCli:
+            raise typer.Exit() from None
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            os._exit(1)
+        except (CLIError, ValueError) as e:
+            c.print(" ")
+            c.print(f"[error]{e}")
+            c.print(" ")
+            raise typer.Exit(code=1) from None
 
     @app.command()
     def download_files() -> None:

@@ -4,12 +4,13 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING
 
 from livekit import api, rtc
 
 from ... import llm, stt, tts, utils, vad
-from ...job import get_job_context
+from ...job import DEFAULT_PARTICIPANT_KINDS, get_job_context
+from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
@@ -24,38 +25,10 @@ from ...voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
+from .utils import InstructionParts
 
 if TYPE_CHECKING:
-    from ...voice.audio_recognition import TurnDetectionMode
-
-
-BASE_INSTRUCTIONS = """
-# Identity
-
-You are an agent that is reaching out to a human agent for help. There has been a previous conversation
-between you and a caller, the conversation history is included below.
-
-# Goal
-
-Your main goal is to give the human agent sufficient context about why the caller had called in,
-so that the human agent could gain sufficient knowledge to help the caller directly.
-
-# Context
-
-In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
-Remember, you are not speaking to the caller right now, you are speaking to the human agent.
-
-Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.
-
-Start by giving them a summary of the conversation so far, and answer any questions they might have.
-
-## Conversation history with caller
-{conversation_history}
-## End of conversation history with caller
-
-You are talking to the human agent now,
-give a brief introduction of the conversation so far, and ask if they want to connect to the caller.
-"""
+    from ...voice.turn import TurnDetectionMode
 
 
 @dataclass
@@ -66,24 +39,61 @@ class WarmTransferResult:
 class WarmTransferTask(AgentTask[WarmTransferResult]):
     def __init__(
         self,
-        target_phone_number: str,
+        sip_call_to: NotGivenOr[str] = NOT_GIVEN,
         *,
+        sip_trunk_id: NotGivenOr[str | None] = NOT_GIVEN,
+        sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
+        sip_number: NotGivenOr[str] = NOT_GIVEN,
+        sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
-        extra_instructions: str = "",
+        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        # deprecated
+        extra_instructions: str = "",
+        target_phone_number: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Initialize a WarmTransferTask to dial a human agent via SIP.
+
+        Args:
+            sip_call_to: The phone number or SIP URI to dial for the human agent
+                (e.g. ``"+15105550123"`` or ``"sip:user@example.com"``).
+            sip_trunk_id: ID of a pre-configured LiveKit SIP outbound trunk used to
+                originate the call. Falls back to the ``LIVEKIT_SIP_OUTBOUND_TRUNK``
+                environment variable when not provided.
+            sip_connection: Low-level SIP connection config (``api.SIPOutboundConfig``)
+                for originating calls from a **custom SIP domain** instead of through a
+                saved trunk. Use this when you need to specify a custom hostname,
+                transport, or authentication credentials directly, bypassing the
+                trunk-based configuration.
+            hold_audio: Audio played to the caller while they are on hold during the
+                    transfer.
+            extra_instructions: Extra instructions to append to the base instructions
+                that are used to summarize the conversation history.
+        """
+
+        if not is_given(instructions):
+            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+        elif extra_instructions:
+            logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
+
+        if isinstance(instructions, InstructionParts):
+            conversation_history = self._format_conversation_history(chat_ctx)
+            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
+                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
+                extra=instructions.extra,
+                _conversation_history=conversation_history,
+            )
+
+        assert is_given(instructions)  # for type checking
         super().__init__(
-            instructions=self.get_instructions(
-                chat_ctx=chat_ctx, extra_instructions=extra_instructions
-            ),
+            instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
             turn_detection=turn_detection,
             tools=tools or [],
@@ -99,41 +109,56 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
 
-        self._target_phone_number = target_phone_number
+        if target_phone_number:
+            logger.warning("`target_phone_number` is deprecated, use `sip_call_to` instead")
+            if not sip_call_to:
+                sip_call_to = target_phone_number
+
+        if not sip_call_to:
+            raise ValueError("`sip_call_to` must be set")
+
+        self._sip_call_to = sip_call_to
+        self._sip_connection = sip_connection if is_given(sip_connection) else None
         self._sip_trunk_id = (
-            sip_trunk_id if is_given(sip_trunk_id) else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+            sip_trunk_id
+            if is_given(sip_trunk_id)
+            else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         )
-        if not self._sip_trunk_id:
+        if self._sip_trunk_id is None and self._sip_connection is None:
             raise ValueError(
-                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable or `sip_trunk_id` argument must be set"
+                "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`,"
+                " or `sip_connection` must be set"
             )
+
+        self._sip_number = (
+            sip_number if is_given(sip_number) else os.getenv("LIVEKIT_SIP_NUMBER", "")
+        )
+        self._sip_headers = sip_headers if is_given(sip_headers) else {}
 
         # background audio and io
         self._background_audio = BackgroundAudioPlayer()
         self._hold_audio_handle: PlayHandle | None = None
         self._hold_audio = (
-            cast(Optional[Union[AudioSource, AudioConfig, list[AudioConfig]]], hold_audio)
+            hold_audio
             if is_given(hold_audio)
             else AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
         )
 
         self._original_io_state: dict[str, bool] = {}
 
-    def get_instructions(
-        self, *, chat_ctx: NotGivenOr[llm.ChatContext], extra_instructions: str = ""
-    ) -> str:
-        # users can override this method if they want to customize the entire instructions
+    @staticmethod
+    def _format_conversation_history(chat_ctx: NotGivenOr[llm.ChatContext]) -> str:
+        if not is_given(chat_ctx) or not chat_ctx:
+            return ""
         prev_convo = ""
-        if chat_ctx:
-            context_copy = chat_ctx.copy(
-                exclude_empty_message=True, exclude_instructions=True, exclude_function_call=True
-            )
-            for msg in context_copy.items:
-                if msg.type != "message":
-                    continue
-                role = "Caller" if msg.role == "user" else "Assistant"
-                prev_convo += f"{role}: {msg.text_content}\n"
-        return BASE_INSTRUCTIONS.format(conversation_history=prev_convo) + extra_instructions
+        for msg in chat_ctx.messages():
+            if msg.role not in ("user", "assistant"):
+                continue
+            if not msg.text_content:
+                continue
+            role = "Caller" if msg.role == "user" else "Assistant"
+            prev_convo += f"{role}: {msg.text_content}\n"
+        return prev_convo
 
     async def on_enter(self) -> None:
         job_ctx = get_job_context()
@@ -203,10 +228,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._set_result(ToolError(f"room closed: {rtc.DisconnectReason.Name(reason)}"))
 
     def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if participant.kind not in (
-            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-            rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-        ):
+        if participant.kind not in DEFAULT_PARTICIPANT_KINDS:
             return
 
         logger.info(f"participant disconnected from caller room: {participant.identity}, closing")
@@ -295,15 +317,18 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
 
         # dial the human agent
-        await job_ctx.api.sip.create_sip_participant(
-            api.CreateSIPParticipantRequest(
-                sip_trunk_id=self._sip_trunk_id,
-                sip_call_to=self._target_phone_number,
-                room_name=human_agent_room_name,
-                participant_identity=self._human_agent_identity,
-                wait_until_answered=True,
-            )
+        sip_request = api.CreateSIPParticipantRequest(
+            sip_trunk_id=self._sip_trunk_id,
+            sip_call_to=self._sip_call_to,
+            room_name=human_agent_room_name,
+            participant_identity=self._human_agent_identity,
+            wait_until_answered=True,
+            sip_number=self._sip_number or None,
+            headers=self._sip_headers,
         )
+        if self._sip_connection is not None:
+            sip_request.trunk.CopyFrom(self._sip_connection)
+        await job_ctx.api.sip.create_sip_participant(sip_request)
 
         return human_agent_sess
 
@@ -350,3 +375,35 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             )
         if output.video:
             output.set_video_enabled(enabled and self._original_io_state["video_output"])
+
+
+# instructions
+PERSONA = """\
+# Identity
+
+You are an agent that is reaching out to a human agent for help. There has been a previous conversation
+between you and a caller, the conversation history is included below.
+
+# Goal
+
+Your main goal is to give the human agent sufficient context about why the caller had called in,
+so that the human agent could gain sufficient knowledge to help the caller directly."""
+
+INSTRUCTIONS_TEMPLATE = """\
+{persona}
+
+# Context
+
+In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
+Remember, you are not speaking to the caller right now, you are speaking to the human agent.
+
+## Conversation history with caller
+{_conversation_history}
+## End of conversation history with caller
+
+Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.
+
+You are talking to the human agent now, start by giving them a summary of the conversation so far, and answer any questions they might have.
+
+{extra}
+"""

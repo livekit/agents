@@ -1,5 +1,3 @@
-from typing import Optional
-
 import riva.client
 
 from livekit.agents.utils import is_given
@@ -7,7 +5,7 @@ from livekit.agents.utils import is_given
 
 def create_riva_auth(
     *,
-    api_key: Optional[str],
+    api_key: str | None,
     function_id: str,
     server: str,
     use_ssl: bool = True,

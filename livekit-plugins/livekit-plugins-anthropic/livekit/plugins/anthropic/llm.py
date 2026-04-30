@@ -25,7 +25,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -35,7 +35,15 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
-from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL
+
+# Claude 4.6+ no longer supports prefilling (trailing assistant messages).
+_NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
+
+
+def _model_disables_prefill(model: str) -> bool:
+    """Return True if the model does not support assistant message prefilling."""
+    return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
 
 
 @dataclass
@@ -48,6 +56,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    strict_tool_schema: bool
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -55,7 +64,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-5-sonnet-20241022",
+        model: str | ChatModels = "claude-sonnet-4-6",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -66,6 +75,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        _strict_tool_schema: bool = True,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -73,7 +83,7 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
+        model (str | ChatModels): The model to use. Defaults to "claude-sonnet-4-6".
         api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
@@ -95,10 +105,14 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            strict_tool_schema=_strict_tool_schema,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
-            raise ValueError("Anthropic API key is required")
+            raise ValueError(
+                "Anthropic API key is required, either as argument or set"
+                " ANTHROPIC_API_KEY environment variable"
+            )
 
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
@@ -126,7 +140,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -148,11 +162,24 @@ class LLM(llm.LLM):
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
+        beta_flag: str | None = None
         if tools:
-            extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
-            tool_choice = (
-                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+            from .tools import AnthropicTool
+
+            tool_ctx = llm.ToolContext(tools)
+            tool_schemas = tool_ctx.parse_function_tools(
+                "anthropic", strict=self._opts.strict_tool_schema
             )
+
+            for tool in tool_ctx.provider_tools:
+                if isinstance(tool, AnthropicTool):
+                    tool_schemas.append(tool.to_dict())
+                    if tool.beta_flag:
+                        beta_flag = tool.beta_flag
+
+            extra["tools"] = tool_schemas
+
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -176,7 +203,11 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        anthropic_ctx, extra_data = chat_ctx.to_provider_format(format="anthropic")
+        # Claude 4.6+ does not support prefilling (trailing assistant messages).
+        inject_trailing = _model_disables_prefill(self._opts.model)
+        anthropic_ctx, extra_data = chat_ctx.to_provider_format(
+            format="anthropic", inject_trailing_user_message=inject_trailing
+        )
         messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
         if extra_data.system_messages:
             extra["system"] = [
@@ -188,6 +219,9 @@ class LLM(llm.LLM):
         if self._opts.caching == "ephemeral":
             if extra.get("system"):
                 extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+            if extra.get("tools"):
+                extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
             seen_assistant = False
             for msg in reversed(messages):
@@ -203,17 +237,27 @@ class LLM(llm.LLM):
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
-        stream = self._client.messages.create(
-            messages=messages,
-            model=self._opts.model,
-            stream=True,
-            timeout=conn_options.timeout,
-            **extra,
-        )
+        if beta_flag:
+            stream = self._client.beta.messages.create(
+                betas=[beta_flag],
+                messages=messages,  # type: ignore[arg-type]
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
+        else:
+            stream = self._client.messages.create(
+                messages=messages,
+                model=self._opts.model,
+                stream=True,
+                timeout=conn_options.timeout,
+                **extra,
+            )
 
         return LLMStream(
             self,
-            anthropic_stream=stream,
+            anthropic_stream=stream,  # type: ignore[arg-type]
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
@@ -227,7 +271,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

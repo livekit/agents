@@ -13,9 +13,10 @@ from livekit.agents import (
     JobProcess,
     ModelSettings,
     cli,
+    inference,
     utils,
 )
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 try:
     import librosa
@@ -109,10 +110,9 @@ async def entrypoint(ctx: JobContext):
     }
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3"),
-        tts=openai.TTS(voice="ash"),
-        # llm=openai.realtime.RealtimeModel(voice="alloy"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("cartesia/sonic-3"),
     )
 
     await session.start(agent=MyAgent(), room=ctx.room)

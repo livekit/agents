@@ -14,13 +14,17 @@
 
 """Inworld plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/inworld/ for more information.
+See https://docs.livekit.io/agents/integrations/tts/inworld/ and
+https://docs.livekit.io/agents/models/stt/inworld/ for more information.
 """
 
+from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream, Encoding, SynthesizeStream, TextNormalization, TimestampType
 from .version import __version__
 
 __all__ = [
+    "STT",
+    "SpeechStream",
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",

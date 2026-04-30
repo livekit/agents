@@ -27,6 +27,7 @@ RUN apt-get update && \
     gcc \
     g++ \
     python3-dev \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 USER appuser

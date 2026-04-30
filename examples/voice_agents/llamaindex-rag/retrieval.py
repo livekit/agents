@@ -80,7 +80,8 @@ class RetrievalAgent(Agent):
             system_msg.content.append(instructions)
         else:
             chat_ctx.items.insert(0, llm.ChatMessage(role="system", content=[instructions]))
-        print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
+        preview = instructions[:100].replace("\n", "\\n")
+        print(f"update instructions: {preview}...")
 
         # update the instructions for agent
         # await self.update_instructions(instructions)
@@ -99,7 +100,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    await session.say("Hey, how can I help you today?", allow_interruptions=True)
+    await session.say("Hey, how can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":

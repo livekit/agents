@@ -19,9 +19,11 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Union
+from functools import cached_property
+from typing import Any, Literal
 
 import aiohttp
 
@@ -31,6 +33,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     tokenize,
     tts,
     utils,
@@ -51,6 +54,17 @@ _DefaultEncoding: TTSEncoding = "mp3_22050_32"
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
     split = output_format.split("_")  # e.g: mp3_44100
     return int(split[1])
+
+
+def _encoding_to_mimetype(encoding: TTSEncoding) -> str:
+    if encoding.startswith("mp3"):
+        return "audio/mp3"
+    elif encoding.startswith("opus"):
+        return "audio/opus"
+    elif encoding.startswith("pcm"):
+        return "audio/pcm"
+    else:
+        raise ValueError(f"Unsupported encoding: {encoding}")
 
 
 @dataclass
@@ -75,7 +89,7 @@ class PronunciationDictionaryLocator:
     version_id: str
 
 
-DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
+DEFAULT_VOICE_ID = "l7kNoIfnJKPg7779LI2t"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
@@ -102,7 +116,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
-        preferred_alignment: Literal["normalized", "original"] = "normalized",
+        preferred_alignment: NotGivenOr[Literal["normalized", "original"]] = NOT_GIVEN,
         pronunciation_dictionary_locators: NotGivenOr[
             list[PronunciationDictionaryLocator]
         ] = NOT_GIVEN,
@@ -126,7 +140,7 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
-            preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
+            preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized", or "original" for CJK (ja, ko, zh) languages.
             pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
         """  # noqa: E501
 
@@ -162,6 +176,7 @@ class TTS(tts.TTS):
                 "auto_mode is enabled, it expects full sentences or phrases, "
                 "please provide a SentenceTokenizer instead of a WordTokenizer."
             )
+
         self._opts = _TTSOptions(
             voice_id=voice_id,
             voice_settings=voice_settings,
@@ -175,7 +190,7 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             enable_logging=enable_logging,
-            language=language,
+            language=LanguageCode(language) if is_given(language) else NOT_GIVEN,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
@@ -186,7 +201,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-        self._current_connection: _Connection | None = None
+        self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
 
     @property
@@ -242,33 +257,41 @@ class TTS(tts.TTS):
             self._opts.voice_settings = voice_settings
             changed = True
 
-        if is_given(language) and language != self._opts.language:
-            self._opts.language = language
-            changed = True
+        if is_given(language):
+            language = LanguageCode(language)
+            if language != self._opts.language:
+                self._opts.language = language
+                changed = True
 
         if is_given(pronunciation_dictionary_locators):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
-        if changed and self._current_connection:
-            self._current_connection.mark_non_current()
-            self._current_connection = None
+        if changed and self.__current_connection:
+            self.__current_connection.mark_non_current()
+            self.__current_connection = None
 
-    async def current_connection(self) -> _Connection:
-        """Get the current connection, creating one if needed"""
+    async def _current_connection(self) -> tuple[_Connection, float, bool]:
+        """Get the current connection, creating one if needed.
+
+        Returns:
+            Tuple of (connection, acquire_time, connection_reused)
+        """
         async with self._connection_lock:
             if (
-                self._current_connection
-                and self._current_connection.is_current
-                and not self._current_connection._closed
+                self.__current_connection
+                and self.__current_connection.is_current
+                and not self.__current_connection._closed
             ):
-                return self._current_connection
+                return self.__current_connection, 0.0, True
 
             session = self._ensure_session()
             conn = _Connection(self._opts, session)
+            t0 = time.perf_counter()
             await conn.connect()
-            self._current_connection = conn
-            return conn
+            acquire_time = time.perf_counter() - t0
+            self.__current_connection = conn
+            return conn, acquire_time, False
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -287,9 +310,9 @@ class TTS(tts.TTS):
             await stream.aclose()
         self._streams.clear()
 
-        if self._current_connection:
-            await self._current_connection.aclose()
-            self._current_connection = None
+        if self.__current_connection:
+            await self.__current_connection.aclose()
+            self.__current_connection = None
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -330,7 +353,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/mp3",
+                    mime_type=_encoding_to_mimetype(self._opts.encoding),
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -362,31 +385,36 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._context_id = utils.shortuuid()
-        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+        self._context_id = ""
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
         self._durations_ms: list[int] = []
         self._connection: _Connection | None = None
 
     async def aclose(self) -> None:
-        await self._sent_tokenizer_stream.aclose()
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._context_id = utils.shortuuid()
+        self._text_buffer = ""
+        self._start_times_ms = []
+        self._durations_ms = []
+
+        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+
         output_emitter.initialize(
             request_id=self._context_id,
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             stream=True,
-            mime_type="audio/mp3",
+            mime_type=_encoding_to_mimetype(self._opts.encoding),
         )
         output_emitter.start_segment(segment_id=self._context_id)
 
         connection: _Connection
         try:
-            connection = await asyncio.wait_for(
-                self._tts.current_connection(), self._conn_options.timeout
+            connection, self._acquire_time, self._connection_reused = await asyncio.wait_for(
+                self._tts._current_connection(), self._conn_options.timeout
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -399,10 +427,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
             flush_on_chunk = (
@@ -411,7 +439,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 and self._opts.auto_mode
             )
             xml_content: list[str] = []
-            async for data in self._sent_tokenizer_stream:
+            async for data in sent_tokenizer_stream:
                 text = data.token
                 # send xml tags fully formed
                 xml_start_tokens = ["<phoneme", "<break"]
@@ -461,6 +489,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+            await sent_tokenizer_stream.aclose()
 
 
 @dataclass
@@ -469,7 +498,7 @@ class _TTSOptions:
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
-    language: NotGivenOr[str]
+    language: NotGivenOr[LanguageCode]
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
@@ -481,7 +510,7 @@ class _TTSOptions:
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
-    preferred_alignment: Literal["normalized", "original"]
+    preferred_alignment: NotGivenOr[Literal["normalized", "original"]]
     auto_mode: NotGivenOr[bool]
     pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
 
@@ -515,7 +544,7 @@ class _Connection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._is_current = True
         self._active_contexts: set[str] = set()
-        self._input_queue = utils.aio.Chan[Union[_SynthesizeContent, _CloseContext]]()
+        self._input_queue = utils.aio.Chan[_SynthesizeContent | _CloseContext]()
 
         self._context_data: dict[str, _StreamData] = {}
 
@@ -530,6 +559,21 @@ class _Connection:
     @property
     def is_current(self) -> bool:
         return self._is_current
+
+    @cached_property
+    def preferred_alignment(self) -> Literal["normalized", "original"]:
+        if is_given(self._opts.preferred_alignment):
+            preferred_alignment = self._opts.preferred_alignment
+        else:
+            if is_given(self._opts.language) and self._opts.language.language in {
+                "ja",
+                "ko",
+                "zh",
+            }:
+                preferred_alignment = "original"
+            else:
+                preferred_alignment = "normalized"
+        return preferred_alignment
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
@@ -582,10 +626,6 @@ class _Connection:
 
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
-
-                    # If not current and this is a new context, ignore it
-                    if not self._is_current and is_new_context:
-                        continue
 
                     if is_new_context:
                         voice_settings = (
@@ -682,7 +722,7 @@ class _Connection:
                 # ensure alignment
                 alignment = (
                     data.get("normalizedAlignment")
-                    if self._opts.preferred_alignment == "normalized"
+                    if self.preferred_alignment == "normalized"
                     else data.get("alignment")
                 )
                 if alignment and stream is not None:
@@ -692,7 +732,7 @@ class _Connection:
                     if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
                         stream._text_buffer += "".join(chars)
                         # in case item in chars has multiple characters
-                        for char, start, dur in zip(chars, starts, durs):
+                        for char, start, dur in zip(chars, starts, durs, strict=False):
                             if len(char) > 1:
                                 stream._start_times_ms += [start] * (len(char) - 1)
                                 stream._durations_ms += [0] * (len(char) - 1)
@@ -827,7 +867,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     params.append(f"model_id={opts.model}")
     params.append(f"output_format={opts.encoding}")
     if is_given(opts.language):
-        params.append(f"language_code={opts.language}")
+        params.append(f"language_code={opts.language.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
     params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
@@ -850,11 +890,14 @@ def _to_timed_words(
     timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], text
+
     timed_words = []
-    _, start_indices, _ = zip(*words)
+    _, start_indices, _ = zip(*words, strict=False)
     end = 0
     # we don't know if the last word is complete, always leave it as remaining
-    for start, end in zip(start_indices[:-1], start_indices[1:]):
+    for start, end in zip(start_indices[:-1], start_indices[1:], strict=False):
         start_t = timestamps[start] / 1000
         end_t = timestamps[end] / 1000
         timed_words.append(

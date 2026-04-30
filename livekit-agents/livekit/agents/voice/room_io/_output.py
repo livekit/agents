@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
+
+from google.protobuf.json_format import MessageToDict
 
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
@@ -12,6 +17,7 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
+    TimedString,
 )
 from .. import io
 from ..transcription import find_micro_track_id
@@ -43,8 +49,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate, num_channels, samples_per_channel=sample_rate // 20
-        )  # chunk the frame into a small, fixed size
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
+        )
 
         # used to republish track on reconnection
         self._republish_task: asyncio.Task[None] | None = None
@@ -56,6 +62,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
+        self._first_frame_event = asyncio.Event()
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -97,7 +104,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._flush_task
 
         for f in self._audio_bstream.push(frame.data):
-            await self._audio_buf.send(f)
+            self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
 
     def flush(self) -> None:
@@ -132,6 +139,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
+        self._first_frame_event.clear()
 
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
@@ -167,6 +175,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._pushed_duration = 0
         self._interrupted_event.clear()
+        self._first_frame_event.clear()
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
@@ -184,6 +193,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # ignore frames if interrupted
                 continue
 
+            if not self._first_frame_event.is_set():
+                self._first_frame_event.set()
+                self.on_playback_started(created_at=time.time())
             await self._audio_source.capture_frame(frame)
 
     def _on_reconnected(self) -> None:
@@ -210,6 +222,7 @@ class _ParticipantLegacyTranscriptionOutput:
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_task: asyncio.Task[None] | None = None
+        self._closed = False
 
         self._reset_state()
         self.set_participant(participant)
@@ -277,6 +290,16 @@ class _ParticipantLegacyTranscriptionOutput:
         )
         self._reset_state()
 
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self._room.off("track_published", self._on_track_published)
+        self._room.off("local_track_published", self._on_local_track_published)
+        if self._flush_task:
+            await self._flush_task
+
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
         if self._participant_identity is None or self._track_id is None:
             return
@@ -300,7 +323,7 @@ class _ParticipantLegacyTranscriptionOutput:
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             if self._room.isconnected():
-                logger.warning("failed to publish transcription", exc_info=e)
+                logger.warning("failed to publish agent transcription to room", exc_info=e)
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -347,6 +370,7 @@ class _ParticipantStreamTranscriptionOutput:
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
         attributes: dict[str, str] | None = None,
+        json_format: bool = False,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
@@ -354,10 +378,12 @@ class _ParticipantStreamTranscriptionOutput:
         self._additional_attributes = attributes or {}
 
         self._writer: rtc.TextStreamWriter | None = None
+        self._json_format = json_format
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_atask: asyncio.Task[None] | None = None
+        self._closed = False
 
         self._reset_state()
         self.set_participant(participant)
@@ -421,6 +447,19 @@ class _ParticipantStreamTranscriptionOutput:
             self._reset_state()
             self._capturing = True
 
+        if self._json_format:
+            ts_pb = agent_pb.TimedString(text=str(text))
+            if isinstance(text, TimedString):
+                if utils.is_given(text.start_time):
+                    ts_pb.start_time = text.start_time
+                if utils.is_given(text.end_time):
+                    ts_pb.end_time = text.end_time
+                if utils.is_given(text.confidence):
+                    ts_pb.confidence = text.confidence
+                if utils.is_given(text.start_time_offset):
+                    ts_pb.start_time_offset = text.start_time_offset
+            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
+
         self._latest_text = text
 
         try:
@@ -435,7 +474,7 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish transcription", exc_info=e)
+            logger.warning("failed to publish agent transcription to room", exc_info=e)
 
     async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
@@ -452,7 +491,7 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish transcription", exc_info=e)
+            logger.warning("failed to publish agent transcription to room", exc_info=e)
 
     def flush(self) -> None:
         if self._participant_identity is None or not self._capturing:
@@ -462,6 +501,22 @@ class _ParticipantStreamTranscriptionOutput:
         curr_writer = self._writer
         self._writer = None
         self._flush_atask = asyncio.create_task(self._flush_task(curr_writer))
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self._room.off("track_published", self._on_track_published)
+        self._room.off("local_track_published", self._on_local_track_published)
+
+        if self._flush_atask:
+            await self._flush_atask
+
+        if self._writer:
+            writer = self._writer
+            self._writer = None
+            await writer.aclose()
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -495,6 +550,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
         next_in_chain: io.TextOutput | None = None,
+        json_format: bool = False,
     ) -> None:
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
@@ -510,8 +566,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                json_format=json_format,
             ),
         ]
+        self.__closed = False
 
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
@@ -529,3 +587,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
         if self.next_in_chain:
             self.next_in_chain.flush()
+
+    async def aclose(self) -> None:
+        if self.__closed:
+            return
+
+        self.__closed = True
+        await asyncio.gather(*[source.aclose() for source in self.__outputs])

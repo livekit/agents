@@ -3,6 +3,12 @@ ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
+ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
+"""Provider-known correlation ids associated with this span (list[str]).
+
+Populated by STT/TTS plugins when the id is either sent to the provider
+(e.g. WS context_id) or returned by it (e.g. response request_id / session_id),
+so it can be cross-referenced with the provider's logs for debugging."""
 
 
 ATTR_PARTICIPANT_ID = "lk.participant_id"
@@ -25,8 +31,11 @@ ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
 # llm node
 ATTR_CHAT_CTX = "lk.chat_ctx"
 ATTR_FUNCTION_TOOLS = "lk.function_tools"
+ATTR_PROVIDER_TOOLS = "lk.provider_tools"
+ATTR_TOOL_SETS = "lk.tool_sets"
 ATTR_RESPONSE_TEXT = "lk.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.response.function_calls"
+ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
@@ -39,6 +48,7 @@ ATTR_FUNCTION_TOOL_OUTPUT = "lk.function_tool.output"
 ATTR_TTS_INPUT_TEXT = "lk.input_text"
 ATTR_TTS_STREAMING = "lk.tts.streaming"
 ATTR_TTS_LABEL = "lk.tts.label"
+ATTR_RESPONSE_TTFB = "lk.response.ttfb"
 
 # eou detection
 ATTR_EOU_PROBABILITY = "lk.eou.probability"
@@ -55,9 +65,13 @@ ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
 ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
 
+# latency span attributes
+ATTR_E2E_LATENCY = "lk.e2e_latency"
+
 # OpenTelemetry GenAI attributes
 # OpenTelemetry specification: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
@@ -85,3 +99,17 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+
+# AMD (Answering Machine Detection) attributes
+ATTR_AMD_CATEGORY = "lk.amd.category"
+ATTR_AMD_REASON = "lk.amd.reason"
+ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
+ATTR_AMD_DELAY = "lk.amd.delay"
+ATTR_AMD_TRANSCRIPT = "lk.amd.transcript"
+
+# Adaptive Interruption attributes
+ATTR_IS_INTERRUPTION = "lk.is_interruption"
+ATTR_INTERRUPTION_PROBABILITY = "lk.interruption.probability"
+ATTR_INTERRUPTION_TOTAL_DURATION = "lk.interruption.total_duration"
+ATTR_INTERRUPTION_PREDICTION_DURATION = "lk.interruption.prediction_duration"
+ATTR_INTERRUPTION_DETECTION_DELAY = "lk.interruption.detection_delay"
