@@ -433,6 +433,13 @@ class AgentActivity(RecognitionHooks):
         cannot interleave their writes to ``_chat_ctx`` and ``rt_session``.
         """
         async with self._refresh_lock:
+            # Re-check after acquiring: a publish queued behind the lock could be
+            # awoken by a cancelled refresh task right as _close_session is about
+            # to await rt_session.aclose(). Writing to a closing session yields
+            # noisy errors out to the caller.
+            if self._closed:
+                return
+
             tools = self.tools
             tool_ctx = llm.ToolContext(tools)
             tool_names = set(get_fnc_tool_names(tools))
@@ -486,8 +493,13 @@ class AgentActivity(RecognitionHooks):
 
         for server in mcp_servers:
             if server not in self._mcp_reload_failed_callbacks:
-                server._add_reload_failed_callback(self._on_mcp_reload_failed)
-                self._mcp_reload_failed_callbacks[server] = self._on_mcp_reload_failed
+                # Bind the source server at registration time so the bridge can
+                # tag the ErrorEvent with the actual failing component. Without
+                # this, listeners couldn't tell which MCP server went stale when
+                # an agent has multiple servers.
+                bound_cb = partial(self._on_mcp_reload_failed, server)
+                server._add_reload_failed_callback(bound_cb)
+                self._mcp_reload_failed_callbacks[server] = bound_cb
 
     def _clear_toolset_change_subscriptions(self) -> None:
         for toolset, ts_cb in list(self._toolset_changed_callbacks.items()):
@@ -498,11 +510,11 @@ class AgentActivity(RecognitionHooks):
             server._remove_reload_failed_callback(fail_cb)
         self._mcp_reload_failed_callbacks.clear()
 
-    def _on_mcp_reload_failed(self, error: BaseException) -> None:
+    def _on_mcp_reload_failed(self, server: mcp.MCPServer, error: BaseException) -> None:
         if self._closed:
             return
         try:
-            self._session.emit("error", ErrorEvent(error=error, source=self._agent))
+            self._session.emit("error", ErrorEvent(error=error, source=server))
         except Exception:
             logger.exception("error while emitting MCP reload-failed event")
 

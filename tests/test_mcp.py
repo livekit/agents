@@ -625,8 +625,58 @@ async def test_agent_activity_emits_session_error_on_terminal_reload_failure(
     error_events = [p for name, p in emitted if name == "error"]
     assert len(error_events) == 1
     assert isinstance(error_events[0].error, RuntimeError)
+    # The bridge must tag the event with the failing MCP server, not the agent —
+    # otherwise downstream listeners can't tell which server went stale when an
+    # agent owns multiple MCP servers.
+    assert error_events[0].source is server
 
     activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_activity_skips_session_error_after_close() -> None:
+    """A reload-failed callback firing after _on_mcp_reload_failed sees _closed=True
+    must not emit a session error event."""
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    activity = _make_test_activity(toolset=toolset, rt_session=None)
+    emitted: list[Any] = []
+    activity._session.emit = lambda name, payload: emitted.append((name, payload))  # type: ignore[attr-defined]
+    activity._sync_toolset_change_subscriptions()
+
+    activity._closed = True
+    bound_cb = next(iter(activity._mcp_reload_failed_callbacks.values()))
+    bound_cb(RuntimeError("simulated terminal failure"))
+
+    assert emitted == []
+
+    activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_publish_tools_change_skips_after_close() -> None:
+    """If _close_session has already flipped _closed=True while a publish was
+    queued behind _refresh_lock, the publish must bail out instead of writing
+    to a closing rt_session."""
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    rt_session = _FakeRealtimeSession()
+    activity = _make_test_activity(toolset=toolset, rt_session=rt_session)
+    # Snapshot before close so the diff would be non-empty if publish ran.
+    activity._tool_names_snapshot = set()
+    activity._closed = True
+
+    await activity._publish_tools_change()
+
+    assert rt_session.tool_updates == []
+    assert activity._tool_names_snapshot == set()
+
     await toolset.aclose()
 
 
@@ -671,8 +721,48 @@ async def test_publish_tools_change_serializes_under_concurrent_callers() -> Non
     block.set()
     await asyncio.gather(first, second)
     assert concurrent_observed is False
+    # Both publishes saw the same {alpha} tool set; snapshot must end matching.
+    assert activity._tool_names_snapshot == {"alpha"}
 
     activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_checkpoints_for_notifications() -> None:
+    """The hoisted checkpoint() must run for ServerNotification messages too,
+    not just Exception-typed ones — otherwise a burst of notifications starves
+    the receive loop of cancellation points."""
+    server = _FakeMCPServer(["alpha"])
+
+    async def _runner() -> None:
+        await server._handle_message(
+            mcp_types.ServerNotification(root=mcp_types.ToolListChangedNotification())
+        )
+
+    task = asyncio.create_task(_runner())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_request_tools_reload_skips_after_unsubscribe() -> None:
+    """Snapshot-iteration race: MCPServer._handle_tool_list_changed snapshots
+    its callback set, then fires each one. If aclose() removed our callback in
+    between, _request_tools_reload must not spawn a reload task."""
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    # Simulate the race: server already removed our callback (aclose path), but
+    # we still receive the call from a stale snapshot iteration.
+    server._remove_tool_list_changed_callback(toolset._request_tools_reload)
+    toolset._listening_for_tool_changes = False
+
+    toolset._request_tools_reload()
+    assert toolset._reload_task is None
+
     await toolset.aclose()
 
 

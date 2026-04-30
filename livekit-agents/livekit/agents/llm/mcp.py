@@ -151,10 +151,12 @@ class MCPServer(ABC):
             self._closing_ev.clear()
 
     async def _handle_message(self, message: Any) -> None:
+        # Always yield to the loop, matching the MCP SDK default handler. Without
+        # this, a burst of notifications starves the receive loop of cancellation
+        # points.
+        await anyio.lowlevel.checkpoint()
+
         if isinstance(message, Exception):
-            # Match the MCP SDK default handler so cancellation propagates through
-            # bursts of incoming notifications.
-            await anyio.lowlevel.checkpoint()
             return
 
         if isinstance(message, mcp.types.ServerNotification) and isinstance(
@@ -553,6 +555,14 @@ class MCPToolset(Toolset):
         return [tool for tool in tools if self._tool_filter(tool)]
 
     def _request_tools_reload(self) -> None:
+        # Guard against snapshot-iteration races: MCPServer._handle_tool_list_changed
+        # snapshots its callback set, then fires each. If aclose() unsubscribed us
+        # between the snapshot and this call, the listening flag is already False
+        # and we must not spawn a reload task against a server that may be tearing
+        # down.
+        if not self._listening_for_tool_changes:
+            return
+
         self._reload_requested = True
         if self._reload_task is not None and not self._reload_task.done():
             return
