@@ -76,6 +76,7 @@ class AvatarSession:
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+        self._realtime_session_id: str | None = None
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -115,6 +116,7 @@ class AvatarSession:
 
         logger.debug("starting Runway avatar session")
         await self._create_session(livekit_url, livekit_token, room.name)
+        job_ctx.add_shutdown_callback(self._cancel_runway_realtime_session)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
@@ -159,6 +161,15 @@ class AvatarSession:
                             status_code=response.status,
                             body=text,
                         )
+                    payload = await response.json()
+                    session_id = payload.get("id") if isinstance(payload, dict) else None
+                    if not session_id or not isinstance(session_id, str):
+                        raise APIStatusError(
+                            "Runway API response missing session id",
+                            status_code=response.status,
+                            body=str(payload),
+                        )
+                    self._realtime_session_id = session_id
                     return
 
             except Exception as error:
@@ -177,3 +188,41 @@ class AvatarSession:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
+
+    async def _cancel_runway_realtime_session(self, _reason: str) -> None:
+        session_id = self._realtime_session_id
+        if session_id is None:
+            return
+
+        assert self._api_key is not None
+        assert isinstance(self._api_url, str)
+
+        try:
+            async with self._ensure_http_session().delete(
+                f"{self._api_url}/v1/realtime_sessions/{session_id}",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "X-Runway-Version": API_VERSION,
+                },
+                timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+            ) as response:
+                if response.ok:
+                    logger.debug(
+                        "cancelled Runway realtime session",
+                        extra={"session_id": session_id},
+                    )
+                else:
+                    body = await response.text()
+                    logger.warning(
+                        "could not cancel Runway realtime session",
+                        extra={
+                            "session_id": session_id,
+                            "status": response.status,
+                            "body": body,
+                        },
+                    )
+        except Exception as exc:
+            logger.warning(
+                "error cancelling Runway realtime session",
+                extra={"session_id": session_id, "error": str(exc)},
+            )
