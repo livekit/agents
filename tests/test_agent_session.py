@@ -673,11 +673,11 @@ async def test_aec_warmup() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
 
 
-async def test_speech_boundary_cooldown() -> None:
-    """Speech boundary cooldown should not interfere with VAD-based interruption when adaptive
+async def test_start_boundary_does_not_block_vad_interruption() -> None:
+    """backchannel boundary should not interfere with VAD-based interruption when adaptive
     detection is not active. The cooldown timer runs but has no effect on the VAD path.
 
-    This validates that the speech_boundary_cooldown config is properly handled and doesn't
+    This validates that the backchannel_boundary config is properly handled and doesn't
     regress normal interruption behavior.
     """
     speed = 5.0
@@ -714,11 +714,11 @@ async def test_speech_boundary_cooldown() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
 
 
-async def test_speech_boundary_cooldown_suppresses_start_boundary_interruption() -> None:
+async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> None:
     actions = FakeActions()
     session = create_session(
         actions,
-        turn_handling={"interruption": {"speech_boundary_cooldown": (0.05, 0.0)}},
+        turn_handling={"interruption": {"backchannel_boundary": (0.05, 0.0)}},
     )
     hooks = _TestRecognitionHooks()
     recognition = AudioRecognition(
@@ -745,11 +745,11 @@ async def test_speech_boundary_cooldown_suppresses_start_boundary_interruption()
         await _close_test_session(session)
 
 
-async def test_speech_boundary_cooldown_releases_end_boundary_transcript() -> None:
+async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(
         actions,
-        turn_handling={"interruption": {"speech_boundary_cooldown": (0.0, 0.5)}},
+        turn_handling={"interruption": {"backchannel_boundary": (0.0, 0.5)}},
     )
     recognition = AudioRecognition(
         session,

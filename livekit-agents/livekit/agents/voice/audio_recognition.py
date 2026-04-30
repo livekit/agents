@@ -184,21 +184,20 @@ class AudioRecognition:
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         self._agent_speaking: bool = False
 
-        _speech_boundary_cooldown: float | tuple[float, float] | None = (
-            session.options.interruption.get("speech_boundary_cooldown")
+        _backchannel_boundary: float | tuple[float, float] | None = (
+            session.options.interruption.get("backchannel_boundary")
         )
-        self._speech_boundary_cooldown: tuple[float, float] | None = (
-            (_speech_boundary_cooldown, _speech_boundary_cooldown)
-            if isinstance(_speech_boundary_cooldown, int | float)
-            else _speech_boundary_cooldown
+        self._backchannel_boundary: tuple[float, float] | None = (
+            (_backchannel_boundary, _backchannel_boundary)
+            if isinstance(_backchannel_boundary, int | float)
+            else _backchannel_boundary
         )
-        if self._speech_boundary_cooldown and (
-            len(self._speech_boundary_cooldown) != 2
-            or any(x < 0.0 for x in self._speech_boundary_cooldown)
+        if self._backchannel_boundary and (
+            len(self._backchannel_boundary) != 2 or any(x < 0.0 for x in self._backchannel_boundary)
         ):
-            raise ValueError("speech_boundary_cooldown must be a tuple of two non-negative floats")
-        self._speech_boundary_cooldown_timer: asyncio.TimerHandle | None = None
-        self._speech_boundary_cooldown_callback: Callable[[], None] | None = None
+            raise ValueError("backchannel_boundary must be a tuple of two non-negative floats")
+        self._backchannel_boundary_timer: asyncio.TimerHandle | None = None
+        self.backchannel_boundary_callback: Callable[[], None] | None = None
         # endregion
 
         self._user_turn_span: trace.Span | None = None
@@ -253,34 +252,26 @@ class AudioRecognition:
             and not self._interruption_ch.closed
         )
 
-    # region: speech boundary cooldown for adaptive interruption detection
+    # region: boundary for adaptive interruption detection
 
     @property
-    def speech_boundary_cooldown_active(self) -> bool:
-        return self._speech_boundary_cooldown_timer is not None
+    def backchannel_boundary_active(self) -> bool:
+        return self._backchannel_boundary_timer is not None
 
-    @property
-    def speech_boundary_cooldown_callback(self) -> Callable[[], None] | None:
-        return self._speech_boundary_cooldown_callback
-
-    @speech_boundary_cooldown_callback.setter
-    def speech_boundary_cooldown_callback(self, cb: Callable[[], None] | None) -> None:
-        self._speech_boundary_cooldown_callback = cb
-
-    def _on_speech_boundary_cooldown_done(self) -> None:
-        self._speech_boundary_cooldown_timer = None
-        cb, self._speech_boundary_cooldown_callback = (
-            self._speech_boundary_cooldown_callback,
+    def _on_backchannel_boundary_done(self) -> None:
+        self._backchannel_boundary_timer = None
+        cb, self.backchannel_boundary_callback = (
+            self.backchannel_boundary_callback,
             None,
         )
         if cb is not None:
             cb()
 
-    def _cancel_speech_boundary_cooldown(self) -> None:
-        if self._speech_boundary_cooldown_timer is not None:
-            self._speech_boundary_cooldown_timer.cancel()
-            self._speech_boundary_cooldown_timer = None
-        self._speech_boundary_cooldown_callback = None
+    def _cancel_backchannel_boundary(self) -> None:
+        if self._backchannel_boundary_timer is not None:
+            self._backchannel_boundary_timer.cancel()
+            self._backchannel_boundary_timer = None
+        self.backchannel_boundary_callback = None
 
     # endregion
 
@@ -288,20 +279,17 @@ class AudioRecognition:
         self._agent_speaking = True
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
 
-        if (
-            self._speech_boundary_cooldown
-            and (start_cooldown := self._speech_boundary_cooldown[0]) > 0
-        ):
-            self._cancel_speech_boundary_cooldown()
-            self._speech_boundary_cooldown_timer = asyncio.get_running_loop().call_later(
-                start_cooldown, self._on_speech_boundary_cooldown_done
+        if self._backchannel_boundary and (start_cooldown := self._backchannel_boundary[0]) > 0:
+            self._cancel_backchannel_boundary()
+            self._backchannel_boundary_timer = asyncio.get_running_loop().call_later(
+                start_cooldown, self._on_backchannel_boundary_done
             )
 
         if self.adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
-        self._cancel_speech_boundary_cooldown()
+        self._cancel_backchannel_boundary()
 
         if self._agent_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=time.time())
@@ -318,7 +306,7 @@ class AudioRecognition:
                 self.on_end_of_overlap_speech(ended_at=time.time())
 
             end_cooldown: float = (
-                self._speech_boundary_cooldown[1] if self._speech_boundary_cooldown else 0.0
+                self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
             )
 
             ignore_until = (
@@ -401,8 +389,8 @@ class AudioRecognition:
             _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time())
         )
 
-    async def _flush_held_transcripts(self, cooldown: float | None = None) -> None:
-        """Flush held transcripts whose *end time* is after the ignore_user_transcript_until timestamp.
+    async def _flush_held_transcripts(self, cooldown: float) -> None:
+        """Flush held transcripts whose *end time* is after the ignore_user_transcript_until - cooldown timestamp.
 
         If the event has no timestamps, we assume it is the same as the next valid event.
         """
@@ -557,10 +545,10 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             await self._end_of_turn_task
 
-        if self._speech_boundary_cooldown_timer is not None:
-            self._speech_boundary_cooldown_timer.cancel()
-            self._speech_boundary_cooldown_timer = None
-            self._speech_boundary_cooldown_callback = None
+        if self._backchannel_boundary_timer is not None:
+            self._backchannel_boundary_timer.cancel()
+            self._backchannel_boundary_timer = None
+            self.backchannel_boundary_callback = None
 
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
@@ -648,7 +636,7 @@ class AudioRecognition:
             self._tasks.add(task)
             self._interruption_atask = None
             self._interruption_ch = None
-            self._cancel_speech_boundary_cooldown()
+            self._cancel_backchannel_boundary()
 
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
@@ -806,8 +794,12 @@ class AudioRecognition:
                 )
                 self._transcript_buffer.append(ev)
                 return
-            elif self._transcript_buffer:
-                await self._flush_held_transcripts()
+
+            if self._transcript_buffer:
+                end_cooldown: float = (
+                    self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
+                )
+                await self._flush_held_transcripts(cooldown=end_cooldown)
                 # no return here to allow the new event to be processed normally
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -1011,8 +1003,8 @@ class AudioRecognition:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
-        if self.speech_boundary_cooldown_active:
-            logger.trace("ignoring overlap speech event during speech boundary cooldown")
+        if self.backchannel_boundary_active:
+            logger.trace("ignoring overlap speech event during backchannel boundary cooldown")
             return
 
         if ev.is_interruption:

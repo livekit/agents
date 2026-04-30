@@ -3527,8 +3527,8 @@ class AgentActivity(RecognitionHooks):
             self._session.output.audio.resume()
 
     def _disable_vad_interruption_soon(self) -> None:
-        """Disable VAD interruption after the speech boundary cooldown expires."""
-        if self._audio_recognition and self._audio_recognition.speech_boundary_cooldown_active:
+        """Disable VAD interruption after the backchannel boundary expires."""
+        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
 
             def _disable_vad_interruption() -> None:
                 # only disable it if the agent is still speaking
@@ -3536,16 +3536,16 @@ class AgentActivity(RecognitionHooks):
                     self._session.agent_state == "speaking"
                     and self._interruption_by_audio_activity_enabled
                 ):
-                    logger.trace("speech boundary cooldown expired")
+                    logger.trace("backchannel boundary expired")
                     self._interruption_by_audio_activity_enabled = False
 
-            self._audio_recognition.speech_boundary_cooldown_callback = _disable_vad_interruption
+            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
         else:
             self._interruption_by_audio_activity_enabled = False
 
     def _restore_interruption_by_audio_activity(self) -> None:
         if self._audio_recognition:
-            self._audio_recognition._cancel_speech_boundary_cooldown()
+            self._audio_recognition._cancel_backchannel_boundary()
 
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
