@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -177,6 +177,10 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+        self._toolset_changed_callbacks: dict[llm.Toolset, Callable[[llm.Toolset], None]] = {}
+        self._toolset_refresh_task: asyncio.Task[None] | None = None
+        self._toolset_refresh_pending = False
+        self._tool_names_snapshot: set[str] = set()
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -423,6 +427,82 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+
+        self._sync_toolset_change_subscriptions()
+        self._tool_names_snapshot = set(get_fnc_tool_names(self.tools))
+
+    def _sync_toolset_change_subscriptions(self) -> None:
+        toolsets = set(llm.ToolContext(self.tools).toolsets)
+
+        for toolset in list(self._toolset_changed_callbacks):
+            if toolset not in toolsets:
+                callback = self._toolset_changed_callbacks.pop(toolset)
+                toolset._remove_tools_changed_callback(callback)
+
+        for toolset in toolsets:
+            if toolset in self._toolset_changed_callbacks:
+                continue
+
+            def _on_tools_changed(changed_toolset: llm.Toolset) -> None:
+                self._request_toolset_refresh(changed_toolset)
+
+            toolset._add_tools_changed_callback(_on_tools_changed)
+            self._toolset_changed_callbacks[toolset] = _on_tools_changed
+
+    def _clear_toolset_change_subscriptions(self) -> None:
+        for toolset, callback in list(self._toolset_changed_callbacks.items()):
+            toolset._remove_tools_changed_callback(callback)
+        self._toolset_changed_callbacks.clear()
+
+    def _request_toolset_refresh(self, toolset: llm.Toolset) -> None:
+        if self._closed:
+            return
+
+        self._toolset_refresh_pending = True
+        if self._toolset_refresh_task is not None and not self._toolset_refresh_task.done():
+            return
+
+        self._toolset_refresh_task = asyncio.create_task(
+            self._refresh_tools_from_toolsets(),
+            name=f"AgentActivity.refresh_tools.{toolset.id}",
+        )
+
+    async def _refresh_tools_from_toolsets(self) -> None:
+        try:
+            while self._toolset_refresh_pending and not self._closed:
+                self._toolset_refresh_pending = False
+                await self._apply_toolset_refresh()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failed to refresh tools after toolset update")
+
+    async def _apply_toolset_refresh(self) -> None:
+        tools = self.tools
+        tool_ctx = llm.ToolContext(tools)
+        tool_names = set(get_fnc_tool_names(tools))
+        tools_added = sorted(tool_names - self._tool_names_snapshot) or None
+        tools_removed = sorted(self._tool_names_snapshot - tool_names) or None
+
+        config_update: llm.AgentConfigUpdate | None = None
+        if tools_added or tools_removed:
+            config_update = llm.AgentConfigUpdate(
+                tools_added=tools_added,
+                tools_removed=tools_removed,
+                agent_id=self._agent.id,
+            )
+            config_update._tools = tool_ctx.flatten()
+
+        if self._rt_session is not None:
+            await self._rt_session.update_tools(tool_ctx.flatten())
+
+        if isinstance(self.llm, llm.LLM):
+            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+
+        if config_update is not None:
+            self._agent._chat_ctx.insert(config_update)
+
+        self._tool_names_snapshot = tool_names
 
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
@@ -706,6 +786,9 @@ class AgentActivity(RecognitionHooks):
                 return_exceptions=True,
             )
 
+        self._tool_names_snapshot = set(get_fnc_tool_names(self.tools))
+        self._sync_toolset_change_subscriptions()
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -952,6 +1035,10 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
+
+        self._clear_toolset_change_subscriptions()
+        if self._toolset_refresh_task is not None:
+            await utils.aio.cancel_and_wait(self._toolset_refresh_task)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()

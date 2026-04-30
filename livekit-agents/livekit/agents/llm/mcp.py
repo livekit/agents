@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -45,6 +45,7 @@ from .tool_context import (
 )
 
 MCPTool = RawFunctionTool
+_ToolListChangedCallback = Callable[[], None]
 
 
 @dataclass
@@ -87,6 +88,7 @@ class MCPServer(ABC):
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+        self._tool_list_changed_callbacks: set[_ToolListChangedCallback] = set()
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
@@ -122,6 +124,7 @@ class MCPServer(ABC):
                     read_timeout_seconds=timedelta(seconds=self._read_timeout)
                     if self._read_timeout
                     else None,
+                    message_handler=self._handle_message,
                 ) as client:
                     await client.initialize()
                     self._client = client
@@ -139,6 +142,28 @@ class MCPServer(ABC):
             self._client = None
             self._lk_tools = None
             self._closing_ev.clear()
+
+    async def _handle_message(self, message: Any) -> None:
+        if isinstance(message, mcp.types.ServerNotification) and isinstance(
+            message.root, mcp.types.ToolListChangedNotification
+        ):
+            self._handle_tool_list_changed()
+
+    def _handle_tool_list_changed(self) -> None:
+        self.invalidate_cache()
+        # Refetch from toolset tasks instead of the MCP receive loop, which must stay free
+        # to deliver the list_tools() response.
+        for callback in list(self._tool_list_changed_callbacks):
+            try:
+                callback()
+            except Exception:
+                logger.exception("error in MCP tool list changed callback")
+
+    def _add_tool_list_changed_callback(self, callback: _ToolListChangedCallback) -> None:
+        self._tool_list_changed_callbacks.add(callback)
+
+    def _remove_tool_list_changed_callback(self, callback: _ToolListChangedCallback) -> None:
+        self._tool_list_changed_callbacks.discard(callback)
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -444,6 +469,10 @@ class MCPToolset(Toolset):
         self._mcp_server = mcp_server
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._reload_requested = False
+        self._reload_task: asyncio.Task[None] | None = None
+        self._listening_for_tool_changes = False
+        self._tool_filter: Callable[[MCPTool], bool] | None = None
 
     async def setup(self, *, reload: bool = False) -> Self:
         """Initialize the MCP server connection and fetch available tools.
@@ -461,27 +490,74 @@ class MCPToolset(Toolset):
             if not reload and self._initialized:
                 return self
 
+            # Register before the first list_tools() call so a concurrent list_changed
+            # notification queues a reload instead of leaving the initial result stale.
+            if not self._listening_for_tool_changes:
+                self._mcp_server._add_tool_list_changed_callback(self._request_tools_reload)
+                self._listening_for_tool_changes = True
+
             if not self._mcp_server.initialized:
                 await self._mcp_server.initialize()
             elif reload:
                 self._mcp_server.invalidate_cache()
 
             tools = await self._mcp_server.list_tools()
-            self._tools = tools
+            self._tools = self._apply_filter(tools)
             self._initialized = True
             return self
 
     def filter_tools(self, filter_fn: Callable[[MCPTool], bool]) -> Self:
         """Filter the toolset's tools in-place using a predicate."""
-        self._tools = [
-            tool for tool in self._tools if isinstance(tool, MCPTool) and filter_fn(tool)
-        ]
+        if self._tool_filter is None:
+            self._tool_filter = filter_fn
+        else:
+            previous_filter = self._tool_filter
+            self._tool_filter = lambda tool: previous_filter(tool) and filter_fn(tool)
+
+        self._tools = self._apply_filter(
+            [tool for tool in self._tools if isinstance(tool, MCPTool)]
+        )
         return self
+
+    def _apply_filter(self, tools: Sequence[MCPTool]) -> list[MCPTool]:
+        if self._tool_filter is None:
+            return list(tools)
+
+        return [tool for tool in tools if self._tool_filter(tool)]
+
+    def _request_tools_reload(self) -> None:
+        self._reload_requested = True
+        if self._reload_task is not None and not self._reload_task.done():
+            return
+
+        self._reload_task = asyncio.create_task(
+            self._reload_tools(), name=f"{type(self).__name__}._reload_tools"
+        )
+
+    async def _reload_tools(self) -> None:
+        try:
+            while self._reload_requested:
+                self._reload_requested = False
+                await self.setup(reload=True)
+                self._notify_tools_changed()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failed to reload MCP tools after tools/list_changed notification")
 
     async def aclose(self) -> None:
         try:
+            if self._listening_for_tool_changes:
+                self._mcp_server._remove_tool_list_changed_callback(self._request_tools_reload)
+                self._listening_for_tool_changes = False
+            if self._reload_task is not None and self._reload_task is not asyncio.current_task():
+                self._reload_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._reload_task
+
             await super().aclose()
             await self._mcp_server.aclose()
         finally:
             self._initialized = False
             self._tools = []
+            self._reload_requested = False
