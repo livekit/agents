@@ -14,6 +14,7 @@ STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
 HEADER_USER_AGENT = "User-Agent"
 HEADER_ROOM_ID = "X-LiveKit-Room-ID"
 HEADER_JOB_ID = "X-LiveKit-Job-ID"
+HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
@@ -55,6 +56,8 @@ def get_inference_headers() -> dict[str, str]:
             headers[HEADER_ROOM_ID] = ctx.job.room.sid
         if ctx.job.id:
             headers[HEADER_JOB_ID] = ctx.job.id
+        if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
+            headers[HEADER_WORKER_TOKEN] = worker_token
     except RuntimeError:
         pass
     return headers
