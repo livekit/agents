@@ -164,7 +164,7 @@ class AvatarSession(BaseAvatarSession):
                         )
                     payload = await response.json()
                     session_id = payload.get("id") if isinstance(payload, dict) else None
-                    if not session_id or not isinstance(session_id, str):
+                    if not isinstance(session_id, str):
                         raise APIStatusError(
                             "Runway API response missing session id",
                             status_code=response.status,
