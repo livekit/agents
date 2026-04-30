@@ -662,10 +662,6 @@ class SpeechStream(stt.SpeechStream):
                         status_code=data.get("code", -1),
                         body=data,
                     )
-                else:
-                    logger.warning(
-                        "received unexpected message from LiveKit Inference STT: %s", data
-                    )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
