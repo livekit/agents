@@ -7,7 +7,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, get_args
 
 import aiohttp
 
@@ -40,7 +40,8 @@ NUM_CHANNELS = 1
 # End-of-stream event names we accept on {"type":"event","data":{...}} messages.
 # Sarvam Bulbul emits these when synthesis completes (spec field: data.event_type;
 # some internal gateway paths also surface it as data.event, so we accept both).
-_END_EVENT_TYPES = frozenset({"complete", "completed", "done", "end", "final"})
+_EndEventType = Literal["complete", "completed", "done", "end", "final"]
+_END_EVENT_TYPES: frozenset[str] = frozenset(get_args(_EndEventType))
 
 
 def _is_end_event(resp: dict[str, object]) -> bool:
