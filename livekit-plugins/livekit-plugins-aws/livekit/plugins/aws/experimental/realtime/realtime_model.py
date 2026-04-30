@@ -523,6 +523,7 @@ class RealtimeSession(  # noqa: F811
         self._chat_ctx_ready: asyncio.Future[bool] | None = None
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
+        self._stream_init_lock = asyncio.Lock()  # held during history+audio init to prevent interleaving
         self._current_generation: _ResponseGeneration | None = None
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
@@ -731,6 +732,11 @@ class RealtimeSession(  # noqa: F811
         if self._stream_response:
             try:
                 if not self._stream_response.input_stream.closed:
+                    # Workaround: the SDK's close() sends HTTP/2 END_STREAM before the
+                    # CRT transport flushes the preceding empty frame. Without this delay,
+                    # the service rejects with "Invalid input request". See:
+                    # https://github.com/awslabs/aws-sdk-python/issues/46
+                    await asyncio.sleep(3.0)
                     await self._stream_response.input_stream.close()
             except Exception as e:
                 logger.debug(f"[SESSION] Error closing stream (expected): {e}")
@@ -978,18 +984,23 @@ class RealtimeSession(  # noqa: F811
             self._start_session_recycle_timer()
 
             # Step 2: Send history events with small delays between them
-            for event in history_events:
-                await self._send_raw_event(event)
-                await asyncio.sleep(0.01)
+            # Hold the init lock for the entire history+audio sequence to prevent
+            # concurrent tasks (e.g. update_chat_ctx/_send_text_message) from
+            # interleaving events on the stream. Nova Sonic requires all chat history
+            # to complete before audio streaming begins.
+            async with self._stream_init_lock:
+                for event in history_events:
+                    await self._send_raw_event(event)
+                    await asyncio.sleep(0.01)
 
-            # Step 3: Create audio input task (sends AUDIO contentStart immediately)
-            self._audio_input_task = asyncio.create_task(
-                self._process_audio_input(), name="RealtimeSession._process_audio_input"
-            )
+                # Step 3: Create audio input task (sends AUDIO contentStart immediately)
+                self._audio_input_task = asyncio.create_task(
+                    self._process_audio_input(), name="RealtimeSession._process_audio_input"
+                )
 
-            self._response_task = asyncio.create_task(
-                self._process_responses(), name="RealtimeSession._process_responses"
-            )
+                self._response_task = asyncio.create_task(
+                    self._process_responses(), name="RealtimeSession._process_responses"
+                )
 
             # Step 4: Allow audio contentStart to be sent before unblocking
             # interactive text (generate_reply). This avoids sending AUDIO and TEXT
@@ -2160,13 +2171,15 @@ class RealtimeSession(  # noqa: F811
             )
 
         # Send event sequence: contentStart → textInput → contentEnd
-        await self._send_raw_event(event)
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(
-            self._event_builder.create_text_content_event(content_name, text)
-        )
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+        # Acquire init lock to prevent interleaving with history replay during session init
+        async with self._stream_init_lock:
+            await self._send_raw_event(event)
+            await asyncio.sleep(0.01)
+            await self._send_raw_event(
+                self._event_builder.create_text_content_event(content_name, text)
+            )
+            await asyncio.sleep(0.01)
+            await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
         )
@@ -2262,6 +2275,11 @@ class RealtimeSession(  # noqa: F811
             self._audio_input_task.cancel()
             tasks.append(self._audio_input_task)
         if self._stream_response and not self._stream_response.input_stream.closed:
+            # Workaround: the SDK's close() sends HTTP/2 END_STREAM before the
+            # CRT transport flushes the preceding empty frame. Without this delay,
+            # the service rejects with "Invalid input request". See:
+            # https://github.com/awslabs/aws-sdk-python/issues/46
+            await asyncio.sleep(3.0)
             await self._stream_response.input_stream.close()
 
         # cancel main task to prevent pending task warnings
