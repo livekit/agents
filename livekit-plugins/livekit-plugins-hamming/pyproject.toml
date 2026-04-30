@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.5.6", "aiohttp>=3.9"]
+dependencies = ["livekit-agents>=1.5.7", "aiohttp>=3.9"]
 
 [project.urls]
 Documentation = "https://docs.hamming.ai"
