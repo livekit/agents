@@ -71,12 +71,17 @@ async def entrypoint(ctx: JobContext):
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
     amd_task: asyncio.Task | None = None
 
-    async def hangup():
-        await ctx.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=ctx.room.name,
-            )
+    async def alert(room: rtc.Room, text: str) -> None:
+        import uuid
+
+        from livekit.agents.types import TOPIC_CHAT
+
+        writer = await room.local_participant.stream_text(
+            topic=TOPIC_CHAT,
+            attributes={"lk.stream_id": str(uuid.uuid4())},
         )
+        await writer.write(text)
+        await writer.aclose()
 
     async def run_amd(
         phone_number: str,
@@ -128,16 +133,19 @@ async def entrypoint(ctx: JobContext):
                     "human answered the call, proceeding with normal conversation",
                     extra={"transcript": result.transcript},
                 )
+                await alert(ctx.room, "AMD: Human detected")
             elif result.category == "machine-ivr":
                 logger.info(
                     "ivr menu detected, starting navigation",
                     extra={"transcript": result.transcript},
                 )
+                await alert(ctx.room, "AMD: IVR detected")
             elif result.category == "machine-vm":
                 logger.info(
                     "voicemail detected, leaving a message",
                     extra={"transcript": result.transcript},
                 )
+                await alert(ctx.room, "AMD: Voicemail detected")
                 speech_handle = session.generate_reply(
                     instructions=(
                         "You've reached voicemail. Leave a brief message asking "
@@ -145,16 +153,14 @@ async def entrypoint(ctx: JobContext):
                     ),
                 )
                 await speech_handle.wait_for_playout()
-                session.shutdown()
                 ctx.shutdown("voicemail detected")
-                await hangup()
+
             elif result.category == "machine-unavailable":
                 logger.info(
                     "mailbox unavailable, ending call", extra={"transcript": result.transcript}
                 )
-                session.shutdown()
+                await alert(ctx.room, "AMD: Unavailable")
                 ctx.shutdown("mailbox unavailable")
-                await hangup()
 
         amd_task = None
 
@@ -173,13 +179,21 @@ async def entrypoint(ctx: JobContext):
             session.shutdown()
             raise e
 
-    async def cancel_amd():
+        return "Calling..."
+
+    async def cancel_and_hangup():
         nonlocal amd_task
         if amd_task is not None:
             await utils.aio.cancel_and_wait(amd_task)
             amd_task = None
 
-    ctx.add_shutdown_callback(cancel_amd)
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(
+                room=ctx.room.name,
+            )
+        )
+
+    ctx.add_shutdown_callback(cancel_and_hangup)
 
 
 if __name__ == "__main__":
