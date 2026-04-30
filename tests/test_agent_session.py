@@ -637,6 +637,7 @@ async def test_generate_reply() -> None:
         5.5,
         speed_factor=speed,
         max_early_diff=1.0,
+        max_late_diff=1.0,
     )
     assert conversation_events[4].item.type == "message"
     assert conversation_events[4].item.role == "assistant"
@@ -646,6 +647,7 @@ async def test_generate_reply() -> None:
         9.0,
         speed_factor=speed,
         max_early_diff=1.0,
+        max_late_diff=1.0,
     )
 
     # chat context
