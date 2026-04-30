@@ -124,9 +124,7 @@ def _parse_received_event(resp: dict[str, object]) -> _ReceivedEvent:
         try:
             return _ReceivedEvent(kind="audio_chunk", audio=base64.b64decode(audio_b64))
         except Exception:
-            logger.warning(
-                "[SLNG TTS] invalid base64 audio (audio_chunk)", exc_info=True
-            )
+            logger.warning("[SLNG TTS] invalid base64 audio (audio_chunk)", exc_info=True)
             return _ReceivedEvent(kind="ignore")
     if mtype in _ERROR_TYPES:
         return _ReceivedEvent(kind="error", error_message=_extract_error_message(resp))
