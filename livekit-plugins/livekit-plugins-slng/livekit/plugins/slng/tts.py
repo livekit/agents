@@ -68,11 +68,11 @@ class _TTSOptions:
     voice: str
     language: str
     sample_rate: int
-    encoding: Literal["linear16"]
     speed: float
     word_tokenizer: tokenize.WordTokenizer
     api_key: str
     model_options: dict[str, object]
+    encoding: str = "linear16"
 
 
 class TTS(tts.TTS):
@@ -128,14 +128,14 @@ class TTS(tts.TTS):
 
         voice = normalize_tts_voice(model, voice)
 
+        # _TTSOptions.encoding defaults to "linear16" because LiveKit expects raw PCM and
+        # some SLNG models default to MP3 unless explicitly requested.
         self._opts = _TTSOptions(
             model_endpoint=resolved_model_endpoint,
             model=model,
             voice=voice,
             language=language,
             sample_rate=sample_rate,
-            # LiveKit expects raw PCM. Some SLNG models default to MP3 unless explicitly requested.
-            encoding="linear16",
             speed=speed,
             word_tokenizer=word_tokenizer,
             api_key=resolved_key,
