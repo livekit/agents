@@ -890,9 +890,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._closing_task is task:
                 self._closing_task = None
 
-        task = asyncio.create_task(
-            self._aclose_impl(error=error, drain=drain, reason=reason)
-        )
+        task = asyncio.create_task(self._aclose_impl(error=error, drain=drain, reason=reason))
         self._closing_task = task
         task.add_done_callback(on_close_done)
 
