@@ -45,7 +45,7 @@ uv build --package livekit-plugins-openai
 
 ```bash
 cd tests && make unit-tests
-cd tests && make test PLUGIN=openai
+cd tests && make test PLUGIN=openai   # docker-backed TTS test scoped to one provider
 cd tests && make realtime-tests
 ```
 
@@ -71,6 +71,16 @@ Provider plugins use provider-specific environment variables, such as
 `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `CARTESIA_API_KEY`,
 and similar names used by each plugin.
 
+## Code Style
+
+- Python packages support Python 3.10 and newer.
+- Keep line length at 100 characters; `ruff format` and `ruff check` enforce
+  the local style.
+- Public classes, methods, and enums need useful docstrings because API docs are
+  generated from source.
+- Run `make check` for formatting, lint, and type checking before asking for
+  review.
+
 ## Package Map
 
 Core package: `livekit-agents/livekit/agents/`
@@ -78,6 +88,7 @@ Core package: `livekit-agents/livekit/agents/`
 - `worker.py`: `AgentServer` and `WorkerOptions`. Owns worker lifecycle,
   LiveKit server registration, job availability, assignments, termination,
   load reporting, health endpoints, process pools, and CLI runtime integration.
+  Older issues and docs may refer to this layer as `Worker`.
 - `job.py`: `JobContext`, `JobRequest`, `JobProcess`, room connection helpers,
   shutdown hooks, SIP helpers, participant entrypoints, recording setup, and
   session report upload.
@@ -96,6 +107,9 @@ Core package: `livekit-agents/livekit/agents/`
 - `voice/room_io/`: `RoomIO`, input, output, pre-connect audio, transcription,
   and RTC room media plumbing.
 - `voice/io.py`: provider-neutral audio/video/text I/O abstractions.
+- `voice/avatar/`, `voice/amd/`, `voice/ivr/`, `voice/recorder_io/`, and
+  `voice/transcription/`: specialized runtime helpers for avatars, answering
+  machine detection, IVR, recording, and transcript output.
 - `llm/`: provider-neutral LLM, realtime model, chat context, function tool,
   MCP, toolset, fallback, and provider-format abstractions.
 - `stt/`, `tts/`, `vad.py`: provider-neutral model interfaces, streaming adapters,
