@@ -301,10 +301,15 @@ class TurnDetectionStream:
             base_url = base_url.replace("http", "ws", 1)
 
         try:
+            params = {}
+            if self._detector._worker_token:
+                params["worker_token"] = self._detector._worker_token
+
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
                     f"{base_url}/eot",
                     headers=self._build_auth_headers(),
+                    params=params,
                 ),
                 self._conn_options.timeout,
             )

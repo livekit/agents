@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -71,6 +72,7 @@ class MultimodalTurnDetector:
                 "api_key is required, either as argument or set LIVEKIT_API_KEY env var"
             )
 
+        self._worker_token = os.getenv("LIVEKIT_WORKER_TOKEN")
         self._opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url=lk_base_url,
