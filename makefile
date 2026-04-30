@@ -116,7 +116,8 @@ unit-tests:
 		tests/test_tool_search.py \
 		tests/test_tool_proxy.py \
 		tests/test_endpointing.py \
-		tests/test_session_host.py
+		tests/test_session_host.py \
+		tests/test_http_session_lifecycle.py
 
 # ============================================
 # Development Workflows

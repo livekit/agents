@@ -535,8 +535,8 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._stt: STT = stt
         self._opts = opts
-        self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
@@ -632,7 +632,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
+                    if closing_ws:
                         return
                     raise APIStatusError(
                         message="LiveKit Inference STT connection closed unexpectedly"
@@ -722,7 +722,7 @@ class SpeechStream(stt.SpeechStream):
         }
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(
+                self._stt._ensure_session().ws_connect(
                     f"{base_url}/stt?model={self._opts.model}", headers=headers
                 ),
                 self._conn_options.timeout,
