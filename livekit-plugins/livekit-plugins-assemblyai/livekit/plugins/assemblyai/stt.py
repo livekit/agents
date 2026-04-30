@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -282,6 +283,7 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -360,6 +362,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -378,8 +381,16 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    if not anchored:
+                        # Anchor the stream's wall-clock to the moment just
+                        # before the first frame is sent — aligned with the
+                        # server's stream-relative zero used by
+                        # SpeechStarted.timestamp.
+                        self.start_time = time.time()
+                        anchored = True
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+                    self._last_frame_sent_at = time.time()
 
             closing_ws = True
             logger.debug("AssemblyAI sending close message session=%s", self._session_id)
@@ -404,6 +415,17 @@ class SpeechStream(stt.SpeechStream):
                             consecutive_timeouts * 5,
                             self._session_id,
                         )
+                        # If the send side is also idle, the stall is upstream
+                        # of this plugin (no audio reaching us). Otherwise
+                        # frames are flowing and the stall is downstream.
+                        if self._last_frame_sent_at is not None:
+                            send_idle_s = time.time() - self._last_frame_sent_at
+                            if send_idle_s >= 15:
+                                logger.warning(
+                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
+                                    send_idle_s,
+                                    self._session_id,
+                                )
                     continue
 
                 if msg.type in (
@@ -554,7 +576,21 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            # SpeechStarted can arrive well after actual speech onset. The
+            # `timestamp` field carries the server VAD's onset time in stream-
+            # relative ms. Convert to wall-clock by adding self.start_time
+            # (the stream's wall-clock anchor) so the framework records an
+            # accurate _speech_start_time instead of message arrival.
+            timestamp_ms = data.get("timestamp")
+            speech_start_time: float | None = None
+            if timestamp_ms is not None:
+                speech_start_time = self.start_time + timestamp_ms / 1000
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    speech_start_time=speech_start_time,
+                )
+            )
             return
 
         if message_type == "Termination":

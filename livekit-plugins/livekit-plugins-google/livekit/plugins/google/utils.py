@@ -21,6 +21,7 @@ def create_tools_config(
     tool_ctx: llm.ToolContext,
     *,
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+    use_parameters_json_schema: bool = True,
     _only_single_type: bool = False,
 ) -> list[types.Tool]:
     gemini_tools: list[types.Tool] = []
@@ -28,7 +29,9 @@ def create_tools_config(
     function_tools = [
         types.FunctionDeclaration.model_validate(schema)
         for schema in tool_ctx.parse_function_tools(
-            "google", tool_behavior=tool_behavior.value if tool_behavior else None
+            "google",
+            tool_behavior=tool_behavior.value if tool_behavior else None,
+            use_parameters_json_schema=use_parameters_json_schema,
         )
     ]
     if function_tools:

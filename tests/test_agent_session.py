@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import (
     Agent,
+    AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
@@ -13,7 +14,9 @@ from livekit.agents import (
     UserStateChangedEvent,
     function_tool,
 )
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import (
+    FunctionToolCall,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
@@ -345,7 +348,6 @@ async def test_interruption_by_text_input() -> None:
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
 
-    print(agent_state_events)
     assert len(agent_state_events) == 7
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
@@ -434,6 +436,98 @@ async def test_interruption_before_speaking(
     assert agent.chat_ctx.items[3].type == "message"
     assert agent.chat_ctx.items[3].role == "user"
     assert agent.chat_ctx.items[3].text_content == "Stop!"
+
+
+async def test_interrupt_before_speaking_with_pausable_audio() -> None:
+    """
+    Regression test for https://github.com/livekit/agents/issues/5509
+    User turn starting while the agent is ``thinking`` must pause the
+    pausable output so the stale reply never promotes to ``speaking``.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
+    actions.add_tts(10.0)
+    actions.add_user_speech(3.0, 4.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # core assertion: the stale reply never promotes to "speaking"
+    assert not any(ev.new_state == "speaking" for ev in agent_state_events), (
+        "stale reply should have been paused before the first frame reached the transport"
+    )
+
+    # state sequence mirrors test_interruption_before_speaking (can_pause=False variant),
+    # proving the pause path is observationally equivalent to the interrupt path
+    assert len(agent_state_events) == 5
+    assert agent_state_events[0].old_state == "initializing"
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "listening"
+    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5, speed_factor=speed)
+
+    # nothing audible reached the transport — the pause cleanup emits a single
+    # playback_finished with interrupted=True and playback_position=0
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+    assert playback_finished_events[0].playback_position == 0.0
+
+    # stale assistant reply is dropped; chat_ctx holds user turn 1 and (after
+    # the on_final_transcript commit) user turn 2
+    user_messages = [
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
+    ]
+    assert [m.text_content for m in user_messages] == ["Tell me a story.", "Stop!"]
+    assert not any(
+        item.type == "message" and item.role == "assistant" for item in agent.chat_ctx.items
+    )
+
+
+async def test_false_interruption_before_speaking_resumes() -> None:
+    """
+    Brief VAD-only noise during ``thinking`` must pause then resume on VAD EOS,
+    letting the stale reply play through normally.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a short reply.", ttft=0.05, duration=0.05)
+    actions.add_tts(5.0, ttfb=0.05, duration=0.05)
+    # brief VAD-only noise — same shape as the can_pause=False test, different capability
+    actions.add_user_speech(3.0, 3.3, "")
+
+    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # the agent resumes and speaks the reply after the false interruption clears
+    speaking_events = [ev for ev in agent_state_events if ev.new_state == "speaking"]
+    assert len(speaking_events) == 1
+
+    # playout was postponed: the noise ran 3.0–3.3s, so "speaking" should fire at
+    # ~3.8s (resume on VAD EOS=3.3s + 0.5s min_silence_duration)
+    check_timestamp(speaking_events[0].created_at - t_origin, 3.8, speed_factor=speed)
+
+    # the reply plays to completion (not interrupted); playback_position covers the
+    # full audio duration
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is False
+    check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
 async def test_generate_reply() -> None:
@@ -750,3 +844,63 @@ def check_timestamp(
     assert abs(t_event - t_target) <= max_abs_diff, (
         f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
     )
+
+
+async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
+
+    # Silent tool-call step: no spoken preamble/audio before the function call.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                call_id="1",
+            )
+        ],
+        ttft=0.05,
+        duration=1.0,
+    )
+
+    # VAD-only speech starts during the silent tool-call generation and remains
+    # active after the tool reply starts.
+    actions.add_user_speech(0.85, 2.0, "", stt_delay=0.05)
+
+    actions.add_llm(
+        content="The weather in Tokyo is sunny today.",
+        input="The weather in Tokyo is sunny today.",
+        ttft=0.0,
+        duration=0.0,
+    )
+    actions.add_tts(0.5, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        can_pause_audio=True,
+        turn_handling={"interruption": {"false_interruption_timeout": 0.2 / speed}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    false_interruption_events: list[AgentFalseInterruptionEvent] = []
+
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("agent_false_interruption", false_interruption_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, agent, drain_delay=0.8 / speed),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    silent_step_finished = transitions.index(("speaking", "listening"))
+
+    # Before the fix this is ("listening", "thinking") because the pause state
+    # captured during the silent tool-call step leaks into the tool reply.
+    assert transitions[silent_step_finished + 1] == ("listening", "speaking")
+    assert false_interruption_events
+    assert false_interruption_events[-1].resumed is True

@@ -5,7 +5,6 @@ from typing import Literal
 STTModels = Literal[
     "whisper-large-v3",
     "whisper-large-v3-turbo",
-    "distil-whisper-large-v3-en",
 ]
 
 LLMModels = Literal[

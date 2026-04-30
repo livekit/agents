@@ -262,7 +262,7 @@ class MCPServerHTTP(MCPServer):
             tool_result_resolver=tool_result_resolver,
         )
         self.url = url
-        self.headers = headers
+        self._headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
         self._allowed_tools = set(allowed_tools) if allowed_tools else None
@@ -277,6 +277,37 @@ class MCPServerHTTP(MCPServer):
         else:
             # Fall back to URL-based detection for backward compatibility
             self._use_streamable_http = self._should_use_streamable_http(url)
+
+        self._http_client: httpx.AsyncClient | None = None
+
+    @property
+    def headers(self) -> dict[str, Any]:
+        return self._headers
+
+    @headers.setter
+    def headers(self, headers: dict[str, Any]) -> None:
+        self._headers = headers
+        if self._http_client is not None:
+            self._http_client.headers = headers
+
+    def _create_http_client(
+        self,
+        headers: dict[str, Any] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        # ported from mcp.shared._httpx_utils.create_mcp_http_client
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "timeout": timeout
+            if timeout is not None
+            else httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+            "headers": headers if headers is not None else self._headers,
+        }
+        if auth is not None:
+            kwargs["auth"] = auth
+        self._http_client = httpx.AsyncClient(**kwargs)
+        return self._http_client
 
     def _should_use_streamable_http(self, url: str) -> bool:
         """
@@ -306,10 +337,7 @@ class MCPServerHTTP(MCPServer):
 
             @asynccontextmanager
             async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
-                async with httpx.AsyncClient(
-                    headers=self.headers or {},
-                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
-                ) as http_client:
+                async with self._create_http_client() as http_client:
                     async with streamable_http_client(
                         url=self.url, http_client=http_client
                     ) as streams:
@@ -319,9 +347,10 @@ class MCPServerHTTP(MCPServer):
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
-                headers=self.headers,
+                headers=self._headers,
                 timeout=self._timeout,
                 sse_read_timeout=self._sse_read_timeout,
+                httpx_client_factory=self._create_http_client,
             )
 
     async def list_tools(self) -> list[MCPTool]:

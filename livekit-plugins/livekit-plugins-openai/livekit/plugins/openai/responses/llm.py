@@ -44,6 +44,7 @@ from ..log import logger
 from ..models import _supports_reasoning_effort
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
@@ -144,6 +145,7 @@ class _LLMOptions:
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
     service_tier: NotGivenOr[ServiceTier]
+    verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
     use_websocket: bool
 
@@ -165,6 +167,7 @@ class LLM(llm.LLM):
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
@@ -196,6 +199,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
             service_tier=service_tier,
+            verbosity=verbosity,
             max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
         )
@@ -292,6 +296,10 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.verbosity):
+            text_cfg = extra.get("text") or {}
+            extra["text"] = {**text_cfg, "verbosity": self._opts.verbosity}
 
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
@@ -394,7 +402,6 @@ class LLMStream(llm.LLMStream):
     async def _run_impl(self) -> None:
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
-
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
@@ -465,6 +472,20 @@ class LLMStream(llm.LLMStream):
                 raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+        # Strip prompt_cache_retention from any response object before validation:
+        # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
+        # vs "in-memory"). We don't use this field so dropping it is safe.
+        if (
+            isinstance(event.get("response"), dict)
+            and "prompt_cache_retention" in event["response"]
+        ):
+            event = {
+                **event,
+                "response": {
+                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
+                },
+            }
+
         event_type = event.get("type", "")
         if event_type == "error":
             return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
