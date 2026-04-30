@@ -63,6 +63,7 @@ members = [
     "livekit-plugins-silero",
     "livekit-plugins-simli",
     "livekit-plugins-simplismart",
+    "livekit-plugins-slng",
     "livekit-plugins-smallestai",
     "livekit-plugins-soniox",
     "livekit-plugins-speechify",
@@ -1945,6 +1946,9 @@ simli = [
 simplismart = [
     { name = "livekit-plugins-simplismart" },
 ]
+slng = [
+    { name = "livekit-plugins-slng" },
+]
 smallestai = [
     { name = "livekit-plugins-smallestai" },
 ]
@@ -2043,6 +2047,7 @@ requires-dist = [
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-simli", marker = "extra == 'simli'", editable = "livekit-plugins/livekit-plugins-simli" },
     { name = "livekit-plugins-simplismart", marker = "extra == 'simplismart'", editable = "livekit-plugins/livekit-plugins-simplismart" },
+    { name = "livekit-plugins-slng", marker = "extra == 'slng'", editable = "livekit-plugins/livekit-plugins-slng" },
     { name = "livekit-plugins-smallestai", marker = "extra == 'smallestai'", editable = "livekit-plugins/livekit-plugins-smallestai" },
     { name = "livekit-plugins-soniox", marker = "extra == 'soniox'", editable = "livekit-plugins/livekit-plugins-soniox" },
     { name = "livekit-plugins-speechify", marker = "extra == 'speechify'", editable = "livekit-plugins/livekit-plugins-speechify" },
@@ -2075,7 +2080,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2845,6 +2850,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
+]
+
+[[package]]
+name = "livekit-plugins-slng"
+source = { editable = "livekit-plugins/livekit-plugins-slng" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
