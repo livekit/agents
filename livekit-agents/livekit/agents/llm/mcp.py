@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from typing_extensions import Self
 
@@ -46,6 +47,9 @@ from .tool_context import (
 
 MCPTool = RawFunctionTool
 _ToolListChangedCallback = Callable[[], None]
+_ReloadFailedCallback = Callable[[BaseException], None]
+
+_RELOAD_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 
 @dataclass
@@ -89,6 +93,7 @@ class MCPServer(ABC):
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
         self._tool_list_changed_callbacks: set[_ToolListChangedCallback] = set()
+        self._reload_failed_callbacks: set[_ReloadFailedCallback] = set()
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
@@ -144,6 +149,12 @@ class MCPServer(ABC):
             self._closing_ev.clear()
 
     async def _handle_message(self, message: Any) -> None:
+        if isinstance(message, Exception):
+            # Match the MCP SDK default handler so cancellation propagates through
+            # bursts of incoming notifications.
+            await anyio.lowlevel.checkpoint()
+            return
+
         if isinstance(message, mcp.types.ServerNotification) and isinstance(
             message.root, mcp.types.ToolListChangedNotification
         ):
@@ -164,6 +175,19 @@ class MCPServer(ABC):
 
     def _remove_tool_list_changed_callback(self, callback: _ToolListChangedCallback) -> None:
         self._tool_list_changed_callbacks.discard(callback)
+
+    def _add_reload_failed_callback(self, callback: _ReloadFailedCallback) -> None:
+        self._reload_failed_callbacks.add(callback)
+
+    def _remove_reload_failed_callback(self, callback: _ReloadFailedCallback) -> None:
+        self._reload_failed_callbacks.discard(callback)
+
+    def _notify_reload_failed(self, error: BaseException) -> None:
+        for callback in list(self._reload_failed_callbacks):
+            try:
+                callback(error)
+            except Exception:
+                logger.exception("error in MCP reload failed callback")
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -538,12 +562,39 @@ class MCPToolset(Toolset):
         try:
             while self._reload_requested:
                 self._reload_requested = False
-                await self.setup(reload=True)
-                self._notify_tools_changed()
+                await self._reload_tools_with_retry()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("failed to reload MCP tools after tools/list_changed notification")
+
+    async def _reload_tools_with_retry(self) -> None:
+        last_exc: BaseException | None = None
+        for attempt, delay in enumerate((0.0,) + _RELOAD_RETRY_DELAYS):
+            if delay:
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    raise
+            try:
+                await self.setup(reload=True)
+                self._notify_tools_changed()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "failed to reload MCP tools (attempt %d/%d): %s",
+                    attempt + 1,
+                    len(_RELOAD_RETRY_DELAYS) + 1,
+                    exc,
+                )
+
+        assert last_exc is not None
+        logger.exception(
+            "giving up reloading MCP tools after tools/list_changed notification",
+            exc_info=last_exc,
+        )
+        self._mcp_server._notify_reload_failed(last_exc)
 
     async def aclose(self) -> None:
         try:

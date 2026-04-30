@@ -178,9 +178,15 @@ class AgentActivity(RecognitionHooks):
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
         self._toolset_changed_callbacks: dict[llm.Toolset, Callable[[llm.Toolset], None]] = {}
+        self._mcp_reload_failed_callbacks: dict[mcp.MCPServer, Callable[[BaseException], None]] = {}
         self._toolset_refresh_task: asyncio.Task[None] | None = None
         self._toolset_refresh_pending = False
         self._tool_names_snapshot: set[str] = set()
+        # Serializes _publish_tools_change between the public update_tools API and the
+        # background refresh task triggered by toolset change notifications. Cannot
+        # reuse self._lock because that one is held across long operations like
+        # _close_session, which would deadlock the cancel_and_wait of the refresh task.
+        self._refresh_lock = asyncio.Lock()
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -402,34 +408,53 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        # Compute tool diff before updating
-        old_tool_names = set(get_fnc_tool_names(self._agent._tools))
-        new_tool_names = set(get_fnc_tool_names(tools))
-        tools_added = list(new_tool_names - old_tool_names) or None
-        tools_removed = list(old_tool_names - new_tool_names) or None
-
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change
-        config_update = llm.AgentConfigUpdate(
-            tools_added=tools_added,
-            tools_removed=tools_removed,
-            agent_id=self._agent.id,
-        )
-        # Store full tool definitions in-memory (not serialized)
-        config_update._tools = llm.ToolContext(tools).flatten()
-        self._agent._chat_ctx.insert(config_update)
-
-        if self._rt_session is not None:
-            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-
-        if isinstance(self.llm, llm.LLM):
-            # for realtime LLM, we assume the server will remove unvalid tool messages
-            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
-
+        await self._publish_tools_change()
         self._sync_toolset_change_subscriptions()
-        self._tool_names_snapshot = set(get_fnc_tool_names(self.tools))
+
+    async def _publish_tools_change(self) -> None:
+        """Push the current tool set to the realtime session and chat context.
+
+        Reads ``self.tools``, diffs against ``self._tool_names_snapshot``, updates
+        the realtime session (when present), updates the chat context (for
+        non-realtime LLMs), and inserts an ``AgentConfigUpdate`` describing the
+        diff. The snapshot is advanced last, so a transient failure mid-publish
+        leaves the previous snapshot in place and the next refresh retries.
+
+        Serialized via ``self._refresh_lock`` so the public ``update_tools`` API
+        and the background refresh task triggered by toolset change notifications
+        cannot interleave their writes to ``_chat_ctx`` and ``rt_session``.
+        """
+        async with self._refresh_lock:
+            tools = self.tools
+            tool_ctx = llm.ToolContext(tools)
+            tool_names = set(get_fnc_tool_names(tools))
+            tools_added = sorted(tool_names - self._tool_names_snapshot) or None
+            tools_removed = sorted(self._tool_names_snapshot - tool_names) or None
+
+            config_update: llm.AgentConfigUpdate | None = None
+            if tools_added or tools_removed:
+                config_update = llm.AgentConfigUpdate(
+                    tools_added=tools_added,
+                    tools_removed=tools_removed,
+                    agent_id=self._agent.id,
+                )
+                # Store full tool definitions in-memory (not serialized)
+                config_update._tools = tool_ctx.flatten()
+
+            if self._rt_session is not None:
+                await self._rt_session.update_tools(tool_ctx.flatten())
+
+            if isinstance(self.llm, llm.LLM):
+                # for realtime LLM, we assume the server will remove unvalid tool messages
+                await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+
+            if config_update is not None:
+                self._agent._chat_ctx.insert(config_update)
+
+            self._tool_names_snapshot = tool_names
 
     def _sync_toolset_change_subscriptions(self) -> None:
         toolsets = set(llm.ToolContext(self.tools).toolsets)
@@ -440,19 +465,41 @@ class AgentActivity(RecognitionHooks):
                 toolset._remove_tools_changed_callback(callback)
 
         for toolset in toolsets:
-            if toolset in self._toolset_changed_callbacks:
-                continue
+            if toolset not in self._toolset_changed_callbacks:
+                toolset._add_tools_changed_callback(self._request_toolset_refresh)
+                self._toolset_changed_callbacks[toolset] = self._request_toolset_refresh
 
-            def _on_tools_changed(changed_toolset: llm.Toolset) -> None:
-                self._request_toolset_refresh(changed_toolset)
+        # Bridge MCP-specific reload failures (after retries are exhausted) onto
+        # the session-level error event so operators can react.
+        from ..llm.mcp import MCPToolset
 
-            toolset._add_tools_changed_callback(_on_tools_changed)
-            self._toolset_changed_callbacks[toolset] = _on_tools_changed
+        mcp_servers = {ts._mcp_server for ts in toolsets if isinstance(ts, MCPToolset)}
+        for server in list(self._mcp_reload_failed_callbacks):
+            if server not in mcp_servers:
+                fail_cb = self._mcp_reload_failed_callbacks.pop(server)
+                server._remove_reload_failed_callback(fail_cb)
+
+        for server in mcp_servers:
+            if server not in self._mcp_reload_failed_callbacks:
+                server._add_reload_failed_callback(self._on_mcp_reload_failed)
+                self._mcp_reload_failed_callbacks[server] = self._on_mcp_reload_failed
 
     def _clear_toolset_change_subscriptions(self) -> None:
-        for toolset, callback in list(self._toolset_changed_callbacks.items()):
-            toolset._remove_tools_changed_callback(callback)
+        for toolset, ts_cb in list(self._toolset_changed_callbacks.items()):
+            toolset._remove_tools_changed_callback(ts_cb)
         self._toolset_changed_callbacks.clear()
+
+        for server, fail_cb in list(self._mcp_reload_failed_callbacks.items()):
+            server._remove_reload_failed_callback(fail_cb)
+        self._mcp_reload_failed_callbacks.clear()
+
+    def _on_mcp_reload_failed(self, error: BaseException) -> None:
+        if self._closed:
+            return
+        try:
+            self._session.emit("error", ErrorEvent(error=error, source=self._agent))
+        except Exception:
+            logger.exception("error while emitting MCP reload-failed event")
 
     def _request_toolset_refresh(self, toolset: llm.Toolset) -> None:
         if self._closed:
@@ -471,38 +518,11 @@ class AgentActivity(RecognitionHooks):
         try:
             while self._toolset_refresh_pending and not self._closed:
                 self._toolset_refresh_pending = False
-                await self._apply_toolset_refresh()
+                await self._publish_tools_change()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("failed to refresh tools after toolset update")
-
-    async def _apply_toolset_refresh(self) -> None:
-        tools = self.tools
-        tool_ctx = llm.ToolContext(tools)
-        tool_names = set(get_fnc_tool_names(tools))
-        tools_added = sorted(tool_names - self._tool_names_snapshot) or None
-        tools_removed = sorted(self._tool_names_snapshot - tool_names) or None
-
-        config_update: llm.AgentConfigUpdate | None = None
-        if tools_added or tools_removed:
-            config_update = llm.AgentConfigUpdate(
-                tools_added=tools_added,
-                tools_removed=tools_removed,
-                agent_id=self._agent.id,
-            )
-            config_update._tools = tool_ctx.flatten()
-
-        if self._rt_session is not None:
-            await self._rt_session.update_tools(tool_ctx.flatten())
-
-        if isinstance(self.llm, llm.LLM):
-            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
-
-        if config_update is not None:
-            self._agent._chat_ctx.insert(config_update)
-
-        self._tool_names_snapshot = tool_names
 
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True

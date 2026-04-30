@@ -48,6 +48,48 @@ async def _wait_for(predicate: Callable[[], bool], *, timeout: float = 1.0) -> N
         await asyncio.sleep(0.01)
 
 
+def _patch_reload_backoff_to_instant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the 1s/2s/4s reload backoff with zero waits for fast tests."""
+    from livekit.agents.llm import mcp as mcp_module
+
+    monkeypatch.setattr(mcp_module, "_RELOAD_RETRY_DELAYS", (0.0, 0.0, 0.0))
+
+
+def _make_test_activity(
+    *,
+    toolset: MCPToolset,
+    rt_session: _FakeRealtimeSession | None,
+    chat_ctx: ChatContext | None = None,
+    session: SimpleNamespace | None = None,
+    closed: bool = False,
+) -> AgentActivity:
+    """Construct an AgentActivity bypassing __init__ for unit tests.
+
+    Initializes only the attributes touched by the toolset-refresh / publish-tools
+    paths. Tests that exercise close paths (which touch stt/tts/vad/etc.) should
+    extend the returned object themselves.
+    """
+    activity = object.__new__(AgentActivity)
+    activity._session = session or SimpleNamespace(tools=[], llm=None)
+    activity._agent = SimpleNamespace(
+        id="agent",
+        tools=[toolset],
+        _tools=[toolset],
+        _chat_ctx=chat_ctx if chat_ctx is not None else ChatContext.empty(),
+        llm=object(),
+    )
+    activity._mcp_tools = []
+    activity._rt_session = rt_session
+    activity._closed = closed
+    activity._toolset_changed_callbacks = {}
+    activity._mcp_reload_failed_callbacks = {}
+    activity._toolset_refresh_task = None
+    activity._toolset_refresh_pending = False
+    activity._tool_names_snapshot = set(ToolContext([toolset]).function_tools)
+    activity._refresh_lock = asyncio.Lock()
+    return activity
+
+
 class _FakeMCPServer(MCPServer):
     def __init__(self, tools: list[str]) -> None:
         super().__init__(client_session_timeout_seconds=5)
@@ -55,6 +97,9 @@ class _FakeMCPServer(MCPServer):
         self.list_tools_calls = 0
         self.invalidate_cache_calls = 0
         self.fail_list_tools = False
+        # When > 0, list_tools fails this many calls and then succeeds. Decremented
+        # on each failing call. Useful for scripting transient-failure scenarios.
+        self.fail_list_tools_remaining = 0
         self._fake_initialized = False
         self.block_list_tools: asyncio.Event | None = None
         self.list_tools_started: asyncio.Event | None = None
@@ -81,6 +126,9 @@ class _FakeMCPServer(MCPServer):
             self.block_list_tools = None
         if self.fail_list_tools:
             raise RuntimeError("list_tools failed")
+        if self.fail_list_tools_remaining > 0:
+            self.fail_list_tools_remaining -= 1
+            raise RuntimeError("list_tools transient failure")
         tool_names = self.list_tools_response_names or self.tool_names
         self.list_tools_response_names = None
         return [_make_mcp_tool(name) for name in tool_names]
@@ -194,22 +242,7 @@ async def test_agent_activity_refreshes_realtime_tools_after_toolset_reload() ->
 
     rt_session = _FakeRealtimeSession()
     chat_ctx = ChatContext.empty()
-    activity = object.__new__(AgentActivity)
-    activity._session = SimpleNamespace(tools=[], llm=None)
-    activity._agent = SimpleNamespace(
-        id="agent",
-        tools=[toolset],
-        _tools=[toolset],
-        _chat_ctx=chat_ctx,
-        llm=object(),
-    )
-    activity._mcp_tools = []
-    activity._rt_session = rt_session
-    activity._closed = False
-    activity._toolset_changed_callbacks = {}
-    activity._toolset_refresh_task = None
-    activity._toolset_refresh_pending = False
-    activity._tool_names_snapshot = {"alpha"}
+    activity = _make_test_activity(toolset=toolset, rt_session=rt_session, chat_ctx=chat_ctx)
     activity._sync_toolset_change_subscriptions()
 
     server.tool_names = ["beta"]
@@ -236,28 +269,17 @@ async def test_agent_activity_unsubscribes_toolset_before_realtime_close() -> No
         await asyncio.sleep(0.05)
 
     rt_session = _FakeRealtimeSession(on_close=_notify_during_close)
-    activity = object.__new__(AgentActivity)
-    activity._session = SimpleNamespace(tools=[], llm=None, stt=None, tts=None, vad=None)
-    activity._agent = SimpleNamespace(
-        id="agent",
-        tools=[toolset],
-        _tools=[toolset],
-        _chat_ctx=ChatContext.empty(),
-        llm=object(),
-        stt=object(),
-        tts=object(),
-        vad=object(),
+    activity = _make_test_activity(
+        toolset=toolset,
+        rt_session=rt_session,
+        session=SimpleNamespace(tools=[], llm=None, stt=None, tts=None, vad=None),
     )
-    activity._mcp_tools = []
-    activity._rt_session = rt_session
+    activity._agent.stt = object()
+    activity._agent.tts = object()
+    activity._agent.vad = object()
     activity._realtime_spans = None
     activity._audio_recognition = None
     activity._interruption_detector = None
-    activity._closed = False
-    activity._toolset_changed_callbacks = {}
-    activity._toolset_refresh_task = None
-    activity._toolset_refresh_pending = False
-    activity._tool_names_snapshot = {"alpha"}
     activity._cancel_speech_pause_task = None
 
     async def _cancel_speech_pause(**kwargs: Any) -> None:
@@ -283,22 +305,7 @@ async def test_agent_activity_keeps_snapshot_when_realtime_tool_update_fails() -
 
     rt_session = _FakeRealtimeSession()
     rt_session.fail_update = True
-    activity = object.__new__(AgentActivity)
-    activity._session = SimpleNamespace(tools=[], llm=None)
-    activity._agent = SimpleNamespace(
-        id="agent",
-        tools=[toolset],
-        _tools=[toolset],
-        _chat_ctx=ChatContext.empty(),
-        llm=object(),
-    )
-    activity._mcp_tools = []
-    activity._rt_session = rt_session
-    activity._closed = False
-    activity._toolset_changed_callbacks = {}
-    activity._toolset_refresh_task = None
-    activity._toolset_refresh_pending = False
-    activity._tool_names_snapshot = {"alpha"}
+    activity = _make_test_activity(toolset=toolset, rt_session=rt_session)
     activity._sync_toolset_change_subscriptions()
 
     server.tool_names = ["beta"]
@@ -349,18 +356,195 @@ async def test_mcp_toolset_keeps_filter_after_tool_list_reload() -> None:
 @pytest.mark.asyncio
 async def test_mcp_toolset_keeps_existing_tools_when_reload_fails(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _patch_reload_backoff_to_instant(monkeypatch)
+
     server = _FakeMCPServer(["alpha"])
     toolset = MCPToolset(id="test_mcp", mcp_server=server)
 
     await toolset.setup()
+    initial_calls = server.list_tools_calls
     assert _tool_names(toolset) == {"alpha"}
 
     server.fail_list_tools = True
     server._handle_tool_list_changed()
 
-    await _wait_for(lambda: server.list_tools_calls >= 2)
+    # Reload retries 4 times total (initial attempt + 3 backoff retries) before
+    # giving up. Each calls list_tools once.
+    await _wait_for(lambda: server.list_tools_calls >= initial_calls + 4)
     assert _tool_names(toolset) == {"alpha"}
-    assert "failed to reload MCP tools" in caplog.text
+    assert "giving up reloading MCP tools" in caplog.text
 
     await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mcp_toolset_retries_reload_with_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reload_backoff_to_instant(monkeypatch)
+
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+    initial_calls = server.list_tools_calls
+
+    failure_callback_calls: list[BaseException] = []
+    server._add_reload_failed_callback(failure_callback_calls.append)
+
+    # Fail twice, then succeed on the third retry (total: 1 fail + 1 fail + success).
+    server.fail_list_tools_remaining = 2
+    server.tool_names = ["beta"]
+    server._handle_tool_list_changed()
+
+    await _wait_for(lambda: _tool_names(toolset) == {"beta"})
+    # 2 transient failures + 1 success.
+    assert server.list_tools_calls == initial_calls + 3
+    assert failure_callback_calls == []
+
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mcp_toolset_emits_terminal_error_after_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reload_backoff_to_instant(monkeypatch)
+
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    failures: list[BaseException] = []
+    server._add_reload_failed_callback(failures.append)
+
+    server.fail_list_tools = True
+    server._handle_tool_list_changed()
+
+    await _wait_for(lambda: len(failures) == 1)
+    assert isinstance(failures[0], RuntimeError)
+    assert _tool_names(toolset) == {"alpha"}
+
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_activity_emits_session_error_on_terminal_reload_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reload_backoff_to_instant(monkeypatch)
+
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    rt_session = _FakeRealtimeSession()
+    activity = _make_test_activity(toolset=toolset, rt_session=rt_session)
+
+    emitted: list[tuple[str, Any]] = []
+
+    def _emit(event_name: str, payload: Any) -> None:
+        emitted.append((event_name, payload))
+
+    activity._session.emit = _emit  # type: ignore[attr-defined]
+    activity._sync_toolset_change_subscriptions()
+
+    server.fail_list_tools = True
+    server._handle_tool_list_changed()
+
+    from livekit.agents.voice.events import ErrorEvent
+
+    await _wait_for(
+        lambda: any(name == "error" and isinstance(p, ErrorEvent) for name, p in emitted)
+    )
+    error_events = [p for name, p in emitted if name == "error"]
+    assert len(error_events) == 1
+    assert isinstance(error_events[0].error, RuntimeError)
+
+    activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_publish_tools_change_serializes_under_concurrent_callers() -> None:
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    rt_session = _FakeRealtimeSession()
+
+    block = asyncio.Event()
+    started = asyncio.Event()
+    enter_count = 0
+    concurrent_observed = False
+    original_update = rt_session.update_tools
+
+    async def _slow_update(tools: list[Any]) -> None:
+        nonlocal enter_count, concurrent_observed
+        enter_count += 1
+        if enter_count > 1:
+            concurrent_observed = True
+        started.set()
+        await block.wait()
+        await original_update(tools)
+        enter_count -= 1
+
+    rt_session.update_tools = _slow_update  # type: ignore[assignment]
+
+    activity = _make_test_activity(toolset=toolset, rt_session=rt_session)
+    activity._sync_toolset_change_subscriptions()
+
+    # First publish blocks inside rt_session.update_tools.
+    first = asyncio.create_task(activity._publish_tools_change())
+    await started.wait()
+
+    # Second publish should be queued on the lock, not enter rt_session.update_tools yet.
+    second = asyncio.create_task(activity._publish_tools_change())
+    await asyncio.sleep(0.05)
+    assert enter_count == 1, "second publish must wait for the first to release the lock"
+
+    block.set()
+    await asyncio.gather(first, second)
+    assert concurrent_observed is False
+
+    activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_ignores_unrelated_messages() -> None:
+    """Exception-typed messages and non-tool-list notifications must not touch
+    the cache or fire tool-list-changed callbacks. Matches the MCP SDK default
+    handler behavior, which absorbs exceptions silently."""
+    server = _FakeMCPServer(["alpha"])
+    callback_calls = 0
+
+    def _callback() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    server._cache_dirty = False
+    server._add_tool_list_changed_callback(_callback)
+
+    # Exception-typed message: no raise, no cache invalidation, no callback.
+    await server._handle_message(RuntimeError("transport hiccup"))
+    assert server._cache_dirty is False
+    assert callback_calls == 0
+    assert server.invalidate_cache_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_message_lets_cancellation_propagate() -> None:
+    """The checkpoint() in the Exception branch is a cooperative cancel point;
+    a cancellation scheduled before the task runs must surface at that await
+    instead of being swallowed by a no-await early return."""
+    server = _FakeMCPServer(["alpha"])
+
+    async def _runner() -> None:
+        await server._handle_message(RuntimeError("transport hiccup"))
+
+    task = asyncio.create_task(_runner())
+    task.cancel()  # marked before the task gets a chance to run
+    with pytest.raises(asyncio.CancelledError):
+        await task
