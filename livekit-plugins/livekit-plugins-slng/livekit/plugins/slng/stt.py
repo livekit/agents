@@ -106,12 +106,6 @@ class STTOptions:
 
 
 class STT(stt.STT):
-    def __bool__(self) -> bool:
-        # LiveKit Agents code may use truthiness checks like `stt or None`.
-        # Some EventEmitter-style bases can be falsy when they have no listeners,
-        # which would unintentionally disable STT.
-        return True
-
     def __init__(
         self,
         *,
