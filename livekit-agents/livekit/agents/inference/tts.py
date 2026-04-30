@@ -648,7 +648,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
-                elif data.get("type") == "output_timestamps":
+                elif data.get("type") == "output_alignment":
                     from ..voice.io import TimedString
 
                     if words := data.get("words"):
@@ -674,8 +674,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
                 elif data.get("type") == "error":
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
-                else:
-                    logger.warning("unexpected message %s", data)
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
