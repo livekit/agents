@@ -42,49 +42,28 @@ THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
 
 
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"', re.DOTALL)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f]")
+_CONTROL_CHAR_ESCAPES = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+}
+
+
 def _sanitize_json_control_chars(json_str: str) -> str:
-    """
-    Sanitize a JSON string by escaping control characters inside string values.
+    # Some LLMs emit raw control chars (newlines, tabs) inside tool-call argument
+    # strings, which is invalid JSON and crashes from_json. Escape them in place.
+    def escape_control(m: re.Match[str]) -> str:
+        c = m.group(0)
+        return _CONTROL_CHAR_ESCAPES.get(c, f"\\u{ord(c):04x}")
 
-    LLMs sometimes generate JSON with literal control characters (e.g., newlines)
-    inside string values, which violates the JSON spec and causes parsing to fail
-    with: ValueError: control character (\\u0000-\\u001F) found while parsing a string
+    def fix_string(m: re.Match[str]) -> str:
+        return _CONTROL_CHAR_RE.sub(escape_control, m.group(0))
 
-    This function escapes those control characters before parsing.
-    """
-    if not json_str:
-        return json_str
-
-    def escape_control_chars_in_string(match: re.Match[str]) -> str:
-        """Escape control characters inside a matched JSON string value."""
-        string_content = match.group(0)
-        result = []
-        i = 0
-        while i < len(string_content):
-            char = string_content[i]
-            if char == "\\" and i + 1 < len(string_content):
-                # Already escaped sequence, keep as-is
-                result.append(char)
-                result.append(string_content[i + 1])
-                i += 2
-            elif ord(char) < 0x20:  # Control characters (U+0000 to U+001F)
-                if char == "\n":
-                    result.append("\\n")
-                elif char == "\r":
-                    result.append("\\r")
-                elif char == "\t":
-                    result.append("\\t")
-                else:
-                    result.append(f"\\u{ord(char):04x}")
-                i += 1
-            else:
-                result.append(char)
-                i += 1
-        return "".join(result)
-
-    # Pattern to match JSON string values (handles escaped quotes)
-    string_pattern = r'"(?:[^"\\]|\\.)*"'
-    return re.sub(string_pattern, escape_control_chars_in_string, json_str)
+    return _JSON_STRING_RE.sub(fix_string, json_str)
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:

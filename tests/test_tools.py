@@ -9,6 +9,7 @@ from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    _sanitize_json_control_chars,
     build_legacy_openai_schema,
     build_strict_openai_schema,
     function_arguments_to_pydantic_model,
@@ -404,6 +405,87 @@ class TestToolExecution:
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+
+class TestSanitizeJsonControlChars:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"a": "hello"}',
+            '{"a": "hello", "b": 1, "c": null, "d": true}',
+            '{"nested": {"x": [1, 2, "three"]}}',
+            '{"escaped": "line1\\nline2\\tend"}',
+            '{"quote": "she said \\"hi\\""}',
+            '{"backslash": "a\\\\b"}',
+            '{"unicode_escape": "\\u00e9clair"}',
+            "{}",
+            "[]",
+            '"plain string"',
+            "123",
+            "null",
+            "",
+        ],
+    )
+    def test_valid_json_unchanged(self, raw: str):
+        sanitized = _sanitize_json_control_chars(raw)
+        assert sanitized == raw
+        if raw:
+            assert json.loads(sanitized) == json.loads(raw)
+
+    def test_literal_newline_in_string_is_escaped(self):
+        raw = '{"prompt": "line1\nline2"}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert json.loads(sanitized) == {"prompt": "line1\nline2"}
+
+    def test_literal_tab_and_carriage_return_escaped(self):
+        raw = '{"a": "x\ty\rz"}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert json.loads(sanitized) == {"a": "x\ty\rz"}
+
+    def test_other_control_chars_escaped_as_unicode(self):
+        raw = '{"a": "x\x01y\x1fz"}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert "\\u0001" in sanitized
+        assert "\\u001f" in sanitized
+        assert json.loads(sanitized) == {"a": "x\x01y\x1fz"}
+
+    def test_already_escaped_sequences_preserved(self):
+        raw = '{"a": "line1\\nline2"}'
+        assert _sanitize_json_control_chars(raw) == raw
+
+    def test_escaped_quote_inside_string_with_newline(self):
+        raw = '{"q": "he said \\"hi\\"\nbye"}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert json.loads(sanitized) == {"q": 'he said "hi"\nbye'}
+
+    def test_whitespace_outside_strings_left_alone(self):
+        raw = '{\n  "a": 1,\n  "b": 2\n}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert sanitized == raw
+        assert json.loads(sanitized) == {"a": 1, "b": 2}
+
+    def test_nested_object_with_newlines(self):
+        raw = '{"outer": {"inner": "a\nb"}}'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert json.loads(sanitized) == {"outer": {"inner": "a\nb"}}
+
+    def test_array_of_strings_with_newlines(self):
+        raw = '["a\nb", "c\td"]'
+        sanitized = _sanitize_json_control_chars(raw)
+        assert json.loads(sanitized) == ["a\nb", "c\td"]
+
+    def test_empty_string(self):
+        assert _sanitize_json_control_chars("") == ""
+
+    def test_prepare_function_arguments_with_literal_newline(self):
+        @function_tool
+        async def echo(prompt: str) -> str:
+            return prompt
+
+        raw = '{"prompt": "A timeline:\n- one\n- two"}'
+        args, kwargs = prepare_function_arguments(fnc=echo, json_arguments=raw)
+        assert args == ("A timeline:\n- one\n- two",)
+        assert kwargs == {}
 
 
 class TestNoParametersSchema:
