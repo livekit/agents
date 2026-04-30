@@ -118,6 +118,7 @@ _RECORDING_ALL_OFF: RecordingOptions = {
 
 
 _AGENT_SESSION_CLOSE_TIMEOUT = 10.0
+_AGENT_TASK_CLOSE_UNWIND_LIMIT = 32
 
 
 class _CloseStepResult(Enum):
@@ -907,8 +908,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    @staticmethod
     def _log_late_close_step_result(
-        self, task: asyncio.Future[object], *, step: str, reason: CloseReason
+        task: asyncio.Future[object], *, step: str, reason: CloseReason
     ) -> None:
         try:
             task.result()
@@ -921,8 +923,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 extra={"step": step, "reason": reason.value},
             )
 
+    @staticmethod
     def _log_background_close_step_result(
-        self,
         task: asyncio.Future[object],
         *,
         step: str,
@@ -977,7 +979,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             _cancel_background_step,
         )
         task.add_done_callback(
-            lambda t: self._log_background_close_step_result(
+            lambda t: AgentSession._log_background_close_step_result(
                 t,
                 step=step,
                 reason=reason,
@@ -1030,14 +1032,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not task.done():
                 task.cancel()
                 task.add_done_callback(
-                    lambda t: self._log_late_close_step_result(t, step=step, reason=reason)
+                    lambda t: AgentSession._log_late_close_step_result(t, step=step, reason=reason)
                 )
             raise
 
         if task not in done:
             task.cancel()
             task.add_done_callback(
-                lambda t: self._log_late_close_step_result(t, step=step, reason=reason)
+                lambda t: AgentSession._log_late_close_step_result(t, step=step, reason=reason)
             )
             logger.warning(
                 "agent session close step timed out",
@@ -1102,7 +1104,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._amd = None
 
             activity = self._activity
+            agent_task_unwind_count = 0
+            agent_task_visited_activities: set[int] = set()
             while activity and isinstance(agent_task := activity.agent, AgentTask):
+                agent_task_unwind_count += 1
+                activity_id = id(activity)
+                if activity_id in agent_task_visited_activities:
+                    logger.warning(
+                        "agent session close stopped unwinding repeated nested agent task activity",
+                        extra={"reason": reason.value},
+                    )
+                    activity = None
+                    break
+
+                agent_task_visited_activities.add(activity_id)
+                if agent_task_unwind_count > _AGENT_TASK_CLOSE_UNWIND_LIMIT:
+                    logger.warning(
+                        "agent session close stopped unwinding nested agent tasks",
+                        extra={"reason": reason.value, "limit": _AGENT_TASK_CLOSE_UNWIND_LIMIT},
+                    )
+                    break
+
                 # notify AgentTask to complete and wait it to resume the parent agent
                 agent_task.cancel()
                 task_activity = activity
@@ -1157,6 +1179,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     current_speech = activity.current_speech
 
                     async def _wait_for_current_speech() -> None:
+                        # Do not let the close-step timeout cancel the speech future before
+                        # activity.aclose() gets a chance to own speech teardown.
                         await asyncio.shield(current_speech)
 
                     await self._run_close_step(

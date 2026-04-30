@@ -28,6 +28,7 @@ class _FakeActivity:
         self.drain_raises = drain_raises
         self.drain_cancelled = asyncio.Event()
         self.aclose_called = asyncio.Event()
+        self.aclose_calls = 0
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         fut: asyncio.Future[None] = asyncio.Future()
@@ -48,6 +49,7 @@ class _FakeActivity:
             raise
 
     async def aclose(self) -> None:
+        self.aclose_calls += 1
         self.aclose_called.set()
 
 
@@ -168,6 +170,37 @@ async def test_aclose_closes_agent_task_activity_and_parent_when_unwind_fails() 
 
     assert child_activity.aclose_called.is_set()
     assert parent_activity.aclose_called.is_set()
+
+
+async def test_aclose_bounds_cyclic_agent_task_unwind() -> None:
+    session = _started_session()
+    agent_a = Agent(instructions="agent a")
+    agent_b = Agent(instructions="agent b")
+    task_a = _FailingAgentTask(agent_a)
+    task_b = _FailingAgentTask(agent_b)
+    activity_a = _FakeActivity(agent=task_a)
+    activity_b = _FakeActivity(agent=task_b)
+    agent_a._activity = activity_b
+    agent_b._activity = activity_a
+    session._activity = activity_a
+
+    await _close_session(session)
+
+    assert activity_a.aclose_called.is_set()
+    assert activity_b.aclose_called.is_set()
+    assert activity_a.aclose_calls == 1
+    assert activity_b.aclose_calls == 1
+
+
+async def test_concurrent_aclose_emits_close_once() -> None:
+    session = _started_session()
+
+    close_events: list[CloseEvent] = []
+    session.on("close", close_events.append)
+
+    await asyncio.wait_for(asyncio.gather(session.aclose(), session.aclose()), timeout=1.0)
+
+    assert len(close_events) == 1
 
 
 async def test_aclose_is_bounded_when_room_io_close_hangs() -> None:
