@@ -629,7 +629,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # Outside a job context (tests, scripts, ad-hoc usage) there's no
             # http session bound to the event loop. Create one scoped to this
             # session so STT/TTS can use http_context.http_session()
-            if job_ctx is None and not self._owned_http_session_ctx:
+            if (
+                job_ctx is None
+                and not self._owned_http_session_ctx
+                and not utils.http_context._is_http_session_ctx_set()
+            ):
                 utils.http_context._new_session_ctx()
                 self._owned_http_session_ctx = True
 

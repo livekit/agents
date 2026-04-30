@@ -224,6 +224,32 @@ async def test_session_does_not_own_http_ctx_inside_job_context(
     assert http_context.http_session() is outer_session
 
 
+async def test_nested_sessions_in_same_task_share_http_ctx() -> None:
+    """A second AgentSession started inside a still-running outer session (same
+    task) must reuse the outer's http session and not close it on aclose.
+    """
+    outer = _make_session()
+    await outer.start(_NoopAgent())
+    outer_session = http_context.http_session()
+    assert outer._owned_http_session_ctx is True
+
+    inner = _make_session()
+    await inner.start(_NoopAgent())
+
+    # inner sees the contextvar already set → does not take ownership
+    assert inner._owned_http_session_ctx is False
+    assert http_context.http_session() is outer_session
+
+    await inner.aclose()
+
+    # outer's session is unaffected by inner's close
+    assert not outer_session.closed
+    assert http_context.http_session() is outer_session
+
+    await outer.aclose()
+    assert outer_session.closed
+
+
 async def test_start_failure_cleans_up_http_ctx() -> None:
     """If start() fails after setting up the http session, aclose() must still
     clean it up. Otherwise __aexit__ on the async-with would leak the factory.
