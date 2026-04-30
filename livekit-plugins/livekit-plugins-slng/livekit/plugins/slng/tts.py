@@ -55,6 +55,86 @@ def _is_end_event(resp: dict[str, object]) -> bool:
     return isinstance(raw, str) and raw.lower() in _END_EVENT_TYPES
 
 
+# Canonical event kinds emitted by the dispatch helper. Mirrors what the WS
+# loops actually need to act on; keeps call sites free of provider-specific
+# message shapes.
+_EventKind = Literal["audio_chunk", "audio_end", "error", "ignore"]
+
+_AUDIO_CHUNK_TYPES = frozenset({"Audio", "audio", "audio_chunk", "chunk"})
+_AUDIO_END_TYPES = frozenset({"Flushed", "audio_end", "end", "flushed"})
+_IGNORE_TYPES = frozenset({"Metadata", "Open", "control_ack", "ready"})
+_ERROR_TYPES = frozenset({"Error", "error"})
+
+
+@dataclass
+class _ReceivedEvent:
+    kind: _EventKind
+    audio: bytes | None = None
+    error_message: str | None = None
+
+
+def _extract_audio_b64(resp: dict[str, object]) -> str | None:
+    """Pull the base64 audio payload out of one of three provider shapes.
+
+    SLNG-fronted providers send audio as either ``resp["data"] = "<b64>"``,
+    ``resp["data"] = {"audio": "<b64>"}`` (Sarvam Bulbul), or
+    ``resp["audio"] = "<b64>"``.
+    """
+    data_field = resp.get("data")
+    if isinstance(data_field, str):
+        return data_field
+    if isinstance(data_field, dict):
+        nested = data_field.get("audio")
+        if isinstance(nested, str):
+            return nested
+    audio_field = resp.get("audio")
+    if isinstance(audio_field, str):
+        return audio_field
+    return None
+
+
+def _extract_error_message(resp: dict[str, object]) -> str:
+    for key in ("message", "description", "error"):
+        value = resp.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "Unknown error"
+
+
+def _parse_received_event(resp: dict[str, object]) -> _ReceivedEvent:
+    """Normalize a raw WS message into a typed :class:`_ReceivedEvent`.
+
+    Handles the variant message shapes from SLNG-fronted TTS providers
+    (Sarvam, Deepgram Aura, Rime, etc.) so the WS read loops only deal
+    with the canonical kinds: ``audio_chunk``, ``audio_end``, ``error``,
+    ``ignore``.
+    """
+    if _is_end_event(resp):
+        return _ReceivedEvent(kind="audio_end")
+
+    mtype = resp.get("type")
+    if mtype in _IGNORE_TYPES:
+        return _ReceivedEvent(kind="ignore")
+    if mtype in _AUDIO_END_TYPES:
+        return _ReceivedEvent(kind="audio_end")
+    if mtype in _AUDIO_CHUNK_TYPES:
+        audio_b64 = _extract_audio_b64(resp)
+        if not audio_b64:
+            return _ReceivedEvent(kind="ignore")
+        try:
+            return _ReceivedEvent(kind="audio_chunk", audio=base64.b64decode(audio_b64))
+        except Exception:
+            logger.warning(
+                "[SLNG TTS] invalid base64 audio (audio_chunk)", exc_info=True
+            )
+            return _ReceivedEvent(kind="ignore")
+    if mtype in _ERROR_TYPES:
+        return _ReceivedEvent(kind="error", error_message=_extract_error_message(resp))
+
+    logger.debug("[SLNG TTS] ignoring unknown message: %s", resp)
+    return _ReceivedEvent(kind="ignore")
+
+
 def _default_tts_endpoint(*, slng_base_url: str, model: str) -> str:
     host = slng_base_url.split(":")[0]
     protocol = "ws" if host in ("localhost", "127.0.0.1") else "wss"
@@ -347,53 +427,17 @@ class ChunkedStream(tts.ChunkedStream):
                         raise APIStatusError(f"SLNG TTS error: {resp.get('error')}")
                     continue
 
-                mtype = resp.get("type")
-                if _is_end_event(resp):
-                    mtype = "audio_end"
-                elif mtype in ("Metadata", "Open", "control_ack", "ready"):
+                event = _parse_received_event(resp)
+                if event.kind == "ignore":
                     continue
-                elif mtype == "Flushed":
-                    mtype = "audio_end"
-                elif mtype in ("Audio", "chunk", "audio"):
-                    mtype = "audio_chunk"
-                elif mtype == "Error":
-                    mtype = "error"
-
-                if mtype == "audio_chunk":
-                    # Providers send audio base64 in one of three shapes:
-                    #   resp["data"] = "<b64>"
-                    #   resp["data"] = {"audio": "<b64>"}  (Sarvam Bulbul)
-                    #   resp["audio"] = "<b64>"
-                    data_field = resp.get("data")
-                    if isinstance(data_field, str):
-                        audio_b64 = data_field
-                    elif isinstance(data_field, dict) and isinstance(data_field.get("audio"), str):
-                        audio_b64 = data_field["audio"]
-                    elif isinstance(resp.get("audio"), str):
-                        audio_b64 = resp["audio"]
-                    else:
-                        audio_b64 = None
-                    if audio_b64:
-                        try:
-                            output_emitter.push(base64.b64decode(audio_b64))
-                        except Exception:
-                            logger.warning(
-                                "[SLNG TTS] invalid base64 audio (audio_chunk)",
-                                exc_info=True,
-                            )
-                elif mtype in ("audio_end", "end", "flushed"):
+                if event.kind == "audio_chunk":
+                    if event.audio is not None:
+                        output_emitter.push(event.audio)
+                elif event.kind == "audio_end":
                     output_emitter.flush()
                     break
-                elif mtype == "error":
-                    error_msg = (
-                        resp.get("message")
-                        or resp.get("description")
-                        or resp.get("error")
-                        or "Unknown error"
-                    )
-                    raise APIStatusError(f"SLNG TTS error: {error_msg}")
-                else:
-                    logger.debug("[SLNG TTS] ignoring unknown message: %s", resp)
+                elif event.kind == "error":
+                    raise APIStatusError(f"SLNG TTS error: {event.error_message}")
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -566,66 +610,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                             raise APIStatusError(f"SLNG TTS error: {resp.get('error')}")
                         continue
 
-                    mtype = resp.get("type")
-                    if _is_end_event(resp):
-                        mtype = "audio_end"
-                    elif mtype in ("Metadata", "Open"):
+                    event = _parse_received_event(resp)
+                    if event.kind == "ignore":
                         continue
-                    elif mtype == "Flushed":
-                        mtype = "audio_end"
-                    elif mtype in ("Audio", "chunk", "audio"):
-                        mtype = "audio_chunk"
-                    elif mtype == "Error":
-                        mtype = "error"
-
-                    # SLNG: Handle audio_chunk with base64 data. Providers send
-                    # audio in one of three shapes:
-                    #   resp["data"] = "<b64>"
-                    #   resp["data"] = {"audio": "<b64>"}  (Sarvam Bulbul)
-                    #   resp["audio"] = "<b64>"
-                    if mtype == "audio_chunk":
-                        data_field = resp.get("data")
-                        if isinstance(data_field, str):
-                            audio_b64 = data_field
-                        elif isinstance(data_field, dict) and isinstance(
-                            data_field.get("audio"), str
-                        ):
-                            audio_b64 = data_field["audio"]
-                        elif isinstance(resp.get("audio"), str):
-                            audio_b64 = resp["audio"]
-                        else:
-                            audio_b64 = None
-                        if audio_b64:
-                            try:
-                                audio_data = base64.b64decode(audio_b64)
-                            except Exception:
-                                logger.warning(
-                                    "[SLNG TTS] invalid base64 audio (audio_chunk)",
-                                    exc_info=True,
-                                )
-                            else:
-                                output_emitter.push(audio_data)
-
-                    # SLNG: "audio_end" or "end" instead of "Flushed"
-                    elif mtype in ("audio_end", "end", "flushed"):
+                    if event.kind == "audio_chunk":
+                        if event.audio is not None:
+                            output_emitter.push(event.audio)
+                    elif event.kind == "audio_end":
+                        # SLNG: "audio_end" or "end" instead of "Flushed"
                         output_emitter.end_segment()
                         break
-
-                    elif mtype == "error":
-                        error_msg = (
-                            resp.get("message")
-                            or resp.get("description")
-                            or resp.get("error")
-                            or "Unknown error"
-                        )
-                        raise APIStatusError(f"SLNG TTS error: {error_msg}")
-
-                    elif mtype in ("control_ack", "ready"):
-                        # Informational messages, ignore
-                        pass
-
-                    else:
-                        logger.debug("[SLNG TTS] ignoring unknown message: %s", resp)
+                    elif event.kind == "error":
+                        raise APIStatusError(f"SLNG TTS error: {event.error_message}")
 
         if is_rime_arcana:
             # EOS closes the websocket; avoid pooling to prevent any cross-segment leakage or reuse
