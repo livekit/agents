@@ -46,7 +46,6 @@ from .log import logger
 
 STTEncoding = Literal["pcm_s16le", "pcm_mulaw"]
 DEFAULT_BUFFER_SIZE_SECONDS = 0.064
-MAX_BUFFER_SECONDS = 600
 MAX_IMMEDIATE_RETRIES = 1
 
 # Define bytes per frame for different encoding types
@@ -422,7 +421,6 @@ class SpeechStream(stt.SpeechStream):
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: list[SpeechEvent] = []
         self._reconnect_event = asyncio.Event()
-        self._pending_replay: bytes | None = None
 
     def update_options(
         self,
@@ -464,11 +462,7 @@ class SpeechStream(stt.SpeechStream):
         return max(1, round(self._opts.sample_rate * buffer_size_seconds))
 
     async def _run(self) -> None:
-        bps = bytes_per_frame.get(self._opts.encoding, 2)
-        max_buffer_bytes = int(MAX_BUFFER_SECONDS * self._opts.sample_rate * bps)
-
-        buffered_audio = bytearray()
-        pending_switch_succeeded: tuple[str | None, str | None] | None = None
+        did_failover = False
         send: asyncio.Task[None] | None = None
         recv: asyncio.Task[None] | None = None
         wait_reconnect: asyncio.Task[bool] | None = None
@@ -487,7 +481,6 @@ class SpeechStream(stt.SpeechStream):
             return None
 
         async def failover(*, exc: BaseException | None) -> bool:
-            nonlocal pending_switch_succeeded
             from_model = current_model()
             exc_info = (
                 (type(exc), exc, exc.__traceback__)
@@ -509,10 +502,7 @@ class SpeechStream(stt.SpeechStream):
                 to_model,
                 exc_info=exc_info,
             )
-
-            pending_switch_succeeded = (from_model, to_model)
             self._active_endpoint_index += 1
-            self._pending_replay = bytes(buffered_audio)
             return True
 
         async def next_audio_frame() -> Any | None:
@@ -533,24 +523,12 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            if self._pending_replay:
-                data = self._pending_replay
-                self._pending_replay = None
-                chunk_bytes = samples_per_buffer * bytes_per_sample
-                for i in range(0, len(data), chunk_bytes):
-                    await ws.send_bytes(data[i : i + chunk_bytes])
-
             for frame in pending_frames:
                 frames = audio_bstream.write(frame.data.tobytes())
                 for out in frames:
                     if len(out.data) % bytes_per_sample != 0:
                         continue
-                    payload = bytes(out.data)
-                    await ws.send_bytes(payload)
-                    buffered_audio.extend(payload)
-                    if len(buffered_audio) > max_buffer_bytes:
-                        excess = len(buffered_audio) - max_buffer_bytes
-                        del buffered_audio[:excess]
+                    await ws.send_bytes(bytes(out.data))
 
             async for item in self._input_ch:
                 if isinstance(item, self._FlushSentinel):
@@ -561,14 +539,7 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     if len(frame.data) % bytes_per_sample != 0:
                         continue
-
-                    payload = bytes(frame.data)
-                    await ws.send_bytes(payload)
-
-                    buffered_audio.extend(payload)
-                    if len(buffered_audio) > max_buffer_bytes:
-                        excess = len(buffered_audio) - max_buffer_bytes
-                        del buffered_audio[:excess]
+                    await ws.send_bytes(bytes(frame.data))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             speech_started = False
@@ -649,8 +620,6 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                     if is_final:
-                        buffered_audio.clear()
-
                         start_time = words[0].get("start", 0.0) if words else 0.0
                         end_time = words[-1].get("end", 0.0) if words else 0.0
                     else:
@@ -688,12 +657,10 @@ class SpeechStream(stt.SpeechStream):
             recv = None
             wait_reconnect = None
 
-            pending_frames: list[Any] = []
-            if self._pending_replay is None:
-                first = await next_audio_frame()
-                if first is None:
-                    return
-                pending_frames.append(first)
+            first = await next_audio_frame()
+            if first is None:
+                return
+            pending_frames: list[Any] = [first]
 
             endpoint = self._model_endpoints[self._active_endpoint_index]
             model = current_model()
@@ -701,13 +668,12 @@ class SpeechStream(stt.SpeechStream):
             ws: aiohttp.ClientWebSocketResponse | None = None
             try:
                 ws = await self._connect_ws(model_endpoint=endpoint, model=model)
-                if pending_switch_succeeded:
-                    from_model, to_model = pending_switch_succeeded
-                    logger.info("STT switched to fallback: %s -> %s", from_model, to_model)
-                    pending_switch_succeeded = None
+                if did_failover:
+                    logger.info("STT switched to fallback: model=%s", model)
                     # Propagate successful failover to parent so new streams
-                    # start from the working endpoint
+                    # start from the working endpoint.
                     self._stt_parent._set_active_endpoint_index(self._active_endpoint_index)
+                    did_failover = False
 
                 send = asyncio.create_task(send_task(ws, pending_frames=pending_frames))
                 recv = asyncio.create_task(recv_task(ws))
@@ -735,11 +701,7 @@ class SpeechStream(stt.SpeechStream):
                 if tasks:
                     with contextlib.suppress(Exception):
                         await utils.aio.gracefully_cancel(*tasks)
-                if (
-                    isinstance(exc, APIStatusError)
-                    and not buffered_audio
-                    and self._pending_replay is None
-                ):
+                if isinstance(exc, APIStatusError):
                     status_code = _safe_error_code(exc)
                     is_permanent_client_error = (
                         status_code is not None and 400 <= status_code < 500 and status_code != 429
@@ -749,17 +711,10 @@ class SpeechStream(stt.SpeechStream):
 
                     if not is_permanent_client_error and attempts < MAX_IMMEDIATE_RETRIES:
                         immediate_reconnect_attempts[endpoint_index] = attempts + 1
-                        replay_bytes = bytearray()
-                        for frame in pending_frames:
-                            data = getattr(frame, "data", None)
-                            if data is None:
-                                continue
-                            replay_bytes.extend(data.tobytes())
-                        if replay_bytes:
-                            self._pending_replay = bytes(replay_bytes)
                         continue
                 if not await failover(exc=exc):
                     raise
+                did_failover = True
                 immediate_reconnect_attempts[self._active_endpoint_index] = 0
                 continue
             finally:
