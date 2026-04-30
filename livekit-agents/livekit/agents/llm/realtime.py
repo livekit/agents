@@ -69,7 +69,7 @@ class RealtimeCapabilities:
     audio_output: bool
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
-    """Whether pre-existing function call items in the chat context are honored"""
+    """Whether function call items already in the chat context can be resumed"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
