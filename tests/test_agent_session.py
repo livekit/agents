@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import (
     Agent,
+    AgentSession,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
@@ -17,9 +18,12 @@ from livekit.agents.llm import (
     FunctionToolCall,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.events import AgentFalseInterruptionEvent, FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 
+from .fake_io import FakeAudioOutput
 from .fake_session import FakeActions, create_session, run_session
 
 
@@ -824,6 +828,117 @@ async def test_unknown_function_call() -> None:
     ]
     assert len(error_outputs) == 1
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
+
+
+async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
+
+    # Silent tool-call step: no spoken preamble/audio before the function call.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                call_id="1",
+            )
+        ],
+        ttft=0.05,
+        duration=1.0,
+    )
+
+    # VAD-only speech starts during the silent tool-call generation and remains
+    # active after the tool reply starts.
+    actions.add_user_speech(0.85, 2.0, "", stt_delay=0.05)
+
+    actions.add_llm(
+        content="The weather in Tokyo is sunny today.",
+        input="The weather in Tokyo is sunny today.",
+        ttft=0.0,
+        duration=0.0,
+    )
+    actions.add_tts(0.5, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        can_pause_audio=True,
+        turn_handling={"interruption": {"false_interruption_timeout": 0.2 / speed}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    false_interruption_events: list[AgentFalseInterruptionEvent] = []
+
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("agent_false_interruption", false_interruption_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, agent, drain_delay=0.8 / speed),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    silent_step_finished = transitions.index(("speaking", "listening"))
+
+    # Before the fix this is ("listening", "thinking") because the pause state
+    # captured during the silent tool-call step leaks into the tool reply.
+    assert transitions[silent_step_finished + 1] == ("listening", "speaking")
+    assert false_interruption_events
+    assert false_interruption_events[-1].resumed is True
+
+
+async def test_speech_handle_advance_step_resets_playout_state() -> None:
+    speech_handle = SpeechHandle.create()
+
+    speech_handle._mark_current_generation_playout_started()
+    assert speech_handle.current_generation_playout_active is True
+
+    speech_handle._advance_step()
+
+    assert speech_handle.current_generation_playout_active is False
+
+
+async def test_paused_speech_info_refreshes_after_handle_step_advances() -> None:
+    session: AgentSession[None] = AgentSession(aec_warmup_duration=None)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+    speech_handle = SpeechHandle.create()
+
+    session._agent_state = "thinking"
+    activity._update_paused_speech(speech_handle, timeout=0)
+    assert activity._paused_speech is not None
+    assert activity._paused_speech.generation_step == 1
+    assert activity._paused_speech.agent_state == "thinking"
+
+    speech_handle._mark_current_generation_playout_started()
+    speech_handle._advance_step()
+    session._agent_state = "speaking"
+
+    activity._update_paused_speech(speech_handle, timeout=1)
+    assert activity._paused_speech is not None
+    assert activity._paused_speech.generation_step == 2
+    assert activity._paused_speech.agent_state == "speaking"
+
+
+async def test_stale_paused_speech_cleanup_resumes_audio_output() -> None:
+    session: AgentSession[None] = AgentSession(aec_warmup_duration=None)
+    session.output.audio = audio_output = FakeAudioOutput(can_pause=True)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+    speech_handle = SpeechHandle.create()
+
+    activity._current_speech = speech_handle
+    activity._update_paused_speech(speech_handle, timeout=0)
+    audio_output.pause()
+    assert audio_output._paused_at is not None
+
+    speech_handle._advance_step()
+    activity._start_false_interruption_timer(timeout=0)
+    await asyncio.sleep(0.01)
+
+    assert activity._paused_speech is None
+    assert audio_output._paused_at is None
 
 
 # helpers

@@ -41,6 +41,7 @@ class SpeechHandle:
         self._done_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
+        self._current_generation_playout_active = False
 
         self._generations: list[asyncio.Future[None]] = []
 
@@ -130,6 +131,10 @@ class SpeechHandle:
             )
 
         self._allow_interruptions = value
+
+    @property
+    def current_generation_playout_active(self) -> bool:
+        return self._current_generation_playout_active
 
     @property
     def chat_items(self) -> list[llm.ChatItem]:
@@ -250,6 +255,16 @@ class SpeechHandle:
         fut = asyncio.Future[None]()
         self._generations.append(fut)
         self._authorize_event.set()
+
+    def _mark_current_generation_playout_started(self) -> None:
+        self._current_generation_playout_active = True
+
+    def _mark_current_generation_playout_finished(self) -> None:
+        self._current_generation_playout_active = False
+
+    def _advance_step(self) -> None:
+        self._num_steps += 1
+        self._current_generation_playout_active = False
 
     def _clear_authorization(self) -> None:
         self._authorize_event.clear()
