@@ -268,7 +268,11 @@ class TTS(tts.TTS):
             model_options=self._opts.model_options,
         )
 
-        await ws.send_str(json.dumps(init_payload))
+        try:
+            await ws.send_str(json.dumps(init_payload))
+        except Exception:
+            await ws.close()
+            raise
 
         return ws
 
