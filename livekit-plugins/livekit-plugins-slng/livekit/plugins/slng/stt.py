@@ -116,7 +116,6 @@ class STT(stt.STT):
         self,
         *,
         api_key: str | None = None,
-        api_token: str | None = None,
         model: str = "deepgram/nova:3",
         model_endpoint: str | None = None,
         model_endpoints: list[str] | None = None,
@@ -142,7 +141,6 @@ class STT(stt.STT):
 
         Args:
             api_key: SLNG API key for authentication.
-            api_token: Deprecated alias for api_key. Use api_key instead.
             model: SLNG model identifier (for example "deepgram/nova:3")
             model_endpoint: Optional full SLNG WebSocket endpoint URL
             model_endpoints: Optional fallback STT endpoints
@@ -162,18 +160,9 @@ class STT(stt.STT):
             http_session: Optional HTTP session
             **model_options: Model-specific options (e.g., whisper_params={"task": "translate"})
         """
-        # Resolve api_key from parameter, legacy api_token, or SLNG_API_KEY env var
-        resolved_key = api_key or api_token or os.environ.get("SLNG_API_KEY")
+        resolved_key = api_key or os.environ.get("SLNG_API_KEY")
         if not resolved_key:
             raise ValueError("api_key is required, or set SLNG_API_KEY environment variable")
-        if api_token and not api_key:
-            import warnings
-
-            warnings.warn(
-                "api_token is deprecated, use api_key instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
         # Detect if endpoint supports streaming (WebSocket endpoints do)
         # - streaming=True: Supports real-time streaming (WebSocket only)
