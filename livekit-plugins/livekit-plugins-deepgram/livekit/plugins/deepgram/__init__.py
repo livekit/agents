@@ -19,6 +19,8 @@ Support for speech-to-text with [Deepgram](https://deepgram.com/).
 See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more information.
 """
 
+from typing import TYPE_CHECKING
+
 from .stt import STT, SpeechStream
 from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import TTS
@@ -28,16 +30,20 @@ __all__ = ["STT", "SpeechStream", "STTv2", "SpeechStreamv2", "__version__", "TTS
 
 
 from livekit.agents import Plugin
-from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 
 from .log import logger
+
+if TYPE_CHECKING:
+    from livekit.agents.diagnostics import PluginDiagnosticInfo
 
 
 class DeepgramPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
-    def diagnostic_info(self) -> PluginDiagnosticInfo:
+    def diagnostic_info(self) -> "PluginDiagnosticInfo":
+        from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
+
         return PluginDiagnosticInfo(
             capabilities=[PluginCapability.STT, PluginCapability.TTS],
             required_env_vars=["DEEPGRAM_API_KEY"],

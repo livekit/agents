@@ -23,6 +23,8 @@ See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
+from typing import TYPE_CHECKING
+
 from . import realtime, responses, tools
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
@@ -56,16 +58,20 @@ __all__ = [
 ]
 
 from livekit.agents import Plugin
-from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 
 from .log import logger
+
+if TYPE_CHECKING:
+    from livekit.agents.diagnostics import PluginDiagnosticInfo
 
 
 class OpenAIPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
-    def diagnostic_info(self) -> PluginDiagnosticInfo:
+    def diagnostic_info(self) -> "PluginDiagnosticInfo":
+        from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
+
         return PluginDiagnosticInfo(
             capabilities=[
                 PluginCapability.LLM,

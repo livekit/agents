@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -44,6 +45,7 @@ class PluginCapability(str, Enum):
     TTS = "tts"
     REALTIME = "realtime"
     VAD = "vad"
+    TURN_DETECTOR = "turn_detector"
     AVATAR = "avatar"
     NOISE_CANCELLATION = "noise_cancellation"
     UNKNOWN = "unknown"
@@ -79,7 +81,12 @@ class DiagnosticContext:
 
 @dataclass(frozen=True)
 class DiagnosticResult:
-    """Single diagnostic finding with a user-facing message and optional fix."""
+    """Single diagnostic finding with a user-facing message and optional fix.
+
+    ``details`` is included in ``doctor --json`` output. Keep it free of
+    secret values; credential-like keys are defensively redacted during
+    serialization.
+    """
 
     id: str
     category: DiagnosticCategory | str
@@ -99,7 +106,7 @@ class DiagnosticResult:
             "message": self.message,
             "fix_hint": self.fix_hint,
             "docs_url": self.docs_url,
-            "details": dict(self.details),
+            "details": _redact_details(self.details),
         }
 
 
@@ -121,6 +128,7 @@ class DiagnosticReport:
     strict: bool = False
     online: bool = False
     deep: bool = False
+    plugins: Sequence[Mapping[str, Any]] = ()
 
     def to_dict(self) -> dict[str, Any]:
         result_dicts = [result.to_dict() for result in self.results]
@@ -130,13 +138,6 @@ class DiagnosticReport:
             )
             for severity in DiagnosticSeverity
         }
-        plugins: list[dict[str, Any]] = []
-        for result in self.results:
-            if result.id == "plugins.registered":
-                raw_plugins = result.details.get("plugins", [])
-                if isinstance(raw_plugins, list):
-                    plugins = [plugin for plugin in raw_plugins if isinstance(plugin, dict)]
-                break
 
         return {
             "schema_version": 1,
@@ -152,7 +153,7 @@ class DiagnosticReport:
                 "fatal": counts[DiagnosticSeverity.FATAL.value],
                 "exit_code": report_exit_code(self),
             },
-            "plugins": plugins,
+            "plugins": [dict(plugin) for plugin in self.plugins],
             "results": result_dicts,
         }
 
@@ -179,6 +180,7 @@ def collect_diagnostics(context: DiagnosticContext) -> DiagnosticReport:
 
     return DiagnosticReport(
         results=results,
+        plugins=_registered_plugin_summaries(context.registered_plugins),
         mode=context.mode,
         strict=context.strict,
         online=context.online,
@@ -221,22 +223,31 @@ def build_diagnostics_table(report: DiagnosticReport) -> Table:
 
 def _check_python_version() -> DiagnosticResult:
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    supported = (3, 10) <= sys.version_info[:2] < (3, 15)
-    if supported:
+    if sys.version_info[:2] < (3, 10):  # noqa: UP036 - diagnostics reports stale runtimes.
         return DiagnosticResult(
             id="python.version",
             category=DiagnosticCategory.ENVIRONMENT,
-            severity=DiagnosticSeverity.OK,
-            message=f"Python {version} is supported",
+            severity=DiagnosticSeverity.FATAL,
+            message=f"Python {version} is below the supported range >=3.10",
+            fix_hint="Use Python 3.10 or newer.",
+            details={"version": version},
+        )
+
+    if sys.version_info[:2] >= (3, 15):
+        return DiagnosticResult(
+            id="python.version",
+            category=DiagnosticCategory.ENVIRONMENT,
+            severity=DiagnosticSeverity.WARN,
+            message=f"Python {version} is newer than the currently tested range",
+            fix_hint="Use Python 3.10, 3.11, 3.12, 3.13, or 3.14 if you hit runtime issues.",
             details={"version": version},
         )
 
     return DiagnosticResult(
         id="python.version",
         category=DiagnosticCategory.ENVIRONMENT,
-        severity=DiagnosticSeverity.FATAL,
-        message=f"Python {version} is outside the supported range >=3.10,<3.15",
-        fix_hint="Use Python 3.10, 3.11, 3.12, 3.13, or 3.14.",
+        severity=DiagnosticSeverity.OK,
+        message=f"Python {version} is supported",
         details={"version": version},
     )
 
@@ -348,16 +359,7 @@ def _check_plugins(context: DiagnosticContext) -> list[DiagnosticResult]:
             category=DiagnosticCategory.PLUGIN,
             severity=DiagnosticSeverity.OK,
             message=f"{len(context.registered_plugins)} plugin(s) registered",
-            details={
-                "plugins": [
-                    {
-                        "title": getattr(plugin, "title", type(plugin).__name__),
-                        "version": getattr(plugin, "version", ""),
-                        "package": getattr(plugin, "package", ""),
-                    }
-                    for plugin in context.registered_plugins
-                ]
-            },
+            details={"plugins": _registered_plugin_summaries(context.registered_plugins)},
         )
     ]
 
@@ -537,7 +539,7 @@ def _check_deployment(context: DiagnosticContext) -> list[DiagnosticResult]:
     server = context.server
     results: list[DiagnosticResult] = []
     drain_timeout = getattr(server, "_drain_timeout", None)
-    if isinstance(drain_timeout, int) and drain_timeout <= 0:
+    if drain_timeout is not None and drain_timeout <= 0:
         results.append(
             DiagnosticResult(
                 id="deployment.drain_timeout",
@@ -563,6 +565,17 @@ def _check_deployment(context: DiagnosticContext) -> list[DiagnosticResult]:
         )
 
     return results
+
+
+def _registered_plugin_summaries(plugins: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "title": getattr(plugin, "title", type(plugin).__name__),
+            "version": getattr(plugin, "version", ""),
+            "package": getattr(plugin, "package", ""),
+        }
+        for plugin in plugins
+    ]
 
 
 def _check_livekit_tcp_connectivity(context: DiagnosticContext) -> DiagnosticResult:
@@ -611,7 +624,7 @@ def _check_livekit_tcp_connectivity(context: DiagnosticContext) -> DiagnosticRes
 
 
 def _resolved_value(context: DiagnosticContext, server_attr: str, env_key: str) -> str:
-    server_value = getattr(context.server, server_attr, None)
+    server_value = getattr(context.server, server_attr) if context.server is not None else None
     if server_value:
         return str(server_value)
     return context.env.get(env_key, "")
@@ -624,10 +637,43 @@ def _valid_ws_url(url: str) -> bool:
 
 def _redact_url(url: str) -> str:
     parsed = urlparse(url)
-    if not parsed.password:
+    if not parsed.username and not parsed.password:
         return url
-    netloc = parsed.netloc.replace(parsed.password, "***")
+
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+
+    netloc = f"***:***@{host}"
     return parsed._replace(netloc=netloc).geturl()
+
+
+_SECRET_DETAIL_KEY_RE = re.compile(
+    r"(api[_-]?key|secret|token|password|credential|authorization|passphrase|bearer|connection[_-]?string)",
+    re.IGNORECASE,
+)
+
+
+def _redact_details(value: Any, *, key: str = "") -> Any:
+    if key and _SECRET_DETAIL_KEY_RE.search(key):
+        return "***"
+
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _redact_details(item_value, key=str(item_key))
+            for item_key, item_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_redact_details(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_redact_details(item) for item in value]
+
+    return value
 
 
 def _plugin_id(plugin: Any) -> str:

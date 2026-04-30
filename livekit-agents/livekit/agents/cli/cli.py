@@ -1710,6 +1710,20 @@ def _apply_cli_server_options(
         server.update_options(**update_kwargs)
 
 
+def _resolved_livekit_api_options(
+    server: AgentServer,
+    *,
+    url: str | None = None,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> tuple[str, str, str]:
+    return (
+        str(url or server._ws_url or ""),
+        str(api_key or server._api_key or ""),
+        str(api_secret or server._api_secret or ""),
+    )
+
+
 def _diagnostic_context(
     server: AgentServer,
     *,
@@ -2053,9 +2067,14 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _configure_logger(c, log_level.value)
         _apply_cli_server_options(server, url=url, api_key=api_key, api_secret=api_secret)
         _run_preflight(server=server, mode="connect", console=c)
-        resolved_url = str(getattr(server, "_ws_url", "") or "")
-        resolved_api_key = str(getattr(server, "_api_key", "") or "")
-        resolved_api_secret = str(getattr(server, "_api_secret", "") or "")
+        resolved_url, resolved_api_key, resolved_api_secret = _resolved_livekit_api_options(
+            server,
+            url=url,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        if not (resolved_url and resolved_api_key and resolved_api_secret):
+            raise CLIError("LiveKit credentials are required for connect mode")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

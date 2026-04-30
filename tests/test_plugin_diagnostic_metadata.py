@@ -83,7 +83,7 @@ def test_local_model_plugin_diagnostic_metadata() -> None:
     turn_detector_info = base.EOUPlugin(english._EUORunnerEn).diagnostic_info()
 
     assert turn_detector_info.required_env_vars == ()
-    assert set(turn_detector_info.capabilities) == {PluginCapability.VAD}
+    assert set(turn_detector_info.capabilities) == {PluginCapability.TURN_DETECTOR}
     assert turn_detector_info.downloadable_files == ["LiveKit turn detector model"]
     assert (
         turn_detector_info.docs_url == "https://docs.livekit.io/agents/build/turns/turn-detector/"

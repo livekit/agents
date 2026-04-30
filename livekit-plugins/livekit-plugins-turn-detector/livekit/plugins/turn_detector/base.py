@@ -8,12 +8,11 @@ import re
 import time
 import unicodedata
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from huggingface_hub import errors
 
 from livekit.agents import LanguageCode, Plugin, llm
-from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
@@ -25,6 +24,9 @@ from .version import __version__
 
 MAX_HISTORY_TOKENS = 128
 MAX_HISTORY_TURNS = 6
+
+if TYPE_CHECKING:
+    from livekit.agents.diagnostics import PluginDiagnosticInfo
 
 
 def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
@@ -198,8 +200,10 @@ class EOUPlugin(Plugin):
         self._runner_class._download_files()
 
     def diagnostic_info(self) -> PluginDiagnosticInfo:
+        from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
+
         return PluginDiagnosticInfo(
-            capabilities=[PluginCapability.VAD],
+            capabilities=[PluginCapability.TURN_DETECTOR],
             downloadable_files=["LiveKit turn detector model"],
             docs_url="https://docs.livekit.io/agents/build/turns/turn-detector/",
         )

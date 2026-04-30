@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
-from livekit.agents.cli.cli import _apply_cli_server_options, _build_cli, _run_preflight
+from livekit.agents.cli.cli import (
+    _apply_cli_server_options,
+    _build_cli,
+    _ExitCli,
+    _resolved_livekit_api_options,
+    _run_preflight,
+)
 from livekit.agents.diagnostics import (
     DiagnosticCategory,
     DiagnosticCheck,
@@ -215,6 +224,27 @@ def test_doctor_online_runs_safe_livekit_tcp_check(
     )
 
 
+def test_doctor_online_reports_livekit_tcp_failure(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def create_connection(address: tuple[str, int], timeout: float) -> object:
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(
+        "livekit.agents.diagnostics.socket.create_connection",
+        create_connection,
+    )
+    app = _build_cli(_make_server())
+
+    result = runner.invoke(app, ["doctor", "--online", "--json"], env=_valid_env())
+
+    assert result.exit_code == 1
+    report = json.loads(result.output)
+    tcp_result = next(item for item in report["results"] if item["id"] == "network.livekit_tcp")
+    assert tcp_result["severity"] == "error"
+    assert tcp_result["details"] == {"host": "diagnostics-test.livekit.cloud", "port": 443}
+
+
 def test_doctor_deep_runs_plugin_declared_checks(runner: CliRunner) -> None:
     Plugin.register_plugin(DeepCheckPlugin())
     app = _build_cli(_make_server())
@@ -288,3 +318,81 @@ def test_cli_server_options_ignore_empty_strings() -> None:
     assert server._ws_url == "wss://configured.livekit.cloud"
     assert server._api_key == "configured-key"
     assert server._api_secret == "configured-secret"
+
+
+def test_cli_server_options_override_constructor_values() -> None:
+    server = AgentServer(
+        ws_url="wss://constructor.livekit.cloud",
+        api_key="constructor-key",
+        api_secret="constructor-secret",
+    )
+
+    _apply_cli_server_options(
+        server,
+        url="wss://cli.livekit.cloud",
+        api_key="cli-key",
+        api_secret="cli-secret",
+    )
+
+    assert server._ws_url == "wss://cli.livekit.cloud"
+    assert server._api_key == "cli-key"
+    assert server._api_secret == "cli-secret"
+
+
+def test_resolved_livekit_api_options_prefers_cli_values() -> None:
+    server = AgentServer(
+        ws_url="wss://constructor.livekit.cloud",
+        api_key="constructor-key",
+        api_secret="constructor-secret",
+    )
+
+    assert _resolved_livekit_api_options(
+        server,
+        url="wss://cli.livekit.cloud",
+        api_key="cli-key",
+        api_secret="cli-secret",
+    ) == ("wss://cli.livekit.cloud", "cli-key", "cli-secret")
+
+
+def test_connect_uses_env_credentials_for_livekit_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = _make_server()
+    captured: dict[str, str] = {}
+
+    class _Rooms:
+        async def list_rooms(self, request: object) -> SimpleNamespace:
+            return SimpleNamespace(rooms=[SimpleNamespace(name="room")])
+
+    class _LiveKitAPI:
+        def __init__(self, url: str, api_key: str, api_secret: str) -> None:
+            captured["url"] = url
+            captured["api_key"] = api_key
+            captured["api_secret"] = api_secret
+            self.room = _Rooms()
+
+        async def __aenter__(self) -> _LiveKitAPI:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def run(*, devmode: bool, unregistered: bool) -> None:
+        server.emit("worker_started")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        raise _ExitCli()
+
+    monkeypatch.setattr("livekit.agents.cli.cli.api.LiveKitAPI", _LiveKitAPI)
+    monkeypatch.setattr(server, "run", run)
+    monkeypatch.setattr(server, "simulate_job", AsyncMock())
+    app = _build_cli(server)
+
+    result = runner.invoke(app, ["connect", "--room", "test-room"], env=_valid_env())
+
+    assert result.exit_code == 0
+    assert captured == {
+        "url": "wss://diagnostics-test.livekit.cloud",
+        "api_key": "api-key",
+        "api_secret": "api-secret",
+    }
