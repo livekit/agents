@@ -74,8 +74,8 @@ class MultimodalTurnDetector:
         self._opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url=lk_base_url,
-            api_key="devkey",
-            api_secret="devsecret",
+            api_key=lk_api_key,
+            api_secret=lk_api_secret,
             conn_options=conn_options,
         )
 

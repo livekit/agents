@@ -99,10 +99,11 @@ async def entrypoint(ctx: JobContext) -> None:
             # See more at https://docs.livekit.io/agents/build/turns
             # turn_detection=MultilingualModel(),
             turn_detection=inference.MultimodalTurnDetector(
+                # TODO: @chenghao-mou remove this before merging
                 base_url="http://0.0.0.0:8080/v1",
             ),
             endpointing={
-                "min_delay": 1.5,
+                "min_delay": 0.5,
                 "max_delay": 3.0,
             },
             interruption={

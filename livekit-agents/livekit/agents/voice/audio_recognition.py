@@ -37,7 +37,7 @@ from ..vad import VADEvent, VADEventType
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .turn import TurnDetectionMode as TurnDetectionMode
+from .turn import TurnDetectionMode as TurnDetectionMode, _TurnDetector
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -225,11 +225,9 @@ class AudioRecognition:
             self._endpointing = endpointing
 
         if is_given(turn_detection):
-            self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
-            if isinstance(self._turn_detector, MultimodalTurnDetector):
-                self.update_turn_detector(self._turn_detector)
-            else:
-                self.update_turn_detector(None)
+            self.update_turn_detector(
+                turn_detection if not isinstance(turn_detection, str) else None
+            )
 
             mode = turn_detection if isinstance(turn_detection, str) else None
             if self._turn_detection_mode != mode:
@@ -609,9 +607,12 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
-    def update_turn_detector(self, detector: MultimodalTurnDetector | None) -> None:
+    def update_turn_detector(self, detector: _TurnDetector | MultimodalTurnDetector | None) -> None:
+        """Update the turn detector and turn detector stream if possible."""
         self._turn_detector = detector
-        self._turn_detector_stream = detector.stream() if detector is not None else None
+        self._turn_detector_stream = (
+            detector.stream() if isinstance(detector, MultimodalTurnDetector) else None
+        )
         if self._turn_detector_stream is not None:
             self._turn_detection_ch = aio.Chan[
                 rtc.AudioFrame
