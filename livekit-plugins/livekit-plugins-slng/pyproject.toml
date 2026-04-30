@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["aiohttp>=3.10", "livekit-agents>=1.5.1"]
+dependencies = ["aiohttp>=3.10", "livekit-agents>=1.5.7"]
 
 [project.urls]
 Documentation = "https://docs.slng.ai/"
