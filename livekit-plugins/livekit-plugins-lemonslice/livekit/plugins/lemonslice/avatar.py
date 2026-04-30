@@ -42,6 +42,7 @@ class AvatarSession(BaseAvatarSession):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> None:
+        super().__init__()
         self._agent_id = agent_id
         self._agent_image_url = agent_image_url
         self._agent_prompt = agent_prompt
@@ -55,6 +56,14 @@ class AvatarSession(BaseAvatarSession):
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "lemonslice"
 
     async def start(  # type: ignore[override]
         self,
