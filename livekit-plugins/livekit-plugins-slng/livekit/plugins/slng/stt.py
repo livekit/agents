@@ -412,8 +412,8 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._api_key = api_key
         self._region_override_header = region_override_header
-        self._model_endpoints = list(model_endpoints)
-        self._models = list(models)
+        self._model_endpoints = model_endpoints
+        self._models = models
         self._active_endpoint_index = active_endpoint_index
         self._model_options = model_options
         self._session = http_session
