@@ -529,6 +529,7 @@ class SpeechStream(stt.SpeechStream):
                     if len(out.data) % bytes_per_sample != 0:
                         continue
                     await ws.send_bytes(bytes(out.data))
+                    self._speech_duration += out.duration
 
             async for item in self._input_ch:
                 if isinstance(item, self._FlushSentinel):
@@ -540,6 +541,7 @@ class SpeechStream(stt.SpeechStream):
                     if len(frame.data) % bytes_per_sample != 0:
                         continue
                     await ws.send_bytes(bytes(frame.data))
+                    self._speech_duration += frame.duration
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             speech_started = False
@@ -604,10 +606,23 @@ class SpeechStream(stt.SpeechStream):
                     ):
                         continue
                     text = data.get("transcript", "")
+                    is_final = msg_type == "final_transcript"
                     if not text:
+                        # Empty-text final still consumed audio at the gateway;
+                        # emit the usage metric so billed audio gets reported.
+                        if is_final and self._speech_duration > 0:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                    alternatives=[],
+                                    recognition_usage=stt.RecognitionUsage(
+                                        audio_duration=self._speech_duration,
+                                    ),
+                                )
+                            )
+                            self._speech_duration = 0
                         continue
 
-                    is_final = msg_type == "final_transcript"
                     confidence = data.get("confidence", 0.0)
                     language = data.get("language", self._opts.language)
                     words = data.get("words", [])
@@ -651,6 +666,18 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                         )
                         speech_started = False
+
+                        if self._speech_duration > 0:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                    alternatives=[],
+                                    recognition_usage=stt.RecognitionUsage(
+                                        audio_duration=self._speech_duration,
+                                    ),
+                                )
+                            )
+                            self._speech_duration = 0
 
         while True:
             send = None
