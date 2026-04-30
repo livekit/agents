@@ -761,10 +761,13 @@ class SpeechStream(stt.SpeechStream):
 
         # Don't enable compression - e2e tests work without it and compress=15
         # was causing handshake errors with Deepgram Nova endpoint
-        ws = await self._session.ws_connect(
-            model_endpoint,
-            headers=headers,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(model_endpoint, headers=headers),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to SLNG STT") from e
 
         init_message = build_stt_init_payload(
             model=model,
