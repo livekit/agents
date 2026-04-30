@@ -94,8 +94,6 @@ class AMD:
         stt: Optional STT to use for transcript generation. Required when the
             session uses no STT (e.g. a realtime model). If ``None``
             and the session has its own STT, AMD reuses those transcripts.
-        max_hold_duration: Maximum seconds the IVR navigator will stay in hold
-            mode before auto-exiting. Passed through to :class:`IVRActivity`.
         suppress_compatibility_warning: If ``True``, suppress model compatibility warning messages.
     """
 
@@ -114,7 +112,6 @@ class AMD:
         timeout: float = TIMEOUT,
         prompt: str = AMD_PROMPT,
         participant_identity: str | None = None,
-        max_hold_duration: float = 300.0,
         suppress_compatibility_warning: bool = False,
     ) -> None:
         self._llm_config = llm
@@ -136,7 +133,6 @@ class AMD:
 
         self._participant_identity = participant_identity
         self._stt: _STT | None = _InferenceSTT(stt) if isinstance(stt, str) else stt
-        self._max_hold_duration = max_hold_duration
 
         stt_model = self._stt.model.lower() if self._stt is not None else None
         if (
@@ -198,7 +194,6 @@ class AMD:
         if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
             await self._session._start_ivr_detection(
                 transcript=result.transcript,
-                max_hold_duration=self._max_hold_duration,
             )
 
         # eagerly resume so agent can speak immediately to a human
@@ -362,6 +357,9 @@ class AMD:
                                     participant,
                                 )
                                 break
+                    else:
+                        continue
+                    break
             else:
                 logger.warning(
                     "session room_io unavailable, starting amd timers immediately as fallback"

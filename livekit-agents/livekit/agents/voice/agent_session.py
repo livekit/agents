@@ -1072,9 +1072,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 turn_detection=turn_detection,
             )
 
-    async def _start_ivr_detection(
-        self, transcript: str | None = None, max_hold_duration: float = 300.0
-    ) -> None:
+    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
 
         This method injects the DTMF tool and enables loop/silence detection,
@@ -1082,13 +1080,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             transcript (str | None, optional): The transcript to start IVR detection with.
-            max_hold_duration (float, optional): The maximum duration of the hold time for IVR detection.
         """
         if self._ivr_activity is not None:
             logger.warning("IVR detection already started, skipping")
             return
 
-        self._ivr_activity = IVRActivity(self, max_hold_duration=max_hold_duration)
+        self._ivr_activity = IVRActivity(self)
         self._tools.extend(self._ivr_activity.tools)
         await self._ivr_activity.start()
         if transcript is not None:
