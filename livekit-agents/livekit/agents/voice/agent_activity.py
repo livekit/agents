@@ -408,20 +408,25 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
+        if self._closed:
+            return
+
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        await self._publish_tools_change()
+        await self._publish_tools_change(record_noop=True)
         self._sync_toolset_change_subscriptions()
 
-    async def _publish_tools_change(self) -> None:
+    async def _publish_tools_change(self, *, record_noop: bool = False) -> None:
         """Push the current tool set to the realtime session and chat context.
 
         Reads ``self.tools``, diffs against ``self._tool_names_snapshot``, updates
         the realtime session (when present), updates the chat context (for
         non-realtime LLMs), and inserts an ``AgentConfigUpdate`` describing the
-        diff. The snapshot is advanced last, so a transient failure mid-publish
-        leaves the previous snapshot in place and the next refresh retries.
+        diff. ``record_noop`` preserves the public update_tools() audit trail even
+        when the requested tool set is unchanged. The snapshot is advanced last, so
+        a transient failure mid-publish leaves the previous snapshot in place and
+        the next refresh retries.
 
         Serialized via ``self._refresh_lock`` so the public ``update_tools`` API
         and the background refresh task triggered by toolset change notifications
@@ -435,7 +440,7 @@ class AgentActivity(RecognitionHooks):
             tools_removed = sorted(self._tool_names_snapshot - tool_names) or None
 
             config_update: llm.AgentConfigUpdate | None = None
-            if tools_added or tools_removed:
+            if tools_added or tools_removed or record_noop:
                 config_update = llm.AgentConfigUpdate(
                     tools_added=tools_added,
                     tools_removed=tools_removed,
@@ -1060,8 +1065,9 @@ class AgentActivity(RecognitionHooks):
         if self._toolset_refresh_task is not None:
             await utils.aio.cancel_and_wait(self._toolset_refresh_task)
 
-        if self._rt_session is not None:
-            await self._rt_session.aclose()
+        async with self._refresh_lock:
+            if self._rt_session is not None:
+                await self._rt_session.aclose()
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()

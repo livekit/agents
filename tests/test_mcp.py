@@ -152,6 +152,45 @@ class _FakeMCPServer(MCPServer):
         raise NotImplementedError
 
 
+class _BaseCacheMCPServer(MCPServer):
+    def client_streams(
+        self,
+    ) -> AbstractAsyncContextManager[
+        tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+        | tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+            GetSessionIdCallback,
+        ]
+    ]:
+        raise NotImplementedError
+
+
+class _BlockingListToolsClient:
+    def __init__(self, responses: list[list[str]]) -> None:
+        self.responses = responses
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def list_tools(self) -> SimpleNamespace:
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        names = self.responses.pop(0)
+        return SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name=name, description=f"{name} test tool", inputSchema={}, meta=None
+                )
+                for name in names
+            ]
+        )
+
+
 class _FakeRealtimeSession:
     def __init__(self, on_close: Callable[[], Awaitable[None]] | None = None) -> None:
         self.tool_updates: list[set[str]] = []
@@ -192,6 +231,34 @@ async def test_mcp_server_invalidates_cache_on_tool_list_changed_notification() 
     assert server._cache_dirty is True
     assert server.invalidate_cache_calls == 1
     assert callback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_keeps_cache_dirty_when_notification_arrives_during_list_tools() -> None:
+    server = _BaseCacheMCPServer(client_session_timeout_seconds=5)
+    client = _BlockingListToolsClient([["alpha"], ["beta"]])
+    server._client = client  # type: ignore[assignment]
+
+    first_list_task = asyncio.create_task(server.list_tools())
+    await client.started.wait()
+
+    server._handle_tool_list_changed()
+    client.release.set()
+    first_tools = await first_list_task
+
+    assert {tool.info.name for tool in first_tools} == {"alpha"}
+    assert server._cache_dirty is True
+
+    client.started = asyncio.Event()
+    client.release = asyncio.Event()
+    second_list_task = asyncio.create_task(server.list_tools())
+    await client.started.wait()
+    client.release.set()
+    second_tools = await second_list_task
+
+    assert {tool.info.name for tool in second_tools} == {"beta"}
+    assert client.calls == 2
+    assert server._cache_dirty is False
 
 
 @pytest.mark.asyncio
@@ -298,6 +365,60 @@ async def test_agent_activity_unsubscribes_toolset_before_realtime_close() -> No
 
 
 @pytest.mark.asyncio
+async def test_agent_activity_close_waits_for_in_flight_tool_publish() -> None:
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    rt_session = _FakeRealtimeSession()
+    block_update = asyncio.Event()
+    update_started = asyncio.Event()
+    original_update = rt_session.update_tools
+
+    async def _slow_update(tools: list[Any]) -> None:
+        update_started.set()
+        await block_update.wait()
+        await original_update(tools)
+
+    rt_session.update_tools = _slow_update  # type: ignore[assignment]
+    activity = _make_test_activity(
+        toolset=toolset,
+        rt_session=rt_session,
+        session=SimpleNamespace(tools=[], llm=None, stt=None, tts=None, vad=None),
+    )
+    activity._agent.stt = object()
+    activity._agent.tts = object()
+    activity._agent.vad = object()
+    activity._realtime_spans = None
+    activity._audio_recognition = None
+    activity._interruption_detector = None
+    activity._cancel_speech_pause_task = None
+
+    async def _cancel_speech_pause(**kwargs: Any) -> None:
+        return None
+
+    activity._cancel_speech_pause = _cancel_speech_pause
+    activity._lock = asyncio.Lock()
+
+    publish_task = asyncio.create_task(activity._publish_tools_change())
+    await update_started.wait()
+
+    async def _close_activity() -> None:
+        async with activity._lock:
+            await activity._close_session()
+
+    close_task = asyncio.create_task(_close_activity())
+    await asyncio.sleep(0.05)
+    assert rt_session.closing is False
+
+    block_update.set()
+    await asyncio.gather(publish_task, close_task)
+
+    assert rt_session.closing is True
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
 async def test_agent_activity_keeps_snapshot_when_realtime_tool_update_fails() -> None:
     server = _FakeMCPServer(["alpha"])
     toolset = MCPToolset(id="test_mcp", mcp_server=server)
@@ -320,6 +441,49 @@ async def test_agent_activity_keeps_snapshot_when_realtime_tool_update_fails() -
     ] == []
 
     activity._clear_toolset_change_subscriptions()
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_tools_records_noop_config_update() -> None:
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    chat_ctx = ChatContext.empty()
+    activity = _make_test_activity(toolset=toolset, rt_session=None, chat_ctx=chat_ctx)
+    activity._tool_names_snapshot = set(ToolContext([toolset]).function_tools)
+
+    await activity.update_tools([toolset])
+
+    config_updates = [item for item in chat_ctx.items if isinstance(item, AgentConfigUpdate)]
+    assert len(config_updates) == 1
+    assert config_updates[0].tools_added is None
+    assert config_updates[0].tools_removed is None
+
+    await toolset.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_tools_after_close_is_noop() -> None:
+    server = _FakeMCPServer(["alpha"])
+    toolset = MCPToolset(id="test_mcp", mcp_server=server)
+    await toolset.setup()
+
+    chat_ctx = ChatContext.empty()
+    activity = _make_test_activity(
+        toolset=toolset,
+        rt_session=None,
+        chat_ctx=chat_ctx,
+        closed=True,
+    )
+    previous_tools = activity._agent._tools
+
+    await activity.update_tools([])
+
+    assert activity._agent._tools is previous_tools
+    assert [item for item in chat_ctx.items if isinstance(item, AgentConfigUpdate)] == []
+
     await toolset.aclose()
 
 

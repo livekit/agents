@@ -91,6 +91,7 @@ class MCPServer(ABC):
         )
 
         self._cache_dirty = True
+        self._cache_generation = 0
         self._lk_tools: list[MCPTool] | None = None
         self._tool_list_changed_callbacks: set[_ToolListChangedCallback] = set()
         self._reload_failed_callbacks: set[_ReloadFailedCallback] = set()
@@ -105,6 +106,7 @@ class MCPServer(ABC):
 
     def invalidate_cache(self) -> None:
         self._cache_dirty = True
+        self._cache_generation += 1
 
     async def initialize(self) -> None:
         if self._client_task and not self._client_task.done():
@@ -196,6 +198,7 @@ class MCPServer(ABC):
         if not self._cache_dirty and self._lk_tools is not None:
             return self._lk_tools
 
+        cache_generation = self._cache_generation
         tools = await self._client.list_tools()
         lk_tools = [
             self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
@@ -203,7 +206,7 @@ class MCPServer(ABC):
         ]
 
         self._lk_tools = lk_tools
-        self._cache_dirty = False
+        self._cache_dirty = cache_generation != self._cache_generation
         return lk_tools
 
     def _make_function_tool(
