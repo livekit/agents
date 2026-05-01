@@ -34,7 +34,7 @@ class AMDCategory(str, Enum):
 
 
 class AMDPredictionEvent(BaseModel):
-    type: Literal["amd"] = "amd"
+    type: Literal["amd_prediction"] = "amd_prediction"
     speech_duration: float
     category: AMDCategory
     reason: str
