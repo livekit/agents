@@ -119,11 +119,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         self._sip_call_to = sip_call_to
         self._sip_connection = sip_connection if is_given(sip_connection) else None
-        self._sip_trunk_id = (
-            sip_trunk_id
-            if is_given(sip_trunk_id)
-            else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
-        )
+        if is_given(sip_trunk_id):
+            self._sip_trunk_id = sip_trunk_id
+        elif self._sip_connection is not None:
+            # explicit sip_connection: don't override with the env var trunk
+            self._sip_trunk_id = None
+        else:
+            self._sip_trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         if self._sip_trunk_id is None and self._sip_connection is None:
             raise ValueError(
                 "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`,"
