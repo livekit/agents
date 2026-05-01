@@ -515,8 +515,8 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-        if self._session.amd is not None and not self._session.amd.started:
-            self._session.amd._on_first_audio()
+        if self._session.amd is not None:
+            self._session.amd.push_audio(frame)
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
