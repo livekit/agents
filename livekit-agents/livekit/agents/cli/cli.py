@@ -289,7 +289,12 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     if kwargs:
         server.update_options(**kwargs)
 
-    devmode = args.reload_addr is not None
+    if args.reload_addr and not args.dev:
+        raise ValueError("--reload-addr requires --dev")
+
+    devmode = args.dev
+    if args.log_format == "colored":
+        devmode = True
 
     exit_raised = False
 
@@ -381,9 +386,11 @@ def run_app(server: AgentServer | WorkerOptions) -> None:
 
     start_p = sub.add_parser("start")
     start_p.add_argument("--log-level", default="INFO")
+    start_p.add_argument("--log-format", choices=["json", "colored"], default="json")
     start_p.add_argument("--url")
     start_p.add_argument("--api-key")
     start_p.add_argument("--api-secret")
+    start_p.add_argument("--dev", action="store_true", default=False)
     start_p.add_argument("--reload-addr")
 
     console_p = sub.add_parser("console")
@@ -406,5 +413,7 @@ def run_app(server: AgentServer | WorkerOptions) -> None:
                 api_key=args.api_key,
                 api_secret=args.api_secret,
                 reload_addr=args.reload_addr,
+                log_format=args.log_format,
+                dev=args.dev,
             ),
         )

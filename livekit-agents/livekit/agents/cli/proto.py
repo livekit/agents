@@ -15,6 +15,8 @@ class CliArgs:
     api_key: str | None = field(repr=False, default=None)
     api_secret: str | None = field(repr=False, default=None)
     reload_addr: str | None = None
+    log_format: str = "json"
+    dev: bool = False
 
 
 def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningAgentJobInfo:
