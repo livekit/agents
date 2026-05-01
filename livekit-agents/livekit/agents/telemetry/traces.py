@@ -407,7 +407,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
 async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
     """Parse a protobuf Status error response for RetryInfo and return the retry delay in seconds,
     or None if the error is not retryable."""
-    from google.rpc import error_details_pb2, status_pb2
+    from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
 
     try:
         body = await resp.read()
@@ -417,7 +417,7 @@ async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
             retry_info = error_details_pb2.RetryInfo()
             if detail.Unpack(retry_info):
                 delay = retry_info.retry_delay
-                return delay.seconds + delay.nanos / 1e9
+                return float(delay.seconds + delay.nanos / 1e9)
     except Exception:
         pass
 
@@ -597,9 +597,7 @@ async def _upload_session_report(
 
         if audio_bytes:
             part = mp.append(audio_bytes)
-            part.set_content_disposition(
-                "form-data", name="audio", filename="recording.ogg"
-            )
+            part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 
@@ -621,6 +619,7 @@ async def _upload_session_report(
             retry_delay = await _parse_retry_delay(resp)
             if retry_delay is None or attempt == max_retries:
                 resp.raise_for_status()
+                raise RuntimeError(f"recording upload failed: status {resp.status}")
 
             logger.warning(
                 "recording upload failed (attempt %d/%d), retrying in %.1fs",
