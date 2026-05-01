@@ -25,7 +25,7 @@ from .classifier import (
     NO_SPEECH_THRESHOLD,
     TIMEOUT,
     AMDCategory,
-    AMDResult,
+    AMDPredictionEvent,
     _AMDClassifier,
 )
 
@@ -144,7 +144,7 @@ class AMD:
         self._stt: NotGivenOr[_STT] = _InferenceSTT(stt) if isinstance(stt, str) else stt
 
         self._classifier: _AMDClassifier | None = None
-        self._result: AMDResult | None = None
+        self._result: AMDPredictionEvent | None = None
         self._closed = False
         self._span: trace.Span | None = None
 
@@ -176,7 +176,7 @@ class AMD:
     def started(self) -> bool:
         return self._classifier is not None and self._classifier.started
 
-    async def execute(self) -> AMDResult:
+    async def execute(self) -> AMDPredictionEvent:
         """Run AMD and return the result.
 
         While executing, speech playout authorization is locked. Once the
@@ -250,7 +250,7 @@ class AMD:
             self._stt_task = None
 
         if self._classifier:
-            self._classifier.off("amd_result", self._on_amd_result)
+            self._classifier.off("amd_prediction", self._on_amd_prediction)
             await self._classifier.close()
             self._classifier = None
 
@@ -276,7 +276,7 @@ class AMD:
             raise ValueError(
                 "AMD classifier could not be resolved, please provide a compatible model"
             )
-        self._classifier.on("amd_result", self._on_amd_result)
+        self._classifier.on("amd_prediction", self._on_amd_prediction)
         self._closed = False
         self._result = None
 
@@ -361,7 +361,7 @@ class AMD:
             finally:
                 await aio.cancel_and_wait(*tasks)
 
-    def _on_amd_result(self, result: AMDResult) -> None:
+    def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
         self._result = result
         if self._classifier:
             self._classifier.end_input()
@@ -395,6 +395,8 @@ class AMD:
             )
         except RuntimeError:
             pass
+
+        self._session.emit("amd_prediction", result)
 
     def _start_span(self) -> None:
         if self._span:

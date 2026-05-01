@@ -33,7 +33,7 @@ class AMDCategory(str, Enum):
     UNCERTAIN = "uncertain"
 
 
-class AMDResult(BaseModel):
+class AMDPredictionEvent(BaseModel):
     type: Literal["amd"] = "amd"
     speech_duration: float
     category: AMDCategory
@@ -102,7 +102,7 @@ def _state_guard(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
+class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
     def __init__(
         self,
         llm: LLM,
@@ -128,7 +128,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._silence_timer: asyncio.TimerHandle | None = None
         self._detection_timeout_timer: asyncio.TimerHandle | None = None
 
-        self._verdict_result: AMDResult | None = None
+        self._verdict_result: AMDPredictionEvent | None = None
         self._verdict_ready = asyncio.Event()
 
         self._llm = llm
@@ -224,7 +224,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             functools.partial(self._silence_timer_callback, speech_duration=speech_duration),
         )
 
-    def _set_verdict(self, result: AMDResult) -> None:
+    def _set_verdict(self, result: AMDPredictionEvent) -> None:
         self._verdict_result = result
         self._try_emit_result()
 
@@ -239,7 +239,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._detection_timeout_timer is not None:
             self._detection_timeout_timer.cancel()
             self._detection_timeout_timer = None
-        self.emit("amd_result", self._verdict_result)
+        self.emit("amd_prediction", self._verdict_result)
         self._emitted = True
 
     @log_exceptions(logger=logger)
@@ -252,7 +252,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
     ) -> None:
         if is_given(category) and is_given(reason) and self._verdict_result is None:
             self._set_verdict(
-                AMDResult(
+                AMDPredictionEvent(
                     speech_duration=speech_duration or self.speech_duration,
                     category=category,
                     reason=reason,
@@ -296,7 +296,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             """Save the prediction to the verdict."""
             if label != AMDCategory.UNCERTAIN:
                 self._set_verdict(
-                    AMDResult(
+                    AMDPredictionEvent(
                         speech_duration=self.speech_duration,
                         category=label,
                         reason="llm",
