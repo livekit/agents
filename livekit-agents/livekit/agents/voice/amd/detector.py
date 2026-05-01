@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
+from google.protobuf.duration_pb2 import Duration
 from opentelemetry import trace
 
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
 from ...job import get_job_context
@@ -15,7 +17,7 @@ from ...log import logger
 from ...stt import STT as _STT
 from ...telemetry import trace_types, tracer
 from ...types import NOT_GIVEN, NotGivenOr
-from ...utils import aio, is_given
+from ...utils import EventEmitter, aio, is_given
 from ...utils.participant import wait_for_track_publication
 from .classifier import (
     AMD_PROMPT,
@@ -74,8 +76,16 @@ _DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
     "prompt": AMD_PROMPT,
 }
 
+_AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
+    AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
+    AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
+    AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
+    AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
+}
 
-class AMD:
+
+class AMD(EventEmitter[Literal["amd_prediction"]]):
     """Answering Machine Detection (AMD).
 
     Detects whether an outbound call is answered by a human or a machine.
@@ -135,6 +145,7 @@ class AMD:
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
     ) -> None:
+        super().__init__()
         self._llm_config: NotGivenOr[LLM | LLMModels | str] = llm
         self._session: AgentSession = session
         self._interrupt_on_machine = interrupt_on_machine
@@ -396,7 +407,24 @@ class AMD:
         except RuntimeError:
             pass
 
-        self._session.emit("amd_prediction", result)
+        if (host := self._session._session_host) is not None:
+            speech_duration = Duration()
+            speech_duration.FromNanoseconds(int(result.speech_duration * 1e9))
+            delay = Duration()
+            delay.FromNanoseconds(int(result.delay * 1e9))
+            host._send_event(
+                agent_pb.AgentSessionEvent(
+                    amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
+                        speech_duration=speech_duration,
+                        delay=delay,
+                        category=_AMD_CATEGORY_MAP[result.category],
+                        reason=result.reason,
+                        transcript=result.transcript,
+                    )
+                )
+            )
+
+        self.emit("amd_prediction", result)
 
     def _start_span(self) -> None:
         if self._span:

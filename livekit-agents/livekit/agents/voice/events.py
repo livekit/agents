@@ -27,7 +27,6 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
-from .amd import AMDPredictionEvent
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -96,7 +95,6 @@ EventTypes = Literal[
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
-    "amd_prediction",
     "function_tools_executed",
     "metrics_collected",
     "session_usage_updated",
@@ -259,7 +257,6 @@ AgentEvent = Annotated[
     | SpeechCreatedEvent
     | ErrorEvent
     | CloseEvent
-    | OverlappingSpeechEvent
-    | AMDPredictionEvent,
+    | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]
