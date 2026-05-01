@@ -192,14 +192,16 @@ class FallbackLLMStream(LLMStream):
         except APIError as e:
             if check_recovery:
                 logger.warning(
-                    f"{llm.label} recovery failed",
-                    exc_info=e,
+                    "%s recovery failed: %s",
+                    llm.label,
+                    e,
                 )
                 raise
 
             logger.warning(
-                f"{llm.label} failed, switching to next LLM",
-                exc_info=e,
+                "%s failed, switching to next LLM: %s",
+                llm.label,
+                e,
             )
             raise
         except Exception:

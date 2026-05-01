@@ -318,7 +318,7 @@ class _ParticipantLegacyTranscriptionOutput:
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             if self._room.isconnected():
-                logger.warning("failed to publish agent transcription to room", exc_info=e)
+                logger.warning("failed to publish agent transcription to room: %s", e)
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -454,7 +454,7 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room", exc_info=e)
+            logger.warning("failed to publish agent transcription to room: %s", e)
 
     async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
@@ -471,7 +471,7 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room", exc_info=e)
+            logger.warning("failed to publish agent transcription to room: %s", e)
 
     def flush(self) -> None:
         if self._participant_identity is None or not self._capturing:

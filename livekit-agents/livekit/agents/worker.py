@@ -692,7 +692,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         if os.path.isfile(file_path):
                             os.unlink(file_path)
                     except Exception as e:
-                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+                        logger.warning("failed to remove %s: %s", file_path, e)
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url
@@ -1106,7 +1106,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                    "failed to connect to livekit, retrying in %ss: %s", retry_delay, e
                 )
                 await asyncio.sleep(retry_delay)
             finally:

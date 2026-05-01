@@ -491,8 +491,9 @@ class InterruptionStreamBase(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to detect interruption, retrying in {retry_interval}s",
-                        exc_info=e,
+                        "failed to detect interruption, retrying in %ss: %s",
+                        retry_interval,
+                        e,
                         extra={
                             "model": self._model._label,
                             "attempt": self._num_retries,

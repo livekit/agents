@@ -124,8 +124,8 @@ class RoomSessionTransport(SessionTransport):
             )
             await writer.write(data)
             await writer.aclose()
-        except Exception:
-            logger.warning("failed to send binary stream message", exc_info=True)
+        except Exception as e:
+            logger.warning("failed to send binary stream message: %s", e)
 
     async def close(self) -> None:
         if self._recv_ch.closed:

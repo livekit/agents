@@ -434,7 +434,7 @@ async def _audio_forwarding_task(
             try:
                 await tts_output.aclose()
             except Exception as e:
-                logger.error("error while closing tts output", exc_info=e)
+                logger.warning("error while closing tts output: %s", e)
 
         audio_output.flush()
 

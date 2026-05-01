@@ -518,9 +518,9 @@ class SupervisedProc(ABC):
                     return
 
                 logger.warning(
-                    "Failed to get memory info for process",
+                    "failed to get memory info for process: %s",
+                    e,
                     extra=self.logging_extra(),
-                    exc_info=e,
                 )
                 # don't bother rechecking if we cannot get process info
                 return

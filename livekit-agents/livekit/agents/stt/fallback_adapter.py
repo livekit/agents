@@ -143,15 +143,17 @@ class FallbackAdapter(
         except APIError as e:
             if recovering:
                 logger.warning(
-                    f"{stt.label} recovery failed",
-                    exc_info=e,
+                    "%s recovery failed: %s",
+                    stt.label,
+                    e,
                     extra={"streamed": False},
                 )
                 raise
 
             logger.warning(
-                f"{stt.label} failed, switching to next STT",
-                exc_info=e,
+                "%s failed, switching to next STT: %s",
+                stt.label,
+                e,
                 extra={"streamed": False},
             )
             raise
@@ -198,8 +200,8 @@ class FallbackAdapter(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
-                except Exception:
-                    logger.debug(f"{stt.label} recovery attempt failed", exc_info=True)
+                except Exception as e:
+                    logger.debug("%s recovery attempt failed: %s", stt.label, e)
                     return
 
             stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
@@ -353,8 +355,9 @@ class FallbackRecognizeStream(RecognizeStream):
                         raise
                     except APIError as e:
                         logger.warning(
-                            f"{stt.label} failed, switching to next STT",
-                            exc_info=e,
+                            "%s failed, switching to next STT: %s",
+                            stt.label,
+                            e,
                             extra={"streamed": True},
                         )
                         raise
@@ -429,8 +432,9 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                 except APIError as e:
                     logger.warning(
-                        f"{stream._stt.label} recovery failed",
-                        exc_info=e,
+                        "%s recovery failed: %s",
+                        stream._stt.label,
+                        e,
                         extra={"streamed": True},
                     )
                 except Exception:
