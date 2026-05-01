@@ -2,8 +2,20 @@ import os
 
 import prometheus_client
 import psutil
+from opentelemetry import metrics as metrics_api
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from .. import utils
+
+_meter = metrics_api.get_meter("livekit-agent-server")
+_METRIC_GROUP = "agent_server"
+_METRIC_EXPORT_ENDPOINT_ENV_VARS = (
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+)
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -35,12 +47,112 @@ CPU_LOAD_GAUGE = prometheus_client.Gauge(
     ["nodename"],
 )
 
+OTEL_PROC_INITIALIZE_TIME = _meter.create_histogram(
+    "lk.agents.server.proc_initialize_time",
+    unit="s",
+    description="Time taken to initialize a worker process",
+)
+OTEL_RUNNING_JOB_COUNTER = _meter.create_up_down_counter(
+    "lk.agents.server.active_job_count",
+    description="Active jobs on the agent server",
+)
+
+
+class _AgentServerMetricsState:
+    def __init__(self) -> None:
+        self.child_process_count = 0
+        self.worker_load = 0.0
+
+
+_agent_server_metrics_state = _AgentServerMetricsState()
+_worker_meter_provider_owned = False
+
+
+def _otel_metrics_configured() -> bool:
+    return any(os.environ.get(env_var) for env_var in _METRIC_EXPORT_ENDPOINT_ENV_VARS)
+
+
+def worker_observability_metrics_enabled() -> bool:
+    current_meter_provider = metrics_api.get_meter_provider()
+    return _otel_metrics_configured() or isinstance(current_meter_provider, SdkMeterProvider)
+
+
+def setup_worker_observability_metrics() -> None:
+    global _worker_meter_provider_owned
+
+    current_meter_provider = metrics_api.get_meter_provider()
+    if isinstance(current_meter_provider, SdkMeterProvider):
+        return
+
+    if not _otel_metrics_configured():
+        return
+
+    metric_exporter = OTLPMetricExporter()
+    reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+    meter_provider = SdkMeterProvider(
+        resource=Resource.create(
+            {SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "livekit-agent-server")}
+        ),
+        metric_readers=[reader],
+    )
+    metrics_api.set_meter_provider(meter_provider)
+    _worker_meter_provider_owned = True
+
+
+def shutdown_worker_observability_metrics() -> None:
+    global _worker_meter_provider_owned
+
+    meter_provider = metrics_api.get_meter_provider()
+    if _worker_meter_provider_owned and isinstance(meter_provider, SdkMeterProvider):
+        meter_provider.force_flush()
+        meter_provider.shutdown()
+        _worker_meter_provider_owned = False
+
+
+def _metric_attrs(metric_name: str) -> dict[str, str]:
+    return {
+        "nodename": utils.nodename(),
+        "metric_name": metric_name,
+        "livekit.metric_group": _METRIC_GROUP,
+    }
+
+
+def _observe_child_process_count() -> list[metrics_api.Observation]:
+    return [
+        metrics_api.Observation(
+            _agent_server_metrics_state.child_process_count,
+            attributes=_metric_attrs("child_process_count"),
+        )
+    ]
+
+
+def _observe_worker_load() -> list[metrics_api.Observation]:
+    return [
+        metrics_api.Observation(
+            _agent_server_metrics_state.worker_load,
+            attributes=_metric_attrs("worker_load"),
+        )
+    ]
+
+
+_meter.create_observable_gauge(
+    "lk.agents.server.child_process_count",
+    callbacks=[lambda options: _observe_child_process_count()],
+    description="Child process count on the agent server",
+)
+_meter.create_observable_gauge(
+    "lk.agents.server.worker_load",
+    callbacks=[lambda options: _observe_worker_load()],
+    description="Worker load percentage",
+)
+
 
 # Note: set_function() is not supported in multiprocess mode.# We need to update this metric explicitly.
 def _update_child_proc_count() -> None:
     """Update child process count metric. Must be called periodically in the main process."""
     try:
         count = len(psutil.Process(os.getpid()).children(recursive=True))
+        _agent_server_metrics_state.child_process_count = count
         CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set(count)
     except Exception:
         # Process might not exist anymore or access denied
@@ -48,16 +160,23 @@ def _update_child_proc_count() -> None:
 
 
 def _update_worker_load(worker_load: float) -> None:
+    _agent_server_metrics_state.worker_load = worker_load
     CPU_LOAD_GAUGE.labels(nodename=utils.nodename()).set(worker_load)
 
 
 def job_started() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).inc()
+    OTEL_RUNNING_JOB_COUNTER.add(1, attributes=_metric_attrs("active_job_count"))
 
 
 def job_ended() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).dec()
+    OTEL_RUNNING_JOB_COUNTER.add(-1, attributes=_metric_attrs("active_job_count"))
 
 
 def proc_initialized(*, time_elapsed: float) -> None:
     PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)
+    OTEL_PROC_INITIALIZE_TIME.record(
+        time_elapsed,
+        attributes=_metric_attrs("proc_initialize_time"),
+    )

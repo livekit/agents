@@ -699,6 +699,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             os.environ["LIVEKIT_API_KEY"] = self._api_key
             os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
+            telemetry.metrics.setup_worker_observability_metrics()
+
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
@@ -765,7 +767,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._worker_load = await self._invoke_load_fnc()
 
                     telemetry.metrics._update_worker_load(self._worker_load)
-                    if self._prometheus_multiproc_dir:
+                    if (
+                        self._prometheus_multiproc_dir
+                        or telemetry.metrics.worker_observability_metrics_enabled()
+                    ):
                         await asyncio.get_event_loop().run_in_executor(
                             None, telemetry.metrics._update_child_proc_count
                         )
@@ -990,6 +995,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._prometheus_server:
                 await self._prometheus_server.aclose()
+
+            telemetry.metrics.shutdown_worker_observability_metrics()
 
             await self._api.aclose()  # type: ignore
 
