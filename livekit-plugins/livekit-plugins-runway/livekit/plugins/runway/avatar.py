@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from typing import Any
 
 import aiohttp
 
@@ -77,6 +78,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+        self._end_session_task: asyncio.Task[None] | None = None
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -118,7 +120,14 @@ class AvatarSession(BaseAvatarSession):
 
         logger.debug("starting Runway avatar session")
         await self._create_session(livekit_url, livekit_token, room.name)
-        job_ctx.add_shutdown_callback(lambda: self._end_runway_realtime_session(room))
+
+        @agent_session.on("close")
+        def _on_agent_session_close(_: Any) -> None:
+            if self._end_session_task is None:
+                self._end_session_task = asyncio.create_task(
+                    self._end_runway_realtime_session(room),
+                    name="runway_end_realtime_session",
+                )
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
@@ -183,6 +192,10 @@ class AvatarSession(BaseAvatarSession):
         raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
 
     async def _end_runway_realtime_session(self, room: rtc.Room) -> None:
+        if not room.isconnected():
+            logger.warning("could not end Runway realtime session; room is disconnected")
+            return
+
         try:
             await room.local_participant.publish_data(
                 json.dumps({"type": "END_CALL"}).encode("utf-8"),
@@ -195,3 +208,7 @@ class AvatarSession(BaseAvatarSession):
                 "error ending Runway realtime session",
                 extra={"error": str(exc)},
             )
+
+    async def aclose(self) -> None:
+        if self._end_session_task is not None:
+            await asyncio.shield(self._end_session_task)
