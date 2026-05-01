@@ -88,6 +88,9 @@ class APIConnectOptions:
     Timeout for connecting to the API in seconds.
     """
 
+    tts_replay_on_partial: bool = False
+    """If True, TTS will retry and replay all tokens even after partial audio was emitted."""
+
     def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")

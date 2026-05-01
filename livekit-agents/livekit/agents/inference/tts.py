@@ -412,6 +412,7 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
+            health_check_cb=self._check_ws_health,
             max_session_duration=300,
             mark_refreshed_on_get=True,
         )
@@ -500,6 +501,9 @@ class TTS(tts.TTS):
             ) from e
 
         return ws
+
+    async def _check_ws_health(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
+        return not ws.closed
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()

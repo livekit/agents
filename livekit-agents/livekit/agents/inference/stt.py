@@ -587,6 +587,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
+        # reset per-session state since the gateway starts a fresh session on reconnect
+        self._speech_duration = 0
+        self._speaking = False
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
