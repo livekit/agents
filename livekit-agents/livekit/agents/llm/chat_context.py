@@ -463,6 +463,20 @@ class ChatContext:
     def index_by_id(self, item_id: str) -> int | None:
         return next((i for i, item in enumerate(self.items) if item.id == item_id), None)
 
+    def remove_by_id(self, item_id: str) -> ChatItem | None:
+        """Remove the first item with the given id.
+
+        Args:
+            item_id: The id of the item to remove.
+
+        Returns:
+            The removed ChatItem, or None if no item with that id exists.
+        """
+        idx = self.index_by_id(item_id)
+        if idx is None:
+            return None
+        return self._items.pop(idx)
+
     def copy(
         self,
         *,
