@@ -496,9 +496,40 @@ class Agent:
         async def transcription_node(
             agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
         ) -> AsyncGenerator[str | TimedString, None]:
-            """Default implementation for `Agent.transcription_node`"""
+            """Default implementation for `Agent.transcription_node`
+
+            Strips SSML tags (e.g. ``<break time="1s"/>``) so they do not leak
+            into conversation messages shown to the user.
+            """
+            from .io import TimedString as _TimedString
+            from .transcription.filters import strip_ssml
+
+            buffer = ""
+
             async for delta in text:
-                yield delta
+                if isinstance(delta, _TimedString):
+                    # TimedString comes from TTS-aligned transcription which
+                    # has already been processed by the TTS engine, so SSML
+                    # tags should not be present.  Yield as-is to preserve
+                    # timing metadata.
+                    yield delta
+                    continue
+
+                # Buffer plain strings to handle SSML tags that may span chunks
+                buffer += delta
+                last_open = buffer.rfind("<")
+                if last_open != -1 and ">" not in buffer[last_open:]:
+                    # Potentially incomplete tag - yield text before it
+                    complete = buffer[:last_open]
+                    if complete:
+                        yield strip_ssml(complete)
+                    buffer = buffer[last_open:]
+                else:
+                    yield strip_ssml(buffer)
+                    buffer = ""
+
+            if buffer:
+                yield strip_ssml(buffer)
 
         @staticmethod
         async def realtime_audio_output_node(
