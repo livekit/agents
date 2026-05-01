@@ -78,6 +78,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+        self._room: rtc.Room | None = None
         self._end_session_task: asyncio.Task[None] | None = None
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -95,6 +96,7 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         await super().start(agent_session, room)
+        self._room = room
 
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
@@ -123,11 +125,7 @@ class AvatarSession(BaseAvatarSession):
 
         @agent_session.on("close")
         def _on_agent_session_close(_: Any) -> None:
-            if self._end_session_task is None:
-                self._end_session_task = asyncio.create_task(
-                    self._end_runway_realtime_session(room),
-                    name="runway_end_realtime_session",
-                )
+            self._ensure_end_session_task()
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
@@ -191,6 +189,19 @@ class AvatarSession(BaseAvatarSession):
 
         raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
 
+    def _ensure_end_session_task(self) -> asyncio.Task[None] | None:
+        if self._end_session_task is not None:
+            return self._end_session_task
+
+        if self._room is None:
+            return None
+
+        self._end_session_task = asyncio.create_task(
+            self._end_runway_realtime_session(self._room),
+            name="runway_end_realtime_session",
+        )
+        return self._end_session_task
+
     async def _end_runway_realtime_session(self, room: rtc.Room) -> None:
         if not room.isconnected():
             logger.warning("could not end Runway realtime session; room is disconnected")
@@ -210,5 +221,5 @@ class AvatarSession(BaseAvatarSession):
             )
 
     async def aclose(self) -> None:
-        if self._end_session_task is not None:
-            await asyncio.shield(self._end_session_task)
+        if end_session_task := self._ensure_end_session_task():
+            await asyncio.shield(end_session_task)
