@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Literal
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import aio
 from .chat_context import ChatContext
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
@@ -105,6 +106,10 @@ class FallbackAdapter(
         )
 
     async def aclose(self) -> None:
+        for llm_status in self._status:
+            if llm_status.recovering_task is not None:
+                await aio.cancel_and_wait(llm_status.recovering_task)
+
         for llm_instance in self._llm_instances:
             llm_instance.off("metrics_collected", self._on_metrics_collected)
 
