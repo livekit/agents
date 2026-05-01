@@ -24,7 +24,9 @@ async def send_dtmf_events(
             code = dtmf_event_to_code(event)
             await job_ctx.room.local_participant.publish_dtmf(code=code, digit=event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
-        except Exception as e:
-            return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
+        except ValueError:
+            return f"Failed to send DTMF event: {event.value}. Error: invalid DTMF event."
+        except Exception:
+            return f"Failed to send DTMF event: {event.value}. Error: unable to send DTMF event."
 
     return f"Successfully sent DTMF events: {', '.join(events)}"
