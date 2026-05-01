@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
@@ -313,6 +315,31 @@ class OpenRouterWebPlugin:
     id: str = "web"
 
 
+class OpenRouterSortOption(TypedDict, total=False):
+    """OpenRouter advanced sorting configuration with partition support."""
+
+    by: Literal["price", "throughput", "latency"]
+    partition: Literal["model", "none"]
+
+
+class OpenRouterPercentiles(TypedDict, total=False):
+    """Performance percentile thresholds for OpenRouter provider preferences."""
+
+    p50: float
+    p75: float
+    p90: float
+    p99: float
+
+
+class OpenRouterMaxPrice(TypedDict, total=False):
+    """Maximum acceptable pricing for OpenRouter provider preferences."""
+
+    prompt: float
+    completion: float
+    request: float
+    image: float
+
+
 class OpenRouterProviderPreferences(TypedDict, total=False):
     """OpenRouter provider routing preferences."""
 
@@ -322,6 +349,12 @@ class OpenRouterProviderPreferences(TypedDict, total=False):
     data_collection: Literal["allow", "deny"]
     only: list[str]
     ignore: list[str]
-    quantizations: list[str]
-    sort: Literal["price", "throughput", "latency"]
-    max_price: dict[str, float]
+    quantizations: list[
+        Literal["int4", "int8", "fp4", "fp6", "fp8", "fp16", "bf16", "fp32", "unknown"]
+    ]
+    sort: Literal["price", "throughput", "latency"] | OpenRouterSortOption
+    max_price: OpenRouterMaxPrice
+    zdr: bool
+    enforce_distillable_text: bool
+    preferred_min_throughput: float | OpenRouterPercentiles
+    preferred_max_latency: float | OpenRouterPercentiles
