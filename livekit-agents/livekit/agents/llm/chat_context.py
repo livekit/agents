@@ -457,6 +457,16 @@ class ChatContext:
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
 
+    def remove(self, item: ChatItem | str) -> None:
+        """Remove the first item from the chat context by ChatItem or item ID.
+
+        Raises ValueError if the item/ID is not found.
+        """
+        idx = self.index_by_id(item.id if not isinstance(item, str) else item)
+        if idx is None:
+            raise ValueError(f"Item not found: {item!r}")
+        self._items.pop(idx)
+
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
