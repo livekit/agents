@@ -11,6 +11,9 @@ from ...llm import LLM as _LLM
 from ...log import logger
 from ...telemetry import trace_types, tracer
 from .classifier import (
+    HUMAN_SILENCE_THRESHOLD,
+    HUMAN_SPEECH_THRESHOLD,
+    MACHINE_SILENCE_THRESHOLD,
     AMDCategory,
     AMDResult,
     _AMDClassifier,
@@ -52,6 +55,18 @@ class AMD:
             agent speech immediately when a machine is detected.
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
+        human_speech_threshold: Maximum speech duration (in seconds) for the
+            short-greeting fast path. Greetings shorter than this threshold
+            are classified as ``human`` without an LLM call, **unless**
+            transcript text has already arrived, in which case the LLM is
+            consulted regardless of duration. Defaults to ``2.5``.
+        human_silence_threshold: Silence duration (in seconds) required after
+            a short greeting before the ``human`` verdict is emitted.
+            Defaults to ``0.5``.
+        machine_silence_threshold: Silence duration (in seconds) required
+            after a long greeting (or a short greeting with available
+            transcript) before the LLM-based verdict is emitted.
+            Defaults to ``1.5``.
     """
 
     def __init__(
@@ -61,6 +76,9 @@ class AMD:
         llm: LLM | LLMModels | str | None = None,
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
+        human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
+        human_silence_threshold: float = HUMAN_SILENCE_THRESHOLD,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
     ) -> None:
         self._llm_config = llm
         self._session: AgentSession | None = session
@@ -69,6 +87,9 @@ class AMD:
         self._closed = False
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
+        self._human_speech_threshold = human_speech_threshold
+        self._human_silence_threshold = human_silence_threshold
+        self._machine_silence_threshold = machine_silence_threshold
         self._span: trace.Span | None = None
 
     @property
@@ -188,7 +209,13 @@ class AMD:
             return
 
         self._session = session
-        self._classifier = self._resolve_classifier(self._llm_config, session)
+        self._classifier = self._resolve_classifier(
+            self._llm_config,
+            session,
+            human_speech_threshold=self._human_speech_threshold,
+            human_silence_threshold=self._human_silence_threshold,
+            machine_silence_threshold=self._machine_silence_threshold,
+        )
         if self._classifier is None:
             raise ValueError(
                 "AMD classifier could not be resolved, please provide a compatible model"
@@ -264,14 +291,23 @@ class AMD:
     def _resolve_classifier(
         llm: LLM | LLMModels | str | None,
         session: AgentSession,
+        *,
+        human_speech_threshold: float = HUMAN_SPEECH_THRESHOLD,
+        human_silence_threshold: float = HUMAN_SILENCE_THRESHOLD,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
     ) -> _AMDClassifier | None:
+        kwargs = {
+            "human_speech_threshold": human_speech_threshold,
+            "human_silence_threshold": human_silence_threshold,
+            "machine_silence_threshold": machine_silence_threshold,
+        }
         if isinstance(llm, str):
-            return _AMDClassifier(_InferenceLLM(llm))
+            return _AMDClassifier(_InferenceLLM(llm), **kwargs)
         if isinstance(llm, _LLM):
-            return _AMDClassifier(llm)
+            return _AMDClassifier(llm, **kwargs)
 
         if (candidate := session.llm) is not None and isinstance(candidate, _LLM):
-            return _AMDClassifier(candidate)
+            return _AMDClassifier(candidate, **kwargs)
 
         return None
 
