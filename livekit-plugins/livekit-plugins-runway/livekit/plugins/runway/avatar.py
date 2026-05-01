@@ -19,6 +19,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.utils import is_given
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -79,6 +80,7 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self._room: rtc.Room | None = None
+        self._realtime_session_id: str | None = None
         self._end_session_task: asyncio.Task[None] | None = None
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -135,9 +137,6 @@ class AvatarSession(BaseAvatarSession):
         )
 
     async def _create_session(self, livekit_url: str, livekit_token: str, room_name: str) -> None:
-        assert self._api_key is not None
-        assert isinstance(self._api_url, str)
-
         body: dict[str, object] = {
             "model": "gwm1_avatars",
             "avatar": self._avatar,
@@ -149,7 +148,7 @@ class AvatarSession(BaseAvatarSession):
             },
         }
 
-        if self._max_duration:
+        if is_given(self._max_duration):
             body["maxDuration"] = self._max_duration
 
         for attempt in range(self._conn_options.max_retry):
@@ -170,10 +169,14 @@ class AvatarSession(BaseAvatarSession):
                             status_code=response.status,
                             body=text,
                         )
+                    payload = await response.json()
+                    session_id = payload.get("id") if isinstance(payload, dict) else None
+                    if isinstance(session_id, str):
+                        self._realtime_session_id = session_id
                     return
 
             except Exception as error:
-                if isinstance(error, APIStatusError):
+                if isinstance(error, APIStatusError) and not error.retryable:
                     raise
 
                 if isinstance(error, APIConnectionError):
@@ -203,21 +206,63 @@ class AvatarSession(BaseAvatarSession):
         return self._end_session_task
 
     async def _end_runway_realtime_session(self, room: rtc.Room) -> None:
-        if not room.isconnected():
-            logger.warning("could not end Runway realtime session; room is disconnected")
+        # Preferred path: data-channel END_CALL while the room is still connected.
+        # The Runway worker handles this message and shuts the session down through
+        # the normal "user ended call" lifecycle (COMPLETED, not CANCELLED).
+        if room.isconnected():
+            try:
+                await room.local_participant.publish_data(
+                    json.dumps({"type": "END_CALL"}).encode("utf-8"),
+                    reliable=True,
+                    destination_identities=[self._avatar_participant_identity],
+                )
+                logger.debug("sent Runway realtime session end call")
+                return
+            except Exception as exc:
+                logger.warning(
+                    "error ending Runway realtime session via data channel",
+                    extra={"error": str(exc)},
+                )
+
+        # Fallback for hard shutdowns where the room is already disconnected
+        # (e.g. aclose() registered as a job shutdown callback runs after
+        # room.disconnect()): cancel the session via API so we don't keep
+        # billing until maxDuration.
+        await self._cancel_runway_realtime_session()
+
+    async def _cancel_runway_realtime_session(self) -> None:
+        session_id = self._realtime_session_id
+        if session_id is None:
+            logger.warning("could not cancel Runway realtime session; no session id available")
             return
 
         try:
-            await room.local_participant.publish_data(
-                json.dumps({"type": "END_CALL"}).encode("utf-8"),
-                reliable=True,
-                destination_identities=[self._avatar_participant_identity],
-            )
-            logger.debug("sent Runway realtime session end call")
+            async with self._ensure_http_session().delete(
+                f"{self._api_url}/v1/realtime_sessions/{session_id}",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "X-Runway-Version": API_VERSION,
+                },
+                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+            ) as response:
+                if response.ok:
+                    logger.debug(
+                        "cancelled Runway realtime session",
+                        extra={"session_id": session_id},
+                    )
+                else:
+                    logger.warning(
+                        "could not cancel Runway realtime session",
+                        extra={
+                            "session_id": session_id,
+                            "status": response.status,
+                            "body": await response.text(),
+                        },
+                    )
         except Exception as exc:
             logger.warning(
-                "error ending Runway realtime session",
-                extra={"error": str(exc)},
+                "error cancelling Runway realtime session",
+                extra={"session_id": session_id, "error": str(exc)},
             )
 
     async def aclose(self) -> None:
