@@ -71,7 +71,7 @@ async def entrypoint(ctx: JobContext):
     # doesn't push frames from any pre-existing participant into AMD's pipeline
     if not session.room_io:
         raise RuntimeError(
-            "session room_io is not unavailable. Make sure you use dev or start commands"
+            "session room_io is unavailable. Make sure you use dev or start commands"
         )
     session.room_io.set_participant(participant_identity)
 
