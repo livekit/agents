@@ -312,7 +312,12 @@ class STT(stt.STT):
             self._opts.enable_logging = enable_logging
 
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad)
+            stream.update_options(
+                server_vad=server_vad,
+                keyterms=keyterms,
+                no_verbatim=no_verbatim,
+                enable_logging=enable_logging,
+            )
 
     def stream(
         self,
@@ -358,9 +363,29 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        reconnect = False
+
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            reconnect = True
+
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
+            reconnect = True
+
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
+            reconnect = True
+
+        if is_given(enable_logging):
+            self._opts.enable_logging = enable_logging
+            reconnect = True
+
+        if reconnect:
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:

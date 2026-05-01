@@ -58,6 +58,36 @@ def test_enable_logging_update():
     assert stt._opts.enable_logging is True
 
 
+@pytest.mark.asyncio
+async def test_update_options_triggers_stream_reconnect():
+    """Updating keyterms/no_verbatim/enable_logging on STT must trigger active stream reconnect."""
+    captured: dict[str, str] = {}
+    stt = STT(
+        api_key="test-key",
+        model_id="scribe_v2_realtime",
+        language_code="en",
+        http_session=_make_session_mock(captured),
+    )
+    stream = stt.stream()
+    try:
+        assert not stream._reconnect_event.is_set()
+        stt.update_options(keyterms=["foo"])
+        assert stream._reconnect_event.is_set()
+        assert stream._opts.keyterms == ["foo"]
+
+        stream._reconnect_event.clear()
+        stt.update_options(no_verbatim=True)
+        assert stream._reconnect_event.is_set()
+        assert stream._opts.no_verbatim is True
+
+        stream._reconnect_event.clear()
+        stt.update_options(enable_logging=False)
+        assert stream._reconnect_event.is_set()
+        assert stream._opts.enable_logging is False
+    finally:
+        await stream.aclose()
+
+
 def test_combined_options():
     stt = STT(
         api_key="test-key",
