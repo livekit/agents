@@ -4,11 +4,9 @@ import asyncio
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, TypedDict
 
-from google.protobuf.duration_pb2 import Duration
 from opentelemetry import trace
 
 from livekit import rtc
-from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
 from ...job import get_job_context
@@ -74,14 +72,6 @@ _DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
     "no_speech_threshold": NO_SPEECH_THRESHOLD,
     "timeout": TIMEOUT,
     "prompt": AMD_PROMPT,
-}
-
-_AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
-    AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
-    AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
-    AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
-    AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
-    AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
 }
 
 
@@ -408,21 +398,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             pass
 
         if (host := self._session._session_host) is not None:
-            speech_duration = Duration()
-            speech_duration.FromNanoseconds(int(result.speech_duration * 1e9))
-            delay = Duration()
-            delay.FromNanoseconds(int(result.delay * 1e9))
-            host._send_event(
-                agent_pb.AgentSessionEvent(
-                    amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
-                        speech_duration=speech_duration,
-                        delay=delay,
-                        category=_AMD_CATEGORY_MAP[result.category],
-                        reason=result.reason,
-                        transcript=result.transcript,
-                    )
-                )
-            )
+            host._on_amd_prediction(result)
 
         self.emit("amd_prediction", result)
 
