@@ -36,11 +36,12 @@ async def entrypoint(ctx: JobContext):
     async def user_presence_task():
         # try to ping the user 3 times, if we get no answer, close the session
         for _ in range(3):
-            await session.generate_reply(
+            handle = session.generate_reply(
                 instructions=(
                     "The user has been inactive. Politely check if the user is still present."
                 )
             )
+            await handle.wait_for_playout()
             await asyncio.sleep(10)
 
         session.shutdown()
@@ -55,6 +56,7 @@ async def entrypoint(ctx: JobContext):
         # ev.new_state: listening, speaking, ..
         if inactivity_task is not None:
             inactivity_task.cancel()
+            inactivity_task = None
 
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
