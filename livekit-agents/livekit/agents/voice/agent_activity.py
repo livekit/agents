@@ -1362,6 +1362,15 @@ class AgentActivity(RecognitionHooks):
                         continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
+
+                if self._paused_speech and self._paused_speech.handle is self._current_speech:
+                    # clear paused speech after generation done
+                    self._paused_speech = None
+                    if self._false_interruption_timer is not None:
+                        self._false_interruption_timer.cancel()
+                        self._false_interruption_timer = None
+                    if (audio_output := self._session.output.audio) and audio_output.can_pause:
+                        audio_output.resume()
                 self._current_speech = None
                 last_playout_ts = time.time()
 
